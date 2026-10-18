@@ -6,7 +6,7 @@
 
 | 领域 | 必须能力 | 可验收的用户结果 |
 | --- | --- | --- |
-| 安装 | Debian 13 amd64/arm64；Hub / Line / Out 宿主机 \`install\` | 干净 VM 能重复安装，错误有阶段与恢复方案 |
+| 安装 | Debian 13 amd64/arm64；Hub / Line / Out 宿主机 `install` | 干净 VM 能重复安装，错误有阶段与恢复方案 |
 | 管理 | Hub 单管理员 Web、数据库、HTTPS；Out 可不部署 | 不依赖 Zero Trust；单机 Hub+Line、多 Line、可选 Out 都能工作 |
 | 纳管 | Web 一次性配对，Line/Out 安装后 Agent 主动 HTTPS 连接；节点状态与展示名 | 目标机只需 install；权限可吊销，非法任务拒绝 |
 | 代理 | 固定 sing-box 1.14.3，VLESS/REALITY 入站，自定义监听端口，Line 生命周期 | 客户端可真正连接；节点停用/删除配置可验证 |
