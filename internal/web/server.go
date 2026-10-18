@@ -98,7 +98,9 @@ func (s *Server) boundary(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
+		// no-referrer turns native form POST Origin into null in browsers.
+		// same-origin preserves strict Origin validation without leaking URLs off-site.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		h.Set("X-Robots-Tag", "noindex, nofollow")
 		defer func() {

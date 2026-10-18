@@ -228,6 +228,7 @@ func TestSessionRotationExpiryAndNoFixation(t *testing.T) {
 	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
 	// Refreshing seen cannot extend the absolute lifetime.
 	app.now = time.Now
+	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
 	other.cookie = nil
 	loginAs(t, other, testPassword)
 	if _, err := app.store.db.Exec("UPDATE sessions SET expires=? WHERE authenticated=1", time.Now().Add(-time.Second).Unix()); err != nil {

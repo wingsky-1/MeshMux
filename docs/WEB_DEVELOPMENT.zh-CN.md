@@ -67,7 +67,7 @@ systemd 验证需要候选 `ExecStart` 路径存在；开发时可复制到临�
 | 未认证 | `/` 跳登录；受保护页面和 API 返回 401；静态资产、初始化/登录表单和本机 healthz 允许匿名 |
 | 限速 | 初始化、登录、改密共用持久化全局预算，10 次/10 分钟（包含成功尝试）；第 11 次返回 429 / Retry-After；一次只执行一个密码运算 |
 | 失败封闭 | 数据库故障时不会跳过认证或限速，返回 503；退出失败不声称会话已经撤销 |
-| 响应 | CSP 禁止外部资源/内联脚本/eval，no-store、no-referrer、nosniff、frame-ancestors none；templ 转义文本 |
+| 响应 | CSP 禁止外部资源/内联脚本/eval，no-store、same-origin Referrer（不向外站发送）、nosniff、frame-ancestors none；templ 转义文本 |
 | 日志 | slog JSON 白名单字段；不记录 URL、请求体、Header、Cookie、密码、引导凭据或原始 HTTP 错误；服务日志 UTC |
 
 全局限速适合单管理员，不依赖可能伪造或共享的 IP。代价是持续攻击者可以暂时耗尽登录预算；已经登录的只读访问和退出不受该预算影响。匿名表单会话数量受限，持续请求可能导致新表单短时返回 503，过期后回收；不是公网 DDoS 防护承诺。

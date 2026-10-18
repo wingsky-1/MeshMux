@@ -25,6 +25,5 @@
 
 # Local Web development state and build products
 .local-state/
-bin/
 /meshmux-web
 artifacts/

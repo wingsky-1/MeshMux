@@ -16,9 +16,10 @@ const app = spawn(
     state,
     "--dev-http",
   ],
-  { stdio: "ignore" },
+  { stdio: ["ignore", "inherit", "inherit"] },
 );
 let browser;
+let page;
 let appFailure;
 app.on("error", (error) => {
   appFailure = error;
@@ -39,7 +40,7 @@ app.on("exit", (code) => {
   const ctx = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
   });
-  const page = await ctx.newPage();
+  page = await ctx.newPage();
   const token = fs
     .readFileSync(path.join(state, "bootstrap.token"), "utf8")
     .trim();
@@ -165,7 +166,22 @@ app.on("exit", (code) => {
     }),
   );
 })()
-  .catch((e) => {
+  .catch(async (e) => {
+    if (page) {
+      await page
+        .screenshot({
+          path: "artifacts/web-preview/failure.png",
+          fullPage: true,
+        })
+        .catch(() => {});
+      console.error(
+        "Failure page:",
+        await page
+          .locator("body")
+          .innerText()
+          .catch(() => "unavailable"),
+      );
+    }
     console.error(e);
     process.exitCode = 1;
   })

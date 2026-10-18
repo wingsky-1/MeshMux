@@ -211,6 +211,13 @@ func (s *store) session(token string, now time.Time) (session, error) {
 	}
 	sess.Hash = tokenHash(token)
 	err := s.db.QueryRow("UPDATE sessions SET seen=? WHERE token_hash=? AND expires>? AND seen>? RETURNING csrf, authenticated, expires", now.Unix(), sess.Hash, now.Unix(), now.Add(-idleLifetime).Unix()).Scan(&sess.CSRF, &sess.Auth, &sess.Expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Once expiry is observed, persist revocation so a later clock correction
+		// or restart cannot make this expired token valid again.
+		if _, cleanupErr := s.db.Exec("DELETE FROM sessions WHERE token_hash=? AND (expires<=? OR seen<=?)", sess.Hash, now.Unix(), now.Add(-idleLifetime).Unix()); cleanupErr != nil {
+			return sess, cleanupErr
+		}
+	}
 	return sess, err
 }
 
