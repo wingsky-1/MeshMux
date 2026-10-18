@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/product"
@@ -26,7 +25,7 @@ func run(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid role: %v\n", err)
 		return 2
 	}
-	if string(role) != "hub" {
+	if role != product.RoleHub {
 		fmt.Fprintln(stderr, "NOT READY TO INSTALL: Line/Out installation is reserved for Issue #6; no host changes were made.")
 		return 3
 	}
@@ -71,6 +70,5 @@ func run(args []string, stderr io.Writer) int {
 }
 
 func main() {
-	_ = time.Second // keep installation logic isolated from service runtime
 	os.Exit(run(os.Args[1:], os.Stderr))
 }
