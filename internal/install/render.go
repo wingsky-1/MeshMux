@@ -217,11 +217,11 @@ bantime = 15m
 usedns = no
 `, strings.Join(ports, ","))
 	return map[string]string{
-		"/etc/meshmux/Caddyfile": caddy,
-		"/etc/meshmux/headscale.yaml": headscale,
-		"/etc/systemd/system/meshmux-web.service": webUnit,
+		"/etc/meshmux/Caddyfile":                        caddy,
+		"/etc/meshmux/headscale.yaml":                   headscale,
+		"/etc/systemd/system/meshmux-web.service":       webUnit,
 		"/etc/systemd/system/meshmux-headscale.service": headscaleUnit,
-		"/etc/systemd/system/meshmux-caddy.service": caddyUnit,
-		"/etc/fail2ban/jail.d/meshmux-ssh.local": sshJail,
+		"/etc/systemd/system/meshmux-caddy.service":     caddyUnit,
+		"/etc/fail2ban/jail.d/meshmux-ssh.local":        sshJail,
 	}, nil
 }

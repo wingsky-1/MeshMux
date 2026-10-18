@@ -17,10 +17,10 @@ import (
 
 type Artifact struct {
 	Component string `json:"component"`
-	Version string `json:"version"`
-	Source string `json:"source"`
-	SHA256 string `json:"sha256"`
-	Format string `json:"format"`
+	Version   string `json:"version"`
+	Source    string `json:"source"`
+	SHA256    string `json:"sha256"`
+	Format    string `json:"format"`
 }
 
 // Digests copied from the upstream GitHub release asset SHA-256 metadata.
@@ -87,7 +87,7 @@ func DownloadVerified(ctx context.Context, client *http.Client, a Artifact, dir 
 		return "", errors.New("ARTIFACT_SOURCE_UNTRUSTED")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 90*time.Second}
+		client = &http.Client{Timeout: 90 * time.Second}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.Source, nil)
 	if err != nil {

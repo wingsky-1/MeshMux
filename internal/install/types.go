@@ -13,15 +13,15 @@ import (
 )
 
 const (
-	WebPort = 9080
+	WebPort       = 9080
 	HeadscalePort = 8080
-	STUNPort = 3478
+	STUNPort      = 3478
 )
 
 type Config struct {
-	ManagementDomain string `json:"management_domain"`
+	ManagementDomain   string `json:"management_domain"`
 	SubscriptionDomain string `json:"subscription_domain"`
-	HeadscaleDomain string `json:"headscale_domain"`
+	HeadscaleDomain    string `json:"headscale_domain"`
 }
 
 var label = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -54,42 +54,42 @@ func (c Config) Validate() error {
 }
 
 type Check struct {
-	Name string `json:"name"`
-	Status string `json:"status"` // pass, fail, pending
-	Code string `json:"error_code,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Name     string `json:"name"`
+	Status   string `json:"status"` // pass, fail, pending
+	Code     string `json:"error_code,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 	Recovery string `json:"next_action,omitempty"`
 }
 
 type Port struct {
 	Protocol string `json:"protocol"`
-	Port int `json:"port"`
-	Service string `json:"service"`
+	Port     int    `json:"port"`
+	Service  string `json:"service"`
 }
 
 type Component struct {
-	Name string `json:"name"`
-	Version string `json:"version"`
+	Name         string `json:"name"`
+	Version      string `json:"version"`
 	Distribution string `json:"distribution"`
 }
 
 type Plan struct {
-	OperationID string `json:"operation_id"`
-	Stage string `json:"stage"`
-	Status string `json:"status"`
-	OS string `json:"os"`
-	Architecture string `json:"architecture"`
-	Config Config `json:"config"`
-	Checks []Check `json:"checks"`
-	Artifacts []Artifact `json:"artifacts"`
-	Components []Component `json:"components"`
-	Ports []Port `json:"ports"`
-	Units []string `json:"systemd_units"`
-	Paths []string `json:"managed_paths"`
-	FirewallChanges []string `json:"firewall_changes"`
-	SSHPPorts []int `json:"ssh_listening_ports,omitempty"`
-	ApplyAvailable bool `json:"apply_available"`
-	NextAction string `json:"next_action"`
+	OperationID     string      `json:"operation_id"`
+	Stage           string      `json:"stage"`
+	Status          string      `json:"status"`
+	OS              string      `json:"os"`
+	Architecture    string      `json:"architecture"`
+	Config          Config      `json:"config"`
+	Checks          []Check     `json:"checks"`
+	Artifacts       []Artifact  `json:"artifacts"`
+	Components      []Component `json:"components"`
+	Ports           []Port      `json:"ports"`
+	Units           []string    `json:"systemd_units"`
+	Paths           []string    `json:"managed_paths"`
+	FirewallChanges []string    `json:"firewall_changes"`
+	SSHPPorts       []int       `json:"ssh_listening_ports,omitempty"`
+	ApplyAvailable  bool        `json:"apply_available"`
+	NextAction      string      `json:"next_action"`
 }
 
 // NewOperationID generates an ID without using environment or user data.
@@ -128,11 +128,11 @@ func BuildPlan(id string, c Config, architecture string, checks []Check, ssh []i
 		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13", Architecture: architecture,
 		Config: c, Checks: checks, Artifacts: PinnedArtifacts(architecture),
 		Components: []Component{{"MeshMux Web", "current source build (manifest pending)", "MeshMux verified release"}, {"Caddy", "2.11.7", "pinned upstream GitHub asset"}, {"Headscale", "0.29.5", "pinned upstream GitHub asset"}, {"sing-box", "1.14.3 (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
-		Ports: Ports(), SSHPPorts: ssh,
-		Units: []string{"meshmux-web.service", "meshmux-headscale.service", "meshmux-caddy.service", "fail2ban.service"},
-		Paths: []string{"/etc/meshmux/", "/var/lib/meshmux/", "/etc/meshmux/headscale.yaml", "/var/lib/meshmux-headscale/", "/usr/local/libexec/meshmux-*", "/etc/fail2ban/jail.d/meshmux-ssh.local"},
+		Ports:      Ports(), SSHPPorts: ssh,
+		Units:           []string{"meshmux-web.service", "meshmux-headscale.service", "meshmux-caddy.service", "fail2ban.service"},
+		Paths:           []string{"/etc/meshmux/", "/var/lib/meshmux/", "/etc/meshmux/headscale.yaml", "/var/lib/meshmux-headscale/", "/usr/local/libexec/meshmux-*", "/etc/fail2ban/jail.d/meshmux-ssh.local"},
 		FirewallChanges: []string{"none in preflight (do not replace the host nftables ruleset)"},
-		ApplyAvailable: false,
-		NextAction: "The read-only PR A cannot apply host changes. Review the plan; Phase B will stage, validate and activate fixed artifacts and services in an isolated Debian 13 VM.",
+		ApplyAvailable:  false,
+		NextAction:      "The read-only PR A cannot apply host changes. Review the plan; Phase B will stage, validate and activate fixed artifacts and services in an isolated Debian 13 VM.",
 	}
 }

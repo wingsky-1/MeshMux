@@ -81,8 +81,8 @@ func TestSSHListeningPorts(t *testing.T) {
 	if got := socketPorts(sockets); len(got) != 1 || got[0] != 60794 {
 		t.Fatalf("socket: %v", got)
 	}
-	ss := "LISTEN 0 128 0.0.0.0:60794 0.0.0.0:* users:((\"sshd\",pid=789,fd=6))\n"+
-		"LISTEN 0 128 [::]:60794 [::]:* users:((\"sshd\",pid=789,fd=6))\n"+
+	ss := "LISTEN 0 128 0.0.0.0:60794 0.0.0.0:* users:((\"sshd\",pid=789,fd=6))\n" +
+		"LISTEN 0 128 [::]:60794 [::]:* users:((\"sshd\",pid=789,fd=6))\n" +
 		"LISTEN 0 128 0.0.0.0:443 0.0.0.0:* users:((\"caddy\",pid=999,fd=6))"
 	if got := parseSSHListeners(ss); len(got) != 1 || got[0] != 60794 {
 		t.Fatalf("actual SSH ports: %v", got)
@@ -108,11 +108,11 @@ func TestReadOnlyPortProbeDetectsConflict(t *testing.T) {
 
 func TestPlanDoesNotMisreportInstallation(t *testing.T) {
 	c := Config{"console.example.org", "sub.example.org", "mesh.example.org"}
-	p := BuildPlan("id", c, "amd64", []Check{{Name:"os",Status:"pass"}, {Name:"public_https",Status:"pending"}}, []int{60794})
+	p := BuildPlan("id", c, "amd64", []Check{{Name: "os", Status: "pass"}, {Name: "public_https", Status: "pending"}}, []int{60794})
 	if p.ApplyAvailable || p.Status == "installed" || len(p.FirewallChanges) == 0 {
 		t.Fatalf("unsafe plan: %+v", p)
 	}
-	p = BuildPlan("id", c, "amd64", []Check{{Name:"os",Status:"fail"}}, nil)
+	p = BuildPlan("id", c, "amd64", []Check{{Name: "os", Status: "fail"}}, nil)
 	if p.Status != "preflight_blocked" {
 		t.Fatalf("failed prerequisite passed: %+v", p)
 	}

@@ -249,7 +249,7 @@ func Preflight(ctx context.Context, c Config) ([]Check, []int) {
 	} else {
 		checks = append(checks, check("dns", "", "", nil))
 	}
-	client := &http.Client{Timeout: 6*time.Second}
+	client := &http.Client{Timeout: 6 * time.Second}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, "https://github.com/", nil)
 	res, networkErr := client.Do(req)
 	if networkErr == nil {
