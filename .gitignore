@@ -1,0 +1,24 @@
+# Build outputs
+/meshmux
+/bin/
+/dist/
+/coverage.out
+*.test
+
+# Local credentials and runtime state
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+*.key
+*.pem
+/state/
+/data/
+/secrets/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
