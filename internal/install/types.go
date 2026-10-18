@@ -67,6 +67,12 @@ type Port struct {
 	Service string `json:"service"`
 }
 
+type Component struct {
+	Name string `json:"name"`
+	Version string `json:"version"`
+	Distribution string `json:"distribution"`
+}
+
 type Plan struct {
 	OperationID string `json:"operation_id"`
 	Stage string `json:"stage"`
@@ -76,6 +82,7 @@ type Plan struct {
 	Config Config `json:"config"`
 	Checks []Check `json:"checks"`
 	Artifacts []Artifact `json:"artifacts"`
+	Components []Component `json:"components"`
 	Ports []Port `json:"ports"`
 	Units []string `json:"systemd_units"`
 	Paths []string `json:"managed_paths"`
@@ -108,7 +115,7 @@ func Ports() []Port {
 func BuildPlan(id string, c Config, architecture string, checks []Check, ssh []int) Plan {
 	ready := true
 	for _, check := range checks {
-		if check.Status != "pass" {
+		if check.Status == "fail" {
 			ready = false
 			break
 		}
@@ -120,9 +127,10 @@ func BuildPlan(id string, c Config, architecture string, checks []Check, ssh []i
 	return Plan{
 		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13", Architecture: architecture,
 		Config: c, Checks: checks, Artifacts: PinnedArtifacts(architecture),
+		Components: []Component{{"MeshMux Web", "current source build (manifest pending)", "MeshMux verified release"}, {"Caddy", "2.11.7", "pinned upstream GitHub asset"}, {"Headscale", "0.29.5", "pinned upstream GitHub asset"}, {"sing-box", "1.14.3 (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
 		Ports: Ports(), SSHPPorts: ssh,
 		Units: []string{"meshmux-web.service", "meshmux-headscale.service", "meshmux-caddy.service", "fail2ban.service"},
-		Paths: []string{"/etc/meshmux/", "/var/lib/meshmux/", "/etc/headscale/config.yaml", "/var/lib/headscale/", "/usr/local/libexec/meshmux-*", "/etc/fail2ban/jail.d/meshmux-ssh.local"},
+		Paths: []string{"/etc/meshmux/", "/var/lib/meshmux/", "/etc/meshmux/headscale.yaml", "/var/lib/meshmux-headscale/", "/usr/local/libexec/meshmux-*", "/etc/fail2ban/jail.d/meshmux-ssh.local"},
 		FirewallChanges: []string{"none in preflight (do not replace the host nftables ruleset)"},
 		ApplyAvailable: false,
 		NextAction: "The read-only PR A cannot apply host changes. Review the plan; Phase B will stage, validate and activate fixed artifacts and services in an isolated Debian 13 VM.",
