@@ -1,0 +1,35 @@
+[Unit]
+Description=MeshMux unprivileged Web security foundation (development preview)
+After=network.target
+
+[Service]
+Type=simple
+User=meshmux
+Group=meshmux
+StateDirectory=meshmux
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/meshmux
+# Candidate only: replace origin and provision the account/binary manually in an isolated VM.
+ExecStart=/usr/local/libexec/meshmux-web --listen 127.0.0.1:9080 --origin https://admin.example.invalid --data-dir /var/lib/meshmux
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=meshmux-web
+
+[Install]
+WantedBy=multi-user.target

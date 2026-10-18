@@ -1,0 +1,390 @@
+package web
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+const testOrigin = "https://admin.example.invalid"
+const testPassword = "test-only-long-password-47!"
+
+var csrfPattern = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
+
+type browser struct {
+	app    *Server
+	cookie *http.Cookie
+	csrf   string
+}
+
+func testApp(t *testing.T) (*Server, *bytes.Buffer) {
+	t.Helper()
+	var logs bytes.Buffer
+	c := Config{Listen: "127.0.0.1:9080", Origin: testOrigin, DataDir: filepath.Join(t.TempDir(), "state")}
+	app, err := newServer(c, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { app.Close() })
+	return app, &logs
+}
+func (b *browser) req(method, path string, form url.Values, headers http.Header) *httptest.ResponseRecorder {
+	body := ""
+	if form != nil {
+		body = form.Encode()
+	}
+	r := httptest.NewRequest(method, testOrigin+path, strings.NewReader(body))
+	r.RemoteAddr = "127.0.0.1:40000"
+	// httptest's absolute target is a convenient constructor, not proxy request form.
+	r.URL.Scheme = ""
+	r.URL.Host = ""
+	if b.cookie != nil {
+		r.AddCookie(b.cookie)
+	}
+	if method == "POST" {
+		r.Header.Set("Origin", testOrigin)
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	for key, values := range headers {
+		r.Header[http.CanonicalHeaderKey(key)] = values
+	}
+	w := httptest.NewRecorder()
+	b.app.Handler().ServeHTTP(w, r)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == b.app.cookieName() {
+			b.cookie = c
+		}
+	}
+	if m := csrfPattern.FindStringSubmatch(w.Body.String()); len(m) > 1 {
+		b.csrf = m[1]
+	}
+	return w
+}
+func (b *browser) post(path string, fields url.Values) *httptest.ResponseRecorder {
+	if fields == nil {
+		fields = url.Values{}
+	}
+	fields.Set("csrf", b.csrf)
+	return b.req("POST", path, fields, nil)
+}
+func requireStatus(t *testing.T, w *httptest.ResponseRecorder, status int) {
+	t.Helper()
+	if w.Code != status {
+		t.Fatalf("status %d want %d: %.300s", w.Code, status, w.Body.String())
+	}
+}
+func initialize(t *testing.T, b *browser) {
+	t.Helper()
+	requireStatus(t, b.req("GET", "/setup", nil, nil), 200)
+	token, err := os.ReadFile(filepath.Join(b.app.store.dir, "bootstrap.token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 303)
+	if _, err = os.Stat(filepath.Join(b.app.store.dir, "bootstrap.token")); !os.IsNotExist(err) {
+		t.Fatal("bootstrap secret was not removed")
+	}
+}
+func loginAs(t *testing.T, b *browser, password string) {
+	t.Helper()
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+	requireStatus(t, b.post("/login", url.Values{"password": {password}}), 303)
+	requireStatus(t, b.req("GET", "/", nil, nil), 200)
+}
+
+func TestAuthenticationLifecycleAndRestart(t *testing.T) {
+	app, logs := testApp(t)
+	b := &browser{app: app}
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, b.req("GET", "/nodes", nil, nil), 401)
+	initialize(t, b)
+	requireStatus(t, b.req("GET", "/setup", nil, nil), 403)
+	loginAs(t, b, testPassword)
+	old := *b.cookie
+	oldCSRF := b.csrf
+	if !old.Secure || !old.HttpOnly || old.SameSite != http.SameSiteStrictMode || old.Path != "/" || old.Domain != "" || old.Name != "__Host-meshmux" {
+		t.Fatal("insecure cookie attributes")
+	}
+	var saved []byte
+	if err := app.store.db.QueryRow("SELECT token_hash FROM sessions WHERE authenticated=1").Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(saved, []byte(old.Value)) || len(saved) != 32 {
+		t.Fatal("session must be hashed")
+	}
+	// A real close/open performs the migration again and keeps a valid session.
+	c := app.cfg
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := newServer(c, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	b.app = reopened
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 200)
+	requireStatus(t, b.req("GET", "/settings", nil, nil), 200)
+	newPassword := "new-test-only-password-96!"
+	requireStatus(t, b.post("/password", url.Values{"current_password": {testPassword}, "password": {newPassword}}), 303)
+	stale := &browser{app: reopened, cookie: &old, csrf: oldCSRF}
+	requireStatus(t, stale.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, stale.post("/logout", nil), 401)
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 401)
+	loginAs(t, b, newPassword)
+	revoked := *b.cookie
+	revokedCSRF := b.csrf
+	requireStatus(t, b.post("/logout", nil), 303)
+	stale.cookie = &revoked
+	stale.csrf = revokedCSRF
+	requireStatus(t, stale.req("GET", "/api/status", nil, nil), 401)
+	for _, secret := range []string{testPassword, newPassword, old.Value, oldCSRF, revoked.Value} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatal("secret leaked in logs")
+		}
+	}
+}
+
+func TestCSRFOriginAndMalformedRequests(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	loginAs(t, b, testPassword)
+	cases := []struct {
+		name, path string
+		form       url.Values
+		headers    http.Header
+		want       int
+		code       string
+	}{
+		{"missing csrf", "/logout", url.Values{}, nil, 403, "CSRF_REJECTED"},
+		{"wrong csrf", "/logout", url.Values{"csrf": {"bad"}}, nil, 403, "CSRF_REJECTED"},
+		{"wrong origin", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Origin": {"https://evil.example.invalid"}}, 403, "ORIGIN_REJECTED"},
+		{"missing origin", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Origin": {}}, 403, "ORIGIN_REJECTED"},
+		{"null origin", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Origin": {"null"}}, 403, "ORIGIN_REJECTED"},
+		{"duplicate origin", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Origin": {testOrigin, testOrigin}}, 403, "ORIGIN_REJECTED"},
+		{"cross site", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Sec-Fetch-Site": {"cross-site"}}, 403, "ORIGIN_REJECTED"},
+		{"duplicate csrf", "/logout", url.Values{"csrf": {b.csrf, b.csrf}}, nil, 400, "FORM_INVALID"},
+		{"query csrf", "/logout?csrf=x", url.Values{"csrf": {b.csrf}}, nil, 400, "FORM_INVALID"},
+		{"duplicate content type", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Content-Type": {"application/x-www-form-urlencoded", "application/json"}}, 415, "FORM_REQUIRED"},
+		{"json", "/logout", url.Values{"csrf": {b.csrf}}, http.Header{"Content-Type": {"application/json"}}, 415, "FORM_REQUIRED"},
+		{"large body", "/password", url.Values{"csrf": {b.csrf}, "password": {strings.Repeat("x", 5000)}}, nil, 400, "FORM_INVALID"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := b.req("POST", tc.path, tc.form, tc.headers)
+			requireStatus(t, w, tc.want)
+			if !strings.Contains(w.Body.String(), tc.code) {
+				t.Fatal("missing stable code")
+			}
+		})
+	}
+	requireStatus(t, b.req("GET", "/logout", nil, nil), 405)
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 200)
+	// Duplicate cookies and invalid random sessions fail closed.
+	dup := http.Header{"Cookie": {b.cookie.String() + "; " + b.cookie.Name + "=forged"}}
+	requireStatus(t, b.req("GET", "/api/status", nil, dup), 401)
+	invalid := &browser{app: app, cookie: &http.Cookie{Name: app.cookieName(), Value: randomToken()}}
+	requireStatus(t, invalid.req("GET", "/api/status", nil, nil), 401)
+	r := httptest.NewRequest("GET", "https://evil.example.invalid/api/status", nil)
+	r.AddCookie(b.cookie)
+	w := httptest.NewRecorder()
+	app.Handler().ServeHTTP(w, r)
+	requireStatus(t, w, 403)
+}
+
+func TestSessionRotationExpiryAndNoFixation(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+	anonymous := *b.cookie
+	csrf := b.csrf
+	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 303)
+	if b.cookie.Value == anonymous.Value {
+		t.Fatal("session fixation")
+	}
+	stale := &browser{app: app, cookie: &anonymous, csrf: csrf}
+	requireStatus(t, stale.post("/login", url.Values{"password": {testPassword}}), 401)
+	requireStatus(t, b.req("GET", "/", nil, nil), 200)
+	old := *b.cookie
+	other := &browser{app: app}
+	loginAs(t, other, testPassword)
+	stale.cookie = &old
+	requireStatus(t, stale.req("GET", "/api/status", nil, nil), 401)
+	now := time.Now()
+	app.now = func() time.Time { return now.Add(31 * time.Minute) }
+	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
+	// Refreshing seen cannot extend the absolute lifetime.
+	app.now = time.Now
+	other.cookie = nil
+	loginAs(t, other, testPassword)
+	if _, err := app.store.db.Exec("UPDATE sessions SET expires=? WHERE authenticated=1", time.Now().Add(-time.Second).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
+}
+
+func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	requireStatus(t, b.req("GET", "/setup", nil, nil), 200)
+	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {"wrong"}, "password": {testPassword}}), 401)
+	token, _ := os.ReadFile(filepath.Join(app.store.dir, "bootstrap.token"))
+	if _, err := app.store.db.Exec("UPDATE bootstrap SET expires=0"); err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 401)
+	if err := app.store.prepareBootstrap(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	token, _ = os.ReadFile(filepath.Join(app.store.dir, "bootstrap.token"))
+	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {"short"}}), 400)
+	// Simulate a second already-open setup tab; its token must become unusable.
+	other := &browser{app: app}
+	requireStatus(t, other.req("GET", "/setup", nil, nil), 200)
+	initialize(t, b)
+	requireStatus(t, other.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 401)
+	app.authSlot <- struct{}{}
+	requireStatus(t, b.req("POST", "/login", url.Values{}, nil), 429)
+	<-app.authSlot
+}
+
+func TestDurableRateLimitAndProxyLog(t *testing.T) {
+	app, logs := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+	// One attempt was used by setup. Forwarded headers must not affect the budget.
+	for i := 0; i < 9; i++ {
+		requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-Forwarded-For": {"192.0.2.5"}, "X-MeshMux-Client-Ip": {"192.0.2.6"}}), 401)
+	}
+	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
+	if strings.Contains(logs.String(), `"ban_candidate":true`) || strings.Contains(logs.String(), "192.0.2.") {
+		t.Fatal("untrusted proxy address logged as candidate")
+	}
+	c := app.cfg
+	app.Close()
+	again, err := newServer(c, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	b.app = again
+	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
+	again.now = func() time.Time { return time.Now().Add(11 * time.Minute) }
+	again.cfg.DirectProxy = true
+	requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-MeshMux-Client-Ip": {"192.0.2.8"}}), 401)
+	var found bool
+	for _, line := range strings.Split(logs.String(), "\n") {
+		var event map[string]any
+		if json.Unmarshal([]byte(line), &event) == nil && event["ban_candidate"] == true && event["client_ip"] == "192.0.2.8" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing explicit direct-Caddy candidate")
+	}
+}
+
+func TestDatabaseFailureClosedAndHeaders(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	w := b.req("GET", "/healthz", nil, nil)
+	requireStatus(t, w, 200)
+	for _, header := range []string{"Content-Security-Policy", "X-Operation-ID", "X-Content-Type-Options", "Referrer-Policy"} {
+		if w.Header().Get(header) == "" {
+			t.Fatalf("missing %s", header)
+		}
+	}
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("cache enabled")
+	}
+	app.store.db.Close()
+	requireStatus(t, b.req("GET", "/healthz", nil, nil), 503)
+	requireStatus(t, b.req("GET", "/login", nil, nil), 503)
+	// Missing/invalid session is unauthorized even when the DB is unavailable;
+	// a syntactically valid session must report DB failure, never authenticate.
+	b.cookie = &http.Cookie{Name: app.cookieName(), Value: randomToken()}
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 503)
+}
+
+func TestSessionCapacityAndMigrationRollback(t *testing.T) {
+	app, _ := testApp(t)
+	for i := 0; i < 256; i++ {
+		if _, _, err := app.store.newSession(false, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := app.store.newSession(false, time.Now()); err == nil {
+		t.Fatal("unbounded anonymous sessions")
+	}
+	if _, _, err := app.store.newSession(false, time.Now().Add(16*time.Minute)); err != nil {
+		t.Fatal("expired rows not reclaimed", err)
+	}
+	dir := filepath.Join(t.TempDir(), "broken")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "meshmux.db")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("CREATE TABLE sessions(existing TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if s, err := openStore(dir); err == nil {
+		s.Close()
+		t.Fatal("broken migration accepted")
+	}
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count, version int
+	if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='admin'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || version != 0 {
+		t.Fatal("migration failed to roll back")
+	}
+}
+
+func TestPageCoverage(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	loginAs(t, b, testPassword)
+	for _, nav := range navigation {
+		w := b.req("GET", nav.Path, nil, nil)
+		requireStatus(t, w, 200)
+		if !strings.Contains(w.Body.String(), nav.Title) {
+			t.Fatal("missing page title")
+		}
+	}
+	requireStatus(t, b.req("GET", "/status", nil, nil), 200)
+	requireStatus(t, b.req("GET", "/assets/app.css", nil, nil), 200)
+	requireStatus(t, b.req("GET", "/assets/htmx.min.js", nil, nil), 200)
+}

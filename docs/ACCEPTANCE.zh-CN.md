@@ -24,6 +24,8 @@
 - [ ] Caddy HTTPS/Fail2ban 的候选或隔离验证；本 PR 不操作真实系统服务、组网数据库或代理内核。
 - [ ] 本地 Web 桌面/手机基础 UI 可交互，空状态诚实；CI 通过。
 
+阶段一自动化、候选验证和浏览器证据记录在 [previews/README](previews/README.md)；这里保留人工出口验收勾选，CI 成功不代替用户验收或 Debian 13 部署。
+
 ## v1.0.0 必须完成的真实用户闭环
 
 - [ ] Debian 13 新环境可执行 install hub|edge|out，单机 Hub+Line、Hub+Line、Hub+Line+Out 三种拓扑正常，Out 可选。

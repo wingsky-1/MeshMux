@@ -1,0 +1,21 @@
+# Candidate only. Replace the example hostname before validating in an isolated VM.
+# Keep management on a dedicated hostname; never enable raw access logging here.
+{
+	admin off
+}
+admin.example.invalid {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	# The anonymous health probe is local-only, not a public diagnostic endpoint.
+	@health path /healthz
+	respond @health 404
+	reverse_proxy 127.0.0.1:9080 {
+		# Strip ALL client-provided copies before setting one transport-peer address.
+		header_up X-MeshMux-Client-IP {http.request.remote.host}
+	}
+}
+# Default Web mode ignores this header and produces NO IP ban candidates.
+# Enable --direct-caddy only when the browser reaches this Caddy directly.
+# Behind Cloudflare/CDN/another proxy: keep --direct-caddy OFF and Web jail disabled.

@@ -13,13 +13,15 @@ MeshMux 按 SemVer 2.0.0，**v1.0.0 是首个公开稳定版本**。开发里程
 5. 记录完成、未完成、真实执行的测试、影响、恢复与风险；CI 绿灯后获得明确验收再合并，及时清理过期分支。
 6. 修改公开行为/范围时更新少量直接相关文档，避免另建重复文档。正式发行另行固定 manifest 与完成隔离环境 E2E。
 
-## 当前 Go 脚手架
+## 当前 Go 实现
 
 - cmd/meshmux：CLI 的 install 占位入口，返回非零、无副作用。
 - internal/product：基础角色模型和契约测试。
 - docs/：产品、架构、运维、安全与验收；docs/adr 仅在真实架构取舍时补充。
 - .github/workflows/ci.yml：gofmt、vet、test、race、build。
-- **尚未有可用 Web、Agent、安装器、订阅生成器或可运行的 proxy/Mesh 逻辑。**
+- cmd/meshmux-web、internal/web：非 root Web 服务、安全认证/会话、SQLite 和嵌入式 templ/HTMX 页面。
+- **Agent、安装器、订阅生成器及 proxy/Mesh 逻辑仍未实现。**
+- 隔离运行、模板再生成、安全验收与恢复见 [WEB_DEVELOPMENT](WEB_DEVELOPMENT.zh-CN.md)，依赖见 [DEPENDENCIES](DEPENDENCIES.zh-CN.md)。
 
 本地运行：
 
@@ -29,6 +31,7 @@ go vet ./...
 go test ./...
 go test -race ./...
 go build ./cmd/meshmux
+go build ./cmd/meshmux-web
 ~~~
 
 Go 当前使用 1.27.2；目标系统初始仅 Debian 13 amd64/arm64。使用 sqlite 驱动/CGO 前先核实多架构可构建性。
