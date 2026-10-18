@@ -1,0 +1,14 @@
+[meshmux-web]
+# Enable ONLY after verifying direct-client -> local Caddy, --direct-caddy,
+# IPv4/IPv6 log matches and firewall behavior in an isolated Debian 13 VM.
+# NEVER enable behind Cloudflare/CDN/shared proxy egress.
+enabled = false
+filter = meshmux-web
+backend = systemd
+port = http,https
+protocol = tcp
+banaction = nftables-multiport
+maxretry = 5
+findtime = 10m
+bantime = 10m
+usedns = no

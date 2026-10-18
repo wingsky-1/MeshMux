@@ -29,10 +29,45 @@ jobs:
       - name: Race test
         run: go test -race ./...
       - name: Build
-        run: go build -o /tmp/meshmux ./cmd/meshmux
+        run: |
+          go build -o /tmp/meshmux ./cmd/meshmux
+          go build -o /tmp/meshmux-web ./cmd/meshmux-web
       - name: CLI must fail closed before installer exists
         run: |
           if /tmp/meshmux install hub; then
             echo 'unimplemented install unexpectedly succeeded' >&2
             exit 1
           fi
+
+  web-preview:
+    # Real browser evidence runs here because restricted local containers may
+    # have no non-root UID or browser sockets. No production credentials/services.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build isolated Web
+        run: go build -o /tmp/meshmux-web ./cmd/meshmux-web
+      - name: Prepare browser test runtime
+        run: |
+          npm install --prefix "$RUNNER_TEMP/meshmux-browser" --no-save --package-lock=false playwright@1.62.1
+          node "$RUNNER_TEMP/meshmux-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Browser flow and responsive screenshots
+        env:
+          NODE_PATH: ${{ runner.temp }}/meshmux-browser/node_modules
+        run: node scripts/browser-smoke.cjs
+      - name: Upload review screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-preview
+          path: artifacts/web-preview/*.png
+          retention-days: 14
+          if-no-files-found: error

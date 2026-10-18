@@ -1,0 +1,6 @@
+{"time":"2026-10-18T12:00:00Z","level":"WARN","msg":"authentication_failed","operation_id":"abcdefghijklmnopqrstuv","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"192.0.2.8"}
+{"time":"2026-10-18T12:00:01.123456Z","level":"WARN","msg":"authentication_failed","operation_id":"abcdefghijklmnopqrstuv","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"2001:db8::8"}
+{"time":"2026-10-18T12:00:02Z","level":"WARN","msg":"authentication_failed","operation_id":"abcdefghijklmnopqrstuv","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":false,"client_ip":""}
+{"time":"2026-10-18T12:00:03Z","level":"INFO","msg":"web_event","operation_id":"abcdefghijklmnopqrstuv","stage":"web","error_code":"AUTH_RATE_LIMITED"}
+{"time":"2026-10-18T12:00:04Z","level":"WARN","msg":"authentication_failed","operation_id":"abcdefghijklmnopqrstuv","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":false,"client_ip":"192.0.2.9"}
+{"time":"2026-10-18T12:00:05Z","level":"WARN","msg":"authentication_failed","operation_id":"abcdefghijklmnopqrstuv","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"bad.example.invalid"}

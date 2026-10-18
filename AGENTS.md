@@ -5,10 +5,10 @@
 ## 1. 产品边界与版本
 
 - **首个公开稳定发行版是 `v1.0.0`，使用 SemVer 2.0.0。** 此前允许连续合并小范围 Issue/PR，但不默认发布 `0.x`；不得将 PR 编号/开发阶段误称为发行版。
-- `v1.0.0` 必须闭环：Debian 13 宿主机 `install`、Hub / Line / 可选 Out 原生 sing-box 纳管、Headscale Mesh 设备/子网路由、订阅创建/删除、客户端/服务端分流配置，及这些能力必需的安全、日志与配置回退。
+- `v1.0.0` 必须闭环：Debian 13 宿主机 `install`、Hub / Line / 可选 Out 原生 sing-box 纳管、Headscale Mesh 设备/子网路由、订阅创建/删除、客户端/服务端分流配置，Web 统一升级，以及这些能力必需的安全、日志与配置回退。
 - **Out optional、Mesh-only 不需要代理订阅、Subscriber ≠ Mesh Device ≠ VLESS credential、Web-first** 均不可破坏。客户端 iOS/Android 只是平台模板差异；不要在模型中复制设备类型。
 - CLI 面向用户仅有 `meshmux install`（可有受限选项）；后续管理通过 Hub Web。内部服务及救援机制不等同于用户管理 CLI。
-- 自助全节点升级、第三方组件更新、严格实时用户配额、多 Out 容错、额外平台兼容性属于 **post-v1.0.0**，不要偷偷扩大当前 PR 范围。
+- **v1.0.0 包含由 #11 单独实现的 Web 全节点统一升级**：Hub/Line/Out 的 MeshMux 程序及发行包中明确兼容的固定组件版本；不是任意上游组件、操作系统升级。#2 只交付认证/持久化边界，不提前引入通用任务引擎或升级器。严格实时用户配额、多 Out 容错、额外平台兼容性仍属于 **post-v1.0.0**。
 
 ## 2. Issue → PR → 合并：最小闭环
 

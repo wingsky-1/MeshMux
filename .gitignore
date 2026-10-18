@@ -22,3 +22,8 @@
 .idea/
 .vscode/
 .DS_Store
+
+# Local Web development state and build products
+.local-state/
+/meshmux-web
+artifacts/

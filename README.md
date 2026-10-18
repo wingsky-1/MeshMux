@@ -4,7 +4,24 @@
 
 MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管理原生 sing-box 代理线路、Headscale/Tailscale 异地组网，以及可选 AI Out 出口。手机可使用一份 sing-box 配置同时实现代理与 Mesh；也支持不需要代理订阅的纯 Mesh 设备和子网路由。
 
-> **当前状态：设计与无副作用 Go 脚手架，尚不能安装或部署。** 本仓库的 `install` 命令仍是拒绝执行的占位程序。下面的功能是 **v1.0.0 交付目标**，不是当前已实现功能。请勿用于生产环境。
+> **当前状态：可在隔离环境运行 Web 安全基座，尚不能安装或用于生产。** 本仓库的 `install` 命令仍是拒绝执行的占位程序。下方完整业务功能是 **v1.0.0 交付目标**，不是当前已实现功能。请勿用于生产环境。
+
+## 体验当前 Web
+
+已实现单管理员初始化、登录/退出/改密、服务端会话、SQLite、安全校验和手机/桌面基础管理台。代理、Mesh、订阅和安装仍未实现。
+
+在普通用户的隔离 Linux 环境（Go 1.27.2）运行：
+
+```sh
+go build -o ./bin/meshmux-web ./cmd/meshmux-web
+umask 077
+./bin/meshmux-web --listen 127.0.0.1:9080 --origin http://127.0.0.1:9080 \
+  --data-dir "$PWD/.local-state" --dev-http
+```
+
+打开 `http://127.0.0.1:9080`，在另一终端读取 `.local-state/bootstrap.token`，通过页面设置管理员密码并登录。**Web 拒绝 root；开发 HTTP 仅限本机，手机验收使用 Caddy HTTPS。**
+
+[完整运行、安全行为和恢复说明](docs/WEB_DEVELOPMENT.zh-CN.md) · [界面截图与验收证据](docs/previews/README.md) · [依赖与许可证](docs/DEPENDENCIES.zh-CN.md)
 
 ## 核心设计
 
@@ -26,8 +43,9 @@ MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管
 | 订阅创建与删除 | sing-box/Mihomo 普通订阅、sing-box 单 VPN Mesh 配置、跨节点凭据精确撤销 |
 | 分流规则 | Web 编辑/验证客户端与服务端规则、国内外与 AI Out/Line 直出、明确兜底 |
 | 安全与恢复 | Web 认证、SSH/Web Fail2ban、自定义 SSH 端口、ACL、脱敏日志、配置校验与回退 |
+| Web 统一升级 | Hub/Line/Out 的 MeshMux 程序和发行包内已验证兼容的固定组件版本；分节点验证、失败回退及任务追踪（#11） |
 
-v1.0.0 以**能安装、能纳管、能联网、能安全创建/删除并恢复故障**为完成标准。全节点 MeshMux 自助升级、第三方组件跨版本升级、精确用户流量配额、复杂通知及多 Out 故障切换不阻塞 v1.0.0，后续在独立 Issue 中安排。
+v1.0.0 以**能安装、能纳管、能联网、能安全创建/删除、能在 Web 统一升级并恢复故障**为完成标准。统一升级由 #11 独立验收，不在当前 Web 安全基座实现。任意第三方组件跨版本升级、操作系统大版本升级、精确用户流量配额、复杂通知及多 Out 故障切换不属于 v1.0.0。
 
 完整清单见 [FEATURES](docs/FEATURES.zh-CN.md)，阶段拆分见 [ROADMAP](docs/ROADMAP.zh-CN.md)，发行条件见 [ACCEPTANCE](docs/ACCEPTANCE.zh-CN.md)。
 
