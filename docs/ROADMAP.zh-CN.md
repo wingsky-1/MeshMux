@@ -10,9 +10,10 @@
 | PR3 | 原生 sing-box 线路纳管、用户创建/删除、标准订阅、可选 Out 与 AI 双跳 | 单 Line/多 Line/有 Out/无 Out 真正连接，撤销精确有效 |
 | PR4 | Headscale Mesh 设备、Mesh-only、子网路由、sing-box 单 VPN | NAS 与手机分别入网；网段获批准可达；多设备互不影响 |
 | PR5 | Web 路由/分流编辑、SSID、客户端/服务端配置生成、校验发布 | CN/国际/AI/Tailnet/DNS、无 Out 和 Out 故障策略验证 |
-| PR6 | 安全/诊断/备份回归，隔离三角色安装 E2E、安装与恢复文档 | P0 全面验收通过、满足 v1.0.0 发行门槛 |
+| Phase 6（Issue #11） | Web 全节点统一升级：发行清单、受限执行、任务持久化、Hub 自更新、逐节点验证与失败回退 | 两版测试制品 A→B、Hub/Line/Out 版本回读和异常恢复，不支持任意上游升级 |
+| Phase 7（Issue #12） | 安全/诊断/备份回归，隔离三角色安装 E2E、安装与恢复文档 | P0 全面验收通过、满足 v1.0.0 发行门槛 |
 
-PR2～PR6 可根据实际依赖拆成更小 PR，前提是每个 PR 仍独立可测试、可回退；不能把“更多 PR”当作工程产出目标。**全节点 Web 程序升级与完整运维面板移到 post-v1.0.0**，另开 Issue 再估算。
+后续阶段的详细范围与依赖以 [v1.0.0 总控 Issue #4](https://github.com/wingsky-1/MeshMux/issues/4) 和 #5～#12 为准，允许拆为更小且独立可测试的 PR。**#11 统一升级是 v1.0.0 P0；完整通用运维面板仍非首版目标。** 本阶段 #2 不提前实现升级器或通用任务引擎。
 
 ## 近期：PR1 的明确边界
 
@@ -26,4 +27,4 @@ PR1 只建立 **可信 Web 基座**：非 root loopback、单管理员、会话/
 
 ## 阶段一交付入口
 
-Issue #2 的 Web 基座提供 [本机运行说明](WEB_DEVELOPMENT.zh-CN.md) 与 [界面/验证证据](previews/README.md)。验收和合并后才能推进安装器及受限 Agent；后续业务能力未提前实现。
+Issue #2 的 Web 基座提供 [本机运行说明](WEB_DEVELOPMENT.zh-CN.md) 与 [界面/验证证据](previews/README.md)。验收和合并后再推进安装器及受限 Agent；统一升级在 #11 独立实现。

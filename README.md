@@ -43,8 +43,9 @@ umask 077
 | 订阅创建与删除 | sing-box/Mihomo 普通订阅、sing-box 单 VPN Mesh 配置、跨节点凭据精确撤销 |
 | 分流规则 | Web 编辑/验证客户端与服务端规则、国内外与 AI Out/Line 直出、明确兜底 |
 | 安全与恢复 | Web 认证、SSH/Web Fail2ban、自定义 SSH 端口、ACL、脱敏日志、配置校验与回退 |
+| Web 统一升级 | Hub/Line/Out 的 MeshMux 程序和发行包内已验证兼容的固定组件版本；分节点验证、失败回退及任务追踪（#11） |
 
-v1.0.0 以**能安装、能纳管、能联网、能安全创建/删除并恢复故障**为完成标准。全节点 MeshMux 自助升级、第三方组件跨版本升级、精确用户流量配额、复杂通知及多 Out 故障切换不阻塞 v1.0.0，后续在独立 Issue 中安排。
+v1.0.0 以**能安装、能纳管、能联网、能安全创建/删除、能在 Web 统一升级并恢复故障**为完成标准。统一升级由 #11 独立验收，不在当前 Web 安全基座实现。任意第三方组件跨版本升级、操作系统大版本升级、精确用户流量配额、复杂通知及多 Out 故障切换不属于 v1.0.0。
 
 完整清单见 [FEATURES](docs/FEATURES.zh-CN.md)，阶段拆分见 [ROADMAP](docs/ROADMAP.zh-CN.md)，发行条件见 [ACCEPTANCE](docs/ACCEPTANCE.zh-CN.md)。
 

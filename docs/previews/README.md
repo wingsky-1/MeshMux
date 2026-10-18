@@ -1,6 +1,6 @@
 # 阶段一界面与验收证据
 
-页面由实际 Go Web/templ 渲染，没有静态假登录或业务成功状态。截图将在 PR 的 `web-preview` Actions artifact 中提供，并在审核前同步到本目录。
+页面由实际 Go Web/templ 渲染，没有静态假登录或业务成功状态。桌面/手机截图作为 PR 的 `web-preview` Actions artifact 保存；不将自动化截图纳入源码提交，避免仓库积累无关二进制产物。
 
 ## 已运行的本地验证
 
@@ -12,9 +12,12 @@
 
 ## CI 与浏览器验收
 
+- PR #13 提交 `30f29de` 的 [CI run #39140837582](https://github.com/wingsky-1/MeshMux/actions/runs/39140837582) 已完成且 `go`、`web-preview` 均成功（2026-10-18 UTC）。
+- [web-preview 截图 artifact](https://github.com/wingsky-1/MeshMux/actions/runs/39140837582/artifacts/12141855681) 包含桌面登录/概览/设置以及手机登录/概览/任务截图，供审阅。截图证明的是开发 HTTP 下的 UI，不等价于公网 HTTPS 或手机真机联调。
+
 现有 Go CI 保留。另设 `web-preview` 作业，仅在隔离 runner 中构建服务、安装固定 Playwright 1.62.1 测试运行时，并执行 `scripts/browser-smoke.cjs`。普通用户真实启动 loopback Web，临时目录不含任何个人基础设施信息。测试截图使用显式本机 HTTP 开发模式，界面会显示提醒；生产 Secure Cookie 在 HTTP 安全测试中另行断言。
 
-浏览器流程目标：初始化、错误密码反馈、登录、只读 HTMX 刷新、八个页面手机无横向溢出、改密后重新登录、CSRF 拒绝、退出。截图尺寸为桌面 1440×1000、手机 390×844。测试未使用真实代理/组网，未进行 iOS/Android 真机或公网部署验收。
+浏览器 CI 实测流程：初始化、错误密码反馈、登录、只读 HTMX 刷新、八个页面手机宽度下无横向溢出、改密后重新登录、CSRF 拒绝、退出。截图尺寸为桌面 1440×1000、手机 390×844。测试未使用真实代理/组网，未进行 iOS/Android 真机或公网部署验收。
 
 本地容器只映射 root，不能运行普通用户进程，Chrome 创建 Unix socket 也被环境拒绝；云浏览器无法访问本地 loopback。因此这些实际非 root/浏览器证据交给 GitHub Actions 执行，不修改产品的 root 拒绝边界来绕过环境限制。
 
