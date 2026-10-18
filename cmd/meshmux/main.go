@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/product"
