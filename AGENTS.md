@@ -28,7 +28,7 @@
 - Agent 只执行明确列举的行为；不能支持任意 shell、路径、系统命令、外部 URL 或绕过配置校验。Out 入站默认拒绝非授权 Line。
 - 每项可能影响运行状态的操作先 validate → stage → apply → readback；失败显式 partial/failed，并提供有限回退。配对凭据/任务修订和服务权限必须受到约束。
 - **未经用户单独授权，不执行现网安装、清理、重启、迁移、Headscale 注销或发布有效订阅。** 开发和自动测试默认只操作隔离 fixture/VM。
-- 当前 `cmd/meshmux` 安装占位程序故意返回非零、无副作用；实现可验收安装器前不得移除这种保护。
+- Issue #5 PR A 增加只读 `install hub --plan` 环境预检与组件 SHA-256 锁；默认 `install hub` 仍须明确拒绝修改宿主机，直到 PR B 的 staging/apply/真实 Debian 13 验收完成。不把计划成功当成主机安装成功。
 
 ## 4. 日志与交付
 
