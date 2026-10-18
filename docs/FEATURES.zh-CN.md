@@ -2,9 +2,9 @@
 
 本表为**规划目标而非实现状态**。**P0 = 首个正式可发布版本 v1.0.0 必须验收**；**P1 = v1.0.0 之后**再由 Issue/PR 安排。功能实现和产品发行是两回事，单个 PR 不等于一个 Release。
 
-## 当前实现（Issue #2）
+## 当前实现（Issue #2 与 Issue #5 PR A）
 
-Web 单管理员认证、安全会话、SQLite 迁移、基础控制台已提供隔离验收入口；业务页面仅空状态。Caddy/systemd/Fail2ban 为候选配置，真实安装与封禁未验收。详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)。下表仍是发行目标。
+Web 单管理员认证、安全会话、SQLite 迁移、基础控制台已提供隔离验收入口；业务页面仅空状态。Caddy/systemd/Fail2ban 为候选配置，真实安装与封禁未验收。Issue #5 PR A 提供 Debian 13 环境只读预检、计划、官方 Caddy/Headscale 制品 SHA-256 锁与未应用的服务候选配置；不提供 apply。详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)。下表仍是发行目标。
 
 ## P0：v1.0.0 最小可用闭环
 
