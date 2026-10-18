@@ -1,26 +1,25 @@
-# 可独立验收的 PR 路线图
+# v1.0.0 开发路线：Issue → 可验收 PR
 
-严格按依赖推进；**不把日期估算当作能跳过真机验收的理由**。
+**首个正式可发布版本为 v1.0.0**。PR0、PR1 等是交付阶段编号，不是语义化版本；不为中间开发阶段强制发布 \`v0.x\`。每个功能 Issue 都要规定范围、非目标和验收证据，合并 PR 由 CI 与明确验收支撑。
 
-| PR | 交付 | 验收重点 |
+| 阶段 | 最小交付与范围 | 出口验收 |
 | --- | --- | --- |
-| PR0 | 设计文档、ADR、Go 骨架、CI、贡献约束 | 无生产入口；文档 PR 可独立评审 |
-| PR1 | Web 安全基座（单管理员、SQLite、Caddy 计划、Fail2ban） | 无 Zero Trust，匿名/CSRF/暴力破解失败封闭 |
-| PR2 | Hub/Line/Out 安装与 outbound Agent 纳管 | Debian13 真正三角色安装、分阶段失败/回退 |
-| PR3 | 原生 sing-box 用户、可选 Out 双跳、订阅发布 | 不安装 Out 也能订阅，AI 双跳与异常回退证据 |
-| PR4 | Headscale、Mesh-only、子网路由、单 VPN 配置 | 平台中立设备、独立凭据、NAS 身份保留 |
-| PR5 | 路由策略 Web 编辑、规则模拟与分层发布 | 客户端/服务端/Out 故障策略一致 |
-| PR6 | Web 全节点升级、任务持久化、统一日志 | 版本收敛与 partial/rollback 真机证据 |
-| PR7 | 隔离三节点全新安装、发行、文档与现网迁移 | 安全门禁，明确现网人工授权 |
+| PR0（当前） | README、AGENTS、P0/P1、4A/部署/纳管设计、Go 最小骨架/CI | install 占位失败封闭，CI 成功，设计无矛盾 |
+| PR1（Issue #2） | 单管理员 loopback Web、认证/会话、SQLite、Caddy 候选、登录防爆破、最小状态与日志 | 本地 Web 可登录、注销；匿名/CSRF/错误 Origin 被拒；不触碰生产服务 |
+| PR2 | Debian 13 Hub/Line/Out 的 install、受限 Agent 配对、SSH/VLESS 端口与 Fail2ban | 三角色隔离环境首次与重复安装、异常回退；目标机只执行 install |
+| PR3 | 原生 sing-box 线路纳管、用户创建/删除、标准订阅、可选 Out 与 AI 双跳 | 单 Line/多 Line/有 Out/无 Out 真正连接，撤销精确有效 |
+| PR4 | Headscale Mesh 设备、Mesh-only、子网路由、sing-box 单 VPN | NAS 与手机分别入网；网段获批准可达；多设备互不影响 |
+| PR5 | Web 路由/分流编辑、SSID、客户端/服务端配置生成、校验发布 | CN/国际/AI/Tailnet/DNS、无 Out 和 Out 故障策略验证 |
+| PR6 | 安全/诊断/备份回归，隔离三角色安装 E2E、安装与恢复文档 | P0 全面验收通过、满足 v1.0.0 发行门槛 |
 
-## 当前第一阶段准备
+PR2～PR6 可根据实际依赖拆成更小 PR，前提是每个 PR 仍独立可测试、可回退；不能把“更多 PR”当作工程产出目标。**全节点 Web 程序升级与完整运维面板移到 post-v1.0.0**，另开 Issue 再估算。
 
-1. 审核 PR0 文档及用户操作界面，确认 P0/非目标。
-2. PR1 先固定 HTTP route/auth/session/error model，不做 root 操作；SQLite migrations 与 API contract 可先行。
-3. 对 chi、templ、HTMX、SQLite driver 和 Argon2id 作最小选型试验，依赖锁定于第一处实际调用，不提前堆库。
-4. 建立 Web UI 桌面及移动截图基线、API auth/security 测试、登录失败记录脱敏测试、Fail2ban 集成用例。
-5. PR1 验收前不运行安装器，不改现有 Hub/Line/Out/家庭设备。
+## 近期：PR1 的明确边界
 
-## 项目管理
+PR1 只建立 **可信 Web 基座**：非 root loopback、单管理员、会话/CSRF、持久化基础数据、最小 UI、脱敏日志与测试；Caddy/Fail2ban 生成候选和集成验证。无需实现真实 Headscale、sing-box、远程 Agent、订阅发布、正式安装器或真实服务器变更。
 
-一个总控 Issue 维护产品边界与依赖顺序；PR 各自有“具体变更、已知风险、测试证据、回退方案、影响文档”。大型变更先 ADR，再实现。旧 Python 项目不再作为代码兼容目标，仅用来提取真实环境需求与验收案例。
+优先 Go 标准库，外部成熟依赖在第一次实际需要时引入并锁定；仅保留格式、vet、测试、构建及现有必要 race CI。不要用过长 Mock 流程伪装端到端验收。
+
+## 发行与版本
+
+完成全部 P0 且隔离环境真实验收，复核组件来源/校验值和恢复流程，才发布 Git tag \`v1.0.0\`（不移动、不复用 Tag）。之后按 SemVer：兼容新增功能 \`1.1.0\`，向后兼容修复 \`1.0.1\`，破坏兼容 \`2.0.0\`。具体是否兼容须同时考虑 CLI 引导方式、Web API、Agent 协议、持久化数据、订阅格式与节点身份。

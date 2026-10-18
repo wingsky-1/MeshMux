@@ -1,20 +1,27 @@
-# 开发和协作
+# 开发、PR 与协作
 
-## 原则
+## 版本与任务来源
 
-每次只做一个能独立验收的 PR。禁止直接在 main 推送未经测试的业务代码。用户以手机审阅 GitHub PR 为主要工作流，PR 描述需足够完整，中文文档优先。所有新增公共行为同时更新 FEATURES、ACCEPTANCE 与适当 ADR。
+MeshMux 按 SemVer 2.0.0，**v1.0.0 是首个公开稳定版本**。开发里程碑用 Issue 与 PR 追踪，未完成 P0 验收不打版本标签。功能边界以 README、FEATURES、ACCEPTANCE 和 Issue 内容为准；若冲突先在同一 PR 修正文档。
 
-## 初始目录
+## 轻量化工作流
 
-- cmd/meshmux：未来唯一交互命令 install 的入口；PR0 是**拒绝实际执行**的占位实现。
-- internal/product：核心领域基本枚举与契约测试，后续扩展身份、任务、路由、配置模型。
-- docs：一切架构、风险、变更证据；docs/adr：不可随意覆盖的架构决策。
-- .github/workflows/ci.yml：格式、vet、race-test、build。
-- 不存在真实 Web、Agent、安装器、配置发布器，也不会创建系统服务。
+1. 在 Issue 明确范围、非目标、体验、失败处理和验收，确认依赖。
+2. 一项清晰能力对应一个可审阅 PR，不直接向 main 开发；不强制一次变更配多个 RFC/ADR/Issue。
+3. 代码采用现有最简单的正确结构，优先 Go 标准库及维护良好的成熟组件；依赖按需加入并固定版本。
+4. 开发时运行 gofmt、go vet、go test、go build；现有 CI race 检测保留，涉及权限/凭据/文件切换需覆盖失败路径。
+5. 记录完成、未完成、真实执行的测试、影响、恢复与风险；CI 绿灯后获得明确验收再合并，及时清理过期分支。
+6. 修改公开行为/范围时更新少量直接相关文档，避免另建重复文档。正式发行另行固定 manifest 与完成隔离环境 E2E。
 
-## 构建
+## 当前 Go 脚手架
 
-需要 Go 1.27.2。源码中目前没有第三方依赖。CI 执行：
+- cmd/meshmux：CLI 的 install 占位入口，返回非零、无副作用。
+- internal/product：基础角色模型和契约测试。
+- docs/：产品、架构、运维、安全与验收；docs/adr 仅在真实架构取舍时补充。
+- .github/workflows/ci.yml：gofmt、vet、test、race、build。
+- **尚未有可用 Web、Agent、安装器、订阅生成器或可运行的 proxy/Mesh 逻辑。**
+
+本地运行：
 
 ~~~sh
 gofmt -l ./cmd ./internal
@@ -24,12 +31,10 @@ go test -race ./...
 go build ./cmd/meshmux
 ~~~
 
-编译环境与目标 Debian13 系统分离；新增 CGO/SQLite 驱动时必须明确 amd64/arm64 可发行性，不允许无解释的 CGO 隐式要求。
+Go 当前使用 1.27.2；目标系统初始仅 Debian 13 amd64/arm64。使用 sqlite 驱动/CGO 前先核实多架构可构建性。
 
-## 项目安全与日志
+## 保密与不操作现网
 
-禁止提交私有域名解析记录、真实 IP、订阅、密码、Key、UUID、数据库备份、真实运行日志。测试使用虚构域名 example.invalid、RFC5737 文档地址和造假的 fixture。敏感问题报告贴脱敏 error_code、operation_id、阶段与重现步骤。
+公开代码不得包含真实订阅 URL、IP、域名、密钥、Headscale 身份或私人备份。示例统一使用 example.invalid 和 RFC5737 文档地址。无需用户单独授权的 PR 不执行生产安装、清理、路由修改或发行。
 
-## PR 验收清单
-
-CI 全绿；无空白按钮/无条件成功返回；失败路径已测；不存在对生产环境的隐式写入；提供本地可复现步骤；有需要时提供界面截图和脱敏日志；维护本 PR 对应文档。首次全新 VPS 安装通过前，README 必须保留“NOT READY TO INSTALL”。
+v1.0.0 前的 README 保留显著的 NOT READY TO INSTALL 标识；本项目的“下一阶段”并不意味着现在可以部署。
