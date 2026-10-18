@@ -4,7 +4,11 @@
 
 MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管理原生 sing-box 代理线路、Headscale/Tailscale 异地组网，以及可选 AI Out 出口。手机可使用一份 sing-box 配置同时实现代理与 Mesh；也支持不需要代理订阅的纯 Mesh 设备和子网路由。
 
-> **当前状态：可在隔离环境运行 Web 安全基座，尚不能安装或用于生产。** 本仓库的 `install` 命令仍是拒绝执行的占位程序。下方完整业务功能是 **v1.0.0 交付目标**，不是当前已实现功能。请勿用于生产环境。
+> **当前状态：Web 安全基座可在隔离环境运行；Hub 安装器仅具备只读 `--plan` 预检，尚不能真正安装或用于生产。** `meshmux install hub` 仍会明确拒绝写入宿主机。下方完整业务功能是 **v1.0.0 交付目标**，不是当前已实现功能。请勿用于生产环境。
+
+## Issue #5 · 只读 Hub 预检（PR A）
+
+`meshmux install hub --plan --management-domain console.example.org --subscription-domain sub.example.org --headscale-domain mesh.example.org` 可输出环境预检和固定组件清单（使用真实域名时才有意义）。**没有安装 apply；不下载或执行软件，不修改系统服务**。参见 [Hub 安装器阶段说明](docs/INSTALL_HUB.zh-CN.md)。
 
 ## 体验当前 Web
 
