@@ -182,7 +182,6 @@ StateDirectory=meshmux-caddy
 StateDirectoryMode=0700
 Environment=XDG_DATA_HOME=/var/lib/meshmux-caddy
 ExecStart=/usr/local/libexec/meshmux-caddy run --config /etc/meshmux/Caddyfile --adapter caddyfile
-ExecReload=/usr/local/libexec/meshmux-caddy reload --config /etc/meshmux/Caddyfile --adapter caddyfile
 Restart=on-failure
 RestartSec=5s
 UMask=0077
