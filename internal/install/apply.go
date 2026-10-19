@@ -379,7 +379,20 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	if _, err := opts.Runner.Run(ctx, caddyPath, "validate", "--config", stagedConfigs["/etc/meshmux/Caddyfile"], "--adapter", "caddyfile"); err != nil {
 		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "CADDY_CONFIG_INVALID", "Review the generated Caddy configuration and domain values.")
 	}
-	if _, err := opts.Runner.Run(ctx, headscalePath, "--config", stagedConfigs["/etc/meshmux/headscale.yaml"], "configtest"); err != nil {
+	// Configtest must never initialize the final SQLite database or production
+	// Noise/DERP keys as root. All mutable paths are redirected to a 0700
+	// operation-local scratch directory, following the my-sub staging pattern.
+	validationDir := filepath.Join(stageDir, "headscale-validation")
+	if err := ensureDirectory(validationDir, 0700); err != nil {
+		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check installer staging directory permissions.")
+	}
+	validationConfig := filepath.Join(validationDir, "headscale.yaml")
+	isolatedYAML := strings.ReplaceAll(targetFiles["/etc/meshmux/headscale.yaml"], "/var/lib/meshmux-headscale/", validationDir+"/")
+	isolatedYAML = strings.ReplaceAll(isolatedYAML, "/run/meshmux-headscale/", validationDir+"/")
+	if err := os.WriteFile(validationConfig, []byte(isolatedYAML), 0600); err != nil {
+		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check installer staging directory permissions.")
+	}
+	if _, err := opts.Runner.Run(ctx, headscalePath, "--config", validationConfig, "configtest"); err != nil {
 		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "HEADSCALE_CONFIG_INVALID", "Review the generated Headscale configuration for version 0.29.5.")
 	}
 	if err := record("stage", "validated", ""); err != nil {
@@ -999,6 +1012,12 @@ func checkTargetOwnership(root string, targets []string, state InstallState, has
 		}
 		if _, ok := state.ManagedFiles[target]; !ok {
 			return &InstallError{Stage: "preflight", Code: "MANAGED_PATH_CONFLICT", Recovery: "This file is not recorded as MeshMux-managed; inspect it manually instead of overwriting it."}
+		}
+		// An administrator's subsequent edits are not silently overwritten by
+		// install --repair. First inspect and deliberately reconcile the drift.
+		digest, digestErr := sha256File(rooted(root, target))
+		if digestErr != nil || digest != state.ManagedFiles[target] {
+			return &InstallError{Stage: "preflight", Code: "MANAGED_FILE_DRIFT", Recovery: "A recorded MeshMux file has changed outside the installer. Back it up and reconcile it manually before repair."}
 		}
 	}
 	return nil
