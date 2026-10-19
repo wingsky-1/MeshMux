@@ -11,18 +11,18 @@ import (
 )
 
 func TestDomains(t *testing.T) {
-	good := Config{"console.example.org", "sub.example.org", "mesh.example.org"}
+	good := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
 	if err := good.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []Config{
-		{"console.example.org", "console.example.org", "mesh.example.org"},
-		{"console.example.org", "sub.example.org", "mesh.example.org\nadmin off"},
-		{"https://console.example.org", "sub.example.org", "mesh.example.org"},
-		{"console.example.org", "sub.example.org", "localhost"},
-		{"CONSOLE.example.org", "sub.example.org", "mesh.example.org"},
-		{"console.example.org", "sub.example.org", "192.0.2.2"},
-		{"console.example.org", "sub.example.org", "foo_.example.org"},
+		{"console.example.org", "console.example.org", "mesh.example.org", false},
+		{"console.example.org", "sub.example.org", "mesh.example.org\nadmin off", false},
+		{"https://console.example.org", "sub.example.org", "mesh.example.org", false},
+		{"console.example.org", "sub.example.org", "localhost", false},
+		{"CONSOLE.example.org", "sub.example.org", "mesh.example.org", false},
+		{"console.example.org", "sub.example.org", "192.0.2.2", false},
+		{"console.example.org", "sub.example.org", "foo_.example.org", false},
 	} {
 		if err := c.Validate(); err == nil {
 			t.Fatalf("invalid domain accepted: %+v", c)
@@ -107,9 +107,9 @@ func TestReadOnlyPortProbeDetectsConflict(t *testing.T) {
 }
 
 func TestPlanDoesNotMisreportInstallation(t *testing.T) {
-	c := Config{"console.example.org", "sub.example.org", "mesh.example.org"}
+	c := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
 	p := BuildPlan("id", c, "amd64", []Check{{Name: "os", Status: "pass"}, {Name: "public_https", Status: "pending"}}, []int{60794})
-	if p.ApplyAvailable || p.Status == "installed" || len(p.FirewallChanges) == 0 {
+	if !p.ApplyAvailable || p.Status == "installed" || len(p.FirewallChanges) == 0 {
 		t.Fatalf("unsafe plan: %+v", p)
 	}
 	p = BuildPlan("id", c, "amd64", []Check{{Name: "os", Status: "fail"}}, nil)

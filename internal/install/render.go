@@ -9,6 +9,12 @@ import (
 // CandidateFiles returns deterministic, UNAPPLIED configurations for Phase B.
 // All interpolation comes from Config.Validate(), never remote user input.
 func CandidateFiles(c Config, ssh []int) (map[string]string, error) {
+	return candidateFiles(c, ssh, false)
+}
+
+// candidateFiles permits internal TLS only to the isolated systemd integration
+// test; no public CLI option can enable it.
+func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -22,11 +28,15 @@ func CandidateFiles(c Config, ssh []int) (map[string]string, error) {
 		}
 		ports = append(ports, strconv.Itoa(p))
 	}
+	tlsLine := ""
+	if internalTLS {
+		tlsLine = "\ttls internal\n"
+	}
 	caddy := fmt.Sprintf(`{
 	admin off
 }
 %s {
-	header {
+%s	header {
 		Strict-Transport-Security "max-age=31536000"
 		-Server
 	}
@@ -37,14 +47,14 @@ func CandidateFiles(c Config, ssh []int) (map[string]string, error) {
 	}
 }
 %s {
-	respond "Subscription service is not yet installed" 404
+%s	respond "Subscription service is not yet installed" 404
 }
 %s {
-	@private path /api/* /swagger* /metrics* /debug/*
+%s	@private path /api/* /swagger* /metrics* /debug/*
 	respond @private 404
 	reverse_proxy 127.0.0.1:8080
 }
-`, c.ManagementDomain, c.SubscriptionDomain, c.HeadscaleDomain)
+`, c.ManagementDomain, tlsLine, c.SubscriptionDomain, tlsLine, c.HeadscaleDomain, tlsLine)
 
 	headscale := fmt.Sprintf(`# Headscale 0.29.5, aligned to the tagged official config-example.yaml.
 server_url: https://%s
@@ -112,7 +122,7 @@ User=meshmux
 Group=meshmux
 StateDirectory=meshmux
 StateDirectoryMode=0700
-ExecStart=/usr/local/libexec/meshmux-web --listen 127.0.0.1:9080 --origin https://%s --data-dir /var/lib/meshmux
+ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --data-dir /var/lib/meshmux%s
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -132,7 +142,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, c.ManagementDomain)
+`, c.ManagementDomain, directCaddyArg(c))
 
 	headscaleUnit := `[Unit]
 Description=MeshMux Headscale coordination and embedded DERP/STUN
@@ -203,7 +213,7 @@ StandardError=journal
 WantedBy=multi-user.target
 `
 	// SSH jail is for verified effective listeners; it does not alter sshd.
-	sshJail := fmt.Sprintf(`# Candidate only; apply after checking jail status and nftables in a Debian 13 VM.
+	sshJail := fmt.Sprintf(`# MeshMux-owned SSH jail. It does not alter sshd or the host nftables ruleset.
 [meshmux-sshd]
 enabled = true
 filter = sshd
@@ -216,6 +226,16 @@ findtime = 10m
 bantime = 15m
 usedns = no
 `, strings.Join(ports, ","))
+	webJail := "[meshmux-web]\\nenabled = false\\nfilter = meshmux-web\\nbackend = systemd\\nport = http,https\\nprotocol = tcp\\nbanaction = nftables-multiport\\nmaxretry = 5\\nfindtime = 10m\\nbantime = 10m\\nusedns = no\\n"
+	if c.DirectCaddy {
+		webJail = strings.Replace(webJail, "enabled = false", "enabled = true", 1)
+	}
+	webFilter := `[Definition]
+failregex = ^\\{"time":"[^"]*","level":"WARN","msg":"authentication_failed","operation_id":"[A-Za-z0-9_-]{22}","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"<ADDR>"\\}$
+ignoreregex =
+datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\\.%%f)?%%z
+journalmatch = _SYSTEMD_UNIT=meshmux-web.service
+`
 	return map[string]string{
 		"/etc/meshmux/Caddyfile":                        caddy,
 		"/etc/meshmux/headscale.yaml":                   headscale,
@@ -223,5 +243,14 @@ usedns = no
 		"/etc/systemd/system/meshmux-headscale.service": headscaleUnit,
 		"/etc/systemd/system/meshmux-caddy.service":     caddyUnit,
 		"/etc/fail2ban/jail.d/meshmux-ssh.local":        sshJail,
+		"/etc/fail2ban/jail.d/meshmux-web.local":        webJail,
+		"/etc/fail2ban/filter.d/meshmux-web.conf":       webFilter,
 	}, nil
+}
+
+func directCaddyArg(c Config) string {
+	if c.DirectCaddy {
+		return " --direct-caddy"
+	}
+	return ""
 }

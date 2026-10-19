@@ -1,0 +1,42 @@
+name: hub-vm
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'verify/issue5-hub-vm-*'
+
+permissions:
+  contents: read
+
+jobs:
+  debian13-systemd:
+    name: Debian 13 QEMU systemd full install
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Build production CLI and VM-only integration test
+        run: |
+          mkdir -p .ci/bin
+          CGO_ENABLED=0 go build -o .ci/bin/meshmux ./cmd/meshmux
+          go test -c -o .ci/bin/install.test ./internal/install
+      - name: Install QEMU and cloud-init image tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils openssh-client
+      - name: Boot official Debian 13 and verify Hub install, repair and reboot
+        run: bash scripts/ci-hub-vm.sh
+      - name: Keep VM serial console on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-vm-serial
+          path: ${{ runner.temp }}/meshmux-hub-vm/serial.log
+          retention-days: 7
+          if-no-files-found: warn

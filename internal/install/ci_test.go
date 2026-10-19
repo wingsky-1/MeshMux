@@ -81,3 +81,16 @@ func TestWriteComponentFixtures(t *testing.T) {
 		}
 	}
 }
+
+func TestSSLocalAddressDebian13(t *testing.T) {
+	lines := "udp UNCONN 0 0 0.0.0.0:3478 0.0.0.0:* users:((\"headscale\",pid=42,fd=4))\n" +
+		"tcp LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:((\"headscale\",pid=42,fd=3))"
+	if !hasListenerPort(lines, 3478) || !hasListenerPort(lines, 8080) || hasListenerPort(lines, 443) {
+		t.Fatalf("Debian 13 ss parser failed: %s", lines)
+	}
+	ssh := "tcp LISTEN 0 128 0.0.0.0:60794 0.0.0.0:* users:((\"sshd\",pid=789,fd=6))"
+	ports := parseSSHListeners(ssh)
+	if len(ports) != 1 || ports[0] != 60794 {
+		t.Fatalf("SSH parser misread protocol-aware ss: %v", ports)
+	}
+}

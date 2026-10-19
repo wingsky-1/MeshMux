@@ -6,12 +6,12 @@ import (
 )
 
 func TestCandidateBoundaries(t *testing.T) {
-	c := Config{"console.example.org", "sub.example.org", "mesh.example.org"}
+	c := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
 	files, err := CandidateFiles(c, []int{60794})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 6 {
+	if len(files) != 8 {
 		t.Fatalf("unexpected files: %d", len(files))
 	}
 	caddy := files["/etc/meshmux/Caddyfile"]
@@ -28,15 +28,24 @@ func TestCandidateBoundaries(t *testing.T) {
 			t.Fatalf("missing Headscale control: %s", s)
 		}
 	}
-	if strings.Contains(web, "User=root") || !strings.Contains(web, "User=meshmux") ||
+	if strings.Contains(web, "User=root") || !strings.Contains(web, "User=meshmux") || !strings.Contains(web, "/usr/local/libexec/meshmuxd __internal-web") ||
 		!strings.Contains(web, "--origin https://console.example.org") ||
 		!strings.Contains(jail, "port = 60794") || strings.Contains(jail, "port = 22") {
 		t.Fatal("unsafe service or SSH jail candidate")
 	}
+	if files["/etc/fail2ban/jail.d/meshmux-web.local"] == "" || files["/etc/fail2ban/filter.d/meshmux-web.conf"] == "" || !strings.Contains(files["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = false") {
+		t.Fatal("Web Fail2ban must remain disabled behind an unverified proxy")
+	}
+	c.DirectCaddy = true
+	directFiles, err := CandidateFiles(c, []int{60794})
+	if err != nil || !strings.Contains(directFiles["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = true") || !strings.Contains(directFiles["/etc/systemd/system/meshmux-web.service"], "--direct-caddy") {
+		t.Fatal("direct-Caddy opt-in did not enable the trusted-client mode")
+	}
+	c.DirectCaddy = false
 	if _, err := CandidateFiles(c, nil); err == nil {
 		t.Fatal("SSH listen port is mandatory")
 	}
-	if _, err := CandidateFiles(Config{"x.example.org\nadmin off", "sub.example.org", "mesh.example.org"}, []int{22}); err == nil {
+	if _, err := CandidateFiles(Config{"x.example.org\nadmin off", "sub.example.org", "mesh.example.org", false}, []int{22}); err == nil {
 		t.Fatal("candidate renderer accepted injection")
 	}
 }
