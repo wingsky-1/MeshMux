@@ -231,6 +231,12 @@ func probePorts(bind func(string, string) error) error {
 // Preflight is read-only: probing ephemeral sockets is not persistent
 // installation or firewall modification. Every failed check blocks apply.
 func Preflight(ctx context.Context, c Config) ([]Check, []int) {
+	return PreflightWithMode(ctx, c, false)
+}
+
+// PreflightWithMode only tolerates ports occupied by the recorded MeshMux
+// services when an existing installation is being verified or repaired.
+func PreflightWithMode(ctx context.Context, c Config, allowManagedListeners bool) ([]Check, []int) {
 	var checks []Check
 	checks = append(checks, check("domains", "DOMAIN_INVALID", "Supply three distinct valid public DNS names.", c.Validate()))
 	osRelease, err := os.ReadFile("/etc/os-release")
@@ -280,11 +286,96 @@ func Preflight(ctx context.Context, c Config) ([]Check, []int) {
 		}
 	}
 	checks = append(checks, check("network_tls", "NETWORK_UNAVAILABLE", "Check outbound HTTPS and DNS for official GitHub assets.", networkErr))
-	checks = append(checks, check("port_ownership", "PORT_CONFLICT", "Stop conflicting services manually; MeshMux never overwrites third-party services.", checkPorts()))
+	portErr := checkPorts()
+	if allowManagedListeners {
+		portErr = checkPortsWithManaged(ctx)
+	}
+	checks = append(checks, check("port_ownership", "PORT_CONFLICT", "Stop conflicting services manually; MeshMux never overwrites third-party services.", portErr))
 	ssh, sshErr := SSHPorts(ctx)
 	checks = append(checks, check("ssh_listening_ports", "SSH_LISTENER_MISMATCH", "Compare systemctl show ssh.socket, sshd -T and ss -lntp; do not change SSH remotely.", sshErr))
 	// Local checks cannot establish ingress through the cloud provider.
 	checks = append(checks, Check{Name: "public_https", Status: "pending", Code: "EXTERNAL_CHECK_PENDING", Recovery: "After activation, probe TCP 443, HTTP ACME and TLS from another network, including IPv6."})
 	checks = append(checks, Check{Name: "public_stun", Status: "pending", Code: "EXTERNAL_CHECK_PENDING", Recovery: "After activation, validate UDP 3478 from another network; local listening is insufficient."})
 	return checks, ssh
+}
+
+func checkPortsWithManaged(ctx context.Context) error {
+	listeners, err := command(ctx, "ss", "-H", "-lntup")
+	if err != nil {
+		return errors.New("PORT_OWNERS_UNKNOWN")
+	}
+	for _, p := range Ports() {
+		host := "127.0.0.1"
+		if p.Port == 80 || p.Port == 443 || p.Protocol == "udp" {
+			host = "0.0.0.0"
+		}
+		if err := CanBind(p.Protocol, net.JoinHostPort(host, strconv.Itoa(p.Port))); err != nil {
+			if !errors.Is(err, syscall.EADDRINUSE) {
+				return errors.New("PORT_PROBE_FAILED")
+			}
+			if !listenersOwnedByMeshMux(listeners, p.Port) {
+				return errors.New("PORT_CONFLICT")
+			}
+		}
+		family := "tcp6"
+		if p.Protocol == "udp" {
+			family = "udp6"
+		}
+		host6 := "::1"
+		if host == "0.0.0.0" {
+			host6 = "::"
+		}
+		if err := CanBind(family, net.JoinHostPort(host6, strconv.Itoa(p.Port))); err != nil {
+			if errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EPROTONOSUPPORT) {
+				continue
+			}
+			if !errors.Is(err, syscall.EADDRINUSE) || !listenersOwnedByMeshMux(listeners, p.Port) {
+				return errors.New("PORT_CONFLICT")
+			}
+		}
+	}
+	return nil
+}
+
+var listenerPID = regexp.MustCompile(`pid=(\\d+)`)
+
+func listenersOwnedByMeshMux(output string, port int) bool {
+	found := false
+	for _, line := range strings.Split(output, "\\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		local := fields[3]
+		pos := strings.LastIndex(local, ":")
+		if pos < 0 {
+			continue
+		}
+		n, err := strconv.Atoi(strings.Trim(local[pos+1:], "]"))
+		if err != nil || n != port {
+			continue
+		}
+		found = true
+		m := listenerPID.FindStringSubmatch(line)
+		if len(m) != 2 {
+			return false
+		}
+		cgroup, err := os.ReadFile("/proc/" + m[1] + "/cgroup")
+		if err != nil {
+			return false
+		}
+		unit := ""
+		switch port {
+		case 80, 443:
+			unit = "meshmux-caddy.service"
+		case 3478, HeadscalePort, 50443:
+			unit = "meshmux-headscale.service"
+		case WebPort:
+			unit = "meshmux-web.service"
+		}
+		if unit == "" || !strings.Contains(string(cgroup), unit) {
+			return false
+		}
+	}
+	return found
 }

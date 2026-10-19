@@ -22,6 +22,14 @@ type Config struct {
 	ManagementDomain   string `json:"management_domain"`
 	SubscriptionDomain string `json:"subscription_domain"`
 	HeadscaleDomain    string `json:"headscale_domain"`
+	DirectCaddy        bool   `json:"direct_caddy,omitempty"`
+}
+
+func SameConfig(a, b Config) bool {
+	return a.ManagementDomain == b.ManagementDomain &&
+		a.SubscriptionDomain == b.SubscriptionDomain &&
+		a.HeadscaleDomain == b.HeadscaleDomain &&
+		a.DirectCaddy == b.DirectCaddy
 }
 
 var label = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -127,12 +135,12 @@ func BuildPlan(id string, c Config, architecture string, checks []Check, ssh []i
 	return Plan{
 		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13", Architecture: architecture,
 		Config: c, Checks: checks, Artifacts: PinnedArtifacts(architecture),
-		Components: []Component{{"MeshMux Web", "current source build (manifest pending)", "MeshMux verified release"}, {"Caddy", "2.11.7", "pinned upstream GitHub asset"}, {"Headscale", "0.29.5", "pinned upstream GitHub asset"}, {"sing-box", "1.14.3 (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
+		Components: []Component{{"MeshMux Web", "same executable as the invoked CLI", "self-copy verified by SHA-256"}, {"Caddy", "2.11.7", "pinned upstream GitHub asset"}, {"Headscale", "0.29.5", "pinned upstream GitHub asset"}, {"sing-box", "1.14.3 (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
 		Ports:      Ports(), SSHPPorts: ssh,
 		Units:           []string{"meshmux-web.service", "meshmux-headscale.service", "meshmux-caddy.service", "fail2ban.service"},
-		Paths:           []string{"/etc/meshmux/", "/var/lib/meshmux/", "/etc/meshmux/headscale.yaml", "/var/lib/meshmux-headscale/", "/usr/local/libexec/meshmux-*", "/etc/fail2ban/jail.d/meshmux-ssh.local"},
+		Paths:           []string{"/etc/meshmux/", "/var/lib/meshmux/", "/var/lib/meshmux-headscale/", "/var/lib/meshmux-caddy/", "/var/lib/meshmux-installer/state.json", "/usr/local/libexec/meshmuxd", "/usr/local/libexec/meshmux-caddy", "/usr/local/libexec/meshmux-headscale", "/etc/fail2ban/jail.d/meshmux-ssh.local", "/etc/fail2ban/filter.d/meshmux-web.conf"},
 		FirewallChanges: []string{"none in preflight (do not replace the host nftables ruleset)"},
-		ApplyAvailable:  false,
-		NextAction:      "The read-only PR A cannot apply host changes. Review the plan; Phase B will stage, validate and activate fixed artifacts and services in an isolated Debian 13 VM.",
+		ApplyAvailable:  ready,
+		NextAction:      "After reviewing this plan, confirm with the exact prompt or pass --yes. Installation re-runs preflight, stages and validates pinned artifacts, applies only MeshMux-owned files, then verifies services and HTTPS. Public ingress and UDP reachability remain separately reported.",
 	}
 }
