@@ -9,7 +9,7 @@
 
 ## 目标运行时锁定候选
 
-这份表是**待发行校验的设计基线**，不是已完成的制品锁。真正 install 前必须生成来源、SHA-256、架构、目标路径和签名（若发行方提供）的 manifest。
+这份表是**待发行校验的设计基线**，不是已完成的制品锁。Issue #5 PR A 已固定 **Caddy 2.11.7 / Headscale 0.29.5** 官方 GitHub 的 amd64/arm64 下载来源及 release asset SHA-256（见 `internal/install/artifacts.go`）；MeshMux 自有程序与 Debian apt 包的制品/版本锁尚待 PR B 交付，所以 **禁止真正 apply**。任何真实 install 前仍必须有完整的来源、SHA-256、架构、目标路径和可用签名策略。
 
 | 组件 | v1.0.0 候选基线 | 使用范围 |
 | --- | --- | --- |

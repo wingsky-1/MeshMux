@@ -6,7 +6,9 @@
 | --- | --- | --- |
 | PR0（已合并） | README、AGENTS、P0/P1、4A/部署/纳管设计、Go 最小骨架/CI | install 占位失败封闭，CI 成功，设计无矛盾 |
 | PR1（Issue #2） | 单管理员 loopback Web、认证/会话、SQLite、Caddy 候选、登录防爆破、最小状态与日志 | 本地 Web 可登录、注销；匿名/CSRF/错误 Origin 被拒；不触碰生产服务 |
-| PR2 | Debian 13 Hub/Line/Out 的 install、受限 Agent 配对、SSH/VLESS 端口与 Fail2ban | 三角色隔离环境首次与重复安装、异常回退；目标机只执行 install |
+| PR2A（Issue #5 PR A） | Debian 13 Hub 只读预检、安装计划、组件固定 SHA-256、受管服务候选配置；无 host apply | 单元测试/CI、无副作用、失败有稳定诊断；**不关闭 #5** |
+| PR2B（Issue #5 PR B） | Hub Web/Caddy/Headscale/Fail2ban 实际宿主机安装、回滚及隔离 VM 验收 | 独立干净 Debian 13 重复安装和失败恢复，HTTPS/DERP/STUN 非 Mock |
+| PR2C（Issue #6） | Line/Out 安装、受限 Agent 主动配对；SSH/VLESS 端口安全 | Line/Out 隔离 VM 实测，配对凭据可撤销，幂等与异常回退 |
 | PR3 | 原生 sing-box 线路纳管、用户创建/删除、标准订阅、可选 Out 与 AI 双跳 | 单 Line/多 Line/有 Out/无 Out 真正连接，撤销精确有效 |
 | PR4 | Headscale Mesh 设备、Mesh-only、子网路由、sing-box 单 VPN | NAS 与手机分别入网；网段获批准可达；多设备互不影响 |
 | PR5 | Web 路由/分流编辑、SSID、客户端/服务端配置生成、校验发布 | CN/国际/AI/Tailnet/DNS、无 Out 和 Out 故障策略验证 |
@@ -14,6 +16,10 @@
 | Phase 7（Issue #12） | 安全/诊断/备份回归，隔离三角色安装 E2E、安装与恢复文档 | P0 全面验收通过、满足 v1.0.0 发行门槛 |
 
 后续阶段的详细范围与依赖以 [v1.0.0 总控 Issue #4](https://github.com/wingsky-1/MeshMux/issues/4) 和 #5～#12 为准，允许拆为更小且独立可测试的 PR。**#11 统一升级是 v1.0.0 P0；完整通用运维面板仍非首版目标。** 本阶段 #2 不提前实现升级器或通用任务引擎。
+
+## 当前阶段：Issue #5 PR A / PR B
+
+PR A 的只读安装计划与自带校验清单见 [INSTALL_HUB](INSTALL_HUB.zh-CN.md)；PR B 负责宿主机写操作和 Debian 13 实装。两者都归属 Issue #5，Issue #6 不提前依赖尚未合并的服务接口。
 
 ## 近期：PR1 的明确边界
 

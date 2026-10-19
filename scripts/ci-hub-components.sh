@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Run only in the disposable Debian 13 Docker container created by
+# .github/workflows/hub-components.yml. Never run this on a VPS.
+set -Eeuo pipefail
+
+if ! grep -q '^VERSION_ID="\?13"\?$' /etc/os-release; then
+  echo 'Expected Debian 13 (trixie) container' >&2
+  exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends \
+  ca-certificates curl tar systemd fail2ban nftables openssh-server
+
+arch="$(dpkg --print-architecture)"
+case "$arch" in
+  amd64)
+    caddy_hash="727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b"
+    headscale_hash="e979d27fe17d924d33bb6ab7504f6338d0635989a0cfdcfbc0ceb637dbcbe980"
+    ;;
+  arm64)
+    caddy_hash="d8fc6d179a5d283028a472a5618564f6ad8a86fed513e64f032b3b0b7cc45e42"
+    headscale_hash="3afddd207b89ac22cfad4235cc163c6e538cc59ada139e7c0bf47640c5d9e945"
+    ;;
+  *)
+    echo "Unsupported architecture: $arch" >&2
+    exit 1
+    ;;
+esac
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+curl -fL --retry 3 --connect-timeout 10 --max-time 150 \
+  "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_${arch}.tar.gz" \
+  -o "$tmp/caddy.tar.gz"
+curl -fL --retry 3 --connect-timeout 10 --max-time 150 \
+  "https://github.com/juanfont/headscale/releases/download/v0.29.5/headscale_0.29.5_linux_${arch}" \
+  -o "$tmp/headscale"
+printf '%s  %s\n' "$caddy_hash" "$tmp/caddy.tar.gz" "$headscale_hash" "$tmp/headscale" | sha256sum -c -
+
+mkdir -p "$tmp/extracted" /usr/local/libexec /tmp/meshmux-headscale-ci
+tar -xzf "$tmp/caddy.tar.gz" -C "$tmp/extracted"
+test -f "$tmp/extracted/caddy"
+install -m 0755 "$tmp/extracted/caddy" /usr/local/libexec/meshmux-caddy
+install -m 0755 "$tmp/headscale" /usr/local/libexec/meshmux-headscale
+install -m 0755 /workspace/.ci/bin/meshmux-web /usr/local/libexec/meshmux-web
+
+fixture=/workspace/.ci/hub-fixture
+MESHMUX_HUB_FIXTURE_DIR="$fixture" /workspace/.ci/bin/install.test \
+  -test.run '^TestWriteComponentFixtures$' -test.v
+
+/usr/local/libexec/meshmux-caddy version
+/usr/local/libexec/meshmux-headscale version
+/usr/local/libexec/meshmux-caddy validate --config "$fixture/Caddyfile" --adapter caddyfile
+/usr/local/libexec/meshmux-headscale --config "$fixture/headscale.yaml" configtest
+
+for file in "$fixture"/meshmux-*.service; do
+  install -m 0644 "$file" "/etc/systemd/system/${file##*/}"
+done
+systemd-analyze verify /etc/systemd/system/meshmux-web.service \
+  /etc/systemd/system/meshmux-headscale.service \
+  /etc/systemd/system/meshmux-caddy.service
+
+install -m 0644 "$fixture/meshmux-ssh.local" /etc/fail2ban/jail.d/meshmux-ssh.local
+fail2ban-client -t
+echo "Debian 13 $arch: all Hub component validations passed"
