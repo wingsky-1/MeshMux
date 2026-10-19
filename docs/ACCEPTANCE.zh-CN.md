@@ -29,7 +29,7 @@
 ## Issue #5 Hub 安装器拆分验收
 
 - [ ] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
-- [ ] **PR B（C 级，阻断 #5 关闭与 #6 接口消费）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、真实 systemd、非 22 SSH Fail2ban、nftables 互不干扰、Caddy HTTPS/Headscale DERP/STUN；两套隔离 Debian 13 VM 实装及失败路径证据。无 VM 时标注未实测。
+- [ ] **PR B（C 级，阻断 #5 关闭与 #6 接口消费）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、真实 systemd、非 22 SSH Fail2ban、nftables 互不干扰、Caddy HTTPS/Headscale DERP/STUN；按需 Debian 13 全系统 VM 验证真实安装、重试/重启/失败恢复（支持架构单独标注）；日常 L1 Go CI 与 L2 Debian 13 真实组件配置校验。无 VM 时标注未实测。
 
 阶段说明见 [Hub 安装](INSTALL_HUB.zh-CN.md)；单测与模板字符串校验不能代替服务实际健康或公网可达。
 
