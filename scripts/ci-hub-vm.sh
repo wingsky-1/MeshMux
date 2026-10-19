@@ -61,7 +61,7 @@ fi
 echo "QEMU accelerator: $accel"
 qemu-system-x86_64 \
   -machine q35 -accel "$accel" \
-  -cpu max -m 2048 -smp 2 -nographic -no-reboot \
+  -cpu max -m 2048 -smp 2 -nographic \
   -drive file="$disk",if=virtio,format=qcow2 \
   -drive file="$seed",if=virtio,format=raw \
   -netdev user,id=n0,hostfwd=tcp:127.0.0.1:22222-:22 \
@@ -93,9 +93,15 @@ ssh_vm 'cloud-init status --wait; cat /etc/os-release | grep VERSION_ID; systemc
 scp_vm .ci/bin/meshmux /tmp/meshmux
 scp_vm .ci/bin/install.test /tmp/install.test
 ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test; sudo env MESHMUX_HUB_SYSTEM_VM=1 MESHMUX_HUB_SYSTEM_PHASE=install /tmp/install.test -test.run "^TestHubSystemVM$" -test.timeout=25m -test.v'
+boot_before="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
 ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
 sleep 8
 wait_ssh
+boot_after="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
+if [[ "$boot_before" == "$boot_after" ]]; then
+  echo 'VM did not actually reboot; refusing to count persistence as verified' >&2
+  exit 1
+fi
 # Debian may mount /tmp as tmpfs; restore only the ephemeral test executable.
 scp_vm .ci/bin/install.test /tmp/install.test
 ssh_vm "sudo chmod 755 /tmp/install.test"
