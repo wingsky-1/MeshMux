@@ -39,13 +39,26 @@ func TestHubSystemVM(t *testing.T) {
 			},
 		}
 		defer transport.CloseIdleConnections()
-		client := &http.Client{Transport: transport, Timeout: 4 * time.Second}
+		client := &http.Client{
+			Transport: transport,
+			Timeout:   4 * time.Second,
+			// Mirror waitForHTTPS: read the raw response and never follow the
+			// first-install 303 from /login to /setup. The certificate
+			// assertions below inspect resp.TLS, which must come from the
+			// original, non-redirected response.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 		for time.Now().Before(deadline) {
 			req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+domain+"/login", nil)
 			resp, err := client.Do(req)
 			if err == nil {
 				resp.Body.Close()
-				if resp.StatusCode == 200 && resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 &&
+				// Same readiness semantics as waitForHTTPS: 2xx/3xx means TLS
+				// terminated and the origin answered (a fresh install has no
+				// administrator yet, so /login answers 303 to /setup).
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 && resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 &&
 					resp.TLS.PeerCertificates[0].VerifyHostname(domain) == nil {
 					return nil
 				}

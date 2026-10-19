@@ -1,7 +1,25 @@
 name: hub-vm
 
 on:
+  # L3 is the acceptance gate for the installer. Run it on the PR itself:
+  # otherwise every later commit merges with no full-system evidence.
+  pull_request:
+    paths:
+      - 'internal/install/**'
+      - 'cmd/meshmux/**'
+      - 'cmd/meshmux-web/**'
+      - 'scripts/ci-hub-vm.sh'
+      - '.github/workflows/hub-vm.yml'
+      - 'docs/CI_HUB_VALIDATION.zh-CN.md'
+      - 'docs/ACCEPTANCE.zh-CN.md'
+      - 'docs/INSTALL_HUB.zh-CN.md'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to verify'
+        required: false
+        default: 'main'
+        type: string
   push:
     branches:
       - 'verify/issue5-hub-vm-*'
@@ -15,7 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout verified ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.2'

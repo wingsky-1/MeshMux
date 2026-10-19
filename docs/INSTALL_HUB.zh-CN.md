@@ -38,7 +38,9 @@ sudo ./bin/meshmux install hub --repair --yes \
 - 使用官方 Caddy 2.11.7 / Headscale 0.29.5 发行制品的固定校验值。真实 Caddy ACME/TLS 不允许将测试证书禁用校验；`tls internal` 仅由不可从用户 CLI 访问的 CI VM 测试钩子生成。
 - 只修改 MeshMux 专属 Caddy/Headscale 文件、专属 systemd 服务和 Fail2ban jail/filter。不会 `nft flush ruleset`、不会重写 SSH、不会清空数据库或 Headscale 私钥。
 - 每次操作的 root 私有状态在 `/var/lib/meshmux-installer/state.json`，日志在 `/var/lib/meshmux-installer/operations/<operation_id>/events.jsonl`；冲突、非受管文件、外部编辑漂移均拒绝覆盖。
-- 失败后记录 `partial` 并给错误码；运行 `--repair` 前排查 journal 和 systemd unit。管理域名、订阅域名或 Headscale 域名迁移不属于自动 repair 范围。
+- 安装完成判定采用“传输层就绪”语义：探针以管理域名作为 SNI 访问本机 Caddy，要求 TLS 握手成功（TLS 1.2 及以上）且 origin 返回 2xx/3xx；探针显式禁止跟随重定向。首次安装尚未创建管理员时，`/login` 返回 303 跳转 `/setup` 属于正常业务状态，不是服务不可用。
+- 失败回滚是“恢复到操作前状态”，而不是清空记录：受管文件台账 `ManagedFiles` 会按成功回滚后的磁盘实况重新核对哈希，保留已恢复文件的归属、移除本次新建后又被删除的文件，因此回滚后仍可继续执行 `--repair`。运行 `--repair` 前仍应排查 journal 和 systemd unit；管理域名、订阅域名或 Headscale 域名迁移不属于自动 repair 范围。
+- Debian 官方包采用查询优先的幂等安装：安装或修复前逐项执行 `dpkg-query -W -f=${Status}`，仅对未处于 `install ok installed` 的缺失包执行 `apt-get update` 和 `apt-get install`；全部包已安装时不调用 apt。
 - 真实外网证书签发、云安全组和跨 NAT STUN/DERP 检查必须另列 `pending`，本机 TLS/端口健康无法证明公网可达。
 
 ## 原 PR A 基线及设计说明
@@ -55,7 +57,7 @@ go build -o ./bin/meshmux ./cmd/meshmux
   --headscale-domain mesh.example.org
 ```
 
-`example.org` 仅展示语法。实际预检时须使用本人控制、已解析 A/AAAA 的测试域名；不得把个人地址或私钥提交到仓库。PR B 中计划以 JSON 写入标准输出，含一次性 operation_id、逐项状态/错误码/补救建议、组件和端口。这里**不读取、收集或输出管理员密码**。默认 install 不接受确认开关，执行写操作仍关闭。
+`example.org` 仅展示语法。实际预检时须使用本人控制、已解析 A/AAAA 的测试域名；不得把个人地址或私钥提交到仓库。计划以 JSON 写入标准输出，含一次性 operation_id、逐项状态/错误码/补救建议、组件和端口。这里**不读取、收集或输出管理员密码**。交互执行必须在展示计划后键入准确短语 `install hub`；非交互执行仅在显式使用 `--yes` 且预检全部通过后才进入 apply，未获确认不修改宿主。
 
 预检读取 `/etc/os-release`，校验 Debian 13、amd64/arm64、root、至少 1 GiB 可用空间、systemd、NTP、三域名 DNS、GitHub 出站 HTTPS、TCP 80/443 与 Web/Headscale loopback 监听冲突、UDP 3478，以及 SSH 实际监听端口。SSH 包含 ssh.socket systemd socket activation 与 ss 的实际监听；传统 sshd 进一步与 `sshd -T` 对比。不调用 `iptables -F`、`nft flush ruleset`，不重配 SSH，也不写 Fail2ban jail。
 
@@ -82,8 +84,9 @@ go build -o ./bin/meshmux ./cmd/meshmux
 | `/etc/meshmux/headscale.yaml` | 0.29.5、SQLite、内置 DERP 999、自建 STUN UDP/3478、`derp.urls=[]`、禁用 DERP map 自动拉取 |
 | `/etc/systemd/system/meshmux-{web,headscale,caddy}.service` | 隔离非 root 服务身份；Caddy 唯一持有 80/443 绑定能力 |
 | `/etc/fail2ban/jail.d/meshmux-ssh.local` | 使用当前真实 SSH 端口；默认 nftables action，未经验证不得激活 |
+| `/etc/fail2ban/jail.d/meshmux-web.local`、`/etc/fail2ban/filter.d/meshmux-web.conf` | Web jail 默认禁用，仅在 `--direct-caddy` 时启用；filter 的 `datepattern` 支持 RFC3339Nano 的 1-9 位小数 |
 
-Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建，非从 my-sub 复制。Hub Web 使用 Issue #2 已实现的 Argon2id/SQLite/CSRF/限速、`/healthz` 和本机初始化令牌。Web 的公网证书由 Caddy 默认 HTTP-01/TLS-ALPN-01 管理，不需要 Cloudflare DNS 插件或 Zero Trust。使用 CDN/Cloudflare 时**不能**启用依赖真实客户端 IP 的 Web Fail2ban jail；应用限速始终启用。
+Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建，非从 my-sub 复制。Hub Web 使用 Issue #2 已实现的 Argon2id/SQLite/CSRF/限速、`/healthz` 和本机初始化令牌。Web 的公网证书由 Caddy 默认 HTTP-01/TLS-ALPN-01 管理，不需要 Cloudflare DNS 插件或 Zero Trust。Web Fail2ban jail 默认禁用，仅在 Caddy 直接面向客户端且显式传入 `--direct-caddy` 时启用；使用 CDN/Cloudflare 或多层代理时**不能**启用依赖真实客户端 IP 的 Web Fail2ban jail，应用限速始终启用。
 
 **已知边界：** 只有一个自建 DERP 时具备单点故障；公网不可达另须检查云安全组。模板语法和 Headscale 0.29.5 运行时验证、Fail2ban action、systemd 实际账户权限及 Caddy ACME 证书签发均属于 PR B 的隔离 Debian 13 验收，不能以字符串测试替代。
 
@@ -100,8 +103,8 @@ Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建�
 
 PR B 输出稳定 Hub 配置路径、systemd 单元、MeshMux Web loopback、Headscale 0.29.5 本地服务/API、可追踪 operation_id 与锁定制品 manifest。Issue #6 只消费这些已确认接口，实现 Line/Out Agent 主动纳管，不重新建立 Web/Headscale 身份或修改 SSH。
 
-**验收标记：** PR A 只证明源码单测/CI 等 B 级证据；尚无 C 级 Debian 13 VM 安装证据。Issue #5 不因 PR A 合并而关闭，更不能由此启动 #6 的依赖实施。
+**验收标记：** PR A 只证明源码单测/CI 等 B 级证据；PR B 的 Go 事务测试、健康探针语义、回滚台账一致性、apt 幂等和 Fail2ban 模板已有 L1 证据，但 L3 尚未重跑，尚无可引用的 Debian 13 VM 成功运行证据。Issue #5 不因 PR A 合并而关闭，更不能由此启动 #6 的依赖实施。
 
 ## 分层 CI 验证
 
-已确立 [L1/L2/L3 CI 验证规范](CI_HUB_VALIDATION.zh-CN.md)。PR A 的 L2 配置集成不能冒充真实 Hub 安装；完整 VM 测试将在 PR B 完成 apply 后加入。
+已确立 [L1/L2/L3 CI 验证规范](CI_HUB_VALIDATION.zh-CN.md)。PR A 的 L2 配置集成不能冒充真实 Hub 安装；`hub-vm` 会在触及安装器路径的 PR 上自动运行 L3，但只有取得明确成功运行链接后才能把真实 systemd 安装、重启恢复和故障回滚记为通过。

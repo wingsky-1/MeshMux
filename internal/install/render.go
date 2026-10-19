@@ -226,14 +226,24 @@ findtime = 10m
 bantime = 15m
 usedns = no
 `, strings.Join(ports, ","))
-	webJail := "[meshmux-web]\\nenabled = false\\nfilter = meshmux-web\\nbackend = systemd\\nport = http,https\\nprotocol = tcp\\nbanaction = nftables-multiport\\nmaxretry = 5\\nfindtime = 10m\\nbantime = 10m\\nusedns = no\\n"
-	if c.DirectCaddy {
-		webJail = strings.Replace(webJail, "enabled = false", "enabled = true", 1)
-	}
+	// Web jail is disabled by default: banning an unverified proxy/CDN client
+	// IP would lock out innocent users behind shared egress addresses.
+	webJail := fmt.Sprintf(`[meshmux-web]
+enabled = %t
+filter = meshmux-web
+backend = systemd
+port = http,https
+protocol = tcp
+banaction = nftables-multiport
+maxretry = 5
+findtime = 10m
+bantime = 10m
+usedns = no
+`, c.DirectCaddy)
 	webFilter := `[Definition]
-failregex = ^\\{"time":"[^"]*","level":"WARN","msg":"authentication_failed","operation_id":"[A-Za-z0-9_-]{22}","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"<ADDR>"\\}$
+failregex = ^\{"time":"[^"]*","level":"WARN","msg":"authentication_failed","operation_id":"[A-Za-z0-9_-]{22}","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"<ADDR>"\}$
 ignoreregex =
-datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\\.%%f)?%%z
+datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\.\d{1,9})?%%z
 journalmatch = _SYSTEMD_UNIT=meshmux-web.service
 `
 	return map[string]string{

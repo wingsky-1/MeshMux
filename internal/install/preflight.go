@@ -290,7 +290,12 @@ func PreflightWithMode(ctx context.Context, c Config, allowManagedListeners bool
 	if allowManagedListeners {
 		portErr = checkPortsWithManaged(ctx)
 	}
-	checks = append(checks, check("port_ownership", "PORT_CONFLICT", "Stop conflicting services manually; MeshMux never overwrites third-party services.", portErr))
+	portCode, portAction := "PORT_CONFLICT", "Stop conflicting services manually; MeshMux never overwrites third-party services."
+	var pe *portError
+	if errors.As(portErr, &pe) {
+		portCode, portAction = pe.code, pe.action
+	}
+	checks = append(checks, check("port_ownership", portCode, portAction, portErr))
 	ssh, sshErr := SSHPorts(ctx)
 	checks = append(checks, check("ssh_listening_ports", "SSH_LISTENER_MISMATCH", "Compare systemctl show ssh.socket, sshd -T and ss -lntp; do not change SSH remotely.", sshErr))
 	// Local checks cannot establish ingress through the cloud provider.
@@ -302,7 +307,7 @@ func PreflightWithMode(ctx context.Context, c Config, allowManagedListeners bool
 func checkPortsWithManaged(ctx context.Context) error {
 	listeners, err := command(ctx, "ss", "-H", "-lntup")
 	if err != nil {
-		return errors.New("PORT_OWNERS_UNKNOWN")
+		return &portError{"PORT_OWNERS_UNKNOWN", "Run ss -H -lntup manually and confirm every MeshMux port owner before applying."}
 	}
 	for _, p := range Ports() {
 		host := "127.0.0.1"
@@ -311,10 +316,14 @@ func checkPortsWithManaged(ctx context.Context) error {
 		}
 		if err := CanBind(p.Protocol, net.JoinHostPort(host, strconv.Itoa(p.Port))); err != nil {
 			if !errors.Is(err, syscall.EADDRINUSE) {
-				return errors.New("PORT_PROBE_FAILED")
+				return &portError{"PORT_PROBE_FAILED", "Inspect the probe error; a socket-family or permission failure is not a port conflict."}
 			}
-			if !listenersOwnedByMeshMux(listeners, p.Port) {
-				return errors.New("PORT_CONFLICT")
+			switch listenerOwnership(listeners, p.Port) {
+			case ownershipManaged:
+			case ownershipUnknown:
+				return &portError{"PORT_OWNER_UNVERIFIED", "Confirm manually which process holds the port; ss and /proc did not identify its owner."}
+			default:
+				return &portError{"PORT_CONFLICT", "Stop conflicting services manually; MeshMux never overwrites third-party services."}
 			}
 		}
 		family := "tcp6"
@@ -329,19 +338,54 @@ func checkPortsWithManaged(ctx context.Context) error {
 			if errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EPROTONOSUPPORT) {
 				continue
 			}
-			if !errors.Is(err, syscall.EADDRINUSE) || !listenersOwnedByMeshMux(listeners, p.Port) {
-				return errors.New("PORT_CONFLICT")
+			if !errors.Is(err, syscall.EADDRINUSE) {
+				return &portError{"PORT_PROBE_FAILED", "Inspect the probe error; a socket-family or permission failure is not a port conflict."}
+			}
+			switch listenerOwnership(listeners, p.Port) {
+			case ownershipManaged:
+			case ownershipUnknown:
+				return &portError{"PORT_OWNER_UNVERIFIED", "Confirm manually which process holds the port; ss and /proc did not identify its owner."}
+			default:
+				return &portError{"PORT_CONFLICT", "Stop conflicting services manually; MeshMux never overwrites third-party services."}
 			}
 		}
 	}
 	return nil
 }
 
-var listenerPID = regexp.MustCompile(`pid=(\\d+)`)
+// portError carries a stable error code and next action so a failed port check
+// reports the real reason instead of blaming a third party for every case.
+type portError struct {
+	code   string
+	action string
+}
 
-func listenersOwnedByMeshMux(output string, port int) bool {
-	found := false
-	for _, line := range strings.Split(output, "\\n") {
+func (e *portError) Error() string { return e.code }
+
+// portOwnership separates a MeshMux-owned listener from a genuine third-party
+// conflict and from a listener whose owner cannot be verified. Collapsing the
+// last two into "conflict" permanently blocks repair of a MeshMux-owned port.
+type portOwnership int
+
+const (
+	ownershipConflict portOwnership = iota
+	ownershipManaged
+	ownershipUnknown
+)
+
+var listenerPID = regexp.MustCompile(`pid=(\d+)`)
+
+// cgroupOf is the single /proc seam the ownership check depends on, so tests
+// can feed real cgroup content without a privileged host.
+var cgroupOf = func(pid string) ([]byte, error) {
+	return os.ReadFile("/proc/" + pid + "/cgroup")
+}
+
+// listenerOwnership classifies every ss line binding port. A bind failure with
+// no visible ss line is unverified, not a third-party conflict.
+func listenerOwnership(output string, port int) portOwnership {
+	ownership := ownershipUnknown
+	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 5 {
 			continue
@@ -355,29 +399,37 @@ func listenersOwnedByMeshMux(output string, port int) bool {
 		if err != nil || n != port {
 			continue
 		}
-		found = true
+		// A listener with no PID in ss, or whose /proc cgroup vanished, cannot be
+		// attributed. Treat it as unverified instead of a third-party conflict.
 		m := listenerPID.FindStringSubmatch(line)
 		if len(m) != 2 {
-			return false
+			ownership = ownershipUnknown
+			continue
 		}
-		cgroup, err := os.ReadFile("/proc/" + m[1] + "/cgroup")
+		cgroup, err := cgroupOf(m[1])
 		if err != nil {
-			return false
+			ownership = ownershipUnknown
+			continue
 		}
-		unit := ""
-		switch port {
-		case 80, 443:
-			unit = "meshmux-caddy.service"
-		case 3478, HeadscalePort, 50443:
-			unit = "meshmux-headscale.service"
-		case WebPort:
-			unit = "meshmux-web.service"
-		}
+		unit := meshMuxUnitForPort(port)
 		if unit == "" || !strings.Contains(string(cgroup), unit) {
-			return false
+			return ownershipConflict
 		}
+		ownership = ownershipManaged
 	}
-	return found
+	return ownership
+}
+
+func meshMuxUnitForPort(port int) string {
+	switch port {
+	case 80, 443:
+		return "meshmux-caddy.service"
+	case 3478, HeadscalePort, 50443:
+		return "meshmux-headscale.service"
+	case WebPort:
+		return "meshmux-web.service"
+	}
+	return ""
 }
 
 // ss -H can include a leading Netid column ("tcp"/"udp"). On Debian 13

@@ -13,7 +13,7 @@
 
 - [ ] README、AGENTS 及 PRODUCT/FEATURES/VERSIONS/ROADMAP 一致以 **v1.0.0** 为首发目标，当前不可安装。
 - [ ] 4A、部署、纳管时序、安全、日志与验收文件清楚且不含真实个人配置。
-- [ ] Go 骨架无真实系统写操作；未实现的 install 明确以非零结果退出。
+- [ ] Go 骨架在未获确认时不修改宿主；未提供完整配置或预检未通过时，`install hub` 明确以非零结果退出且不留下宿主状态。
 - [ ] CI 实测通过；独立 PR 合并前人工审查。
 
 ## PR1：Web 认证与本地基础
@@ -29,7 +29,8 @@
 ## Issue #5 Hub 安装器拆分验收
 
 - [ ] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
-- [ ] **PR B（C 级，阻断 #5 关闭与 #6 接口消费）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、真实 systemd、非 22 SSH Fail2ban、nftables 互不干扰、Caddy HTTPS/Headscale DERP/STUN；按需 Debian 13 全系统 VM 验证真实安装、重试/重启/失败恢复（支持架构单独标注）；日常 L1 Go CI 与 L2 Debian 13 真实组件配置校验。无 VM 时标注未实测。
+- [ ] **PR B 安装事务与回归（L1/B 级，已实现，仍受 L3 门禁约束）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、受管文件台账回滚一致性、apt 查询优先、健康探针 303/禁止重定向语义、Web Fail2ban 默认禁用与 `--direct-caddy` 启用、RFC3339Nano 日期模式，均有 Go 测试覆盖；非 22 SSH Fail2ban 与 nftables 的真实系统行为仍需 L3 证明。
+- [ ] **PR B 全系统验收（C 级，阻断 #5 关闭与 #6 接口消费）**：L3 尚未在本次修复后重跑；真实 systemd 安装、重启恢复、故障回滚、Caddy 真实 ACME/TLS、Headscale DERP/STUN 与 nftables 互不干扰尚无新的成功证据。`hub-vm` 已配置为安装器相关 PR 自动触发，但必须以成功运行链接为准，不能以 workflow 已存在或 L1/L2 绿灯代替。arm64 宿主机、公网 ACME/TLS、云防火墙和跨 NAT DERP/STUN 仍未测试，保持 pending。
 
 阶段说明见 [Hub 安装](INSTALL_HUB.zh-CN.md)；单测与模板字符串校验不能代替服务实际健康或公网可达。
 

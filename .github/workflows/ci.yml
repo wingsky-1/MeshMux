@@ -38,12 +38,53 @@ jobs:
         run: |
           go build -o /tmp/meshmux ./cmd/meshmux
           go build -o /tmp/meshmux-web ./cmd/meshmux-web
-      - name: CLI must fail closed before installer exists
+      # These three invariants hold for every implementation stage of the
+      # installer. They assert the system's refusal properties, not the
+      # absence of an implementation: no configuration means no host changes,
+      # and a failed preflight blocks apply even under --yes.
+      - name: CLI must not modify host without explicit consent
         run: |
-          if /tmp/meshmux install hub; then
-            echo 'unimplemented install unexpectedly succeeded' >&2
+          set -Eeuo pipefail
+          domains=(--management-domain console.example.org
+                   --subscription-domain sub.example.org
+                   --headscale-domain mesh.example.org)
+
+          # Invariant 1: no configuration => refuse before planning or side effects.
+          set +e
+          /tmp/meshmux install hub </dev/null >/tmp/no-domain.out 2>/tmp/no-domain.err
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::install hub succeeded without any configuration" >&2
             exit 1
           fi
+          grep -q '^CONFIG_REQUIRED' /tmp/no-domain.err
+
+          # Invariant 2: failed preflight blocks apply even with --yes.
+          # This runner is non-root and not Debian 13, so preflight cannot pass.
+          set +e
+          /tmp/meshmux install hub --yes "${domains[@]}" </dev/null >/tmp/yes.json 2>/tmp/yes.err
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::install hub --yes applied on a host that failed preflight" >&2
+            exit 1
+          fi
+          python3 -c "import json;d=json.load(open('/tmp/yes.json'));assert d['status']=='preflight_blocked',d['status'];assert d['apply_available'] is False,d['apply_available']"
+
+          # Invariant 3: neither refusing invocation may touch the host.
+          for p in /run/lock/meshmux-install.lock \
+                   /var/lib/meshmux-installer \
+                   /var/cache/meshmux-installer \
+                   /etc/meshmux \
+                   /etc/fail2ban/jail.d/meshmux-ssh.local \
+                   /usr/local/libexec/meshmuxd; do
+            if [ -e "$p" ]; then
+              echo "::error::install left host state behind without consent: $p" >&2
+              exit 1
+            fi
+          done
+          echo "install CLI refused as expected and left no host state"
 
   web-preview:
     # Real browser evidence runs here because restricted local containers may
