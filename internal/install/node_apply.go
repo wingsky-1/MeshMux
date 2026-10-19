@@ -508,7 +508,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return failVerifiedPartial(result, state, opts, record, "verify", "FAIL2BAN_RELOAD_FAILED", "Review Fail2ban logs and preserve existing jails.")
 	}
 	if err := verifyNodeSSHJail(ctx, opts.Runner, installedCfg.SSHPort); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Fail2ban action ports and require every actual SSH listener, excluding VLESS.")
+		return failVerifiedPartial(result, state, opts, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
 	}
 	if repair {
 		lockCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -991,23 +991,23 @@ func verifyNodeSSHJail(ctx context.Context, runner CommandRunner, ssh ...int) er
 	// also proves the daemon loaded the jail (an unknown jail errors out).
 	portsOut, err := runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "port")
 	if err != nil {
-		return err
+		return fmt.Errorf("SSH_JAIL_QUERY_FAILED jail port readback: %v", err)
 	}
 	actionOut, err := runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "actionstart")
 	if err != nil {
-		return err
+		return fmt.Errorf("SSH_JAIL_QUERY_FAILED acl action readback: %v", err)
 	}
 	jailPorts, err := parseFail2banPorts(string(portsOut))
 	if err != nil {
-		return err
+		return fmt.Errorf("SSH_JAIL_PORT_MISMATCH jail ports unparsable: %v", err)
 	}
 	actionPorts, err := parseFail2banActionPorts(string(actionOut))
 	if err != nil {
-		return err
+		return fmt.Errorf("SSH_JAIL_PORT_MISMATCH acl action unparsable: %v", err)
 	}
 	want := sortedInts(ssh)
 	if !equalIntSets(jailPorts, want) || !equalIntSets(actionPorts, want) {
-		return errors.New("SSH_JAIL_PORT_MISMATCH")
+		return fmt.Errorf("SSH_JAIL_PORT_MISMATCH jail=%v action=%v want=%v", jailPorts, actionPorts, want)
 	}
 	return nil
 }

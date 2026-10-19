@@ -250,3 +250,16 @@ func TestNodeAgentReferencePinsStagedBinary(t *testing.T) {
 		t.Fatalf("explicit executable resolved to %q", got)
 	}
 }
+
+// TestNodeSSHJailQueryFailureKeepsOuterCode pins the fail-closed contract:
+// when the jail port readback itself errors, the install reports the stable
+// SSH_FAIL2BAN_JAIL_UNAVAILABLE code (with the inner detail in Recovery).
+func TestNodeSSHJailQueryFailureKeepsOuterCode(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	f.runner.failCall = "nftables-multiport port"
+	_, err := f.install(t, false, strings.Repeat("A", 43))
+	var ie *InstallError
+	if !errors.As(err, &ie) || ie.Code != "SSH_FAIL2BAN_JAIL_UNAVAILABLE" {
+		t.Fatalf("jail query failure = %v, want SSH_FAIL2BAN_JAIL_UNAVAILABLE", err)
+	}
+}
