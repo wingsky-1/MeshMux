@@ -282,6 +282,28 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	if _, err := opts.Runner.Run(ctx, kernelPath, "check", "-c", stagedCandidate); err != nil {
 		return failNodePartial(result, state, opts, record, "stage", "KERNEL_CONFIG_INVALID", "Review the generated native sing-box configuration.")
 	}
+	// The staged Out ACL is syntax-checked with nft -c below, so the Debian
+	// packages must be installed before that check, not later in apply.
+	missing := missingDebianPackages(ctx, opts.Runner, "ca-certificates", "fail2ban", "nftables")
+	if len(missing) > 0 {
+		if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
+			return failNodePartial(result, state, opts, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no package upgrade or third-party repository is used.")
+		}
+		args := append([]string{"install", "-y", "--no-install-recommends"}, missing...)
+		if _, err := opts.Runner.Run(ctx, "apt-get", args...); err != nil {
+			return failNodePartial(result, state, opts, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status; only the listed missing packages are installed.")
+		}
+	}
+	if usedPackage(missing, "nftables") {
+		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Runner, installedCfg, hasState); err != nil {
+			code, recovery := "ACL_TABLE_PROBE_FAILED", "Re-run the exact nft ownership readback. MeshMux will not adopt, overwrite or delete an unverified table."
+			var ie *InstallError
+			if errors.As(err, &ie) {
+				code, recovery = ie.Code, ie.Recovery
+			}
+			return failNodePartial(result, state, opts, record, "apply", code, recovery)
+		}
+	}
 	if cfg.Role == node.RoleOut {
 		acl, err := node.CompileACL(node.Candidate{
 			NodeID: cfg.NodeID, Role: cfg.Role, Revision: 1,
@@ -434,26 +456,6 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return failNodePartial(result, state, opts, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
 
-	missing := missingDebianPackages(ctx, opts.Runner, "ca-certificates", "fail2ban", "nftables")
-	if len(missing) > 0 {
-		if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
-			return failNodePartial(result, state, opts, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no package upgrade or third-party repository is used.")
-		}
-		args := append([]string{"install", "-y", "--no-install-recommends"}, missing...)
-		if _, err := opts.Runner.Run(ctx, "apt-get", args...); err != nil {
-			return failNodePartial(result, state, opts, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status; only the listed missing packages are installed.")
-		}
-	}
-	if usedPackage(missing, "nftables") {
-		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Runner, installedCfg, hasState); err != nil {
-			code, recovery := "ACL_TABLE_PROBE_FAILED", "Re-run the exact nft ownership readback. MeshMux will not adopt, overwrite or delete an unverified table."
-			var ie *InstallError
-			if errors.As(err, &ie) {
-				code, recovery = ie.Code, ie.Recovery
-			}
-			return failNodePartial(result, state, opts, record, "apply", code, recovery)
-		}
-	}
 	if err := ensureNodeAccounts(ctx, opts.Runner, opts.Root, hasState); err != nil {
 		return failNodePartial(result, state, opts, record, "apply", "ACCOUNT_CREATE_FAILED", "Inspect meshmux-singbox and meshmux-agent accounts before retrying.")
 	}
@@ -984,7 +986,10 @@ func usedPackage(packages []string, want string) bool {
 }
 
 func verifyNodeSSHJail(ctx context.Context, runner CommandRunner, ssh ...int) error {
-	portsOut, err := runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "port")
+	// fail2ban 1.1.0 (Debian 13) removed `get <JAIL> port`; the jail port
+	// is read back through the nftables-multiport action instance, which
+	// also proves the daemon loaded the jail (an unknown jail errors out).
+	portsOut, err := runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "port")
 	if err != nil {
 		return err
 	}

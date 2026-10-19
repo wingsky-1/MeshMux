@@ -71,9 +71,9 @@ Node 工作流在当前工作树中扩展到 `edge` 与 `out` profile，目标�
 
 | 检查 | 期望证据 | 当前状态 |
 | --- | --- | --- |
-| L1 CLI/installer/runtime/Web | 主控回填真实 `gofmt`、vet、test、race、build、定向 mutation；失败必须为有效语义红 | 待验 |
-| L2 amd64 Debian 13 | 固定制品 hash、sing-box check、unit 语法、Fail2ban/nft 配置自检及明确 run 链接 | 未测 |
-| L2 arm64 Debian 13 | 同上，使用原生 arm64 runner 与固定 binary hash | 未测 |
+| L1 CLI/installer/runtime/Web | 主控回填真实 `gofmt`、vet、test、race、build、定向 mutation；失败必须为有效语义红 | 通过（本地全绿；定向单测覆盖 Origin allowlist、重装拒绝、revoked 重配对、ACL 顺序/LKG、fixture Origin） |
+| L2 amd64 Debian 13 | 固定制品 hash、sing-box check、unit 语法、Fail2ban/nft 配置自检及明确 run 链接 | 通过（[hub-components run 39289174690](https://github.com/wingsky-1/MeshMux/actions/runs/39289174690)，head `9b0108f`；unit 语法用空可执行 stub，binary 内容同 run 内 SHA 校验） |
+| L2 arm64 Debian 13 | 同上，使用原生 arm64 runner 与固定 binary hash | 通过（同上 run，原生 arm64 runner 同矩阵全绿） |
 | L3 edge | 隔离 VM 首装、plan/确认、stdin code、repair 身份复用、重启与故障恢复 | 未测 |
 | L3 out | 同上，加真实 nft readback 与默认拒绝语义；当前 `policy accept` 实现仍是阻塞 | 未测 |
 

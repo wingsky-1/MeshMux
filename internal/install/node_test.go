@@ -65,7 +65,10 @@ func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]
 		}
 		return nil, errors.New("missing package")
 	case "fail2ban-client":
-		if len(args) == 3 && args[0] == "get" && args[1] == "meshmux-node-sshd" && args[2] == "port" {
+		// fail2ban 1.1.0 has no `get <JAIL> port`; the installer reads the
+		// jail port back through the nftables-multiport action instance.
+		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
+			args[2] == "action" && args[3] == "nftables-multiport" && args[4] == "port" {
 			return []byte("2222\n"), nil
 		}
 		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
