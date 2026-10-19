@@ -2,11 +2,15 @@
 
 MeshMux 优先继承 `my-sub` 的稳定经验及上游组件自校验能力，不为测试引入 Ansible/Molecule 或持续在线 VPS。开发期禁止现网执行。CI 只验证代码真实覆盖的阶段，L1/L2 通过都不代表真实宿主机安装成功。
 
+本文保留 Issue #5 Hub 已成功的运行链接与相同 tree 说明；Issue #6 PR-B 的 Node 验证仍待实际运行，当前不提供 CI 成功链接，也不把脚本存在当作证据。
+
 三层门禁的分工与证据强度：
 
 - **L1（Go 测试 + 故障注入）**：验证纯逻辑、flag/配置边界、受控命令调用、文件事务、幂等和回滚状态，速度最快、覆盖分支最广，但不证明真实 systemd、内核、nftables 或网络行为。
 - **L2（Debian 13 容器组件自检）**：在官方发行容器内运行固定版本 Caddy/Headscale 的配置校验和 systemd unit 语法检查，证明组件配置可被官方工具接受，但不是完整系统安装。
 - **L3（QEMU 真实 systemd 全系统）**：在可销毁的 Debian 13 VM 中执行实际 install、repair、重启和 Fail2ban/nftables 操作，是 Issue #5 的 C 级证据；必须引用明确成功运行。
+
+Issue #6 Node 的 L1/L2/L3 状态见 [验收标准](ACCEPTANCE.zh-CN.md#issue-6-pr-b-实现与验收)。在真实运行回填前，三项均为待验/未测。
 
 ## L1：每次提交（现有 ci.yml）
 
@@ -60,3 +64,19 @@ Cloudflare 灰云 DNS、真实 ACME TLS、UDP/3478、Headscale 特殊控制协�
 - **L3**：`hub-vm` 工作流在触及 `internal/install/**`、`cmd/meshmux/**`、`cmd/meshmux-web/**`、`scripts/ci-hub-vm.sh` 或相关文档/workflow 的 PR 上自动触发，也支持 `verify/issue5-hub-vm-*` 分支 push 与带 `ref` 输入的手动运行；启动带 SHA-512 固定校验的 Debian 13 官方 qcow2 / systemd。`internal/install/vm_test.go` 仅在 `MESHMUX_HUB_SYSTEM_VM=1` 时激活；虚拟机才执行安装器、故障修复与重启、真实 Fail2ban nftables ban/unban。实验性的内部签发证书只用于隔离 CI；正式 CLI 不能启用。
 
 QEMU 若没有 `/dev/kvm` 则改用 TCG 软件模拟；有条件时验证速度更快。**L3 必须有明确成功运行链接，不能以脚本存在或启动 QEMU 代替成功。**
+
+## Issue #6 Node 验证范围（待验）
+
+Node 工作流在当前工作树中扩展到 `edge` 与 `out` profile，目标是验证固定 sing-box 1.14.3、systemd Agent/sing-box、stdin 配对、repair、重启、Fail2ban 与实际 SSH listener、nft ownership/readback。`ci-node-vm.sh` 的 Hub fixture 启动/状态握手与 `TestNodeSystemVM` 已就位，待隔离 Debian 13 运行回填成功链接后方可把 Node L3 记为通过。
+
+| 检查 | 期望证据 | 当前状态 |
+| --- | --- | --- |
+| L1 CLI/installer/runtime/Web | 主控回填真实 `gofmt`、vet、test、race、build、定向 mutation；失败必须为有效语义红 | 待验 |
+| L2 amd64 Debian 13 | 固定制品 hash、sing-box check、unit 语法、Fail2ban/nft 配置自检及明确 run 链接 | 未测 |
+| L2 arm64 Debian 13 | 同上，使用原生 arm64 runner 与固定 binary hash | 未测 |
+| L3 edge | 隔离 VM 首装、plan/确认、stdin code、repair 身份复用、重启与故障恢复 | 未测 |
+| L3 out | 同上，加真实 nft readback 与默认拒绝语义；当前 `policy accept` 实现仍是阻塞 | 未测 |
+
+Node 测试必须使用受控 runner、临时 root 或一次性 VM。没有 root/DeBIan 13 时只验证早期拒绝与命令组装，不执行宿主安装。SSH 与 VLESS 端口必须不同；Fail2ban jail/action 应覆盖实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。
+
+当前 Node baseline 的 VLESS `users` 为空，没有 TLS/REALITY、代理用户、客户端凭据或订阅，#7 未实现；#8、#9、#11 不在本轮验证范围。#11 仍是 v1.0.0 P0。不得从本地 listener 或 plan 成功推导公网可达、真实协议握手或客户端可用。

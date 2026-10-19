@@ -106,6 +106,13 @@ type PairingRequest struct {
 	KernelVersion string `json:"kernel_version"`
 }
 
+// HeartbeatRequest is the strict typed heartbeat body. It carries only the
+// agent and kernel versions; identity comes from the Bearer credential.
+type HeartbeatRequest struct {
+	AgentVersion  string `json:"agent_version"`
+	KernelVersion string `json:"kernel_version"`
+}
+
 func (t *Task) UnmarshalJSON(data []byte) error {
 	obj, err := decodeJSONObject(data, true)
 	if err != nil {
@@ -174,6 +181,37 @@ func (r *PairingRequest) UnmarshalJSON(data []byte) error {
 		return errors.New("PAIRING_INVALID: field type invalid")
 	}
 	*r = decoded
+	return nil
+}
+
+func (r *HeartbeatRequest) UnmarshalJSON(data []byte) error {
+	obj, err := decodeJSONObject(data, true)
+	if err != nil {
+		return errors.New("HEARTBEAT_INVALID: malformed or overlapping fields")
+	}
+	if err := requireFields(obj, "agent_version", "kernel_version"); err != nil {
+		return errors.New("HEARTBEAT_INVALID: malformed or overlapping fields")
+	}
+	if bytes.Equal(bytes.TrimSpace(obj["agent_version"]), []byte("null")) ||
+		bytes.Equal(bytes.TrimSpace(obj["kernel_version"]), []byte("null")) {
+		return errors.New("HEARTBEAT_INVALID: field type invalid")
+	}
+	var decoded HeartbeatRequest
+	if err := decodeExactFields(obj, []fieldSpec{
+		{"agent_version", &decoded.AgentVersion},
+		{"kernel_version", &decoded.KernelVersion},
+	}); err != nil {
+		return errors.New("HEARTBEAT_INVALID: field type invalid")
+	}
+	*r = decoded
+	return nil
+}
+
+// Validate checks the two heartbeat versions without requiring pairing fields.
+func (r HeartbeatRequest) Validate() error {
+	if !validVersionString(r.AgentVersion) || !validVersionString(r.KernelVersion) {
+		return errors.New("VERSION_INVALID: agent and kernel versions must be 1-64 printable characters")
+	}
 	return nil
 }
 

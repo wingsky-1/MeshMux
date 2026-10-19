@@ -24,6 +24,13 @@ func createPendingNode(t *testing.T, app *Server, role, name string, vless, ssh 
 	return node, code
 }
 
+func clearNodeTasks(t *testing.T, app *Server, nodeID string) {
+	t.Helper()
+	if _, err := app.store.db.Exec(`DELETE FROM agent_tasks WHERE node_id=?`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func pairJSON(t *testing.T, app *Server, nodeID, role, code string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"node_id": nodeID, "role": role, "pairing_code": code, "agent_version": "meshmux-agent test", "kernel_version": "6.1-test"})
@@ -64,7 +71,7 @@ func TestNodeCreateAndListOverWeb(t *testing.T) {
 	loginAs(t, b, testPassword)
 	w := b.post("/nodes", url.Values{"role": {"edge"}, "display_name": {"line-hk-01"}, "vless_port": {"8443"}, "ssh_port": {"2222"}})
 	requireStatus(t, w, 200)
-	if !strings.Contains(w.Body.String(), "配对码已签发") || !strings.Contains(w.Body.String(), "节点安装尚未开放") {
+	if !strings.Contains(w.Body.String(), "配对码已签发") || !strings.Contains(w.Body.String(), "配对码 15 分钟过期") {
 		t.Fatalf("nodes page missing pairing disclosure: %.300s", w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "8443") && !strings.Contains(w.Body.String(), "VLESS") {
@@ -106,6 +113,7 @@ func TestPairingSingleUseExpiryAndRole(t *testing.T) {
 		t.Fatalf("pairing did not issue identity: %.200s", w.Body.String())
 	}
 	token := paired["identity_token"]
+	clearNodeTasks(t, app, node.ID)
 	if w.Header().Get("X-Operation-ID") == "" {
 		t.Fatal("missing operation id")
 	}
@@ -159,6 +167,7 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
+	clearNodeTasks(t, app, node.ID)
 	newTask := func(kind string, rev int64, idem string, params string) agent.Task {
 		return agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: idem, Revision: rev, IdempotencyKey: idem, NodeID: node.ID, Kind: kind, Params: json.RawMessage(params)}
 	}

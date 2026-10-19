@@ -39,7 +39,26 @@
 
 - [x] **PR-A 本地验收（A/L1）**：Agent 严格协议、配对、任务状态与持久化边界，以及 Web 节点基础能力已由主控完成本地验收；完整 race、格式与 diff check 通过，浏览器复核完成，关键协议、迁移和 Web mutation 证据见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md)。
 - [ ] **PR-A 远端 CI**：当前无新的远端 CI 结论；不得用本地 L1 结果替代远端流水线或 L2/L3 宿主机安装验收。
-- [ ] **PR-B**：尚未实现。宿主机预检/安装、systemd Agent、sing-box 配置应用、Out ACL，以及 Web partial/failed 错误码查询展示、离线状态和 runtime 不属于 PR-A 已交付能力；`agent_tasks.error_code` 持久化不等于 Web 已提供错误码查询展示。最小拆分见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md#pr-b-最小拆分建议)。
+
+## Issue #6 PR-B 实现与验收
+
+PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当前工作树，PR-A 已本地 ff 合入 `adb7558`。以下勾选必须等待主控给出真实运行结果后回填；当前没有 PR-B CI 链接，源码存在、定向测试通过或 plan 成功都不能替代全仓与隔离宿主机验收。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| L1 | `cmd/meshmux` 命令边界、stdin 配对码、确认/预检失败无副作用、repair 身份复用、structured partial/failed 与内部版本探针 | [ ] 待验 |
+| L1 | installer state/owned paths、check/stage/apply/readback、runtime LKG/journal、Web 离线与固定 recheck/reissue | [ ] 待验 |
+| L2 | Debian 13 amd64 固定 sing-box 1.14.3、systemd unit、Fail2ban/nft 配置自检 | [ ] 未测 |
+| L2 | Debian 13 arm64 固定制品与组件配置自检 | [ ] 未测 |
+| L3 | 隔离 Debian 13 VM 的 edge/out 首装、repair、重启、故障恢复、实际 SSH/VLESS 端口与 Fail2ban/nft 行为 | [ ] 未测 |
+
+- [ ] **全仓自动化**：等待主控回填实际 `gofmt`、`go vet`、`go test`、race、build 结果；不得把缺失依赖或编译错误记作通过。
+- [ ] **PR-B CI**：尚未提供成功运行链接，保持未验。后续链接必须指向对应 head，并说明该 head 的 Git tree。
+- [ ] **L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；本阶段 baseline 无 TLS/REALITY、无用户、无订阅，#7 未实现。
+- [ ] **Out ACL 语义**：当前源码为 `policy accept` 加目标 VLESS TCP/UDP drop，和“空授权默认拒绝、仅目标端口可用”的验收要求不一致；必须先修正并有真实 nft readback/流量证据。
+- [ ] **自定义端口**：SSH 与 VLESS 端口必须不同；Fail2ban jail/action 必须覆盖全部实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。该结论待 L2/L3 实测。
+
+实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#8、#9 与 #11 不在本轮验收范围，#11 仍是 v1.0.0 P0。
 
 ## v1.0.0 必须完成的真实用户闭环
 

@@ -1,13 +1,13 @@
-# Issue #6 Phase 2B PR-A 交付评审
+# Issue #6 Phase 2B 实施评审
 
 更新时间：2026-10-19。
 
 ## 状态
 
 - Issue #5 已关闭。`c5be00c` 的树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 相同；[Go/web run 39216454974](https://github.com/wingsky-1/MeshMux/actions/runs/39216454974)、[Debian 组件 run 39216454901](https://github.com/wingsky-1/MeshMux/actions/runs/39216454901) 和 [QEMU run 39216454882](https://github.com/wingsky-1/MeshMux/actions/runs/39216454882) 均成功，#6 可消费 #5 已合入的 Hub 接口。
-- Issue #6 PR-A 已完成主控最终验收和本地评审/L1 验证，可进入主控授权的本地提交/ff merge 流程。当前没有新的远端 CI 结论，这不表示已发行、已现网部署或已获得 L2/L3 证据。
+- Issue #6 PR-A 已完成主控最终验收和本地评审/L1 验证，并已在本地 ff 合入 `adb7558`。远端 `main` 仍为 `17baaa1`；当前没有新的远端 CI 结论，这不表示已发行、已现网部署或已获得 L2/L3 证据。
 - #11 的 Web 全节点统一升级是 v1.0.0 P0，由 #11 独立实现和验收。
-- PR-B 尚未实现；同一 Issue #6 任务接下来继续 B。Web 的 partial/failed 错误码查询展示、离线状态和 runtime 能力仍归 B。
+- PR-B 的 Node CLI、安装事务、runtime、Web 固定操作和验证脚本已写入当前工作树，正在做全仓与隔离宿主机验收。没有 PR-B 远端 CI 链接，也不得把实现存在或定向测试通过当作 L2/L3 结论。
 
 ## 原 P0 修复与本地验收
 
@@ -25,12 +25,21 @@
 - PR-A 没有 L2/L3 隔离 Debian 13 宿主机安装证据；不得用本地 L1 冒充系统验收。
 - PR-A 当前无新的远端 CI 结论；ADR Accepted 仅指本地评审/L1 通过，不表示远端 CI、发行或现网验收通过。
 
-## PR-B 最小拆分建议
+## PR-B 当前实现与验收边界
 
-以下只是后续实现拆分建议，不是交付承诺或验收结论；每个 PR 都应独立通过隔离 Debian 13 证据与人工验收。
+当前工作树已实现以下主路径，尚待主控按真实运行结果验收：
 
-1. **B1 · 安装与配对基座**：Edge/Out 预检、固定制品与校验、systemd 常驻 Agent、stdin 配对、心跳与状态任务。不实现 sing-box 配置、不开放 Out 入站；验收重点是首装、配对失败/重放、断线与重启恢复。
-2. **B2 · 配置候选与 Line apply**：新增节点专属认证候选配置通道和不可变 revision 存储；任务仍只携带 `revision`，Agent 下载后做完整性校验、`sing-box check`、原子切换、受控重启与 readback。验收重点是非法/过期 revision、校验失败、启动失败、回退 last-known-good 和离线不停线。
-3. **B3 · Out ACL**：在 B2 配置机制稳定后落地 Out nftables 默认拒绝、授权 Line 来源同步、撤销/同步失败 fail-closed。验收重点是真实入站阻断、授权 Line 可达、规则撤销和恢复，不与配置 apply 混在一个小 PR 里造成难以归因的失败。
+- **CLI**：用户入口仍为 `meshmux install hub|edge|out`；edge/out 接受 `--hub`、`--node`、`--vless-port`、`--ssh-port`、`--plan`、`--yes`、`--repair`。配对码没有 flag，只从同一个 buffered stdin reader 在确认之后读取 43 字符单行。私有 zero-arg `__internal-agent-version` 仅输出 `node.CurrentAgentVersion`，供 installer 验证暂存 Agent，不是用户管理命令。
+- **Installer**：配置先于宿主探测；真实 preflight 覆盖 Debian 13、root、架构、磁盘、systemd、时钟、CA、Hub/GitHub HTTPS、端口、实际 SSH listener、包可用性与 nft ownership。plan 不消费配对码或写宿主；未确认不 apply。
+- **Transaction**：sing-box 1.14.3 官方归档与解压后 binary 均校验固定 SHA-256；Agent 使用当前 CLI 的自复制 bytes/hash。state 仅按 Hub URL、Node ID、role、VLESS/SSH port 判断同一 Node，记录 owned paths、operation journal 和 stage/status/error/recovery。
+- **Runtime**：固定六类任务；配置任务 params 只允许 `revision`。apply 在 runtime lock 内做 staged readback、sing-box check、受控重启与严格进程/监听/配置/二进制回读；有 LKG 时才尝试恢复，恢复后仍须完整 readback。
+- **Web**：节点页面显示严格本机 readback 与最近任务；无 heartbeat、pending 或 heartbeat 超过 2 分钟显示离线，离线时不投递改动任务。固定 recheck 生成不可变 revision 和四任务链；“重签身份”撤销旧 token、替换 pairing code、终止旧未完成任务并回到 pending。
+- **Agent boundary**：`meshmux __internal-agent` 是 systemd 固定入口；拒绝参数，不提供任意路径、命令或 URL 调度。CLI 没有新增 `upgrade`、`rollback`、`status` 管理命令。
 
-**阻塞接口**：PR-B 配置任务必须复用 PR-A envelope，`config.*` params 只保留 `revision`；完整候选配置不能进入 task params、公开订阅 URL 或任意 Agent 指定 URL。建议的最小接口是管理员提交不可变候选 revision，Agent 用节点专属 Bearer 通过固定路径按 revision 拉取，响应包含 revision、内容哈希、大小、内容类型与候选内容；Agent 先校验哈希与单调节点约束，再执行 `config.check`。接口名称可在 PR-B 评审中定稿，但认证、角色绑定、不可变 revision 和哈希校验是硬边界。
+## 待验与已知阻塞
+
+- 全仓 `gofmt`、vet、test、race、build 和浏览器/CI 结果等待主控回填；当前不勾成功。
+- L2 Debian 13 组件自检与 L3 edge/out QEMU 首装、repair、重启、失败恢复尚未取得证据。公网入站、真实协议握手和客户端可用也未测。
+- 当前 VLESS 候选 `users` 为空，没有 TLS/REALITY、用户、凭据或订阅；#7 未实现。
+- 当前 Out ACL 是 `policy accept` 加目标 VLESS TCP/UDP drop，与“空授权默认拒绝、仅目标端口可用”的要求不一致，是上线验收阻塞。#8、#9 与 #11 不在本轮实现范围；#11 仍是 v1.0.0 P0。
+- 自定义 SSH/VLESS 端口必须不同；安装器从 ssh.socket、ss 和 sshd 读取实际 listener，Fail2ban jail/action 需覆盖全部 SSH listener 并排除 VLESS。真实封禁和 nft 行为只能由 L3 证明。

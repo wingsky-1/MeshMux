@@ -175,6 +175,7 @@ func TestAgentResultRejectsCrossNodeWrites(t *testing.T) {
 	app, _ := testApp(t)
 	nodeA, tokenA := pairedNode(t, app, "line-a")
 	_, tokenB := pairedNode(t, app, "line-b")
+	clearNodeTasks(t, app, nodeA.ID)
 	task := agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Revision: 1, IdempotencyKey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", NodeID: nodeA.ID, Kind: agent.KindHealthStatus, Params: []byte("{}")}
 	if err := app.store.enqueueTask(task); err != nil {
 		t.Fatal(err)
@@ -201,6 +202,7 @@ func TestAgentResultRejectsCrossNodeWrites(t *testing.T) {
 func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	app, _ := testApp(t)
 	node, token := pairedNode(t, app, "line-state")
+	clearNodeTasks(t, app, node.ID)
 	revision := int64(0)
 	newTask := func(operation string) agent.Task {
 		revision++
@@ -274,6 +276,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 func TestPendingTasksIncludeRedeliveryStates(t *testing.T) {
 	app, _ := testApp(t)
 	node, token := pairedNode(t, app, "line-redeliver")
+	clearNodeTasks(t, app, node.ID)
 	statuses := []string{"pending", "applying", "verifying", "healthy"}
 	for i, status := range statuses {
 		id, _ := agent.NewID()

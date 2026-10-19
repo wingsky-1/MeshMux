@@ -276,6 +276,35 @@ func TestPairingRequestValidation(t *testing.T) {
 	}
 }
 
+func TestHeartbeatRequestStrictDecoding(t *testing.T) {
+	valid := `{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3"}`
+	var req HeartbeatRequest
+	if err := json.Unmarshal([]byte(valid), &req); err != nil {
+		t.Fatal(err)
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, body := range []string{
+		`{"agent_version":"meshmux-agent 1.0.0-dev"}`,
+		`{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3","node_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+		`{"Agent_Version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3"}`,
+		`{"agent_version":null,"kernel_version":"1.14.3"}`,
+		`{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3","kernel_version":"1.15.0"}`,
+		`{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3"} trailing`,
+	} {
+		if err := json.Unmarshal([]byte(body), &req); err == nil {
+			t.Fatalf("invalid heartbeat accepted: %s", body)
+		}
+	}
+
+	req = HeartbeatRequest{AgentVersion: "agent\nforged", KernelVersion: "1.14.3"}
+	if err := req.Validate(); err == nil {
+		t.Fatal("control character in heartbeat version accepted")
+	}
+}
+
 func TestTaskResultStatusAndErrorCodeConsistency(t *testing.T) {
 	base := TaskResult{OperationID: strings.Repeat("a", 32)}
 	for _, status := range []string{"pending", "applying", "verifying", "healthy", "rolled_back"} {

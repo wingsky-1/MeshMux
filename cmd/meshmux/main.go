@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/install"
+	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/product"
 	"github.com/wingsky-1/MeshMux/internal/webcmd"
 )
@@ -23,6 +24,12 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__internal-web" {
 		os.Exit(webcmd.Run(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-agent" {
+		os.Exit(node.RunCommand(os.Args[2:], os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-agent-version" {
+		os.Exit(runInternalAgentVersion(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	os.Exit(runWithIO(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
@@ -34,11 +41,23 @@ func run(args []string, stderr io.Writer) int {
 }
 
 func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWithDependencies(args, stdin, stdout, stderr, productionNodeRunner{}, productionAgentService{})
+}
+
+func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Writer, nodes nodeRunner, agent agentService) int {
 	if len(args) > 0 && args[0] == "__internal-web" {
 		return webcmd.Run(args[1:])
 	}
+	if len(args) > 0 && args[0] == "__internal-agent" {
+		return agent.RunCommand(args[1:], stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-agent-version" {
+		return runInternalAgentVersion(args[1:], stdout, stderr)
+	}
 	if len(args) < 2 || args[0] != "install" {
-		fmt.Fprintln(stderr, "usage: meshmux install {hub|edge|out} [--management-domain NAME --subscription-domain NAME --headscale-domain NAME] [--plan|--yes] [--repair]")
+		fmt.Fprintln(stderr, "usage: meshmux install {hub|edge|out}")
+		fmt.Fprintln(stderr, "  hub: [--management-domain NAME --subscription-domain NAME --headscale-domain NAME] [--plan|--yes] [--repair]")
+		fmt.Fprintln(stderr, "  edge|out: --hub HTTPS_ORIGIN --node 32_HEX --vless-port PORT --ssh-port PORT [--plan|--yes] [--repair]")
 		return 2
 	}
 	role, err := product.ParseRole(args[1])
@@ -46,11 +65,13 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "ROLE_INVALID")
 		return 2
 	}
-	if role != product.RoleHub {
-		fmt.Fprintln(stderr, "NOT READY TO INSTALL: Line/Out installation is reserved for Issue #6; no host changes were made.")
-		return 3
+	if role == product.RoleHub {
+		return runHubInstall(args[2:], stdin, stdout, stderr)
 	}
+	return runNodeInstall(node.Role(role), args[2:], stdin, stdout, stderr, nodes)
+}
 
+func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("install hub", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var c install.Config
@@ -61,7 +82,7 @@ func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.StringVar(&c.SubscriptionDomain, "subscription-domain", "", "subscription hostname")
 	flags.StringVar(&c.HeadscaleDomain, "headscale-domain", "", "Headscale/DERP hostname")
 	flags.BoolVar(&c.DirectCaddy, "direct-caddy", false, "enable Web Fail2ban only when Caddy is reached directly, not through a CDN/proxy")
-	if err := flags.Parse(args[2:]); err != nil || flags.NArg() != 0 {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "CONFIG_INVALID: unknown or unexpected install options")
 		return 2
 	}
