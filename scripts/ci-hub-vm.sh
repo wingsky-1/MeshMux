@@ -30,7 +30,7 @@ echo 'Downloading official pinned Debian 13 cloud image'
 curl -fL --retry 3 --connect-timeout 15 --max-time 320 \
   'https://cloud.debian.org/cdimage/cloud/trixie/20261001-2618/debian-13-genericcloud-amd64-20261001-2618.qcow2' -o "$image"
 expected='9G8GcablvexSkauJcrri8Q5UCML2SnQHjxHvwvBqQ2qdAxPtUOBHJULuq/eA6ffHkqwKMUxsIFB/zZ/YG0aMPQ'
-actual="$(openssl dgst -sha512 -binary "$image" | base64 -w0)"
+actual="$(openssl dgst -sha512 -binary "$image" | base64 -w0 | tr -d '=')"
 [[ "$actual" == "$expected" ]] || { echo 'Debian image SHA-512 mismatch' >&2; exit 1; }
 
 qemu-img create -f qcow2 -F qcow2 -b "$image" "$disk" 15G
