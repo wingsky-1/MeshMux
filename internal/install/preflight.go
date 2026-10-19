@@ -185,9 +185,16 @@ func CanBind(protocol, address string) error {
 
 // checkPorts distinguishes an absent IPv6 stack from a real port collision.
 // A disabled IPv6 family must not prevent an IPv4-only Hub from installing.
+
 func checkPorts() error {
+	return probePorts(CanBind)
+}
+
+// probePorts accepts an injected binder so no privileged host environment is
+// needed to test IPv4-only and occupied-port behavior.
+func probePorts(bind func(string, string) error) error {
 	ipv6 := true
-	if err := CanBind("tcp6", "[::1]:0"); err != nil {
+	if err := bind("tcp6", "[::1]:0"); err != nil {
 		if errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL) ||
 			errors.Is(err, syscall.EPROTONOSUPPORT) {
 			ipv6 = false
@@ -200,7 +207,7 @@ func checkPorts() error {
 		if p.Port == 80 || p.Port == 443 || p.Protocol == "udp" {
 			host = "0.0.0.0"
 		}
-		if err := CanBind(p.Protocol, net.JoinHostPort(host, strconv.Itoa(p.Port))); err != nil {
+		if err := bind(p.Protocol, net.JoinHostPort(host, strconv.Itoa(p.Port))); err != nil {
 			return err
 		}
 		if !ipv6 {
@@ -214,7 +221,7 @@ func checkPorts() error {
 		if p.Protocol == "udp" {
 			family = "udp6"
 		}
-		if err := CanBind(family, net.JoinHostPort(host6, strconv.Itoa(p.Port))); err != nil {
+		if err := bind(family, net.JoinHostPort(host6, strconv.Itoa(p.Port))); err != nil {
 			return err
 		}
 	}
