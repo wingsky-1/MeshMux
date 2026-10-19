@@ -45,6 +45,7 @@ test -f "$tmp/extracted/caddy"
 install -m 0755 "$tmp/extracted/caddy" /usr/local/libexec/meshmux-caddy
 install -m 0755 "$tmp/headscale" /usr/local/libexec/meshmux-headscale
 install -m 0755 /workspace/.ci/bin/meshmux-web /usr/local/libexec/meshmux-web
+install -m 0755 /workspace/.ci/bin/meshmux-web /usr/local/libexec/meshmuxd
 
 fixture=/workspace/.ci/hub-fixture
 MESHMUX_HUB_FIXTURE_DIR="$fixture" /workspace/.ci/bin/install.test \
