@@ -44,3 +44,11 @@ Cloudflare 灰云 DNS、真实 ACME TLS、UDP/3478、Headscale 特殊控制协�
 - `my_sub/security.py`：验证 Fail2ban 前不启动/重启，避免误封 SSH。MeshMux 须进一步识别真实 SSH 非 22 端口。
 
 借鉴测试思想，不从私有仓库复制代码；`my-sub` 的 Python 安装器和 MeshMux Go 安装器相互独立。
+
+## PR B CI 运行入口
+
+- **L1**：GitHub Actions `ci`（`go test ./...` / `go test -race ./...`），含 `internal/install/apply_test.go` 的随机私有目录注入、幂等性及回滚。测试进程没有操作真实 `/etc` 的权利。
+- **L2**：`hub-components` 的 amd64、arm64 官方二进制校验，额外上传短期保留的 `hub-installer-<arch>` 和对应 `SHA256SUMS`，并非稳定 release。
+- **L3**：`hub-vm` 工作流（只在 `verify/issue5-hub-vm-*` 临时验证分支 push 或人工 workflow_dispatch 执行）启动带 SHA-512 固定校验的 Debian 13 官方 qcow2 / systemd。`internal/install/vm_test.go` 仅在 `MESHMUX_HUB_SYSTEM_VM=1` 时激活；虚拟机才执行安装器、故障修复与重启、真实 Fail2ban nftables ban/unban。实验性的内部签发证书只用于隔离 CI；正式 CLI 不能启用。
+
+QEMU 若没有 `/dev/kvm` 则改用 TCG 软件模拟；有条件时验证速度更快。**L3 必须有明确成功运行链接，不能以脚本存在或启动 QEMU 代替成功。**

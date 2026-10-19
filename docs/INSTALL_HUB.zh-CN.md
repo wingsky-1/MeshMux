@@ -1,6 +1,47 @@
-# Issue #5 · Hub 安装器：PR A 只读预检与制品基线
+# Issue #5 · Hub 安装器（PR A 预检 + PR B 安装执行）
 
-**状态：PR A 可审核，未实施主机安装。** 当前 `meshmux install hub` 仍会以非零退出，绝不会触碰宿主机配置或启停服务。首次真正安装、重复安装、修复与回滚属于 PR B。不要在生产 VPS 上验证本阶段。
+**阶段状态：PR #14 已通过 L1/L2；PR #15 的 install/apply 已实现初稿并处于 L3 QEMU 隔离验收。两 PR 均未合并，禁止在任何现网 VPS/NAS 上执行 Draft 安装器。**
+
+## PR B 安装、重试和恢复（仅隔离 Debian 13 测试 VM）
+
+用于手动复核 CI 步骤的命令示例，不是当前公开生产安装指令：
+
+```sh
+go build -o ./bin/meshmux ./cmd/meshmux
+./bin/meshmux install hub --plan \
+  --management-domain console.example.org \
+  --subscription-domain sub.example.org \
+  --headscale-domain mesh.example.org
+
+# 仅在全新可销毁 VM 上，且域名由操作者控制时执行
+sudo ./bin/meshmux install hub \
+  --management-domain console.example.org \
+  --subscription-domain sub.example.org \
+  --headscale-domain mesh.example.org
+
+# 重复执行：仅做已安装健康读回，不修改数据和制品
+sudo ./bin/meshmux install hub --yes \
+  --management-domain console.example.org \
+  --subscription-domain sub.example.org \
+  --headscale-domain mesh.example.org
+
+# 发生部分安装/需主动修复时，显式使用 --repair
+sudo ./bin/meshmux install hub --repair --yes \
+  --management-domain console.example.org \
+  --subscription-domain sub.example.org \
+  --headscale-domain mesh.example.org
+```
+
+交互模式需输入准确短语 `install hub`，非交互自动化需 `--yes` 与全部三个域名。Web 不从命令行接收管理员密码，而是在 `/var/lib/meshmux/bootstrap.token` 生成一次性初始化令牌（敏感权限 0600）。带 `--direct-caddy` 时才启用 Web IP 封禁；经过 CDN/多层代理一律不要开启。
+
+- 原生安装器 `/usr/local/libexec/meshmuxd` 是与操作 CLI 相同的经 SHA-256 比对的可执行文件。CI 发布对应源码提交的构建制品和 `SHA256SUMS`；**这不等于已存在公开 Release 或长期有效的签名 manifest**。
+- 使用官方 Caddy 2.11.7 / Headscale 0.29.5 发行制品的固定校验值。真实 Caddy ACME/TLS 不允许将测试证书禁用校验；`tls internal` 仅由不可从用户 CLI 访问的 CI VM 测试钩子生成。
+- 只修改 MeshMux 专属 Caddy/Headscale 文件、专属 systemd 服务和 Fail2ban jail/filter。不会 `nft flush ruleset`、不会重写 SSH、不会清空数据库或 Headscale 私钥。
+- 每次操作的 root 私有状态在 `/var/lib/meshmux-installer/state.json`，日志在 `/var/lib/meshmux-installer/operations/<operation_id>/events.jsonl`；冲突、非受管文件、外部编辑漂移均拒绝覆盖。
+- 失败后记录 `partial` 并给错误码；运行 `--repair` 前排查 journal 和 systemd unit。管理域名、订阅域名或 Headscale 域名迁移不属于自动 repair 范围。
+- 真实外网证书签发、云安全组和跨 NAT STUN/DERP 检查必须另列 `pending`，本机 TLS/端口健康无法证明公网可达。
+
+## 原 PR A 基线及设计说明
 
 ## 运行方式
 
@@ -14,7 +55,7 @@ go build -o ./bin/meshmux ./cmd/meshmux
   --headscale-domain mesh.example.org
 ```
 
-`example.org` 仅展示语法。实际预检时须使用本人控制、已解析 A/AAAA 的测试域名；不得把个人地址或私钥提交到仓库。计划以 JSON 写入终端错误输出，含一次性 operation_id、逐项状态/错误码/补救建议、组件和端口。这里**不读取、收集或输出管理员密码**。默认 install 不接受确认开关，执行写操作仍关闭。
+`example.org` 仅展示语法。实际预检时须使用本人控制、已解析 A/AAAA 的测试域名；不得把个人地址或私钥提交到仓库。PR B 中计划以 JSON 写入标准输出，含一次性 operation_id、逐项状态/错误码/补救建议、组件和端口。这里**不读取、收集或输出管理员密码**。默认 install 不接受确认开关，执行写操作仍关闭。
 
 预检读取 `/etc/os-release`，校验 Debian 13、amd64/arm64、root、至少 1 GiB 可用空间、systemd、NTP、三域名 DNS、GitHub 出站 HTTPS、TCP 80/443 与 Web/Headscale loopback 监听冲突、UDP 3478，以及 SSH 实际监听端口。SSH 包含 ssh.socket systemd socket activation 与 ss 的实际监听；传统 sshd 进一步与 `sshd -T` 对比。不调用 `iptables -F`、`nft flush ruleset`，不重配 SSH，也不写 Fail2ban jail。
 
