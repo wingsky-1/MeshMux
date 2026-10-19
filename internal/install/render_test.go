@@ -37,7 +37,8 @@ func TestCandidateBoundaries(t *testing.T) {
 		t.Fatal("Web Fail2ban must remain disabled behind an unverified proxy")
 	}
 	c.DirectCaddy = true
-	directFiles, err := CandidateFiles(c, []int{60794})\n\tif err != nil || !strings.Contains(directFiles["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = true") || !strings.Contains(directFiles["/etc/systemd/system/meshmux-web.service"], "--direct-caddy") {
+	directFiles, err := CandidateFiles(c, []int{60794})
+	if err != nil || !strings.Contains(directFiles["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = true") || !strings.Contains(directFiles["/etc/systemd/system/meshmux-web.service"], "--direct-caddy") {
 		t.Fatal("direct-Caddy opt-in did not enable the trusted-client mode")
 	}
 	c.DirectCaddy = false
