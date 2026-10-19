@@ -21,7 +21,13 @@ jobs:
           cache: false
       - name: Check gofmt
         run: |
-          test -z "$(gofmt -l ./cmd ./internal)"
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            gofmt -d ./cmd ./internal
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test
