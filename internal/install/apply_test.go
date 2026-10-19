@@ -32,7 +32,7 @@ func (f *fakeInstallerRunner) Run(_ context.Context, name string, args ...string
 		}
 		f.users[args[len(args)-1]] = true
 	case "systemctl":
-		if strings.Contains(call, "enable --now "+f.failUnit) && f.failUnit != "" {
+		if f.failUnit != "" && (strings.Contains(call, "enable --now "+f.failUnit) || strings.Contains(call, "restart "+f.failUnit)) {
 			return nil, errors.New("fault injected")
 		}
 	case "chown":
