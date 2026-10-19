@@ -69,7 +69,20 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/password", app.mutation(app.password, true))
 	r.Get("/api/status", app.authenticated(app.status))
 	r.Get("/status", app.authenticated(app.statusFragment))
+	r.Get("/nodes", app.authenticated(func(w http.ResponseWriter, r *http.Request, sess session) {
+		app.nodesPage(w, r, sess, nil, "")
+	}))
+	r.Post("/nodes", app.mutation(app.nodesCreate, true))
+	r.Get("/api/nodes", app.authenticated(app.nodesList))
+	// Agent endpoints use Bearer identity, not admin session + browser Origin.
+	r.Post("/api/agent/pair", app.pairAgent)
+	r.Get("/api/agent/tasks", app.agentTasks)
+	r.Post("/api/agent/heartbeat", app.agentHeartbeat)
+	r.Post("/api/agent/result", app.agentResult)
 	for _, page := range navigation {
+		if page.Path == "/nodes" {
+			continue
+		}
 		p := page
 		r.Get(p.Path, app.authenticated(func(w http.ResponseWriter, r *http.Request, sess session) {
 			app.render(w, r, 200, Dashboard(pageData{Title: p.Title, Path: p.Path, CSRF: sess.CSRF, Dev: app.cfg.DevHTTP, DirectProxy: app.cfg.DirectProxy}))
@@ -113,7 +126,8 @@ func (s *Server) boundary(next http.Handler) http.Handler {
 			s.fail(w, r, 403, "HOST_REJECTED", "请求主机不匹配。", "请使用配置的管理地址。")
 			return
 		}
-		if r.Method != "GET" && r.Method != "HEAD" {
+		// Outbound Agents authenticate with Bearer identity, not browser Origin.
+		if r.Method != "GET" && r.Method != "HEAD" && !agentAPI(r.URL.Path) {
 			origins := r.Header.Values("Origin")
 			if len(origins) != 1 || origins[0] != s.cfg.Origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 				s.fail(w, r, 403, "ORIGIN_REJECTED", "请求来源不可信。", "请从管理页面重新提交。")

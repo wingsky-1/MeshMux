@@ -2,9 +2,11 @@
 
 ## 安装原则
 
-Hub 与目标节点面向用户的 CLI 只有 install；Agent 长期运行由 systemd 维护。用户在 Web 先创建待纳管节点，复制**一条经过版本固定的安装命令**，目标机在首次运行时输入 Web 提供的短期一次性配对码（不要把配对码放入进程参数、Shell 历史或安装 URL）。后续配置、日志、升级、回退、停用从 Web 操作。
+以下是 v1.0.0 的目标安装流程；PR-A 当前不提供可执行节点安装。目标态下，Hub 与目标节点面向用户的 CLI 只有 install；Agent 长期运行由 systemd 维护。用户在 Web 先创建待纳管节点，复制**一条经过版本固定的安装命令**，目标机在首次运行时输入 Web 提供的短期一次性配对码（不要把配对码放入进程参数、Shell 历史或安装 URL）。后续配置、日志、升级、回退、停用从 Web 操作。
 
-具体 Agent 安全通道（mTLS / 经固定 Hub HTTPS 校验的节点凭据）要在 PR1/PR2 前进行威胁建模与协议测试，未验证前不承诺生产可用。首次密钥发行后须轮换到节点专属不可复用凭据，支持撤销和过期。
+Issue #6 PR-A 设计冻结 `meshmux-agent/v1`：Web 签发一次性 15 分钟 JSON-body 配对码，Agent 经出站 HTTPS 换取节点专属可撤销 Bearer 身份；任务固定为 `config.check` / `config.stage` / `config.apply` / `config.readback` / `health.status` / `node.status`，`upgrade.*` 与 `rollback.*` 预留给 #11 且当前拒绝。PR-A 基础实现已完成本地评审/L1 验收，可进入主控授权的本地提交与 ff merge 流程，当前没有新的远端 CI 结论；宿主机安装与 apply、sing-box 控制和 Out nftables ACL 属于尚未实现的 PR-B。配置任务参数只允许 `revision`，候选配置必须经受认证的专用候选配置通道或授权封装传输，不得复用公开订阅通道。首次密钥发行后须轮换到节点专属不可复用凭据，支持撤销和过期。
+
+下图描述 v1.0.0 目标态，不代表 PR-A 已实现宿主机安装、服务健康或配置应用。
 
 ~~~mermaid
 sequenceDiagram

@@ -4,17 +4,17 @@
 
 MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管理原生 sing-box 代理线路、Headscale/Tailscale 异地组网，以及可选 AI Out 出口。手机可使用一份 sing-box 配置同时实现代理与 Mesh；也支持不需要代理订阅的纯 Mesh 设备和子网路由。
 
-> **分支状态：PR #14 的 Hub 预检/组件锁已合并；本分支（PR #15）包含可执行的 Hub 宿主机安装与恢复，仍处于隔离环境验收阶段。禁止把未发布代码当作生产发行版。** 完整代理、Mesh、订阅及 Web 统一升级仍属于后续 v1.0.0 开发。
+> **分支状态：Issue #5 已关闭；Hub 安装、幂等与恢复已按 L1/L2/L3 amd64 自动化验收合入 `main`（`17baaa1`）。Issue #6 PR-A 的 Agent 协议/配对基础实现已完成本地评审，可进入主控授权的本地提交与 ff merge；当前无新的远端 CI 结论，PR-B 尚未实现并在同一任务继续。禁止把未发布代码当作生产发行版。** #11 的 Web 全节点统一升级是 v1.0.0 P0，不属于本阶段。
 
 ## Issue #5 · Hub 预检（PR A）与安装执行（PR B）
 
 - PR #14（已合并）：`meshmux install hub --plan` 仅输出预检与固定版本候选；不会写系统。
-- PR #15（本次合入）：实现显式确认后 `install hub`、`--repair` 和只修改 MeshMux 自有路径的安装事务。**仅供隔离 Debian 13 VM 验证，尚不是正式安装发行包。** 真实 systemd / TLS 及 Fail2ban 必须通过 [分层 CI 验证](docs/CI_HUB_VALIDATION.zh-CN.md) 才可验收。
-- [完整安装与恢复说明](docs/INSTALL_HUB.zh-CN.md)；Line/Out、用户订阅与统一升级不属于 Issue #5。
+- PR #15（已合并）：实现显式确认后 `install hub`、`--repair` 和只修改 MeshMux 自有路径的安装事务。**已通过隔离 Debian 13 VM 自动化验收，尚不是正式安装发行包。** 运行边界与外部环境 pending 项见 [验收标准](docs/ACCEPTANCE.zh-CN.md)。
+- [完整安装与真实安装恢复说明](docs/INSTALL_HUB.zh-CN.md)。#5 只交付 Hub 安装与恢复；Line/Out 安装与纳管属于 #6，#11 单独实现并验收 Web 全节点统一升级。
 
 ## 体验当前 Web
 
-已实现单管理员初始化、登录/退出/改密、服务端会话、SQLite、安全校验和手机/桌面基础管理台。代理、Mesh、订阅仍未实现；Hub 安装执行目前仅存在于 PR #15，尚未通过最终集成验收。
+已实现单管理员初始化、登录/退出/改密、服务端会话、SQLite、安全校验和手机/桌面基础管理台。PR-A 的 Edge/Out 节点登记仅展示期望 SSH 端口，实际 SSH 探测待验收；无心跳时不显示 1970，paired 不等于健康，且暂无可执行节点安装。代理、Mesh、订阅仍未实现；Hub 安装执行已合并，正式安装发行包仍待 v1.0.0 交付。详细证据见 [PR-A 评审](docs/PHASE2B_REVIEW.zh-CN.md)。
 
 在普通用户的隔离 Linux 环境（Go 1.27.2）运行：
 

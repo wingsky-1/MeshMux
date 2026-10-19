@@ -123,7 +123,7 @@ func (s *store) migrate() error {
 	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 {
+	if version > 2 {
 		return errors.New("SCHEMA_TOO_NEW: restore matching binary and database; do not downgrade in place")
 	}
 	if version == 0 {
@@ -134,8 +134,26 @@ func (s *store) migrate() error {
    CREATE TABLE bootstrap (id INTEGER PRIMARY KEY CHECK(id=1), token_hash BLOB NOT NULL, expires INTEGER NOT NULL);
    CREATE TABLE auth_limit (id INTEGER PRIMARY KEY CHECK(id=1), started INTEGER NOT NULL, attempts INTEGER NOT NULL);
    INSERT INTO auth_limit VALUES(1,0,0);
-   PRAGMA user_version=1;
+   PRAGMA user_version=2;
+   CREATE TABLE nodes (id TEXT PRIMARY KEY, role TEXT NOT NULL CHECK(role IN ('edge','out')), display_name TEXT NOT NULL, vless_port INTEGER NOT NULL, ssh_port INTEGER NOT NULL, status TEXT NOT NULL, agent_version TEXT NOT NULL DEFAULT '', kernel_version TEXT NOT NULL DEFAULT '', last_heartbeat INTEGER NOT NULL DEFAULT 0, last_success TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+   CREATE TABLE node_pairing (node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE, code_hash BLOB NOT NULL, expires INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE node_identities (node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE, token_hash BLOB NOT NULL, created_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE agent_tasks (operation_id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, kind TEXT NOT NULL, revision INTEGER NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', params TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+   CREATE INDEX agent_tasks_node ON agent_tasks(node_id);
   `)
+		if err != nil {
+			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+		}
+	}
+	if version == 1 {
+		_, err = tx.Exec(`
+   CREATE TABLE nodes (id TEXT PRIMARY KEY, role TEXT NOT NULL CHECK(role IN ('edge','out')), display_name TEXT NOT NULL, vless_port INTEGER NOT NULL, ssh_port INTEGER NOT NULL, status TEXT NOT NULL, agent_version TEXT NOT NULL DEFAULT '', kernel_version TEXT NOT NULL DEFAULT '', last_heartbeat INTEGER NOT NULL DEFAULT 0, last_success TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+   CREATE TABLE node_pairing (node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE, code_hash BLOB NOT NULL, expires INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE node_identities (node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE, token_hash BLOB NOT NULL, created_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE agent_tasks (operation_id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, kind TEXT NOT NULL, revision INTEGER NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', params TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+   CREATE INDEX agent_tasks_node ON agent_tasks(node_id);
+   PRAGMA user_version=2;
+   `)
 		if err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}

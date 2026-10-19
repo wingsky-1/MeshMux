@@ -28,11 +28,18 @@
 
 ## Issue #5 Hub 安装器拆分验收
 
-- [ ] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
-- [ ] **PR B 安装事务与回归（L1/B 级，已实现，仍受 L3 门禁约束）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、受管文件台账回滚一致性、apt 查询优先、健康探针 303/禁止重定向语义、Web Fail2ban 默认禁用与 `--direct-caddy` 启用、RFC3339Nano 日期模式，均有 Go 测试覆盖；非 22 SSH Fail2ban 与 nftables 的真实系统行为仍需 L3 证明。
-- [ ] **PR B 全系统验收（C 级，阻断 #5 关闭与 #6 接口消费）**：L3 尚未在本次修复后重跑；真实 systemd 安装、重启恢复、故障回滚、Caddy 真实 ACME/TLS、Headscale DERP/STUN 与 nftables 互不干扰尚无新的成功证据。`hub-vm` 已配置为安装器相关 PR 自动触发，但必须以成功运行链接为准，不能以 workflow 已存在或 L1/L2 绿灯代替。arm64 宿主机、公网 ACME/TLS、云防火墙和跨 NAT DERP/STUN 仍未测试，保持 pending。
+- [x] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
+- [x] **PR B 安装事务与回归（L1/B 级）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、受管文件台账回滚一致性、apt 查询优先、健康探针 303/禁止重定向语义、Web Fail2ban 默认禁用与 `--direct-caddy` 启用、RFC3339Nano 日期模式，均有 Go 测试覆盖。[Go/web run 39216454974](https://github.com/wingsky-1/MeshMux/actions/runs/39216454974) 与 [Debian 13 组件 run 39216454901](https://github.com/wingsky-1/MeshMux/actions/runs/39216454901) 均为 head `c5be00c` PASS；该 head 的树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 相同。
+- [x] **PR B 全系统验收（C 级，amd64 自动化门禁）**：[L3 QEMU/systemd run 39216454882](https://github.com/wingsky-1/MeshMux/actions/runs/39216454882) 于 head `c5be00c` PASS，`internal/install/vm_test` 覆盖真实 systemd 服务与监听、本机内部证书 TLS 探针（非真实公网 ACME）、重启持久化、故障回滚以及 Fail2ban/nftables ban/unban；run head 的 Git 树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 完全相同，Hub 接口可被 #6 消费。#5 已关闭。
+- [ ] **PR B 外部环境边界**：arm64 宿主机 L3、真实公网 ACME/TLS、云防火墙入站以及真实 DERP/STUN 跨 NAT 握手仍未测试，保持 pending；不得扩展宣称全平台或生产环境验收完成。
 
 阶段说明见 [Hub 安装](INSTALL_HUB.zh-CN.md)；单测与模板字符串校验不能代替服务实际健康或公网可达。
+
+## Issue #6 PR-A 本地验收
+
+- [x] **PR-A 本地验收（A/L1）**：Agent 严格协议、配对、任务状态与持久化边界，以及 Web 节点基础能力已由主控完成本地验收；完整 race、格式与 diff check 通过，浏览器复核完成，关键协议、迁移和 Web mutation 证据见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md)。
+- [ ] **PR-A 远端 CI**：当前无新的远端 CI 结论；不得用本地 L1 结果替代远端流水线或 L2/L3 宿主机安装验收。
+- [ ] **PR-B**：尚未实现。宿主机预检/安装、systemd Agent、sing-box 配置应用、Out ACL，以及 Web partial/failed 错误码查询展示、离线状态和 runtime 不属于 PR-A 已交付能力；`agent_tasks.error_code` 持久化不等于 Web 已提供错误码查询展示。最小拆分见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md#pr-b-最小拆分建议)。
 
 ## v1.0.0 必须完成的真实用户闭环
 

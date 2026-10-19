@@ -11,7 +11,7 @@
 1. **代理与组网统一编排但身份独立**：订阅用户、代理凭据和 Mesh 设备各自有生命周期。
 2. **Out 从来不是安装前提**：一体机 Hub+Line、Hub+多 Line、Hub+Line+Out 均是正式部署模式。
 3. **客户端 + 服务端双层策略**：SSID / LAN / Tailnet / CN / global 由客户端解释；Line 服务端按域名和规则集选 Line 直出或 Out 双跳。
-4. **Web-first 操作**：首次在宿主机运行 install，之后纳管、订阅、Mesh 与分流都通过 Web；升级暂由明确可重复的受控修复/安装路径承担，全节点 Web 升级留待后续。
+4. **Web-first 操作**：首次在宿主机运行 install，之后纳管、订阅、Mesh 与分流都通过 Web；#11 负责在 v1.0.0 前实现并验收 Web 全节点统一升级，当前仅允许明确可重复的受控修复/安装路径。
 5. **安全且克制**：复用成熟技术；保留认证、Fail2ban、最小权限、清晰日志、校验与失败回退，不过度架构或重复构建底层协议。
 
 ## 核心业务对象
@@ -27,7 +27,7 @@
 
 ## 首版不做
 
-不重写 WireGuard、Headscale、sing-box；不制作通用服务器面板、任意 root Shell、远程交互终端、Kubernetes、RBAC/多管理员、Cloudflare Zero Trust、收款系统。v1.0.0 不阻塞于全节点 Web 升级、复杂流量配额、多 Out 故障切换、第三方组件跨版本升级或自动适配全部 Linux 发行版。
+不重写 WireGuard、Headscale、sing-box；不制作通用服务器面板、任意 root Shell、远程交互终端、Kubernetes、RBAC/多管理员、Cloudflare Zero Trust、收款系统。v1.0.0 不阻塞于复杂流量配额、多 Out 故障切换、第三方组件跨版本升级或自动适配全部 Linux 发行版；但 **Web 全节点统一升级属于 #11，必须在 v1.0.0 前完成验收**。
 
 ## 公开仓库边界
 

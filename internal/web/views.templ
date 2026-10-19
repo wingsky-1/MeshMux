@@ -1,5 +1,7 @@
 package web
 
+import "time"
+
 templ Document(title string) {
 	<!DOCTYPE html>
 	<html lang="zh-CN">
@@ -146,6 +148,63 @@ templ Dashboard(p pageData) {
 						<section class="panel empty-page"><span class="network-symbol" aria-hidden="true">◇</span><h2>尚未实现</h2><p>当前仅提供 Web 安全基座。<br/>尚未纳管节点、生成订阅、连接 Headscale 或发布路由配置。</p><a href="/">返回概览 →</a></section>
 					}
 					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer>
+				</main>
+			</div>
+		</div>
+	}
+}
+
+templ NodesPage(p pageData, nodes []Node, created *Node, pairingCode string, hubOrigin string) {
+	@Document(p.Title) {
+		<a class="skip" href="#main">跳到内容</a>
+		<div class="shell">
+			<aside class="sidebar">
+				@Brand()
+				<div class="nav-label">工作空间</div>
+				<nav aria-label="主导航">
+					for _,item:=range navigation {
+						if item.Path==p.Path {
+							<a class="active" href={ templ.SafeURL(item.Path) } aria-current="page"><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						} else {
+							<a href={ templ.SafeURL(item.Path) }><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						}
+					}
+				</nav>
+				<div class="sidebar-foot"><span class="dot"></span> 节点配对 · 开发预览<small>首个正式版本目标 v1.0.0</small></div>
+			</aside>
+			<div class="workspace">
+				<header class="topbar"><span>控制台 <span class="crumb">/ { p.Title }</span></span><div class="account"><span class="avatar">A</span><span>管理员</span><form action="/logout" method="post"><input type="hidden" name="csrf" value={ p.CSRF }/><button class="text-button" type="submit">退出</button></form></div></header>
+				<main id="main" class="content">
+					<div class="page-heading"><div><p class="eyebrow">MESHMUX CONSOLE</p><h1>{ p.Title }</h1></div><span class="pill">待纳管 · 一次性配对</span></div>
+					if p.Dev {
+						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
+					}
+					<p class="subtitle">节点安装尚未开放。当前可创建待纳管记录和一次性配对码；实际安装由后续版本实现后开放。</p>
+					if created != nil {
+						<section class="panel"><div class="panel-heading"><h2>配对码已签发 · 仅显示一次</h2><span class="badge accent">15 分钟有效</span></div>
+							<dl class="details"><dt>Node ID（不可变）</dt><dd><code>{ created.ID }</code></dd><dt>角色</dt><dd>{ created.Role }</dd><dt>一次性配对码</dt><dd><code>{ pairingCode }</code></dd></dl>
+							<p class="hint">配对码仅显示一次，15 分钟内有效。当前仅供隔离协议验证，不要放入 shell argv、历史或 URL；安装指令尚未开放。</p>
+						</section>
+					}
+					<div class="settings-grid">
+						<section class="panel"><h2>创建待纳管节点</h2><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><label for="role">角色</label><select id="role" name="role" required><option value="edge">Line（edge）· 客户端入口</option><option value="out">Out · 可选私有出口</option></select><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" required placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" required placeholder="例如 2222"/><p class="hint">SSH 端口由你在目标主机上准备，安装器会在安装开放后检测它。VLESS 与 SSH 端口必须不同。配对码 15 分钟过期、一次性使用，不记日志。</p><button type="submit">创建并签发配对码 →</button></form></section>
+						<section class="panel"><h2>纳管边界</h2><dl class="details"><dt>安装</dt><dd>尚未开放</dd><dt>Agent 协议</dt><dd>Agent 主动出站，仅执行固定范围内动作</dd><dt>Out 入站</dt><dd>安装后要求非授权 Line 默认拒绝（待实现）</dd><dt>离线行为</dt><dd>安装后 Agent 保持已验证配置（待实现）</dd></dl><p class="hint">所有操作可追踪；不支持远端任意 Shell / URL / 路径。</p></section>
+					</div>
+						<section class="panel"><div class="panel-heading"><h2>节点列表</h2><span class="badge">待纳管</span></div>
+						if len(nodes) == 0 {
+							<p class="muted">尚未创建待纳管节点。</p>
+						} else {
+							for _, n := range nodes {
+								{{ heartbeatAt := "尚未收到" }}
+								{{ if n.LastHeartbeat != 0 { heartbeatAt = time.Unix(n.LastHeartbeat, 0).Format("2006-01-02 15:04:05") } }}
+								{{ lastSuccess := "尚无成功记录" }}
+								{{ if n.LastSuccess != "" { lastSuccess = n.LastSuccess } }}
+								<dl class="details"><dt>Node ID</dt><dd><code>{ n.ID }</code></dd><dt>角色 / 展示名</dt><dd>{ n.Role } · { n.DisplayName }</dd><dt>端口</dt><dd>VLESS { n.VlessPortString() } · SSH { n.SSHPortString() }</dd><dt>状态</dt><dd>{ n.Status } · agent { n.AgentVersion } · kernel { n.KernelVersion }</dd><dt>最近心跳</dt><dd>{ heartbeatAt }</dd><dt>最近成功</dt><dd>{ lastSuccess }</dd></dl>
+							}
+						}
+						<p class="hint">“配对成功”只说明身份已建立。健康状态需要有效的最近心跳和最近成功记录。</p>
+					</section>
+					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>节点配对 · 开发预览</span></footer>
 				</main>
 			</div>
 		</div>
