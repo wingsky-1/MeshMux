@@ -86,7 +86,7 @@ policy:
   path: ""
 dns:
   magic_dns: false
-  base_domain: ""
+  base_domain: "tail.%s"
   override_local_dns: false
   nameservers:
     global: []
@@ -99,7 +99,7 @@ logtail:
   enabled: false
 auto_update:
   enabled: false
-`, c.HeadscaleDomain)
+`, c.HeadscaleDomain, c.HeadscaleDomain)
 
 	webUnit := fmt.Sprintf(`[Unit]
 Description=MeshMux Hub Web
