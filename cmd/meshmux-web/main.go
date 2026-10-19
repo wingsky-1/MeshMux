@@ -8,6 +8,8 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/webcmd"
 )
 
+func run() int { return webcmd.Run(os.Args[1:]) }
+
 func main() {
-	os.Exit(webcmd.Run(os.Args[1:]))
+	os.Exit(run())
 }

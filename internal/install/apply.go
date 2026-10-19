@@ -320,6 +320,11 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		if err := VerifyFile(path, a.SHA256); err != nil {
 			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "ARTIFACT_CHECKSUM_MISMATCH", "Delete the staged download and retry; do not bypass SHA-256 verification.")
 		}
+		if a.Component == "headscale" {
+			if err := os.Chmod(path, 0755); err != nil {
+				return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "ARTIFACT_STAGE_FAILED", "Check permission on the verified Headscale binary.")
+			}
+		}
 		stagedArtifacts[a.Component] = path
 		state.Artifacts[a.Component] = a.SHA256
 	}
@@ -605,7 +610,7 @@ func verifyServices(ctx context.Context, c Config, runner CommandRunner, tlsProb
 			return &InstallError{Stage: "verify", Code: code, Recovery: "Inspect systemctl status and journalctl for the named service."}
 		}
 	}
-	if err := waitForWebHealth(ctx); err != nil {
+	if err := waitForWebHealth(ctx, c.ManagementDomain); err != nil {
 		return &InstallError{Stage: "verify", Code: "WEB_HEALTH_FAILED", Recovery: "Check meshmux-web.service, loopback port 9080, and the private SQLite directory."}
 	}
 	if _, err := runner.Run(ctx, headscaleBinaryPath, "--config", "/etc/meshmux/headscale.yaml", "nodes", "list"); err != nil {
@@ -624,11 +629,12 @@ func verifyServices(ctx context.Context, c Config, runner CommandRunner, tlsProb
 	return nil
 }
 
-func waitForWebHealth(ctx context.Context) error {
+func waitForWebHealth(ctx context.Context, domain string) error {
 	deadline := time.Now().Add(30 * time.Second)
 	client := &http.Client{Timeout: 3 * time.Second}
 	for time.Now().Before(deadline) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:9080/healthz", nil)
+		req.Host = domain
 		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()

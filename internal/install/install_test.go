@@ -11,7 +11,7 @@ import (
 )
 
 func TestDomains(t *testing.T) {
-	good := Config{"console.example.org", "sub.example.org", "mesh.example.org"}
+	good := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
 	if err := good.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestReadOnlyPortProbeDetectsConflict(t *testing.T) {
 }
 
 func TestPlanDoesNotMisreportInstallation(t *testing.T) {
-	c := Config{"console.example.org", "sub.example.org", "mesh.example.org"}
+	c := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
 	p := BuildPlan("id", c, "amd64", []Check{{Name: "os", Status: "pass"}, {Name: "public_https", Status: "pending"}}, []int{60794})
 	if p.ApplyAvailable || p.Status == "installed" || len(p.FirewallChanges) == 0 {
 		t.Fatalf("unsafe plan: %+v", p)
