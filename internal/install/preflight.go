@@ -183,7 +183,18 @@ func CanBind(protocol, address string) error {
 	return l.Close()
 }
 
+// checkPorts distinguishes an absent IPv6 stack from a real port collision.
+// A disabled IPv6 family must not prevent an IPv4-only Hub from installing.
 func checkPorts() error {
+	ipv6 := true
+	if err := CanBind("tcp6", "[::1]:0"); err != nil {
+		if errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL) ||
+			errors.Is(err, syscall.EPROTONOSUPPORT) {
+			ipv6 = false
+		} else {
+			return err
+		}
+	}
 	for _, p := range Ports() {
 		host := "127.0.0.1"
 		if p.Port == 80 || p.Port == 443 || p.Protocol == "udp" {
@@ -191,6 +202,9 @@ func checkPorts() error {
 		}
 		if err := CanBind(p.Protocol, net.JoinHostPort(host, strconv.Itoa(p.Port))); err != nil {
 			return err
+		}
+		if !ipv6 {
+			continue
 		}
 		host6 := "::1"
 		if host == "0.0.0.0" {
