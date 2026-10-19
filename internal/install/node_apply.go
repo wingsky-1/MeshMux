@@ -1145,6 +1145,17 @@ func nodeValidLKG(root string, cfg node.Config) (string, bool) {
 	return digest, digest == sumBytes(expected)
 }
 
+// nodeAgentReference resolves which executable the staged Agent binary must
+// be a copy of: the running installer itself, or the explicit Executable
+// the install was launched from (the VM harness stages /tmp/meshmux while
+// driving the install from install.test).
+func nodeAgentReference(executable string) string {
+	if executable == "" {
+		return "/proc/self/exe"
+	}
+	return executable
+}
+
 // nodeFileOwnedBy checks exact UID and group ownership. It is only used for
 // production-root readbacks; isolated test roots keep whatever UID the test
 // runner has, so ownership is not asserted there.
@@ -1222,7 +1233,12 @@ func verifyAgentBinary(ctx context.Context, opts NodeApplyOptions, stagedPath, s
 	if opts.Root != "/" {
 		return errors.New("AGENT_VERIFIER_REQUIRED")
 	}
-	selfHash, err := sha256File("/proc/self/exe")
+	// The staged Agent must be a copy of the exact executable being
+	// installed. That is /proc/self/exe for a real install, or the explicit
+	// Executable (the VM harness stages /tmp/meshmux while driving the
+	// install from install.test).
+	reference := nodeAgentReference(opts.Executable)
+	selfHash, err := sha256File(reference)
 	if err != nil || selfHash != stagedHash {
 		return errors.New("AGENT_NOT_SELF_COPY")
 	}

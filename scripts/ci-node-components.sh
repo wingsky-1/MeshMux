@@ -77,6 +77,14 @@ units=( /etc/systemd/system/meshmux-agent.service
 if [[ -f /etc/systemd/system/meshmux-out-acl.service ]]; then
   units+=( /etc/systemd/system/meshmux-out-acl.service )
 fi
+# systemd-analyze verify resolves ExecStart binaries. The real binaries are
+# produced by the installer transaction (hash-verified in L3), so offline
+# unit validation uses empty executable stubs; this checks unit syntax and
+# dependencies, not binary contents.
+mkdir -p /usr/local/libexec
+: > /usr/local/libexec/meshmuxd
+: > /usr/local/libexec/meshmux-sing-box
+chmod 0755 /usr/local/libexec/meshmuxd /usr/local/libexec/meshmux-sing-box
 if ! systemd-analyze verify "${units[@]}" 2>&1 | tee /tmp/node-l2-verify.log; then
   echo 'systemd-analyze verify failed' >&2
   cat /tmp/node-l2-verify.log >&2

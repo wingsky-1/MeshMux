@@ -237,3 +237,16 @@ func TestNodeFileOwnedByBoundary(t *testing.T) {
 		t.Fatal("absent path ownership was accepted")
 	}
 }
+
+// TestNodeAgentReferencePinsStagedBinary pins which executable the staged
+// Agent must be a copy of: a real install compares against itself, while an
+// explicit Executable (the VM harness stages /tmp/meshmux from install.test)
+// compares against that binary instead of the test driver.
+func TestNodeAgentReferencePinsStagedBinary(t *testing.T) {
+	if got := nodeAgentReference(""); got != "/proc/self/exe" {
+		t.Fatalf("empty executable resolved to %q", got)
+	}
+	if got := nodeAgentReference("/tmp/meshmux"); got != "/tmp/meshmux" {
+		t.Fatalf("explicit executable resolved to %q", got)
+	}
+}
