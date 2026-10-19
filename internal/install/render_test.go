@@ -36,10 +36,12 @@ func TestCandidateBoundaries(t *testing.T) {
 	if files["/etc/fail2ban/jail.d/meshmux-web.local"] == "" || files["/etc/fail2ban/filter.d/meshmux-web.conf"] == "" || !strings.Contains(files["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = false") {
 		t.Fatal("Web Fail2ban must remain disabled behind an unverified proxy")
 	}
-	c.DirectCaddy = true\n\tdirectFiles, err := CandidateFiles(c, []int{60794})\n\tif err != nil || !strings.Contains(directFiles["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = true") || !strings.Contains(directFiles["/etc/systemd/system/meshmux-web.service"], "--direct-caddy") {
+	c.DirectCaddy = true
+	directFiles, err := CandidateFiles(c, []int{60794})\n\tif err != nil || !strings.Contains(directFiles["/etc/fail2ban/jail.d/meshmux-web.local"], "enabled = true") || !strings.Contains(directFiles["/etc/systemd/system/meshmux-web.service"], "--direct-caddy") {
 		t.Fatal("direct-Caddy opt-in did not enable the trusted-client mode")
 	}
-	c.DirectCaddy = false\n\tif _, err := CandidateFiles(c, nil); err == nil {
+	c.DirectCaddy = false
+	if _, err := CandidateFiles(c, nil); err == nil {
 		t.Fatal("SSH listen port is mandatory")
 	}
 	if _, err := CandidateFiles(Config{"x.example.org\nadmin off", "sub.example.org", "mesh.example.org", false}, []int{22}); err == nil {
