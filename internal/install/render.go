@@ -30,13 +30,13 @@ func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, e
 	}
 	tlsLine := ""
 	if internalTLS {
-		tlsLine = "\\ttls internal\\n"
+		tlsLine = "\ttls internal\n"
 	}
 	caddy := fmt.Sprintf(`{
 	admin off
 }
 %s {
-%s\theader {
+%s	header {
 		Strict-Transport-Security "max-age=31536000"
 		-Server
 	}
@@ -47,10 +47,10 @@ func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, e
 	}
 }
 %s {
-%s\trespond "Subscription service is not yet installed" 404
+%s	respond "Subscription service is not yet installed" 404
 }
 %s {
-%s\t@private path /api/* /swagger* /metrics* /debug/*
+%s	@private path /api/* /swagger* /metrics* /debug/*
 	respond @private 404
 	reverse_proxy 127.0.0.1:8080
 }
