@@ -32,9 +32,20 @@ jobs:
           mkdir -p .ci/bin
           go test -c -o .ci/bin/install.test ./internal/install
           go build -o .ci/bin/meshmux-web ./cmd/meshmux-web
+          go build -o .ci/bin/meshmux ./cmd/meshmux
+          (cd .ci/bin && sha256sum meshmux > SHA256SUMS)
       - name: Debian 13 official component configuration checks
         run: |
           docker run --rm \
             -v "$PWD:/workspace" \
             -w /workspace \
             debian:13 bash /workspace/scripts/ci-hub-components.sh
+      - name: Upload reviewable installer and source-bound checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-installer-${{ matrix.arch }}
+          path: |
+            .ci/bin/meshmux
+            .ci/bin/SHA256SUMS
+          retention-days: 14
+          if-no-files-found: error

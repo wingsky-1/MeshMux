@@ -132,6 +132,21 @@ func TestHubSystemVM(t *testing.T) {
 		if err := verifyServices(ctx, c, ExecRunner{}, tlsProbe); err != nil {
 			t.Fatalf("services not healthy after reboot: %v", err)
 		}
+		// This tests the real Fail2ban -> nftables action in the disposable VM,
+		// without making failed SSH login attempts or affecting a real firewall.
+		runner := ExecRunner{}
+		banIP := "198.51.100.123"
+		if _, err := runner.Run(ctx, "fail2ban-client", "set", "meshmux-sshd", "banip", banIP); err != nil {
+			t.Fatalf("test IP ban failed: %v", err)
+		}
+		defer runner.Run(context.Background(), "fail2ban-client", "set", "meshmux-sshd", "unbanip", banIP)
+		rules, err := runner.Run(ctx, "nft", "-a", "list", "ruleset")
+		if err != nil || !strings.Contains(string(rules), banIP) {
+			t.Fatalf("Fail2ban ban not reflected in nftables rules (err=%v)", err)
+		}
+		if _, err := runner.Run(ctx, "fail2ban-client", "set", "meshmux-sshd", "unbanip", banIP); err != nil {
+			t.Fatalf("test IP unban failed: %v", err)
+		}
 		if string(mustReadVM(t, "/var/lib/meshmux/ci-sentinel")) != "web data must survive" {
 			t.Fatal("Web data lost after reboot")
 		}

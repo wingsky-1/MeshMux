@@ -281,7 +281,9 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return fail("preflight", "OPERATION_LOG_FAILED", "Check installer state directory permissions.")
 	}
 
-	previous := state
+	// A repair must preserve the previous manifest by value: maps are mutable
+	// references, and staged file updates must never rewrite rollback metadata.
+	previous := cloneInstallState(state)
 	if !hasState {
 		state = InstallState{Schema: 1, CreatedAt: now, ManagedFiles: map[string]string{}, Artifacts: map[string]string{}}
 	}
@@ -1154,4 +1156,18 @@ func sha256File(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func cloneInstallState(source InstallState) InstallState {
+	copyState := source
+	copyState.ManagedFiles = make(map[string]string, len(source.ManagedFiles))
+	for key, value := range source.ManagedFiles {
+		copyState.ManagedFiles[key] = value
+	}
+	copyState.Artifacts = make(map[string]string, len(source.Artifacts))
+	for key, value := range source.Artifacts {
+		copyState.Artifacts[key] = value
+	}
+	copyState.SSHPorts = append([]int(nil), source.SSHPorts...)
+	return copyState
 }
