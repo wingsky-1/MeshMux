@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -80,18 +79,18 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 
 type ApplyOptions struct {
 	// Root is "/" in production. A temporary root is accepted only by tests.
-	Root                string
-	Runner              CommandRunner
-	HTTPClient          *http.Client
-	Executable          string
-	Preflight           func(context.Context, Config, bool) ([]Check, []int)
-	DownloadArtifact    func(context.Context, Artifact, string) (string, error)
-	TLSProbe            func(context.Context, string) error
+	Root             string
+	Runner           CommandRunner
+	HTTPClient       *http.Client
+	Executable       string
+	Preflight        func(context.Context, Config, bool) ([]Check, []int)
+	DownloadArtifact func(context.Context, Artifact, string) (string, error)
+	TLSProbe         func(context.Context, string) error
 	// Test-only seam used by the isolated systemd integration test. It is not
 	// exposed by the CLI and cannot be enabled through user configuration.
 	InternalTLSForTest bool
-	Artifacts           []Artifact
-	Verify              func(context.Context, Config, CommandRunner, func(context.Context, string) error) error
+	Artifacts          []Artifact
+	Verify             func(context.Context, Config, CommandRunner, func(context.Context, string) error) error
 }
 
 type operationEvent struct {
@@ -413,8 +412,8 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	}
 
 	applyFiles := map[string]string{
-		runtimeBinaryPath: runtimeStage,
-		caddyBinaryPath: caddyPath,
+		runtimeBinaryPath:   runtimeStage,
+		caddyBinaryPath:     caddyPath,
 		headscaleBinaryPath: headscalePath,
 	}
 	for _, target := range keys {

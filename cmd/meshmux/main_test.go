@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-func TestStubInstallerFailClosed(t *testing.T) {
+func TestCLIRejectsUnsupportedRolesAndCommands(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		want int
 	}{
-		{[]string{"install", "hub"}, 3},
+		{[]string{"install", "hub"}, 2},
 		{[]string{"install", "edge"}, 3},
 		{[]string{"install", "out"}, 3},
 		{[]string{"install", "nas"}, 2},

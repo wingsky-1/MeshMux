@@ -16,11 +16,11 @@ func TestDomains(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []Config{
-		{"console.example.org", "console.example.org", "mesh.example.org"},
+		{"console.example.org", "console.example.org", "mesh.example.org", false},
 		{"console.example.org", "sub.example.org", "mesh.example.org\nadmin off"},
-		{"https://console.example.org", "sub.example.org", "mesh.example.org"},
+		{"https://console.example.org", "sub.example.org", "mesh.example.org", false},
 		{"console.example.org", "sub.example.org", "localhost"},
-		{"CONSOLE.example.org", "sub.example.org", "mesh.example.org"},
+		{"CONSOLE.example.org", "sub.example.org", "mesh.example.org", false},
 		{"console.example.org", "sub.example.org", "192.0.2.2"},
 		{"console.example.org", "sub.example.org", "foo_.example.org"},
 	} {
