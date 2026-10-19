@@ -155,7 +155,7 @@ func parseSSHListeners(s string) []int {
 		if len(fields) < 4 {
 			continue
 		}
-		addr := fields[3]
+		addr := ssLocalAddress(fields)
 		pos := strings.LastIndex(addr, ":")
 		if pos < 0 {
 			continue
@@ -346,7 +346,7 @@ func listenersOwnedByMeshMux(output string, port int) bool {
 		if len(fields) < 5 {
 			continue
 		}
-		local := fields[3]
+		local := ssLocalAddress(fields)
 		pos := strings.LastIndex(local, ":")
 		if pos < 0 {
 			continue
@@ -378,4 +378,17 @@ func listenersOwnedByMeshMux(output string, port int) bool {
 		}
 	}
 	return found
+}
+
+// ss -H can include a leading Netid column ("tcp"/"udp"). On Debian 13
+// ss -H -lntup uses: Netid State Recv-Q Send-Q Local Peer Process.
+// Older test fixtures may omit Netid and begin with LISTEN instead.
+func ssLocalAddress(fields []string) string {
+	if len(fields) >= 5 && (strings.HasPrefix(fields[0], "tcp") || strings.HasPrefix(fields[0], "udp")) {
+		return fields[4]
+	}
+	if len(fields) >= 4 && (fields[0] == "LISTEN" || fields[0] == "UNCONN") {
+		return fields[3]
+	}
+	return ""
 }

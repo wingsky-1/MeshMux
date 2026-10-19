@@ -701,7 +701,7 @@ func hasListenerPort(output string, port int) bool {
 		if len(fields) < 4 {
 			continue
 		}
-		addr := fields[3]
+		addr := ssLocalAddress(fields)
 		pos := strings.LastIndex(addr, ":")
 		if pos < 0 {
 			continue
