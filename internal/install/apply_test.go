@@ -12,8 +12,8 @@ import (
 )
 
 type fakeInstallerRunner struct {
-	users map[string]bool
-	calls []string
+	users    map[string]bool
+	calls    []string
 	failUnit string
 }
 
@@ -49,10 +49,10 @@ func (f *fakeInstallerRunner) Run(_ context.Context, name string, args ...string
 }
 
 type installerFixture struct {
-	root string
+	root   string
 	runner *fakeInstallerRunner
-	opts ApplyOptions
-	c Config
+	opts   ApplyOptions
+	c      Config
 }
 
 func makeInstallerFixture(t *testing.T) installerFixture {
@@ -134,7 +134,7 @@ func TestHubInstallFirstRunIdempotentAndStatePreservation(t *testing.T) {
 		t.Fatalf("repair = %+v, %v", result, err)
 	}
 	for path, expected := range map[string]string{
-		filepath.Join(web, "sentinel.db"): "admin must survive",
+		filepath.Join(web, "sentinel.db"):         "admin must survive",
 		filepath.Join(noise, "noise_private.key"): "keep key",
 	} {
 		got, err := os.ReadFile(path)
