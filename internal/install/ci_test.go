@@ -59,9 +59,9 @@ func TestWriteComponentFixtures(t *testing.T) {
 		t.Skip("only used by Debian 13 component integration CI")
 	}
 	files, err := CandidateFiles(Config{
-		ManagementDomain: "admin.example.org",
+		ManagementDomain:   "admin.example.org",
 		SubscriptionDomain: "sub.example.org",
-		HeadscaleDomain: "mesh.example.org",
+		HeadscaleDomain:    "mesh.example.org",
 	}, []int{2222})
 	if err != nil {
 		t.Fatal(err)
