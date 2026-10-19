@@ -1,0 +1,40 @@
+name: hub-components
+on:
+  pull_request:
+    paths:
+      - 'internal/install/**'
+      - 'cmd/meshmux/**'
+      - 'cmd/meshmux-web/**'
+      - '.github/workflows/hub-components.yml'
+      - 'scripts/ci-hub-components.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debian13:
+    name: Debian 13 component validation (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Build isolated fixture and Web binaries
+        run: |
+          mkdir -p .ci/bin
+          go test -c -o .ci/bin/install.test ./internal/install
+          go build -o .ci/bin/meshmux-web ./cmd/meshmux-web
+      - name: Debian 13 official component configuration checks
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            debian:13 bash /workspace/scripts/ci-hub-components.sh
