@@ -193,7 +193,7 @@ func testNodeSystemInstall(t *testing.T, ctx context.Context, cfg node.Config, p
 	}
 	res, err := InstallNode(ctx, cfg, opID, false, pairingCode, opts)
 	if err != nil || res.Status != "installed" {
-		t.Fatalf("first install status=%s code=%s stage=%s err=%v", res.Status, res.ErrorCode, res.Stage, err)
+		t.Fatalf("first install status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	state := mustNodeState(t, cfg.NodeID)
 	nodeSystemReadback(t, ctx, *state.Node, cfg.Role)
@@ -207,7 +207,7 @@ func testNodeSystemInstall(t *testing.T, ctx context.Context, cfg node.Config, p
 	}
 	res, err = InstallNode(ctx, cfg, opID, true, "", opts)
 	if err != nil || res.Status != "installed" {
-		t.Fatalf("repair status=%s code=%s stage=%s err=%v", res.Status, res.ErrorCode, res.Stage, err)
+		t.Fatalf("repair status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	assertNodeFilesEqual(t, identityBefore, candidateBefore)
 	injected := &vmOneFailureRunner{target: "restart meshmux-sing-box.service"}
@@ -227,7 +227,7 @@ func testNodeSystemInstall(t *testing.T, ctx context.Context, cfg node.Config, p
 	}
 	res, err = InstallNode(ctx, cfg, opID, true, "", opts)
 	if err != nil || res.Status != "installed" {
-		t.Fatalf("recovery repair status=%s code=%s stage=%s err=%v", res.Status, res.ErrorCode, res.Stage, err)
+		t.Fatalf("recovery repair status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	nodeSystemReadback(t, ctx, *mustNodeState(t, cfg.NodeID).Node, cfg.Role)
 	assertNodeFilesEqual(t, identityBefore, candidateBefore)
@@ -249,7 +249,7 @@ func testNodeSystemPostReboot(t *testing.T, ctx context.Context, cfg node.Config
 	}
 	res, err := InstallNode(ctx, cfg, opID, true, "", opts)
 	if err != nil || res.Status != "installed" {
-		t.Fatalf("post-reboot repair status=%s code=%s stage=%s err=%v", res.Status, res.ErrorCode, res.Stage, err)
+		t.Fatalf("post-reboot repair status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	assertNodeFilesEqual(t, identityBefore, candidateBefore)
 }
