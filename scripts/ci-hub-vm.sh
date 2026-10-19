@@ -60,7 +60,7 @@ if [[ -c /dev/kvm && -w /dev/kvm ]]; then
 fi
 echo "QEMU accelerator: $accel"
 qemu-system-x86_64 \
-  -machine q35,accel="$accel" \
+  -machine q35 -accel "$accel" \
   -cpu max -m 2048 -smp 2 -nographic -no-reboot \
   -drive file="$disk",if=virtio,format=qcow2 \
   -drive file="$seed",if=virtio,format=raw \
