@@ -17,12 +17,12 @@ func TestDomains(t *testing.T) {
 	}
 	for _, c := range []Config{
 		{"console.example.org", "console.example.org", "mesh.example.org", false},
-		{"console.example.org", "sub.example.org", "mesh.example.org\nadmin off"},
+		{"console.example.org", "sub.example.org", "mesh.example.org\nadmin off", false},
 		{"https://console.example.org", "sub.example.org", "mesh.example.org", false},
-		{"console.example.org", "sub.example.org", "localhost"},
+		{"console.example.org", "sub.example.org", "localhost", false},
 		{"CONSOLE.example.org", "sub.example.org", "mesh.example.org", false},
-		{"console.example.org", "sub.example.org", "192.0.2.2"},
-		{"console.example.org", "sub.example.org", "foo_.example.org"},
+		{"console.example.org", "sub.example.org", "192.0.2.2", false},
+		{"console.example.org", "sub.example.org", "foo_.example.org", false},
 	} {
 		if err := c.Validate(); err == nil {
 			t.Fatalf("invalid domain accepted: %+v", c)
