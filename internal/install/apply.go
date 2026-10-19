@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -103,11 +104,13 @@ type operationEvent struct {
 
 type fileSnapshot struct {
 	Target string
-	Backup string
-	Exists bool
-	Mode   os.FileMode
-	UID    int
-	GID    int
+	// Logical is the unrooted managed path recorded in state.ManagedFiles.
+	Logical string
+	Backup  string
+	Exists  bool
+	Mode    os.FileMode
+	UID     int
+	GID     int
 }
 
 var operationIDPattern = regexp.MustCompile("^[a-f0-9]{32}$")
@@ -401,11 +404,19 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions.")
 	}
 
-	if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no third-party repository was added.")
-	}
-	if _, err := opts.Runner.Run(ctx, "apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "fail2ban", "nftables"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status and retry; do not remove existing packages or rules.")
+	// Query first, install second (the cloud-init pattern). Repair must not
+	// re-run apt unconditionally: a transient repository failure would then
+	// block a repair that has nothing to do with packages, and an unbounded
+	// upgrade could move Fail2ban/nftables off the recorded component set.
+	missingPackages := missingDebianPackages(ctx, opts.Runner, "ca-certificates", "fail2ban", "nftables")
+	if len(missingPackages) > 0 {
+		if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
+			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no third-party repository was added.")
+		}
+		installArgs := append([]string{"install", "-y", "--no-install-recommends"}, missingPackages...)
+		if _, err := opts.Runner.Run(ctx, "apt-get", installArgs...); err != nil {
+			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status and retry; do not remove existing packages or rules.")
+		}
 	}
 	if err := ensureSystemUsers(ctx, opts.Runner, opts.Root, hasState); err != nil {
 		var ie *InstallError
@@ -549,7 +560,14 @@ func failAndRollback(result InstallResult, state, previous InstallState, hadPrev
 		state.Status, state.Stage, state.ErrorCode, state.Recovery = "partial", stage, code, recovery
 		state.UpdatedAt = time.Now().UTC()
 		if haveSnapshots && rollbackOK {
-			state.ManagedFiles = map[string]string{}
+			// The ledger must mirror the disk, not be emptied: rollback
+			// restored every previously existing target from its snapshot and
+			// removed the targets this operation created. Recompute the
+			// restored files' hashes and drop the deleted entries. Clearing
+			// the map would leave managed files on disk with no ownership
+			// record, so the next --repair would reject them with
+			// MANAGED_PATH_CONFLICT and destroy its own recovery path.
+			reconcileManagedLedger(&state, snapshots)
 		}
 		_ = writeState(opts.Root, state)
 		result.Status = "partial"
@@ -609,6 +627,34 @@ func rollbackManaged(ctx context.Context, opts ApplyOptions, snapshots []fileSna
 	return ok
 }
 
+// reconcileManagedLedger rewrites the managed-file ledger so it matches the
+// disk after a successful rollback. Rollback is "restore the recorded state",
+// not "forget the records": targets that existed before the operation were
+// copied back from their snapshot and are re-hashed, while targets this
+// operation created were removed and therefore drop out of the ledger.
+func reconcileManagedLedger(state *InstallState, snapshots []fileSnapshot) {
+	if state.ManagedFiles == nil {
+		state.ManagedFiles = map[string]string{}
+	}
+	for _, s := range snapshots {
+		if s.Logical == "" {
+			continue
+		}
+		if !s.Exists {
+			delete(state.ManagedFiles, s.Logical)
+			continue
+		}
+		digest, err := sha256File(s.Target)
+		if err != nil {
+			// Keep the last recorded digest when the restored file cannot be
+			// hashed: a stale entry preserves ownership, an absent one would
+			// make the file unrecoverable by --repair.
+			continue
+		}
+		state.ManagedFiles[s.Logical] = digest
+	}
+}
+
 func verifyServices(ctx context.Context, c Config, runner CommandRunner, tlsProbe func(context.Context, string) error) error {
 	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service", "meshmux-caddy.service", "fail2ban.service"} {
 		if _, err := runner.Run(ctx, "systemctl", "is-active", "--quiet", unit); err != nil {
@@ -666,23 +712,51 @@ func waitForWebHealth(ctx context.Context, domain string) error {
 	return errors.New("WEB_HEALTH_FAILED")
 }
 
+// httpsProbeAddress is the local endpoint Caddy terminates TLS on. Tests
+// override it so the readiness semantics can be exercised without binding 443.
+var httpsProbeAddress = "127.0.0.1:443"
+
+// httpsProbeRoots lets a test trust a purpose-minted certificate. Production
+// keeps it nil, which means the system root store.
+var httpsProbeRoots *x509.CertPool
+
 func waitForHTTPS(ctx context.Context, domain string) error {
 	deadline := time.Now().Add(180 * time.Second)
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{ServerName: domain, MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{
+			ServerName: domain,
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    httpsProbeRoots,
+		},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, "127.0.0.1:443")
+			return dialer.DialContext(ctx, network, httpsProbeAddress)
 		},
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Second,
+		// The probe must observe the raw response and never follow redirects.
+		// Go's default client chases the first-install 303 (/login -> /setup)
+		// until "stopped after 10 redirects", which surfaces as a transport
+		// error and hides an already healthy TLS termination.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	for time.Now().Before(deadline) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+domain+"/login", nil)
 		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
+			// Kubernetes-style readiness semantics: success is "TLS
+			// terminated and the origin answered the request", i.e. any
+			// 2xx/3xx. A fresh install has no administrator yet, so /login
+			// legitimately answers 303 to /setup; that is business state, not
+			// an unavailable service. Only 4xx/5xx (or a transport failure)
+			// means Caddy/origin is not serving.
+			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 				return nil
 			}
 		}
@@ -1056,6 +1130,20 @@ func checkSystemUsers(ctx context.Context, runner CommandRunner, hasState bool) 
 	return nil
 }
 
+// missingDebianPackages returns only the packages that are not fully
+// configured on this host. "install ok installed" is dpkg's success state;
+// any other answer (or a query failure) means the package must be installed.
+func missingDebianPackages(ctx context.Context, runner CommandRunner, packages ...string) []string {
+	var missing []string
+	for _, pkg := range packages {
+		output, err := runner.Run(ctx, "dpkg-query", "-W", "-f=${Status}", pkg)
+		if err != nil || !strings.Contains(string(output), "install ok installed") {
+			missing = append(missing, pkg)
+		}
+	}
+	return missing
+}
+
 func ensureSystemUsers(ctx context.Context, runner CommandRunner, root string, hasState bool) error {
 	for _, item := range []struct{ name, home string }{
 		{"meshmux", "/var/lib/meshmux"},
@@ -1101,7 +1189,7 @@ func snapshotTargets(root string, targets []string, state InstallState, hasState
 	for _, target := range targets {
 		path := rooted(root, target)
 		info, err := os.Lstat(path)
-		snapshot := fileSnapshot{Target: path, Backup: filepath.Join(backupDir, strings.TrimPrefix(strings.ReplaceAll(target, "/", "_"), "_"))}
+		snapshot := fileSnapshot{Target: path, Logical: target, Backup: filepath.Join(backupDir, strings.TrimPrefix(strings.ReplaceAll(target, "/", "_"), "_"))}
 		if os.IsNotExist(err) {
 			snapshots = append(snapshots, snapshot)
 			continue
