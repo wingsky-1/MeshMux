@@ -61,8 +61,8 @@ func TestHubSystemVM(t *testing.T) {
 	var opts ApplyOptions
 	opts = ApplyOptions{
 		InternalTLSForTest: true,
-		Executable: "/tmp/meshmux",
-		TLSProbe: tlsProbe,
+		Executable:         "/tmp/meshmux",
+		TLSProbe:           tlsProbe,
 		Preflight: func(ctx context.Context, c Config, installed bool) ([]Check, []int) {
 			ports, err := SSHPorts(ctx)
 			if err != nil {
@@ -146,7 +146,7 @@ func TestHubSystemVM(t *testing.T) {
 type vmOneFailureRunner struct {
 	ExecRunner
 	target string
-	used bool
+	used   bool
 }
 
 func (r *vmOneFailureRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
