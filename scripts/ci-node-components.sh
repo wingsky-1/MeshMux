@@ -94,8 +94,12 @@ echo "verified units: ${units[*]}"
 
 echo '--- nft -c -f Out ACL dry-run ---'
 # Dry-run check only; no kernel transactions are applied.
+# Only acl.nft carries the rendered table: out.nft is the empty dynamic
+# placeholder that installNodeDynamic fills from the validated candidate
+# (nodeManagedFiles marks it Static:false with no Body), so it is expected
+# to be empty here and is not syntax-checked.
 acls=()
-for f in "$fx"/*/acl.nft "$fx"/*/out.nft; do
+for f in "$fx"/*/acl.nft; do
   [[ -f "$f" ]] || continue
   acls+=("$f")
 done
