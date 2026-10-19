@@ -52,7 +52,7 @@ Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建�
 2. 真实 `check → stage → apply → readback`，记录每次 operation_id/阶段/持久状态；配置原子写入、所有权/现有服务检查、锁、防中断、重试幂等和 rollback；不得覆盖其他 Caddy/Headscale，也不得删除 MeshMux/Headscale SQLite。
 3. Debian 官方 Fail2ban/nftables 包安装与真实 SSH 非 22 jail action 验证；若已有 host 规则，使用 MesMux 专属对象，不修改既有默认策略。
 4. 通过 `headscale configtest`（先核实实际 0.29.5 CLI 支持方式）、`caddy validate`、`systemd-analyze verify`、服务健康与 HTTPS 外部真实访问、UDP STUN/DERP 验证；外部未验收保持 pending。
-5. 在至少两套隔离 Debian 13 VM（含 amd64，一台用非 22 SSH）进行干净首次、重复、配置损坏、端口冲突、证书失败、服务中断和恢复；arm64 必须单独明确是否实测。收集脱敏日志、`systemctl status`、`fail2ban-client status` 及 `nft list tables`。
+5. 采用分层 CI：L1 每次 Go 回归；L2 Debian 13 容器验证固定版本真实 Caddy/Headscale/systemd/Fail2ban 配置；L3 PR B 退出时通过至少一套自动化 Debian 13 完整 systemd VM 验证真实安装、重复执行、重启及故障恢复。arm64 若无完整宿主机验证须明确限制。参见 [CI 验证规范](CI_HUB_VALIDATION.zh-CN.md)。
 6. 所有修复先停受影响服务、备份 SQLite 一致性快照，再仅更换该项目受管文件。不能依赖删除数据库来恢复成功安装。
 
 ## 与后续 Issue 的接口
@@ -60,3 +60,7 @@ Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建�
 PR B 输出稳定 Hub 配置路径、systemd 单元、MeshMux Web loopback、Headscale 0.29.5 本地服务/API、可追踪 operation_id 与锁定制品 manifest。Issue #6 只消费这些已确认接口，实现 Line/Out Agent 主动纳管，不重新建立 Web/Headscale 身份或修改 SSH。
 
 **验收标记：** PR A 只证明源码单测/CI 等 B 级证据；尚无 C 级 Debian 13 VM 安装证据。Issue #5 不因 PR A 合并而关闭，更不能由此启动 #6 的依赖实施。
+
+## 分层 CI 验证
+
+已确立 [L1/L2/L3 CI 验证规范](CI_HUB_VALIDATION.zh-CN.md)。PR A 的 L2 配置集成不能冒充真实 Hub 安装；完整 VM 测试将在 PR B 完成 apply 后加入。
