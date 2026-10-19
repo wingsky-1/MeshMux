@@ -96,5 +96,8 @@ ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test; sudo env MESHMUX_HUB_SYST
 ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
 sleep 8
 wait_ssh
+# Debian may mount /tmp as tmpfs; restore only the ephemeral test executable.
+scp_vm .ci/bin/install.test /tmp/install.test
+ssh_vm "sudo chmod 755 /tmp/install.test"
 ssh_vm 'sudo env MESHMUX_HUB_SYSTEM_VM=1 MESHMUX_HUB_SYSTEM_PHASE=post-reboot /tmp/install.test -test.run "^TestHubSystemVM$" -test.timeout=10m -test.v'
 echo 'Hub Debian 13 full-system installation/restart/recovery acceptance PASS'
