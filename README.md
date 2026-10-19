@@ -4,12 +4,12 @@
 
 MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管理原生 sing-box 代理线路、Headscale/Tailscale 异地组网，以及可选 AI Out 出口。手机可使用一份 sing-box 配置同时实现代理与 Mesh；也支持不需要代理订阅的纯 Mesh 设备和子网路由。
 
-> **分支状态：PR #14 的 Hub 预检/官方组件配置校验已通过；PR #15 包含可执行的 Hub 宿主机安装与恢复代码，仍处于隔离环境验收阶段。两 PR 均未合并，禁止把 PR #15 Draft 当作生产发行版。** 完整代理、Mesh、订阅及 Web 统一升级仍属于后续 v1.0.0 开发。
+> **分支状态：PR #14 的 Hub 预检/组件锁已合并；本分支（PR #15）包含可执行的 Hub 宿主机安装与恢复，仍处于隔离环境验收阶段。禁止把未发布代码当作生产发行版。** 完整代理、Mesh、订阅及 Web 统一升级仍属于后续 v1.0.0 开发。
 
 ## Issue #5 · Hub 预检（PR A）与安装执行（PR B）
 
-- PR #14：`meshmux install hub --plan` 仅输出预检与固定版本候选；不会写系统。
-- PR #15：实现显式确认后 `install hub`、`--repair` 和只修改 MeshMux 自有路径的安装事务。**仅供隔离 Debian 13 VM 验证，尚不是正式安装发行包。** 真实 systemd / TLS 及 Fail2ban 必须通过 [分层 CI 验证](docs/CI_HUB_VALIDATION.zh-CN.md) 才可验收。
+- PR #14（已合并）：`meshmux install hub --plan` 仅输出预检与固定版本候选；不会写系统。
+- PR #15（本次合入）：实现显式确认后 `install hub`、`--repair` 和只修改 MeshMux 自有路径的安装事务。**仅供隔离 Debian 13 VM 验证，尚不是正式安装发行包。** 真实 systemd / TLS 及 Fail2ban 必须通过 [分层 CI 验证](docs/CI_HUB_VALIDATION.zh-CN.md) 才可验收。
 - [完整安装与恢复说明](docs/INSTALL_HUB.zh-CN.md)；Line/Out、用户订阅与统一升级不属于 Issue #5。
 
 ## 体验当前 Web
