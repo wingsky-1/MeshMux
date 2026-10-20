@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
@@ -166,7 +167,8 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 	}
 	kernelHash, err := runningExecutableHash(props.MainPID, r.procRoot)
 	if err != nil || kernelHash != r.cfg.KernelSHA256 {
-		return Readback{}, errors.New("SINGBOX_RUNNING_BINARY_MISMATCH")
+		return Readback{}, fmt.Errorf("SINGBOX_RUNNING_BINARY_MISMATCH exe=%s running=%s want=%s",
+			runningExecutableTarget(props.MainPID, r.procRoot), hashPrefix(kernelHash), hashPrefix(r.cfg.KernelSHA256))
 	}
 	configPath := rooted(r.root, ActiveConfigPath)
 	info, err := os.Lstat(configPath)

@@ -39,6 +39,32 @@ func runningExecutableHash(pid int, procRoot string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// runningExecutableTarget reports which file a PID was started from. Only
+// the link target is exposed, never file contents; used to tell a wrong
+// binary apart from a corrupt one when the running hash mismatches.
+func runningExecutableTarget(pid int, procRoot string) string {
+	if pid < 1 {
+		return "none"
+	}
+	if procRoot == "" {
+		procRoot = "/proc"
+	}
+	target, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return "unresolvable"
+	}
+	return target
+}
+
+// hashPrefix keeps mismatch diagnostics short: twelve hex chars identify
+// a binary without printing full digests into logs.
+func hashPrefix(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
+
 func processRunning(pid int) bool {
 	if pid < 1 {
 		return false
