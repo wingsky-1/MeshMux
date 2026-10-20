@@ -62,7 +62,7 @@ func decodeAgentJSON(r *http.Request, dst any) error {
 // nodesPage renders the pending-node workspace. created + pairingCode are set
 // only immediately after creation so the one-time code is shown once.
 func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess session, created *Node, pairingCode string) {
-	nodes, err := s.store.listNodes()
+	nodes, err := s.store.listNodesAt(s.now())
 	if err != nil {
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
 		return
@@ -71,7 +71,7 @@ func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess session,
 }
 
 func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
-	nodes, err := s.store.listNodes()
+	nodes, err := s.store.listNodesAt(s.now())
 	if err != nil {
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
 		return
@@ -132,7 +132,7 @@ func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess sessi
 		s.fail(w, r, 409, "IDENTITY_REISSUE_FAILED", "无法重签节点身份。", "确认节点存在后重试。")
 		return
 	}
-	existing, err := s.store.getNode(nodeID)
+	existing, err := s.store.getNodeAt(nodeID, s.now())
 	if err != nil {
 		s.event(r, "IDENTITY_REISSUE_READBACK_FAILED")
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "身份已重签，但页面读取失败。", "配对码不会再次显示；如未保存请重新签发。")
@@ -165,7 +165,7 @@ func nodeIDFromRequest(r *http.Request) string {
 }
 
 func (s *Server) nodesPageWithCode(w http.ResponseWriter, r *http.Request, sess session, created *Node, action, code string) {
-	nodes, err := s.store.listNodes()
+	nodes, err := s.store.listNodesAt(s.now())
 	if err != nil {
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
 		return
@@ -364,7 +364,7 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 400, "RESULT_INVALID", "任务结果格式不正确。", "请按固定 task schema 上报。")
 		return
 	}
-	changed, err := s.store.reportResultAudited(node.ID, res)
+	changed, err := s.store.reportResultAudited(node.ID, res, s.now())
 	if err != nil {
 		msg := err.Error()
 		code := "RESULT_REJECTED"
@@ -404,7 +404,7 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentAuth(w http.ResponseWriter, r *http.Request) (Node, bool) {
 	token := bearerToken(r)
-	node, err := s.store.authenticateAgent(token)
+	node, err := s.store.authenticateAgentAt(token, s.now())
 	if err != nil {
 		s.agentFail(w, r, 401, "AGENT_UNAUTHORIZED", "节点身份无效或已撤销。", "请使用配对时配发的节点专属身份重试。")
 		return Node{}, false

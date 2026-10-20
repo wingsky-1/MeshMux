@@ -25,7 +25,7 @@ flowchart TB
     AgentAPI --> Agents["Outbound-connected node agents"]
 ~~~
 
-Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本化、可审阅的候选配置。候选文档当前为严格 `meshmux-node/v1`（非秘密、空 `users`）；#7 首个 PR 新增严格 `meshmux-node/v2` REALITY 文档（含用户与秘密字段），v1 行为逐字节不变，未知 schema 拒绝。Hub 可选兼任 Line。Agent 只执行固定能力协议，不接受命令字符串。Headscale 管理采用经版本验证的本地官方 API/CLI 适配器，不暴露公网管理端点。
+Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本化、可审阅的候选配置。候选文档当前为严格 `meshmux-node/v1`（非秘密、空 `users`）；#7 PR-A 已加入严格 `meshmux-node/v2` REALITY 文档（含用户与秘密字段），v1 行为逐字节不变，未知 schema 拒绝。Hub 可选兼任 Line。Agent 只执行固定能力协议，不接受命令字符串。Headscale 管理采用经版本验证的本地官方 API/CLI 适配器，不暴露公网管理端点。
 
 当前 Node 安装路径把用户命令限制为 `meshmux install edge|out`，安装事务完成后由 systemd 启动固定服务：`meshmux-agent.service` 以受限 root 运行私有 `__internal-agent` 协议入口，独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行 kernel。Agent 只接受固定任务类型、固定 binary/config 路径和固定 argv，不提供任意 shell、路径、URL 或管理命令；其动态写事务与 repair 通过 `/var/lib/meshmux-agent/runtime.lock` 串行化。Agent 离线不会自行停止 kernel。
 
@@ -35,7 +35,7 @@ Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本�
 - Headscale 自带数据库保存：Tailnet 用户、节点身份、PreAuthKey、路由等组网事实；MeshMux 只保存稳定引用（Headscale Node ID）及期望策略，不直接改其数据库。
 - Agent 私有目录保存：独立身份凭据、最后已知好配置、候选配置、回退记录和版本信息。节点配置不从外部任意 URL 直接执行。当前 layout 使用 `/var/lib/meshmux-agent/identity.json`、`state.json`、`active-candidate.json`、`out.nft`，kernel 配置为 `/var/lib/meshmux-singbox/config.json`。
 - Installer 的 `/var/lib/meshmux-installer/state.json` 记录 Node 的 immutable Hub URL、Node ID、role 和端口绑定，以及 MeshMux 静态受管文件 SHA-256 ledger；operation journal 位于 `/var/lib/meshmux-installer/operations/<operation_id>/events.jsonl`。
-- 标准订阅 Token 和设备专属 Token 高熵、独立、可撤销；#7 首个 PR 的 schema 4 只持久化 Token 哈希（原始值仅创建时展示一次），per-Line VLESS 凭据使用安全随机 UUIDv4。v2 候选携带的用户 UUID 与 REALITY 私钥属节点秘密，只经已认证的 Hub↔Agent 通道传输。公开制品仅在编译校验后原子切换。禁止普通日志记录完整订阅 URL、UUID 或密钥。
+- 标准订阅 Token 和设备专属 Token 高熵、独立、可撤销；#7 PR-A 的 schema 4 只持久化 Token 哈希（原始值仅创建时展示一次），per-Line VLESS 凭据使用安全随机 UUIDv4。v2 候选携带的用户 UUID 与 REALITY 私钥属节点秘密，只经已认证的 Hub↔Agent 通道传输。公开制品仅在编译校验后原子切换。禁止普通日志记录完整订阅 URL、UUID 或密钥。
 - 单操作 operation_id 贯穿 Web → job → agent → runtime → health probe，状态枚举 pending / applying / verifying / healthy / partial / failed / rolled_back。
 
 ## 4. Technology Architecture — 技术
@@ -54,7 +54,7 @@ flowchart LR
     Agent["Line/Out Agent"] -->|"outbound HTTPS"| Hub
 ~~~
 
-上图包含目标态的 VLESS/REALITY、用户、订阅和 Mesh 路径。`main` 上的 Node baseline 仍只生成空 `users` 的 v1 VLESS candidate，没有 TLS/REALITY、用户、凭据或订阅；本地 listener/readback 不代表公网可达、真实协议握手或客户端可用。Issue #7 首个 PR（进行中）交付独立订阅域模型与严格 v2 REALITY 编译器（v1 保持不变），但不含 Web 用户操作、公开下载和跨节点凭据生命周期；真实握手需后续证据。#8、#9 与 #11 不在本轮实现范围，#11 仍是 v1.0.0 P0。
+上图包含目标态的 VLESS/REALITY、用户、订阅和 Mesh 路径。`main` 上的 Node baseline 仍只生成空 `users` 的 v1 VLESS candidate，没有 TLS/REALITY、用户、凭据或订阅；本地 listener/readback 不代表公网可达、真实协议握手或客户端可用。Issue #7 PR-A 已合入独立订阅域模型与严格 v2 REALITY 编译器（v1 保持不变）；Web 生命周期、双格式下载、跨 Line 收敛与 Hub 共存已在 `verify/issue7-sub-lifecycle` 分支实现，尚待 PR-B/PR-C 的 CI 与 VM 验收，真实握手需后续证据。#8、#9 与 #11 不在本轮实现范围，#11 仍是 v1.0.0 P0。
 
 ## 5. 关键不变量
 

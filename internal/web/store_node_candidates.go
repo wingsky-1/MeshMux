@@ -172,8 +172,44 @@ func (s *store) latestCandidate(nodeID string) (storedCandidate, error) {
 	return s.candidate(nodeID, revision.Int64)
 }
 
-// reconcileNode publishes one immutable baseline revision and the fixed four
-// task chain in a single transaction. Callers cannot supply kinds or params.
+// publishCandidateTx stores one immutable candidate revision and the fixed
+// four task chain in the caller's transaction.
+//
+// It is the single publication path of the control plane: the manual reconcile
+// and the subscriber synchronization both use it, so one Line never carries
+// two chains at the same time. The caller owns the transaction, so a failure
+// rolls the candidate and the chain back together.
+func publishCandidateTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time) ([]agent.Task, error) {
+	if err := insertCandidateTx(tx, candidate, now.Unix()); err != nil {
+		return nil, err
+	}
+	params, _ := json.Marshal(map[string]int64{"revision": candidate.Revision})
+	taskRevision, err := taskRevisionAfter(tx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]agent.Task, 0, 4)
+	for _, kind := range []string{agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback} {
+		task, err := newFixedTask(nodeID, kind, params, taskRevision)
+		if err != nil {
+			return nil, err
+		}
+		if err := enqueueTaskTx(tx, task, now); err != nil {
+			return nil, err
+		}
+		taskRevision++
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+// reconcileNode publishes one immutable revision and the fixed four task chain
+// in a single transaction. Callers cannot supply kinds or params.
+//
+// A Line with stored transport settings publishes the full snapshot, so a
+// manual reconcile never erases the credentials of another subscriber. A node
+// without Line settings keeps the frozen v1 baseline and the Out behavior is
+// unchanged.
 func (s *store) reconcileNode(nodeID string, now time.Time) (storedCandidate, []agent.Task, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -200,37 +236,21 @@ func (s *store) reconcileNode(nodeID string, now time.Time) (storedCandidate, []
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
 		return storedCandidate{}, nil, errors.New("DATABASE_UNAVAILABLE")
 	}
-	candidate := node.Candidate{
-		NodeID:        nodeID,
-		Role:          node.Role(role),
-		Revision:      revision,
-		VLESSPort:     vless,
-		KernelVersion: node.KernelVersion,
-	}
-	if err = insertCandidateTx(tx, candidate, now.Unix()); err != nil {
-		return storedCandidate{}, nil, err
-	}
-	tasks := make([]agent.Task, 0, 4)
-	taskRevision, err := taskRevisionAfter(tx, nodeID)
+	candidate, err := buildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
 		return storedCandidate{}, nil, err
 	}
-	params, _ := json.Marshal(map[string]int64{"revision": revision})
-	for _, kind := range []string{agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback} {
-		task, err := newFixedTask(nodeID, kind, params, taskRevision)
-		if err != nil {
-			return storedCandidate{}, nil, err
-		}
-		if err := enqueueTaskTx(tx, task); err != nil {
-			return storedCandidate{}, nil, err
-		}
-		taskRevision++
-		tasks = append(tasks, task)
+	if candidate.Role != node.Role(role) || candidate.VLESSPort != vless {
+		return storedCandidate{}, nil, errors.New("CANDIDATE_MISMATCH: candidate does not match the node")
+	}
+	tasks, err := publishCandidateTx(tx, nodeID, candidate, now)
+	if err != nil {
+		return storedCandidate{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return storedCandidate{}, nil, errors.New("DATABASE_UNAVAILABLE")
 	}
-	stored, err := s.candidate(nodeID, revision)
+	stored, err := s.candidate(nodeID, candidate.Revision)
 	if err != nil {
 		return storedCandidate{}, nil, fmt.Errorf("CANDIDATE_READBACK_FAILED: %w", err)
 	}
@@ -266,8 +286,9 @@ func newFixedTask(nodeID, kind string, params json.RawMessage, revision int64) (
 }
 
 // seedInitialTasksTx enqueues the fixed reconcile chain for the latest initial
-// candidate. Pairing calls this only after identity insertion succeeds.
-func seedInitialTasksTx(tx *sql.Tx, nodeID string) error {
+// candidate. Pairing calls this only after identity insertion succeeds. The
+// caller's clock is the same one that stamped the pairing identity.
+func seedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time) error {
 	candidate, err := candidateTx(tx, nodeID)
 	if err != nil {
 		return err
@@ -290,7 +311,7 @@ func seedInitialTasksTx(tx *sql.Tx, nodeID string) error {
 		if err != nil {
 			return err
 		}
-		if err := enqueueTaskTx(tx, task); err != nil {
+		if err := enqueueTaskTx(tx, task, now); err != nil {
 			return err
 		}
 		taskRevision++

@@ -1,0 +1,226 @@
+package web
+
+// SubscribersPage renders the subscriber management workspace.
+//
+// The page separates two kinds of truth on every Line row:
+//
+//   - 期望 (intent): what the operator asked for on the Hub;
+//   - 已确认 (confirmed): what the Line itself proved by its own readback.
+//
+// A queued publication, a delivered task or a successful Hub write is never
+// rendered as a confirmed remote state.
+templ SubscribersPage(p pageData, v subscriberPageView) {
+	@Document(p.Title) {
+		<a class="skip" href="#main">跳到内容</a>
+		<div class="shell">
+			<aside class="sidebar">
+				@Brand()
+				<div class="nav-label">工作空间</div>
+				<nav aria-label="主导航">
+					for _,item:=range navigation {
+						if item.Path==p.Path {
+							<a class="active" href={ templ.SafeURL(item.Path) } aria-current="page"><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						} else {
+							<a href={ templ.SafeURL(item.Path) }><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						}
+					}
+				</nav>
+				<div class="sidebar-foot"><span class="dot"></span> 订阅用户 · 开发预览<small>首个正式版本目标 v1.0.0</small></div>
+			</aside>
+			<div class="workspace">
+				<header class="topbar"><span>控制台 <span class="crumb">/ { p.Title }</span></span><div class="account"><span class="avatar">A</span><span>管理员</span><form action="/logout" method="post"><input type="hidden" name="csrf" value={ p.CSRF }/><button class="text-button" type="submit">退出</button></form></div></header>
+				<main id="main" class="content">
+					<div class="page-heading"><div><p class="eyebrow">MESHMUX CONSOLE</p><h1>{ p.Title }</h1></div><span class="pill">订阅 · 线路 · Token</span></div>
+					if p.Dev {
+						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
+					}
+					<link rel="stylesheet" href="/assets/subscribers.css"/>
+					<p class="subtitle">订阅用户与 VLESS 凭据、节点身份、订阅 Token 是四类独立身份。暂停或删除会立即撤销公开下载，但已缓存的客户端配置在远端确认前仍然有效。</p>
+					if v.Token != "" {
+						<section class="panel">
+							<div class="panel-heading"><h2>订阅 Token 已签发 · 仅显示一次</h2><span class="badge accent">{ v.TokenOwner }</span></div>
+							<p class="hint">原始 Token 只在本次响应中出现，Hub 只保存它的 SHA-256 摘要。离开此页面后无法再次查看；遗失时请轮换。</p>
+							<pre class="sub-secret">{ v.Token }</pre>
+							<div class="sub-links">
+								<a href={ templ.SafeURL(subscriptionDownloadURL(v.Origin, v.Token, "sing-box.json")) } rel="noreferrer noopener">sing-box.json 订阅地址</a>
+								<a href={ templ.SafeURL(subscriptionDownloadURL(v.Origin, v.Token, "mihomo.yaml")) } rel="noreferrer noopener">mihomo.yaml 订阅地址</a>
+							</div>
+							<p class="hint">订阅地址包含原始 Token，请勿写入日志、诊断包或公开页面。链接使用 no-referrer，避免 Token 经 Referer 泄露到第三方站点。</p>
+						</section>
+					}
+					<div class="sub-split">
+						<section class="panel">
+							<h2>创建订阅用户</h2>
+							<p class="muted">创建时会为每个所选 Line 生成独立 VLESS UUID，并签发第一个订阅 Token。</p>
+							<form method="post" action="/subscribers">
+								<input type="hidden" name="csrf" value={ p.CSRF }/>
+								<label for="subscriber_name">展示名</label>
+								<input id="subscriber_name" name="display_name" type="text" required maxlength="80" placeholder="例如 alice-iphone"/>
+								<label>纳入线路</label>
+								if len(v.Lines) == 0 {
+									<p class="hint">还没有已配置的线路。请先在下方保存至少一条 Line。</p>
+								} else {
+									<div class="sub-check-list">
+										for _,line:=range v.Lines {
+											<label class="sub-check">
+												<input type="checkbox" name={ "line_" + line.NodeID } value="1"/>
+												<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port } · 排序 { line.SortOrder }</small></span>
+											</label>
+										}
+									</div>
+								}
+								<p class="hint">展示名只是标签，随时可改；订阅用户 ID、VLESS UUID 和 Token 都不随它变化。</p>
+								<button type="submit">创建订阅用户 →</button>
+							</form>
+						</section>
+						<section class="panel">
+							<h2>线路参数</h2>
+							<p class="muted">一条 Line 对应一个已纳管的 Line 节点（edge）。REALITY 密钥在服务端生成，页面与接口都不显示私钥。</p>
+							<form method="post" action="/lines">
+								<input type="hidden" name="csrf" value={ p.CSRF }/>
+								<label for="line_node">Line 节点</label>
+								<select id="line_node" name="node_id" required>
+									if len(v.EdgeNodes) == 0 {
+										<option value="">尚无已纳管的 Line 节点</option>
+									}
+									for _,node:=range v.EdgeNodes {
+										<option value={ node.ID }>{ node.DisplayName } · { node.ID }</option>
+									}
+								</select>
+								<div class="sub-inline">
+									<div>
+										<label for="line_display">展示名</label>
+										<input id="line_display" name="display_name" type="text" required maxlength="80" placeholder="例如 香港 01"/>
+									</div>
+									<div>
+										<label for="line_order">排序</label>
+										<input id="line_order" name="sort_order" type="number" min="0" max="65535" value="0" required/>
+									</div>
+								</div>
+								<label for="line_server">对外地址</label>
+								<input id="line_server" name="server" type="text" required maxlength="253" placeholder="例如 line.example.invalid"/>
+								<label for="line_port">对外端口</label>
+								<input id="line_port" name="port" type="number" min="1" max="65535" required placeholder="8443"/>
+								<label for="line_server_name">server_name</label>
+								<input id="line_server_name" name="server_name" type="text" required maxlength="253" placeholder="例如 handshake.example.invalid"/>
+								<label for="line_handshake">握手伪装地址</label>
+								<input id="line_handshake" name="handshake_server" type="text" required maxlength="253" placeholder="例如 handshake.example.invalid"/>
+								<label for="line_handshake_port">握手伪装端口</label>
+								<input id="line_handshake_port" name="handshake_port" type="number" min="1" max="65535" required placeholder="443"/>
+								<p class="hint">保存已存在的 Line 时保留其 REALITY 密钥与 short id，因此改展示名或排序不会让已发布的客户端配置失效。参数只写入 Hub 本地状态，不会自动改到已纳管主机。</p>
+								<button type="submit">保存线路参数 →</button>
+							</form>
+						</section>
+					</div>
+					<section class="panel">
+						<div class="panel-heading"><h2>订阅用户</h2><span class="badge">{ len(v.Subscribers) } 个</span></div>
+						if len(v.Subscribers) == 0 {
+							<p class="muted">尚未创建订阅用户。</p>
+						}
+						for _,sub:=range v.Subscribers {
+							<article class="node-card">
+								<div class="panel-heading">
+									<h3>{ sub.DisplayName }</h3>
+									<span class={ sub.StateClass }>{ sub.StateLabel }</span>
+								</div>
+								<dl class="details">
+									<dt>Subscriber ID</dt><dd><code>{ sub.ID }</code></dd>
+									<dt>线路选择</dt><dd>{ sub.Total } 条 · 凭据记录 { sub.Credentials } 条（含历史）</dd>
+									<dt>收敛状态</dt>
+									<dd class="sub-summary">
+										if sub.Total == 0 {
+											<span class="muted">尚未选择线路</span>
+										} else {
+											<span class="sub-summary-count">{ sub.Confirmed }/{ sub.Total } 条线路已确认</span>
+											<span class={ sub.SyncClass }>{ sub.SyncLabel }</span>
+											if sub.SyncCode != "" {
+												<code class="sub-code">{ sub.SyncCode }</code>
+											}
+										}
+									</dd>
+								</dl>
+								for _,line:=range sub.Lines {
+									<div class="sub-line">
+										<span class="sub-line-name">{ line.DisplayName }<br/><span class="sub-line-endpoint">{ line.Server }:{ line.Port }</span></span>
+										<span>
+											<span class="sub-intent">{ line.Intent }</span><br/>
+											if line.SyncStatus == subscriberSyncHealthy {
+												<span class="sub-confirmed is-confirmed">{ line.Confirmed }</span>
+											} else if line.SyncStatus == subscriberSyncPending {
+												<span class="sub-confirmed is-pending">{ line.Confirmed } · <code class="sub-code">{ line.SyncCode }</code></span>
+											} else if line.SyncStatus == subscriberSyncPartial {
+												<span class="sub-confirmed is-failed">{ line.Confirmed } · <code class="sub-code">{ line.SyncCode }</code></span>
+											} else {
+												<span class="sub-confirmed">{ line.Confirmed }</span>
+											}
+										</span>
+										<span></span>
+									</div>
+								}
+								<form method="post" action="/subscribers/rename">
+									<input type="hidden" name="csrf" value={ p.CSRF }/>
+									<input type="hidden" name="subscriber_id" value={ sub.ID }/>
+									<div class="sub-inline">
+										<div>
+											<label for={ "rename_" + sub.ID }>修改展示名</label>
+											<input id={ "rename_" + sub.ID } name="display_name" type="text" required maxlength="80" value={ sub.DisplayName }/>
+										</div>
+										<button type="submit">保存名称</button>
+									</div>
+								</form>
+								<form method="post" action="/subscribers/lines">
+									<input type="hidden" name="csrf" value={ p.CSRF }/>
+									<input type="hidden" name="subscriber_id" value={ sub.ID }/>
+									<label>线路选择</label>
+									if len(v.Lines) == 0 {
+										<p class="hint">还没有已配置的线路。</p>
+									} else {
+										<div class="sub-check-list">
+											for _,line:=range sub.Lines {
+												<label class="sub-check">
+													<input type="checkbox" name={ "line_" + line.NodeID } value="1" checked?={ line.Selected }/>
+													<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port }</small></span>
+												</label>
+											}
+										</div>
+									}
+									<p class="hint">保留的线路沿用历史 UUID；新增线路获得新凭据；移除的线路只在本 Hub 标记停用，其 UUID 仍保留可审计记录。</p>
+									<button type="submit">更新线路选择 →</button>
+								</form>
+								<div class="sub-actions">
+									if sub.State == "active" {
+										<form method="post" action="/subscribers/state"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><input type="hidden" name="action" value="pause"/><button class="secondary-button" type="submit">暂停</button></form>
+									}
+									if sub.State == "paused" {
+										<form method="post" action="/subscribers/state"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><input type="hidden" name="action" value="resume"/><button class="secondary-button" type="submit">恢复</button></form>
+									}
+									if sub.State != "deleting" {
+										<form method="post" action="/subscribers/state"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><input type="hidden" name="action" value="delete"/><button class="danger-button" type="submit">删除</button></form>
+									}
+									<form method="post" action="/subscribers/token/rotate"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><button class="secondary-button" type="submit">轮换 Token</button></form>
+									<form method="post" action="/subscribers/token/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><button class="secondary-button" type="submit">吊销 Token</button></form>
+									<form method="post" action="/subscribers/sync"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><input type="hidden" name="action" value="publish"/><button type="submit">同步到线路</button></form>
+									<form method="post" action="/subscribers/sync"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="subscriber_id" value={ sub.ID }/><input type="hidden" name="action" value="retry"/><button class="secondary-button" type="submit">重试未确认线路</button></form>
+								</div>
+								<p class="sub-note">暂停、删除与吊销 Token 立即让公开订阅 URL 失效；但已下载并缓存的客户端配置仍持有 VLESS UUID，只有在线路本机回读确认凭据集合已更新后才真正停止授权。轮换 Token 只更换下载凭据，不会改变任何已发放的 VLESS UUID。</p>
+							</article>
+						}
+					</section>
+					<p class="hint">本页面显示的“已确认”只表示该 Line 的本机回读与它自己的最新不可变修订一致；它不证明公网可达、真实协议握手或客户端可用。</p>
+					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>订阅用户 · 开发预览</span></footer>
+				</main>
+			</div>
+		</div>
+	}
+}
+
+// subscriptionDownloadURL builds one public subscription download address.
+//
+// The bearer is the last path segment, so the address is never logged by the
+// Hub and never appears in a server log line.
+func subscriptionDownloadURL(origin, token, format string) string {
+	if origin == "" || token == "" {
+		return "#"
+	}
+	return origin + "/subscription/" + token + "/" + format
+}

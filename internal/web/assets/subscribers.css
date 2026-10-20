@@ -1,0 +1,246 @@
+/* Scoped styles for the subscriber workspace.
+   The palette, type scale and radii are the existing MeshMux console tokens
+   from app.css: green #12644e, muted #71817b, line #e1e8e4, surface #ffffff,
+   page #f5f7f6, panel radius 11px, control radius 8px, badge radius 6px.
+   Only layout that app.css does not already provide is added here. */
+
+.sub-stack {
+  display: grid;
+  gap: 22px;
+}
+
+.sub-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+.sub-line {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr auto;
+  gap: 8px 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #f0f3f0;
+  font-size: 13px;
+}
+
+.sub-line:last-child {
+  border-bottom: 0;
+}
+
+.sub-line-name {
+  font-weight: 600;
+  color: #2b4436;
+  overflow-wrap: anywhere;
+}
+
+.sub-line-endpoint {
+  color: #839186;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sub-intent,
+.sub-confirmed {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.sub-intent {
+  color: #63796c;
+}
+
+.sub-confirmed {
+  color: #71817b;
+}
+
+.sub-confirmed.is-confirmed {
+  color: #2b7050;
+}
+
+.sub-confirmed.is-pending {
+  color: #8a6a2e;
+}
+
+.sub-confirmed.is-failed {
+  color: #a24528;
+}
+
+/* The convergence summary reuses the badge palette of app.css
+   (.badge/.accent/.failure); only the row layout and the stable code are
+   added here. */
+.sub-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.sub-summary-count {
+  color: #2b4436;
+  font-weight: 600;
+}
+
+.sub-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f0f3f0;
+  color: #63796c;
+  overflow-wrap: anywhere;
+}
+
+.sub-confirmed.is-pending .sub-code {
+  background: #fdf4e3;
+  color: #8a6a2e;
+}
+
+.sub-confirmed.is-failed .sub-code {
+  background: #fff0eb;
+  color: #a24528;
+}
+
+.sub-check-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.sub-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #cdd9d2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+/* app.css styles every input as a full-width block; a checkbox needs the
+   native control size instead. */
+.sub-check input[type="checkbox"] {
+  display: inline-block;
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 3px 0 0;
+  padding: 0;
+  flex: 0 0 18px;
+  accent-color: #12644e;
+}
+
+.sub-check-text {
+  display: block;
+  font-size: 13px;
+  color: #2b4436;
+  overflow-wrap: anywhere;
+}
+
+.sub-check-text small {
+  display: block;
+  font-size: 11px;
+  color: #839186;
+}
+
+.sub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.sub-actions form {
+  margin: 0;
+}
+
+.sub-actions button {
+  margin-top: 0;
+}
+
+.sub-actions .secondary-button {
+  background: #fff;
+  border: 1px solid #cdd9d2;
+  color: #2b4436;
+}
+
+.sub-actions .secondary-button:hover {
+  background: #f1f7f2;
+}
+
+.sub-actions .danger-button {
+  background: #fff0eb;
+  border: 1px solid #f0d5ca;
+  color: #a24528;
+}
+
+.sub-actions .danger-button:hover {
+  background: #f8e2da;
+}
+
+.sub-inline {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.sub-inline label {
+  margin-top: 0;
+  flex: 1 1 220px;
+}
+
+.sub-inline input {
+  margin: 0;
+}
+
+.sub-secret {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: #f3f6f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.sub-links {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.sub-links a {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sub-note {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #71817b;
+  margin: 10px 0 0;
+}
+
+@media (max-width: 900px) {
+  .sub-split {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .sub-line {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .sub-inline label {
+    flex: 1 1 100%;
+  }
+  .sub-actions button {
+    width: 100%;
+  }
+}
