@@ -26,6 +26,10 @@ func dumpGuestServiceState(t *testing.T) {
 		{"systemctl", "show", "meshmux-sing-box", "--property=ActiveState,SubState,MainPID,ExecMainPID,Result", "--value", "--no-pager"},
 		{"journalctl", "-u", "meshmux-sing-box", "--no-pager", "-n", "60"},
 		{"ss", "-H", "-lntup"},
+		// Time-sync evidence distinguishes a QEMU TCG clock flake
+		// (TSC unstable, NTP still converging) from a real install bug.
+		{"timedatectl", "status"},
+		{"journalctl", "-u", "systemd-timesyncd", "--no-pager", "-n", "30"},
 	} {
 		out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
 		t.Logf("$ %s (err=%v):\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

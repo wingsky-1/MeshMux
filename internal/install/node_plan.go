@@ -112,10 +112,12 @@ func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, runn
 		_, systemdErr = runner.Run(ctx, "systemctl", "--version")
 	}
 	checks = append(checks, check("systemd", "SYSTEMD_UNAVAILABLE", "Boot with systemd as PID 1.", systemdErr))
-	ntp, ntpErr := runner.Run(ctx, "timedatectl", "show", "-p", "NTPSynchronized", "--value")
-	if ntpErr == nil && strings.TrimSpace(string(ntp)) != "yes" {
-		ntpErr = errors.New("clock not synchronized")
-	}
+	// NTP is eventually consistent after boot: under QEMU TCG the clock can
+	// take a minute to synchronize (TSC unstable, switched to hpet), so a
+	// single-shot timedatectl check flakes. Poll with a bounded deadline
+	// instead (Google SRE retry-with-deadline; systemd time-sync.target
+	// semantics); deterministic failures still fail fast elsewhere.
+	ntpErr := waitForClockSync(ctx, runner)
 	checks = append(checks, check("clock", "TIME_UNSYNCED", "Enable NTP and verify timedatectl before pairing.", ntpErr))
 	_, caErr := os.Stat("/etc/ssl/certs/ca-certificates.crt")
 	checks = append(checks, check("system_roots", "CA_BUNDLE_UNAVAILABLE", "Install and populate ca-certificates before pairing.", caErr))
@@ -147,6 +149,34 @@ func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, runn
 	checks = append(checks, Check{Name: "public_reachability", Status: "pending", Code: "EXTERNAL_CHECK_PENDING", Recovery: "After local readback, verify the VLESS TCP/UDP ports from another network and cloud security-group ingress separately."})
 	checks = append(checks, Check{Name: "protocol_handshake", Status: "pending", Code: "EXTERNAL_CHECK_PENDING", Recovery: "Run an authorized client handshake after Hub-side authorization; local listeners do not prove protocol usability."})
 	return checks, ssh
+}
+
+// clockSyncTimeout bounds the NTP wait so a broken time service still fails
+// instead of hanging the install; clockSyncInterval spaces the polls.
+const (
+	clockSyncTimeout  = 90 * time.Second
+	clockSyncInterval = 3 * time.Second
+)
+
+// waitForClockSync polls timedatectl until NTPSynchronized=yes or the
+// deadline/context expires. A missing timedatectl binary or a "no" answer
+// is transient (time service still starting); only the timeout is fatal.
+func waitForClockSync(ctx context.Context, runner CommandRunner) error {
+	deadline := time.Now().Add(clockSyncTimeout)
+	for {
+		ntp, err := runner.Run(ctx, "timedatectl", "show", "-p", "NTPSynchronized", "--value")
+		if err == nil && strings.TrimSpace(string(ntp)) == "yes" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("clock not synchronized")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(clockSyncInterval):
+		}
+	}
 }
 
 func BuildNodePlan(id string, cfg node.Config, architecture string, checks []Check, ssh []int) NodePlan {

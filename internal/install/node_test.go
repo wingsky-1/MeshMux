@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
@@ -81,6 +82,12 @@ func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]
 		if len(args) > 1 && args[0] == "show" && strings.Contains(call, node.SingBoxUnit) {
 			return []byte("ActiveState=active\nSubState=running\nMainPID=4242\n"), nil
 		}
+	case "timedatectl":
+		// Hermetic unit tests simulate a synchronized clock; the real
+		// waitForClockSync poll is covered by its own flap/ctx tests.
+		// Without this the new bounded poll would idle 90s per test that
+		// exercises the real preflight (e.g. TestNodeFirstInstallAndLedger).
+		return []byte("yes\n"), nil
 	case "nft":
 		if len(args) >= 2 && args[0] == "list" {
 			return []byte("table inet meshmux_out {\n chain input { policy accept; tcp dport 8443 drop; udp dport 8443 drop; }\n}"), nil
@@ -875,5 +882,48 @@ func TestVerifyAgentBinaryRequiresExactVersionProbe(t *testing.T) {
 	r = &probeRunner{out: []byte(node.CurrentAgentVersion + "\n")}
 	if err := verifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", strings.Repeat("0", 64)); err == nil {
 		t.Fatal("hash mismatch accepted, want AGENT_NOT_SELF_COPY")
+	}
+}
+
+// clockFlapRunner emulates a time service that is still starting: the first
+// calls fail or report "no" before settling on "yes". Industry practice is
+// to retry such eventually-consistent signals with a bounded deadline
+// instead of failing a single-shot check (SRE retry-with-deadline).
+type clockFlapRunner struct {
+	calls int
+	ready int
+	fail  int
+}
+
+func (r *clockFlapRunner) Run(_ context.Context, name string, _ ...string) ([]byte, error) {
+	if name != "timedatectl" {
+		return nil, errors.New("unexpected command " + name)
+	}
+	r.calls++
+	if r.calls <= r.fail {
+		return nil, errors.New("time service starting")
+	}
+	if r.calls <= r.ready {
+		return []byte("no\n"), nil
+	}
+	return []byte("yes\n"), nil
+}
+
+func TestWaitForClockSyncRetriesTransientNoAndErrors(t *testing.T) {
+	r := &clockFlapRunner{fail: 1, ready: 3}
+	if err := waitForClockSync(context.Background(), r); err != nil {
+		t.Fatalf("flapping clock = %v, want nil (calls=%d)", err, r.calls)
+	}
+	if r.calls < 4 {
+		t.Fatalf("clock calls = %d, want >=4 (errors+no retried)", r.calls)
+	}
+}
+
+func TestWaitForClockSyncRespectsContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	r := &clockFlapRunner{fail: 1000, ready: 1000}
+	if err := waitForClockSync(ctx, r); err == nil {
+		t.Fatal("cancelled clock wait accepted, want ctx error")
 	}
 }

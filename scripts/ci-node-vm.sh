@@ -151,6 +151,20 @@ wait_ssh() {
   echo 'Debian 13 SSH boot timeout' >&2
   return 1
 }
+wait_time_sync() {
+  # NTP is eventually consistent after boot: under TCG the guest clock can
+  # lag (TSC unstable) and timedatectl reports no for a minute. Wait with
+  # a bounded deadline like systemd time-sync.target instead of failing
+  # the first preflight (SRE wait-for-ready, not test retry).
+  for _ in $(seq 1 100); do
+    if ssh_vm 'timedatectl show -p NTPSynchronized --value | grep -qx yes' >/dev/null 2>&1; then return 0; fi
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 3
+  done
+  echo 'Debian 13 NTP sync timeout (timedatectl NTPSynchronized != yes)' >&2
+  ssh_vm 'timedatectl status; journalctl -u systemd-timesyncd --no-pager -n 30' >&2 || true
+  return 1
+}
 copy_test_binaries() {
   scp_vm .ci/bin/meshmux /tmp/meshmux
   scp_vm .ci/bin/install.test /tmp/install.test
@@ -215,6 +229,7 @@ start_node_fixture() {
 
 wait_ssh
 ssh_vm 'cloud-init status --wait; cat /etc/os-release | grep VERSION_ID; systemctl --version | head -1'
+wait_time_sync
 copy_test_binaries
 start_node_fixture
 ssh_vm "sudo env MESHMUX_NODE_SYSTEM_VM=1 MESHMUX_NODE_ROLE=${role} MESHMUX_NODE_PHASE=install MESHMUX_NODE_FIXTURE_STATUS=/tmp/node-fixture.status MESHMUX_NODE_FIXTURE_CA=/tmp/node-fixture-ca.crt /tmp/install.test -test.run '^TestNodeSystemVM$' -test.timeout=25m -test.v"
@@ -222,6 +237,7 @@ boot_before="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
 ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
 sleep 8
 wait_ssh
+wait_time_sync
 boot_after="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
 if [[ "$boot_before" == "$boot_after" ]]; then
   echo 'VM did not actually reboot; refusing to count persistence as verified' >&2
