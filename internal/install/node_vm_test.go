@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +15,22 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
+
+// dumpGuestServiceState logs the kernel unit state, its journal tail and
+// the guest listeners when an install step fails. The VM is ephemeral, so
+// without this the failure reason never leaves the guest. Output is ports
+// and service state only; pairing material is never printed.
+func dumpGuestServiceState(t *testing.T) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"systemctl", "show", "meshmux-sing-box", "--property=ActiveState,SubState,MainPID,ExecMainPID,Result", "--value", "--no-pager"},
+		{"journalctl", "-u", "meshmux-sing-box", "--no-pager", "-n", "60"},
+		{"ss", "-H", "-lntup"},
+	} {
+		out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+		t.Logf("$ %s (err=%v):\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+}
 
 // TestNodeSystemVM runs only in an ephemeral Debian 13 VM with real systemd.
 // It performs the first install against the runner-side Hub fixture, then
@@ -193,6 +210,7 @@ func testNodeSystemInstall(t *testing.T, ctx context.Context, cfg node.Config, p
 	}
 	res, err := InstallNode(ctx, cfg, opID, false, pairingCode, opts)
 	if err != nil || res.Status != "installed" {
+		dumpGuestServiceState(t)
 		t.Fatalf("first install status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	state := mustNodeState(t, cfg.NodeID)
@@ -207,6 +225,7 @@ func testNodeSystemInstall(t *testing.T, ctx context.Context, cfg node.Config, p
 	}
 	res, err = InstallNode(ctx, cfg, opID, true, "", opts)
 	if err != nil || res.Status != "installed" {
+		dumpGuestServiceState(t)
 		t.Fatalf("repair status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	assertNodeFilesEqual(t, identityBefore, candidateBefore)
@@ -227,6 +246,7 @@ func testNodeSystemInstall(t *testing.T, ctx context.Context, cfg node.Config, p
 	}
 	res, err = InstallNode(ctx, cfg, opID, true, "", opts)
 	if err != nil || res.Status != "installed" {
+		dumpGuestServiceState(t)
 		t.Fatalf("recovery repair status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	nodeSystemReadback(t, ctx, *mustNodeState(t, cfg.NodeID).Node, cfg.Role)
@@ -249,6 +269,7 @@ func testNodeSystemPostReboot(t *testing.T, ctx context.Context, cfg node.Config
 	}
 	res, err := InstallNode(ctx, cfg, opID, true, "", opts)
 	if err != nil || res.Status != "installed" {
+		dumpGuestServiceState(t)
 		t.Fatalf("post-reboot repair status=%s code=%s stage=%s recovery=%s err=%v", res.Status, res.ErrorCode, res.Stage, res.Recovery, err)
 	}
 	assertNodeFilesEqual(t, identityBefore, candidateBefore)
