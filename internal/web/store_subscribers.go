@@ -211,6 +211,9 @@ func (s *store) createSubscriber(displayName string, lineIDs []string, now time.
 // renameSubscriber changes only the mutable display name. The subscriber ID,
 // the lifecycle state, the credentials and every token stay exactly as they
 // were.
+//
+// A deleting or deleted subscriber is a tombstone: its display name stays
+// frozen. A paused subscriber may still be renamed.
 func (s *store) renameSubscriber(id, displayName string, now time.Time) (subscription.Subscriber, error) {
 	if err := subscription.ValidateID(id); err != nil {
 		return subscription.Subscriber{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
@@ -223,6 +226,13 @@ func (s *store) renameSubscriber(id, displayName string, now time.Time) (subscri
 	sub, err := getSubscriberTx(tx, id)
 	if err != nil {
 		return subscription.Subscriber{}, err
+	}
+	switch sub.State {
+	case subscription.StateDeleting, subscription.StateDeleted:
+		return subscription.Subscriber{}, errors.New("SUBSCRIBER_TOMBSTONED: a deleting or deleted subscriber can no longer be renamed")
+	case subscription.StateActive, subscription.StatePaused:
+	default:
+		return subscription.Subscriber{}, errors.New("SUBSCRIBER_STATE_INVALID: state must be active, paused, deleting or deleted")
 	}
 	renamed, err := sub.Rename(displayName)
 	if err != nil {
@@ -248,6 +258,13 @@ func (s *store) renameSubscriber(id, displayName string, now time.Time) (subscri
 //
 // The VLESS UUIDs are not touched here: a credential may only be released
 // after the remote Line confirmed the revocation by readback.
+//
+// The state is the desired state only: pausing records the intent and
+// invalidates the download URL, but the subscriber stays in the Line snapshot
+// until the remote synchronization confirmed the removal.
+//
+// A resumed subscriber keeps no usable bearer: the revocation of the pause is
+// permanent and the operator has to rotate the token.
 func (s *store) setSubscriberState(id string, state subscription.State, now time.Time) (subscription.Subscriber, error) {
 	if err := state.Validate(); err != nil {
 		return subscription.Subscriber{}, err
@@ -450,6 +467,9 @@ func (s *store) rotateToken(subscriberID string, now time.Time) (string, error) 
 
 // revokeTokens revokes every active token of one subscriber. It is
 // idempotent and never touches the VLESS credentials.
+//
+// The subscriber must exist: an unknown subscriber is an error, so a mistyped
+// identifier is never reported as a successful revocation.
 func (s *store) revokeTokens(subscriberID string, now time.Time) error {
 	if err := subscription.ValidateID(subscriberID); err != nil {
 		return errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
@@ -459,6 +479,9 @@ func (s *store) revokeTokens(subscriberID string, now time.Time) error {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	defer tx.Rollback()
+	if _, err = getSubscriberTx(tx, subscriberID); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(`UPDATE subscription_tokens SET revoked=1, revoked_at=? WHERE subscriber_id=? AND revoked=0`,
 		now.Unix(), subscriberID); err != nil {
 		return errors.New("TOKEN_REVOKE_FAILED")
@@ -472,25 +495,30 @@ func (s *store) revokeTokens(subscriberID string, now time.Time) error {
 // resolveTokenSubscriber maps one plaintext bearer to its active subscriber.
 // A revoked token, a token of a non-active subscriber and an unknown token are
 // all rejected the same way so the endpoint cannot be enumerated.
+//
+// The token and the subscriber are read in one joined query, so a state change
+// cannot slip between two reads. Only a missing row is a uniform rejection;
+// every other failure is reported as a database failure.
 func (s *store) resolveTokenSubscriber(token string) (subscription.Subscriber, error) {
 	if err := subscription.ValidateToken(token); err != nil {
 		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
 	}
-	var subscriberID string
-	err := s.db.QueryRow(`SELECT subscriber_id FROM subscription_tokens WHERE token_hash=? AND revoked=0`,
-		subscription.TokenHash(token)).Scan(&subscriberID)
+	sub, err := scanSubscriber(s.db.QueryRow(`SELECT s.id, s.display_name, s.state
+FROM subscription_tokens t JOIN subscribers s ON s.id = t.subscriber_id
+WHERE t.token_hash=? AND t.revoked=0`, subscription.TokenHash(token)))
 	if errors.Is(err, sql.ErrNoRows) {
+		// An unknown token, a revoked token and a token of a non-active
+		// subscriber are indistinguishable for the caller.
 		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
 	}
 	if err != nil {
 		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
 	}
-	sub, err := s.getSubscriber(subscriberID)
-	if err != nil {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
 	if sub.State != subscription.StateActive {
 		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+	}
+	if err := sub.Validate(); err != nil {
+		return subscription.Subscriber{}, errors.New("SUBSCRIBER_CORRUPT: stored subscriber record is invalid")
 	}
 	return sub, nil
 }
@@ -608,6 +636,10 @@ func (s *store) setLine(line subscription.Line, now time.Time) (subscription.Lin
 	default:
 		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
 	}
+	// The client-facing address is canonicalized to lower case, so one Line is
+	// never published under two spellings of the same host. An IPv6 address
+	// keeps its form.
+	line.Server = strings.ToLower(line.Server)
 	if err = line.Validate(); err != nil {
 		return subscription.Line{}, err
 	}
@@ -661,6 +693,9 @@ func (s *store) getLine(nodeID string) (subscription.Line, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return subscription.Line{}, errors.New("LINE_NOT_FOUND: unknown line")
 	}
+	if errors.Is(err, errLineSettingsCorrupt) {
+		return subscription.Line{}, err
+	}
 	if err != nil {
 		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
 	}
@@ -677,6 +712,9 @@ func (s *store) listLines() ([]subscription.Line, error) {
 	out := []subscription.Line{}
 	for rows.Next() {
 		line, err := scanLine(rows)
+		if errors.Is(err, errLineSettingsCorrupt) {
+			return nil, err
+		}
 		if err != nil {
 			return nil, errors.New("DATABASE_UNAVAILABLE")
 		}
@@ -688,6 +726,13 @@ func (s *store) listLines() ([]subscription.Line, error) {
 	return out, nil
 }
 
+// scanLine reads one stored Line and validates it against the contract that
+// setLine enforces on write.
+//
+// The write path only stores canonical values, so an invalid row means the
+// database was modified outside the Hub. Such a row is reported as a corrupt
+// record instead of reaching a client configuration, and it is never silently
+// canonicalized here.
 func scanLine(row rowScanner) (subscription.Line, error) {
 	var line subscription.Line
 	var local int
@@ -698,5 +743,32 @@ func scanLine(row rowScanner) (subscription.Line, error) {
 		return subscription.Line{}, err
 	}
 	line.Local = local == 1
+	if err := validateStoredLine(line); err != nil {
+		return subscription.Line{}, err
+	}
 	return line, nil
+}
+
+// errLineSettingsCorrupt marks a stored Line that does not satisfy the
+// domain contract. The message carries the stable error code only and never
+// the stored values.
+var errLineSettingsCorrupt = errors.New("LINE_SETTINGS_CORRUPT: stored line settings are invalid")
+
+// validateStoredLine checks the persisted Line against the domain contract and
+// against the node-side REALITY contract of setLine.
+func validateStoredLine(line subscription.Line) error {
+	if err := line.Validate(); err != nil {
+		return errLineSettingsCorrupt
+	}
+	reality := nodedomain.RealityConfig{
+		ServerName:      line.ServerName,
+		HandshakeServer: line.HandshakeServer,
+		HandshakePort:   line.HandshakePort,
+		PrivateKey:      line.PrivateKey,
+		ShortID:         line.ShortID,
+	}
+	if err := reality.Validate(); err != nil {
+		return errLineSettingsCorrupt
+	}
+	return nil
 }

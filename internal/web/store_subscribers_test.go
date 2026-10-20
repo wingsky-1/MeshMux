@@ -618,6 +618,151 @@ func TestUnknownBearerIsRejected(t *testing.T) {
 	}
 }
 
+// TestResolveTokenSubscriberReportsDatabaseFailure verifies that a database
+// failure is never disguised as an invalid token. A closed database must be
+// reported as a database problem, because a client that retries after a
+// transient failure has to be able to tell the two cases apart.
+func TestResolveTokenSubscriberReportsDatabaseFailure(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	edge := createEdgeNode(t, s, now)
+	configureLine(t, s, edge, "line-a", now)
+	_, bearer, err := s.createSubscriber("alice", []string{edge}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bearer is valid and known before the database goes away.
+	if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.resolveTokenSubscriber(bearer)
+	if err == nil {
+		t.Fatal("closed database reported a resolved subscriber")
+	}
+	if !hasErrorCode(err, "DATABASE_UNAVAILABLE") {
+		t.Fatalf("error %q does not carry code DATABASE_UNAVAILABLE", err)
+	}
+	// The failure message never contains the bearer.
+	if strings.Contains(err.Error(), bearer) {
+		t.Fatal("error message leaks the bearer")
+	}
+}
+
+// TestRevokeTokensRejectsUnknownSubscriber verifies that a revocation for an
+// unknown subscriber is an error instead of a silent success. A mistyped
+// identifier must never be reported as a successful revocation.
+func TestRevokeTokensRejectsUnknownSubscriber(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	edge := createEdgeNode(t, s, now)
+	configureLine(t, s, edge, "line-a", now)
+	sub, bearer, err := s.createSubscriber("alice", []string{edge}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.revokeTokens("ffffffffffffffffffffffffffffffff", now)
+	if err == nil {
+		t.Fatal("revocation of an unknown subscriber reported success")
+	}
+	if !hasErrorCode(err, "SUBSCRIBER_NOT_FOUND") {
+		t.Fatalf("error %q does not carry code SUBSCRIBER_NOT_FOUND", err)
+	}
+	// The known subscriber keeps his bearer: the failed call revoked nothing.
+	if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+		t.Fatal(err)
+	}
+	// The known subscriber can still be revoked normally.
+	if err := s.revokeTokens(sub.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.resolveTokenSubscriber(bearer); err == nil {
+		t.Fatal("revoked bearer still accepted")
+	}
+}
+
+// TestRenameSubscriberRejectsTombstone verifies that a deleting or deleted
+// subscriber keeps its tombstone: its display name stays frozen. A paused
+// subscriber may still be renamed.
+func TestRenameSubscriberRejectsTombstone(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	edge := createEdgeNode(t, s, now)
+	configureLine(t, s, edge, "line-a", now)
+	sub, _, err := s.createSubscriber("alice", []string{edge}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A paused subscriber is renamed: the pause is a temporary desired state.
+	if _, err := s.setSubscriberState(sub.ID, subscription.StatePaused, now); err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := s.renameSubscriber(sub.ID, "alice-paused", now)
+	if err != nil {
+		t.Fatalf("paused subscriber was not renamed: %v", err)
+	}
+	if renamed.DisplayName != "alice-paused" {
+		t.Fatalf("display name = %q", renamed.DisplayName)
+	}
+
+	// A deleting subscriber keeps its tombstone.
+	if _, err := s.setSubscriberState(sub.ID, subscription.StateDeleting, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.renameSubscriber(sub.ID, "alice-renamed", now); err == nil {
+		t.Fatal("deleting subscriber was renamed")
+	} else if !hasErrorCode(err, "SUBSCRIBER_TOMBSTONED") {
+		t.Fatalf("error %q does not carry code SUBSCRIBER_TOMBSTONED", err)
+	}
+	// A deleted subscriber keeps its tombstone too.
+	if _, err := s.setSubscriberState(sub.ID, subscription.StateDeleted, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.renameSubscriber(sub.ID, "alice-renamed", now); err == nil {
+		t.Fatal("deleted subscriber was renamed")
+	} else if !hasErrorCode(err, "SUBSCRIBER_TOMBSTONED") {
+		t.Fatalf("error %q does not carry code SUBSCRIBER_TOMBSTONED", err)
+	}
+	// The stored name is exactly the one from before the deletion.
+	stored, err := s.getSubscriber(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.DisplayName != "alice-paused" {
+		t.Fatalf("stored display name = %q, want alice-paused", stored.DisplayName)
+	}
+}
+
+// TestCorruptLineSettingsAreRejected verifies that a stored Line that does not
+// satisfy the domain contract is never handed to a caller. A row that was
+// modified outside the Hub must fail instead of reaching a client
+// configuration.
+func TestCorruptLineSettingsAreRejected(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	edge := createEdgeNode(t, s, now)
+	configureLine(t, s, edge, "line-a", now)
+
+	// An IP address is not a valid REALITY server name. The write path never
+	// stores such a value, so the row is corrupted on purpose.
+	if _, err := s.db.Exec(`UPDATE line_settings SET server_name=? WHERE node_id=?`, "203.0.113.7", edge); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.getLine(edge)
+	if err == nil {
+		t.Fatal("corrupt line was returned by getLine")
+	}
+	if !hasErrorCode(err, "LINE_SETTINGS_CORRUPT") {
+		t.Fatalf("error %q does not carry code LINE_SETTINGS_CORRUPT", err)
+	}
+	if _, err := s.listLines(); err == nil {
+		t.Fatal("corrupt line was returned by listLines")
+	} else if !hasErrorCode(err, "LINE_SETTINGS_CORRUPT") {
+		t.Fatalf("error %q does not carry code LINE_SETTINGS_CORRUPT", err)
+	}
+}
+
 func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	edge := createEdgeNode(t, s, now)
