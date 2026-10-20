@@ -295,6 +295,22 @@ func (r *Runtime) systemdProperties(ctx context.Context) (systemdProperties, err
 	return props, nil
 }
 
+// TransientReadback reports whether a live-readback failure looks like a
+// kernel that has not finished starting yet: the process is absent, still
+// the systemd-executor supervisor, or listening nowhere yet. Anything else
+// (config bytes, ownership, hashes, table content) is deterministic and must
+// fail fast instead of being mistaken for slowness.
+func TransientReadback(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SINGBOX_NOT_RUNNING") ||
+		strings.Contains(msg, "SINGBOX_SUPERVISOR_STARTING") ||
+		strings.Contains(msg, "SINGBOX_PID_CHANGED") ||
+		strings.Contains(msg, "LISTENER_")
+}
+
 func (r *Runtime) verifyListeners(ctx context.Context, pid, port int) error {
 	output, err := r.runner.Run(ctx, ssPath, "-H", "-lntup")
 	if err != nil {

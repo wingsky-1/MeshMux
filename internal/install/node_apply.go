@@ -1220,7 +1220,7 @@ func pollNodeReadback(ctx context.Context, opts NodeApplyOptions, cfg node.Confi
 			return readback, nil
 		}
 		last = err
-		if !nodeReadbackRetriable(err) || time.Now().After(deadline) {
+		if !node.TransientReadback(err) || time.Now().After(deadline) {
 			return node.Readback{}, last
 		}
 		select {
@@ -1229,19 +1229,6 @@ func pollNodeReadback(ctx context.Context, opts NodeApplyOptions, cfg node.Confi
 		case <-time.After(2 * time.Second):
 		}
 	}
-}
-
-// nodeReadbackRetriable reports whether a live-readback failure looks like a
-// kernel that has not finished starting yet: the process is absent, still
-// the systemd-executor supervisor, or listening nowhere yet. Anything else
-// (config bytes, ownership, hashes, table content) is deterministic and
-// fails immediately.
-func nodeReadbackRetriable(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "SINGBOX_NOT_RUNNING") ||
-		strings.Contains(msg, "SINGBOX_PID_CHANGED") ||
-		strings.Contains(msg, "SINGBOX_SUPERVISOR_STARTING") ||
-		strings.Contains(msg, "LISTENER_")
 }
 
 // nodeFileOwnedBy checks exact UID and group ownership. It is only used for

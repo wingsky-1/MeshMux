@@ -277,6 +277,40 @@ func TestReadbackStartupConfigMismatchRejected(t *testing.T) {
 // MainPID can transiently be the systemd-executor supervisor that has not
 // execed into sing-box yet. That is "not running yet", never a wrong
 // binary, so it gets its own code that the installer retries.
+// TestTransientReadbackSignals pins which live-readback failures may be
+// retried: only the kernel-still-starting signals. Anything deterministic
+// must fail fast instead of burning the startup budget.
+func TestTransientReadbackSignals(t *testing.T) {
+	transient := []string{
+		"SINGBOX_NOT_RUNNING",
+		"SINGBOX_SUPERVISOR_STARTING",
+		"SINGBOX_PID_CHANGED",
+		"LISTENER_PID_PORT_MISMATCH",
+		"LISTENER_QUERY_FAILED",
+	}
+	for _, code := range transient {
+		if !TransientReadback(errors.New(code)) {
+			t.Errorf("%s should be retriable", code)
+		}
+	}
+	deterministic := []string{
+		"ACTIVE_CONFIG_MISMATCH",
+		"AGENT_EXECUTABLE_MISMATCH",
+		"SINGBOX_RUNNING_BINARY_MISMATCH",
+		"OUT_DEFAULT_DENY_MISSING",
+		"HOST_REJECTED",
+		"",
+	}
+	for _, code := range deterministic {
+		if TransientReadback(errors.New(code)) {
+			t.Errorf("%q should fail fast", code)
+		}
+	}
+	if TransientReadback(nil) {
+		t.Error("nil error should fail fast")
+	}
+}
+
 func TestReadbackSupervisorStartingIsDistinct(t *testing.T) {
 	root, cfg, _, runner := createRuntimeFixture(t, RoleEdge, 7)
 	exePath := filepath.Join(root, "proc", strconv.Itoa(runner.pid), "exe")

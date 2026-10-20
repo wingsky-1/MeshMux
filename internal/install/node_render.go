@@ -143,9 +143,9 @@ ProtectControlGroups=true
 ReadOnlyPaths=/var/lib/meshmux-singbox/config.json
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-// AF_NETLINK stays allowed: sing-box enumerates interfaces and routes at
-// startup, and denying it kills the kernel under this unit (seen as a
-// crashloop with no stable MainPID on slow hosts).
+# AF_NETLINK stays allowed: sing-box enumerates interfaces and routes at
+# startup, and denying it kills the kernel under this unit (seen as a
+# crashloop with no stable MainPID on slow hosts).
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 StandardOutput=journal
 StandardError=journal

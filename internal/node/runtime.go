@@ -262,7 +262,18 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	if err = writeStageAtomic(r.root, stagedConfigPath(r.root, document.Revision), configData); err != nil {
 		return err
 	}
-	readback, err := r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData))
+	// The kernel may still be starting (systemd runs Agent and kernel
+	// concurrently with no ordering between them). Poll a bounded number of
+	// times for startup-transient signals; anything deterministic fails fast
+	// so a broken data plane is never mistaken for a slow one.
+	var readback Readback
+	for i := 0; ; i++ {
+		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData))
+		if err == nil || !TransientReadback(err) || i >= 29 {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
 	if err != nil {
 		return err
 	}

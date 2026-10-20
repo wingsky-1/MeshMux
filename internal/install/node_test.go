@@ -269,6 +269,17 @@ func TestNodeUnitsKeepRoleDependenciesAndSandboxPathsPrecise(t *testing.T) {
 	if !strings.Contains(aclUnit, "Before=meshmux-sing-box.service\n") {
 		t.Fatalf("ACL ordering missing:\n%s", aclUnit)
 	}
+	for name, body := range map[string]string{"agent": agent, "edge kernel": edgeKernel, "out kernel": outKernel} {
+		for _, line := range strings.Split(body, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				t.Fatalf("%s unit uses // comments, which systemd ignores with warnings; use #:\n%s", name, body)
+			}
+		}
+	}
+	if !strings.Contains(edgeKernel, "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n") ||
+		!strings.Contains(outKernel, "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n") {
+		t.Fatalf("kernel unit must keep AF_NETLINK: sing-box enumerates interfaces at startup:\n%s\n%s", edgeKernel, outKernel)
+	}
 	aclFile, exists := out[node.ACLPath]
 	if !exists || aclFile.Static || aclFile.Body != "" {
 		t.Fatalf("ACL path is not a dynamic-only managed entry: %+v", aclFile)
