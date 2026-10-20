@@ -48,7 +48,7 @@ func TestRealityKeyValidationRejectsMismatchAndZero(t *testing.T) {
 	if err = validateRealityKeyPair(zero, zero); err == nil {
 		t.Fatal("zero REALITY key accepted")
 	}
-	for _, key := range []string{
+	for index, key := range []string{
 		"",
 		first.PrivateKey[:42],
 		first.PrivateKey + "=",
@@ -57,10 +57,10 @@ func TestRealityKeyValidationRejectsMismatchAndZero(t *testing.T) {
 		strings.Repeat("A", 42),
 	} {
 		if err = validateRealityKeyPair(key, first.PublicKey); err == nil {
-			t.Fatalf("malformed private key accepted: %q", key)
+			t.Fatalf("malformed private key accepted in case %d", index)
 		}
 		if err = validateRealityKeyPair(first.PrivateKey, key); err == nil {
-			t.Fatalf("malformed public key accepted: %q", key)
+			t.Fatalf("malformed public key accepted in case %d", index)
 		}
 	}
 }

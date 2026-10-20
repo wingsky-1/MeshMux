@@ -14,7 +14,7 @@ func TestNewTokenHasFullEntropyShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(token) != 48 || strings.ContainsAny(token, "=+/") {
-		t.Fatalf("token is not 48-character unpadded base64url: %q", token)
+		t.Fatalf("token is not 48-character unpadded base64url (length %d)", len(token))
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil || len(raw) != 36 {
