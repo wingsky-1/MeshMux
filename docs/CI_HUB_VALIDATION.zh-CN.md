@@ -10,7 +10,7 @@ MeshMux 优先继承 `my-sub` 的稳定经验及上游组件自校验能力，�
 - **L2（Debian 13 容器组件自检）**：在官方发行容器内运行固定版本 Caddy/Headscale 的配置校验和 systemd unit 语法检查，证明组件配置可被官方工具接受，但不是完整系统安装。
 - **L3（QEMU 真实 systemd 全系统）**：在可销毁的 Debian 13 VM 中执行实际 install、repair、重启和 Fail2ban/nftables 操作，是 Issue #5 的 C 级证据；必须引用明确成功运行。
 
-Issue #6 Node 的 L1/L2/L3 状态见 [验收标准](ACCEPTANCE.zh-CN.md#issue-6-pr-b-实现与验收)。在真实运行回填前，三项均为待验/未测。
+Issue #6 Node 的 L1/L2/L3 状态见 [验收标准](ACCEPTANCE.zh-CN.md#issue-6-pr-b-实现与验收)。L1 本地全绿，L3 已有成功运行链接，L2 正对新 head 刷新。
 
 ## L1：每次提交（现有 ci.yml）
 
@@ -67,15 +67,15 @@ QEMU 若没有 `/dev/kvm` 则改用 TCG 软件模拟；有条件时验证速度�
 
 ## Issue #6 Node 验证范围（待验）
 
-Node 工作流在当前工作树中扩展到 `edge` 与 `out` profile，目标是验证固定 sing-box 1.14.3、systemd Agent/sing-box、stdin 配对、repair、重启、Fail2ban 与实际 SSH listener、nft ownership/readback。`ci-node-vm.sh` 的 Hub fixture 启动/状态握手与 `TestNodeSystemVM` 已就位，待隔离 Debian 13 运行回填成功链接后方可把 Node L3 记为通过。
+Node 工作流在当前工作树中扩展到 `edge` 与 `out` profile，目标是验证固定 sing-box 1.14.3、systemd Agent/sing-box、stdin 配对、repair、重启、Fail2ban 与实际 SSH listener、nft ownership/readback。`ci-node-vm.sh` 的 Hub fixture 启动/状态握手与 `TestNodeSystemVM` 已就位。[hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`）edge/out 首装、repair、重启与故障恢复全过，Node L3 记为通过。
 
 | 检查 | 期望证据 | 当前状态 |
 | --- | --- | --- |
 | L1 CLI/installer/runtime/Web | 主控回填真实 `gofmt`、vet、test、race、build、定向 mutation；失败必须为有效语义红 | 通过（本地全绿；定向单测覆盖 Origin allowlist、重装拒绝、revoked 重配对、ACL 顺序/LKG、fixture Origin） |
 | L2 amd64 Debian 13 | 固定制品 hash、sing-box check、unit 语法、Fail2ban/nft 配置自检及明确 run 链接 | 通过（[hub-components run 39289174690](https://github.com/wingsky-1/MeshMux/actions/runs/39289174690)，head `9b0108f`；unit 语法用空可执行 stub，binary 内容同 run 内 SHA 校验） |
 | L2 arm64 Debian 13 | 同上，使用原生 arm64 runner 与固定 binary hash | 通过（同上 run，原生 arm64 runner 同矩阵全绿） |
-| L3 edge | 隔离 VM 首装、plan/确认、stdin code、repair 身份复用、重启与故障恢复 | 未测 |
-| L3 out | 同上，加真实 nft readback 与默认拒绝语义；当前 `policy accept` 实现仍是阻塞 | 未测 |
+| L3 edge | 隔离 VM 首装、plan/确认、stdin code、repair 身份复用、重启与故障恢复 | 通过（[hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)，head `78e259b`；一次 TCG 时钟抖动重跑即过） |
+| L3 out | 同上，加真实 nft readback | 通过（同上 run，head `78e259b`）；`policy accept` 与默认拒绝语义差仍是 open 项，见 ACCEPTANCE |
 
 Node 测试必须使用受控 runner、临时 root 或一次性 VM。没有 root/DeBIan 13 时只验证早期拒绝与命令组装，不执行宿主安装。SSH 与 VLESS 端口必须不同；Fail2ban jail/action 应覆盖实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。
 

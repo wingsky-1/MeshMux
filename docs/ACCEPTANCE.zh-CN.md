@@ -42,7 +42,7 @@
 
 ## Issue #6 PR-B 实现与验收
 
-PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当前工作树，PR-A 已本地 ff 合入 `adb7558`。以下勾选必须等待主控给出真实运行结果后回填；当前没有 PR-B CI 链接，源码存在、定向测试通过或 plan 成功都不能替代全仓与隔离宿主机验收。
+PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当前工作树，PR-A 已本地 ff 合入 `adb7558`。以下勾选必须等待主控给出真实运行结果后回填；L3 已有成功运行链接（L2 正对新 head 刷新），源码存在、定向测试通过或 plan 成功都不能替代全仓与隔离宿主机验收。
 
 | 层级 | 待验范围 | 状态 |
 | --- | --- | --- |
@@ -50,10 +50,10 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当�
 | L1 | installer state/owned paths、check/stage/apply/readback、runtime LKG/journal、Web 离线与固定 recheck/reissue | [x] 本地全绿（install 85 PASS/0 FAIL/4 门禁 SKIP；web/node/cmd 全过；install race 无 DATA RACE） |
 | L2 | Debian 13 amd64 固定 sing-box 1.14.3、systemd unit、Fail2ban/nft 配置自检 | [x] [hub-components run 39289174690](https://github.com/wingsky-1/MeshMux/actions/runs/39289174690)（head `9b0108f`）：releases.tsv pin、archive+binary SHA、unit verify、nft -c、fail2ban -t、candidate jq 全过；unit 语法用空可执行 stub 校验，binary 内容同 run 内 SHA 校验 |
 | L2 | Debian 13 arm64 固定制品与组件配置自检 | [x] 同上 run，原生 arm64 runner，同矩阵同步骤全绿 |
-| L3 | 隔离 Debian 13 VM 的 edge/out 首装、repair、重启、故障恢复、实际 SSH/VLESS 端口与 Fail2ban/nft 行为 | [ ] 未测 |
+| L3 | 隔离 Debian 13 VM 的 edge/out 首装、repair、重启、故障恢复、实际 SSH/VLESS 端口与 Fail2ban/nft 行为 | [x] [hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`，tree `e35fc88`）：edge/out/hub 三 job 全 success；edge 含一次 TCG 时钟 `TIME_UNSYNCED` 抖动，重跑即过 |
 
 - [x] **全仓自动化**：本地 `gofmt` 干净、`go vet ./...` 通过、`go build ./...` 通过；`go test` 分包全过（product/agent 52、node 46、install 85、web 56、cmd 三包 68），`go test -race` 全过（install/web/node/cmd 及 product/agent/webcmd 五包 120，无 DATA RACE）。
-- [ ] **PR-B CI**：L2 已有成功运行链接（见上，head `9b0108f`，`verify/issue6-node-vm-prb`）；L3 edge/out 待成功 run，链接到位后回填。后续链接必须指向对应 head，并说明该 head 的 Git tree。
+- [x] **PR-B CI（L3）**：[hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`，tree `e35fc88`，`verify/issue6-node-vm-prb`）edge/out/hub 全 success。L2 仍指向旧 head `9b0108f`，新 head L2 [hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917) 已触发，待回填。后续链接必须指向对应 head，并说明该 head 的 Git tree。
 - [ ] **L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；本阶段 baseline 无 TLS/REALITY、无用户、无订阅，#7 未实现。
 - [ ] **Out ACL 语义**：当前源码为 `policy accept` 加目标 VLESS TCP/UDP drop，和“空授权默认拒绝、仅目标端口可用”的验收要求不一致；必须先修正并有真实 nft readback/流量证据。
 - [ ] **自定义端口**：SSH 与 VLESS 端口必须不同；Fail2ban jail/action 必须覆盖全部实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。该结论待 L2/L3 实测。
