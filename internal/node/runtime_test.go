@@ -273,6 +273,25 @@ func TestReadbackStartupConfigMismatchRejected(t *testing.T) {
 	}
 }
 
+// TestReadbackSupervisorStartingIsDistinct pins the systemd 257 case: the
+// MainPID can transiently be the systemd-executor supervisor that has not
+// execed into sing-box yet. That is "not running yet", never a wrong
+// binary, so it gets its own code that the installer retries.
+func TestReadbackSupervisorStartingIsDistinct(t *testing.T) {
+	root, cfg, _, runner := createRuntimeFixture(t, RoleEdge, 7)
+	exePath := filepath.Join(root, "proc", strconv.Itoa(runner.pid), "exe")
+	if err := os.Remove(exePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/lib/systemd/systemd-executor", exePath); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadbackLocal(context.Background(), cfg, root, runner)
+	if err == nil || !strings.Contains(err.Error(), "SINGBOX_SUPERVISOR_STARTING") {
+		t.Fatalf("supervisor exe readback = %v", err)
+	}
+}
+
 func TestOutACLRequiresExactRulePairs(t *testing.T) {
 	root, cfg, _, runner := createRuntimeFixture(t, RoleOut, 7)
 	cfg.Role = RoleOut

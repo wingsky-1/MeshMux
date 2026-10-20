@@ -1191,12 +1191,15 @@ func pollNodeReadback(ctx context.Context, opts NodeApplyOptions, cfg node.Confi
 }
 
 // nodeReadbackRetriable reports whether a live-readback failure looks like a
-// kernel that has not finished starting yet. Anything else (config bytes,
-// ownership, hashes, table content) is deterministic and fails immediately.
+// kernel that has not finished starting yet: the process is absent, still
+// the systemd-executor supervisor, or listening nowhere yet. Anything else
+// (config bytes, ownership, hashes, table content) is deterministic and
+// fails immediately.
 func nodeReadbackRetriable(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "SINGBOX_NOT_RUNNING") ||
 		strings.Contains(msg, "SINGBOX_PID_CHANGED") ||
+		strings.Contains(msg, "SINGBOX_SUPERVISOR_STARTING") ||
 		strings.Contains(msg, "LISTENER_")
 }
 

@@ -65,6 +65,19 @@ func hashPrefix(h string) string {
 	return h
 }
 
+// exeIsSupervisor reports whether a PID is still the systemd executor that
+// has not execed into the service binary yet. systemd 257 forks
+// systemd-executor per service to apply sandboxing before exec; catching it
+// means "not running yet", never "wrong binary".
+func exeIsSupervisor(pid int, procRoot string) bool {
+	target := runningExecutableTarget(pid, procRoot)
+	base := target
+	if i := strings.LastIndex(target, "/"); i >= 0 {
+		base = target[i+1:]
+	}
+	return strings.HasPrefix(base, "systemd-executor")
+}
+
 func processRunning(pid int) bool {
 	if pid < 1 {
 		return false

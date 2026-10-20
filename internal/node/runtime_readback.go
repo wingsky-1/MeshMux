@@ -165,8 +165,19 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 	if err = r.verifyUnitExecStart(ctx); err != nil {
 		return Readback{}, err
 	}
+	// systemd 257 forks a systemd-executor supervisor that only later execs
+	// into the service binary. Catching it mid-setup is not a wrong binary,
+	// it is a kernel that has not finished starting. Checked before hashing
+	// so a supervisor link that no longer resolves still reports starting,
+	// not unreadable.
+	if exeIsSupervisor(props.MainPID, r.procRoot) {
+		return Readback{}, errors.New("SINGBOX_SUPERVISOR_STARTING")
+	}
 	kernelHash, err := runningExecutableHash(props.MainPID, r.procRoot)
-	if err != nil || kernelHash != r.cfg.KernelSHA256 {
+	if err != nil {
+		return Readback{}, err
+	}
+	if kernelHash != r.cfg.KernelSHA256 {
 		return Readback{}, fmt.Errorf("SINGBOX_RUNNING_BINARY_MISMATCH exe=%s running=%s want=%s",
 			runningExecutableTarget(props.MainPID, r.procRoot), hashPrefix(kernelHash), hashPrefix(r.cfg.KernelSHA256))
 	}

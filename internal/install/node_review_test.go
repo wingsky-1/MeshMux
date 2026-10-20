@@ -260,8 +260,13 @@ func TestNodeReadbackRetriesSlowKernelStart(t *testing.T) {
 	valid := f.opts.Readback
 	f.opts.Readback = func(ctx context.Context, cfg node.Config, root string, runner node.CommandRunner) (node.Readback, error) {
 		calls++
-		if calls < 3 {
+		// First the process is absent, then it is briefly the
+		// systemd-executor supervisor, then sing-box is serving.
+		if calls == 1 {
 			return node.Readback{}, errors.New("SINGBOX_NOT_RUNNING")
+		}
+		if calls == 2 {
+			return node.Readback{}, errors.New("SINGBOX_SUPERVISOR_STARTING")
 		}
 		return valid(ctx, cfg, root, runner)
 	}
