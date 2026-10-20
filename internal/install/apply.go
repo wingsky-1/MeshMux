@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
 const (
@@ -48,6 +50,9 @@ type InstallState struct {
 	ErrorCode     string            "json:\"error_code,omitempty\""
 	Recovery      string            "json:\"recovery,omitempty\""
 	LastOperation string            "json:\"last_operation_id,omitempty\""
+	// Node is present only when this host layout is a Line or Out node.
+	// Hub configurations remain byte-for-byte compatible when this is nil.
+	Node *node.Config `json:"node,omitempty"`
 }
 
 type InstallResult struct {

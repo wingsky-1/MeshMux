@@ -2,9 +2,16 @@
 
 本表为**规划目标而非实现状态**。**P0 = 首个正式可发布版本 v1.0.0 必须验收**；**P1 = v1.0.0 之后**再由 Issue/PR 安排。功能实现和产品发行是两回事，单个 PR 不等于一个 Release。
 
-## 当前实现（Issue #2 与 Issue #5 PR A）
+## 当前实现与验收边界
 
-Web 单管理员认证、安全会话、SQLite 迁移、基础控制台已提供隔离验收入口；业务页面仅空状态。Caddy/systemd/Fail2ban 为候选配置，真实安装与封禁未验收。Issue #5 PR A 提供 Debian 13 环境只读预检、计划、官方 Caddy/Headscale 制品 SHA-256 锁与未应用的服务候选配置；不提供 apply。详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)。下表仍是发行目标。
+- **Web 基座**：单管理员认证、安全会话、SQLite、基础控制台和节点工作区已提供隔离验收入口。
+- **Hub 安装**：Issue #5 的 Hub `--plan`、确认后 apply、`--repair`、受管文件台账与有限恢复已合并，并有 L1/L2/L3 amd64 自动化证据；仍不是正式发行包。
+- **Line / Out（PR-B 实现中）**：`meshmux install edge|out`、真实 preflight、固定制品、stdin 配对码、systemd Agent/sing-box、state/owned paths、structured partial/failed 与有限 LKG 恢复已写入当前工作树；尚未完成全仓和隔离 Debian 13 验收，尚无 PR-B CI 链接。
+- **Node baseline**：sing-box VLESS 候选的 `users` 为空，没有 TLS/REALITY、代理用户、客户端凭据或订阅；#7 未实现。当前没有证据证明公网可达、真实协议握手或客户端可用。
+- **Out**：安装产物可选；当前 ACL 实现仍为 `policy accept` 加 VLESS 目标端口 TCP/UDP drop，尚未满足“空授权时默认全拒绝，仅目标端口可用”的验收语义。
+- **独立阶段**：#8、#9 不在本轮实现范围；#11 Web 全节点统一升级仍是 v1.0.0 P0，但不属于本轮实现或验收。
+
+详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)、[Hub 安装](INSTALL_HUB.zh-CN.md) 与 [Line / Out 安装](INSTALL_NODE.zh-CN.md)。下表仍是发行目标，不是 PR-B 的验收结论。
 
 ## P0：v1.0.0 最小可用闭环
 
@@ -12,8 +19,8 @@ Web 单管理员认证、安全会话、SQLite 迁移、基础控制台已提供
 | --- | --- | --- |
 | 安装 | Debian 13 amd64/arm64；Hub / Line / Out 宿主机 `install` | 干净 VM 能重复安装，错误有阶段与恢复方案 |
 | 管理 | Hub 单管理员 Web、数据库、HTTPS；Out 可不部署 | 不依赖 Zero Trust；单机 Hub+Line、多 Line、可选 Out 都能工作 |
-| 纳管 | Web 一次性配对，Line/Out 安装后 Agent 主动 HTTPS 连接；节点状态与展示名 | 目标机只需 install；权限可吊销，非法任务拒绝 |
-| 代理 | 固定 sing-box 1.14.3，VLESS/REALITY 入站，自定义监听端口，Line 生命周期 | 客户端可真正连接；节点停用/删除配置可验证 |
+| 纳管 | Web 一次性配对，Line/Out 安装后 Agent 主动 HTTPS 连接；节点状态与展示名 | 目标机只需 install；身份可重签/撤销，非法任务拒绝 |
+| 代理 | 固定 sing-box 1.14.3，VLESS/REALITY 入站，自定义监听端口，Line 生命周期 | 用户/凭据与订阅在 #7 闭环后，客户端可真正连接；当前 baseline 不满足此项 |
 | 聚合 | 多 Line 线路选择、命名、标准订阅导出 sing-box / Mihomo | 客户端导入成功，新增 Line 按选择更新配置 |
 | 订阅 | 用户创建、禁用、删除，精确撤销跨节点 VLESS 凭据与下载 Token | 旧 URL 不可下载；删除时部分失败不假完成 |
 | Mesh | Headscale 注册/注销、Mesh-only、独立子网路由及路由批准 | 无代理订阅的 NAS 可以入网并实际路由 |
@@ -21,7 +28,7 @@ Web 单管理员认证、安全会话、SQLite 迁移、基础控制台已提供
 | 分流 | Web 配置客户端 CN/国际/Tailnet/DNS 与服务端域名/IP/规则集；AI Line→Out 或 Line 直出 | 不存在 Out 不生成无效配置；Out 出错默认不泄漏回退出口 |
 | 基本诊断 | 节点/任务日志、固定错误码、必要的公网端口与协议健康检查 | 出错能辨别主机监听、云安全组、代理握手与 Mesh 问题 |
 | 安全 | 单管理员认证/CSRF/限速；SSH + Web Fail2ban；端口与防火墙一致 | 匿名拒绝；暴力登录和异常来源安全处理 |
-| 安全 | 节点独立身份、最小权限、Out ACL、高熵 Token、日志脱敏 | 无任意 Shell，Out 默认拒绝，Token 可轮换/撤销 |
+| 安全 | 节点独立身份、受限权限（实际边界待 Debian 13 VM 验证）、Out ACL、高熵 Token、日志脱敏 | 无任意 Shell；Out 空授权默认拒绝且仅目标端口可用；Token 可轮换/撤销 |
 | 可靠性 | 版本固定与哈希验证；配置 check / stage / apply / readback / rollback | 错误配置不覆盖已验证版本，部分失败可重试 |
 | 统一升级（#11） | Web 逐节点升级 MeshMux Hub/Line/Out 及发行包内经过兼容验证的固定组件，持久化任务、版本回读、失败回退 | 不需日常 SSH/CLI 完成已支持版本升级；部分失败明确报告，不声称跨节点原子事务 |
 
@@ -38,6 +45,6 @@ Web 单管理员认证、安全会话、SQLite 迁移、基础控制台已提供
 ## 不变量与质量底线
 
 - **Subscriber ≠ Mesh Device ≠ VLESS Credential**，订阅用户和 Mesh 设备可分别创建/删除。
-- Out 可选，且 AI 规则可明确选择 Line 直出；配置了 Out 时该 Out 故障默认 fail-closed，不会静默直出。
+- Out 可选，且 AI 规则可明确选择 Line 直出；配置了 Out 时该 Out 故障默认 fail-closed，不会静默直出。当前 Out ACL 的 `policy accept` 边界必须在上线前修正并实测。
 - 编辑路由或删除用户前生成可审阅配置，失败不能报告完成。
 - “安全优先”意味着保留必要测试和失败回滚，不引入不必要的架构、审批链或不相关功能。

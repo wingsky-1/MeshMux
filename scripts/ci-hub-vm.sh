@@ -16,15 +16,36 @@ disk="$work/disk.qcow2"
 key="$work/id_ed25519"
 seed="$work/seed.iso"
 serial="$work/serial.log"
+redacted_serial="$work/serial.redacted.log"
 pid=''
+redact_serial() {
+  if [[ ! -f "$serial" ]]; then
+    return 0
+  fi
+  awk '
+    /-----BEGIN [^-]+-----/ { in_key=1; print "<redacted private key>"; next }
+    in_key && /-----END [^-]+-----/ { in_key=0; next }
+    in_key { next }
+    { print }
+  ' "$serial" |
+    sed -E \
+      -e '/(database|sqlite|identity|credential|pairing|token|secret|password|private|code)/I s#.*#<redacted sensitive diagnostic line>#' \
+      -e 's#(pairing[_-]?code|token|secret|password|private[_-]?key|code)([=: ]+)[^[:space:]]+#\1\2<redacted>#Ig' \
+      -e 's#[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}#<redacted-uuid>#Ig' \
+      -e 's#[A-Za-z0-9_+/-]{24,}#<redacted>#g' \
+      -e 's#https?://[^[:space:]]+#<redacted-url>#Ig' |
+    tail -200 >"$redacted_serial"
+  chmod 600 "$redacted_serial"
+}
 cleanup() {
   if [[ -n "$pid" ]]; then
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   fi
+  redact_serial || true
 }
 trap cleanup EXIT
-trap 'echo "VM test failed; serial console tail follows:"; tail -100 "$serial" || true' ERR
+trap 'redact_serial || true; echo "VM test failed; redacted serial console tail follows:"; tail -100 "$redacted_serial" 2>/dev/null || true' ERR
 
 echo 'Downloading official pinned Debian 13 cloud image'
 curl -fL --retry 3 --connect-timeout 15 --max-time 320 \

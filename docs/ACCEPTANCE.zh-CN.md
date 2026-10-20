@@ -28,11 +28,37 @@
 
 ## Issue #5 Hub 安装器拆分验收
 
-- [ ] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
-- [ ] **PR B 安装事务与回归（L1/B 级，已实现，仍受 L3 门禁约束）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、受管文件台账回滚一致性、apt 查询优先、健康探针 303/禁止重定向语义、Web Fail2ban 默认禁用与 `--direct-caddy` 启用、RFC3339Nano 日期模式，均有 Go 测试覆盖；非 22 SSH Fail2ban 与 nftables 的真实系统行为仍需 L3 证明。
-- [ ] **PR B 全系统验收（C 级，阻断 #5 关闭与 #6 接口消费）**：L3 尚未在本次修复后重跑；真实 systemd 安装、重启恢复、故障回滚、Caddy 真实 ACME/TLS、Headscale DERP/STUN 与 nftables 互不干扰尚无新的成功证据。`hub-vm` 已配置为安装器相关 PR 自动触发，但必须以成功运行链接为准，不能以 workflow 已存在或 L1/L2 绿灯代替。arm64 宿主机、公网 ACME/TLS、云防火墙和跨 NAT DERP/STUN 仍未测试，保持 pending。
+- [x] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
+- [x] **PR B 安装事务与回归（L1/B 级）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、受管文件台账回滚一致性、apt 查询优先、健康探针 303/禁止重定向语义、Web Fail2ban 默认禁用与 `--direct-caddy` 启用、RFC3339Nano 日期模式，均有 Go 测试覆盖。[Go/web run 39216454974](https://github.com/wingsky-1/MeshMux/actions/runs/39216454974) 与 [Debian 13 组件 run 39216454901](https://github.com/wingsky-1/MeshMux/actions/runs/39216454901) 均为 head `c5be00c` PASS；该 head 的树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 相同。
+- [x] **PR B 全系统验收（C 级，amd64 自动化门禁）**：[L3 QEMU/systemd run 39216454882](https://github.com/wingsky-1/MeshMux/actions/runs/39216454882) 于 head `c5be00c` PASS，`internal/install/vm_test` 覆盖真实 systemd 服务与监听、本机内部证书 TLS 探针（非真实公网 ACME）、重启持久化、故障回滚以及 Fail2ban/nftables ban/unban；run head 的 Git 树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 完全相同，Hub 接口可被 #6 消费。#5 已关闭。
+- [ ] **PR B 外部环境边界**：arm64 宿主机 L3、真实公网 ACME/TLS、云防火墙入站以及真实 DERP/STUN 跨 NAT 握手仍未测试，保持 pending；不得扩展宣称全平台或生产环境验收完成。
 
 阶段说明见 [Hub 安装](INSTALL_HUB.zh-CN.md)；单测与模板字符串校验不能代替服务实际健康或公网可达。
+
+## Issue #6 PR-A 本地验收
+
+- [x] **PR-A 本地验收（A/L1）**：Agent 严格协议、配对、任务状态与持久化边界，以及 Web 节点基础能力已由主控完成本地验收；完整 race、格式与 diff check 通过，浏览器复核完成，关键协议、迁移和 Web mutation 证据见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md)。
+- [ ] **PR-A 远端 CI**：当前无新的远端 CI 结论；不得用本地 L1 结果替代远端流水线或 L2/L3 宿主机安装验收。
+
+## Issue #6 PR-B 实现与验收
+
+PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当前工作树，PR-A 已本地 ff 合入 `adb7558`。以下勾选必须等待主控给出真实运行结果后回填；L3 已有成功运行链接（L2 正对新 head 刷新），源码存在、定向测试通过或 plan 成功都不能替代全仓与隔离宿主机验收。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| L1 | `cmd/meshmux` 命令边界、stdin 配对码、确认/预检失败无副作用、repair 身份复用、structured partial/failed 与内部版本探针 | [x] 本地全绿（gofmt/vet/build/`go test` 分包/`-race`，见下） |
+| L1 | installer state/owned paths、check/stage/apply/readback、runtime LKG/journal、Web 离线与固定 recheck/reissue | [x] 本地全绿（install 85 PASS/0 FAIL/4 门禁 SKIP；web/node/cmd 全过；install race 无 DATA RACE） |
+| L2 | Debian 13 amd64 固定 sing-box 1.14.3、systemd unit、Fail2ban/nft 配置自检 | [x] [hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)（head `78e259b`，tree `e35fc88`）：releases.tsv pin、archive+binary SHA、unit verify、nft -c、fail2ban -t、candidate jq 全过；unit 语法用空可执行 stub 校验，binary 内容同 run 内 SHA 校验（含 DAC cap 与时钟 poll 后的 unit） |
+| L2 | Debian 13 arm64 固定制品与组件配置自检 | [x] 同上 run（head `78e259b`），原生 arm64 runner，同矩阵同步骤全绿 |
+| L3 | 隔离 Debian 13 VM 的 edge/out 首装、repair、重启、故障恢复、实际 SSH/VLESS 端口与 Fail2ban/nft 行为 | [x] [hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`，tree `e35fc88`）：edge/out/hub 三 job 全 success；edge 含一次 TCG 时钟 `TIME_UNSYNCED` 抖动，重跑即过 |
+
+- [x] **全仓自动化**：本地 `gofmt` 干净、`go vet ./...` 通过、`go build ./...` 通过；`go test` 分包全过（product/agent 52、node 46、install 85、web 56、cmd 三包 68），`go test -race` 全过（install/web/node/cmd 及 product/agent/webcmd 五包 120，无 DATA RACE）。
+- [x] **PR-B CI**：L2 [hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)（head `78e259b`，tree `e35fc88`）amd64/arm64 全绿；L3 [hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（同 head/tree）edge/out/hub 全 success。后续链接必须指向对应 head，并说明该 head 的 Git tree。
+- [ ] **L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；本阶段 baseline 无 TLS/REALITY、无用户、无订阅，#7 未实现。
+- [ ] **Out ACL 语义**：当前源码为 `policy accept` 加目标 VLESS TCP/UDP drop，和“空授权默认拒绝、仅目标端口可用”的验收要求不一致；必须先修正并有真实 nft readback/流量证据。
+- [ ] **自定义端口**：SSH 与 VLESS 端口必须不同；Fail2ban jail/action 必须覆盖全部实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。该结论待 L2/L3 实测。
+
+实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#8、#9 与 #11 不在本轮验收范围，#11 仍是 v1.0.0 P0。
 
 ## v1.0.0 必须完成的真实用户闭环
 

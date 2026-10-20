@@ -3,10 +3,14 @@ on:
   pull_request:
     paths:
       - 'internal/install/**'
+      - 'internal/node/**'
+      - 'internal/agent/**'
+      - 'internal/web/**'
       - 'cmd/meshmux/**'
       - 'cmd/meshmux-web/**'
       - '.github/workflows/hub-components.yml'
       - 'scripts/ci-hub-components.sh'
+      - 'scripts/ci-node-components.sh'
   workflow_dispatch:
 
 permissions:
@@ -31,6 +35,7 @@ jobs:
         run: |
           mkdir -p .ci/bin
           go test -c -o .ci/bin/install.test ./internal/install
+          go test -c -o .ci/bin/web.test ./internal/web
           go build -o .ci/bin/meshmux-web ./cmd/meshmux-web
           go build -o .ci/bin/meshmux ./cmd/meshmux
           (cd .ci/bin && sha256sum meshmux > SHA256SUMS)
@@ -40,6 +45,13 @@ jobs:
             -v "$PWD:/workspace" \
             -w /workspace \
             debian:13 bash /workspace/scripts/ci-hub-components.sh
+      - name: Debian 13 Node component configuration checks (Issue #6 PR-B L2)
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            --privileged \
+            debian:13 bash /workspace/scripts/ci-node-components.sh
       - name: Upload reviewable installer and source-bound checksum
         uses: actions/upload-artifact@v4
         with:

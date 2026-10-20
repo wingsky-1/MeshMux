@@ -6,9 +6,13 @@ on:
   pull_request:
     paths:
       - 'internal/install/**'
+      - 'internal/node/**'
+      - 'internal/agent/**'
+      - 'internal/web/**'
       - 'cmd/meshmux/**'
       - 'cmd/meshmux-web/**'
       - 'scripts/ci-hub-vm.sh'
+      - 'scripts/ci-node-vm.sh'
       - '.github/workflows/hub-vm.yml'
       - 'docs/CI_HUB_VALIDATION.zh-CN.md'
       - 'docs/ACCEPTANCE.zh-CN.md'
@@ -23,15 +27,29 @@ on:
   push:
     branches:
       - 'verify/issue5-hub-vm-*'
+      - 'verify/issue6-node-vm-*'
 
 permissions:
   contents: read
 
 jobs:
   debian13-systemd:
-    name: Debian 13 QEMU systemd full install
+    name: Debian 13 QEMU ${{ matrix.profile }} full install
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: hub
+            timeout: 45
+            artifact: hub-vm-serial
+          - profile: edge
+            timeout: 60
+            artifact: edge-vm-serial
+          - profile: out
+            timeout: 60
+            artifact: out-vm-serial
     steps:
       - name: Checkout verified ref
         uses: actions/checkout@v4
@@ -46,18 +64,23 @@ jobs:
           mkdir -p .ci/bin
           CGO_ENABLED=0 go build -o .ci/bin/meshmux ./cmd/meshmux
           go test -c -o .ci/bin/install.test ./internal/install
+          go test -c -o .ci/bin/web.test ./internal/web
       - name: Install QEMU and cloud-init image tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             qemu-system-x86 qemu-utils cloud-image-utils openssh-client
-      - name: Boot official Debian 13 and verify Hub install, repair and reboot
+      - name: Verify Hub on a fresh official Debian 13 VM
+        if: matrix.profile == 'hub'
         run: bash scripts/ci-hub-vm.sh
-      - name: Keep VM serial console on failure
+      - name: Verify ${{ matrix.profile }} Node on a fresh official Debian 13 VM
+        if: matrix.profile != 'hub'
+        run: bash scripts/ci-node-vm.sh '${{ matrix.profile }}'
+      - name: Keep redacted VM serial console on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: hub-vm-serial
-          path: ${{ runner.temp }}/meshmux-hub-vm/serial.log
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/meshmux-${{ matrix.profile }}-vm/serial.redacted.log
           retention-days: 7
           if-no-files-found: warn

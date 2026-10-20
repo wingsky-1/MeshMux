@@ -12,8 +12,8 @@ func TestCLIRejectsUnsupportedRolesAndCommands(t *testing.T) {
 		want int
 	}{
 		{[]string{"install", "hub"}, 2},
-		{[]string{"install", "edge"}, 3},
-		{[]string{"install", "out"}, 3},
+		{[]string{"install", "edge"}, 2},
+		{[]string{"install", "out"}, 2},
 		{[]string{"install", "nas"}, 2},
 		{[]string{"update"}, 2},
 		{[]string{"install"}, 2},
@@ -23,9 +23,8 @@ func TestCLIRejectsUnsupportedRolesAndCommands(t *testing.T) {
 		if got := run(tc.args, &b); got != tc.want {
 			t.Fatalf("run(%v)=%d, want %d", tc.args, got, tc.want)
 		}
-		if len(tc.args) == 2 && tc.args[0] == "install" && tc.want == 3 &&
-			!strings.Contains(b.String(), "NOT READY TO INSTALL") {
-			t.Fatalf("missing safety notice for %v", tc.args)
+		if strings.Contains(b.String(), "NOT READY TO INSTALL") {
+			t.Fatalf("obsolete installation notice for %v", tc.args)
 		}
 	}
 }

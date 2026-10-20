@@ -5,16 +5,24 @@ package webcmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/web"
 )
 
@@ -30,6 +38,11 @@ func Run(args []string) int {
 	flags.BoolVar(&c.DirectProxy, "direct-caddy", false, "trust the dedicated client IP header from a directly exposed local Caddy")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return 2
+	}
+	if !c.DevHTTP {
+		if origin, err := url.Parse(c.Origin); err == nil && origin.Scheme == "https" {
+			c.InstallArtifact = discoverInstallArtifact()
+		}
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 		if a.Key == slog.TimeKey && len(groups) == 0 {
@@ -76,4 +89,45 @@ func Run(args []string) int {
 	}
 	logger.Info("web_stopped", "stage", "shutdown", "error_code", "WEB_STOPPED")
 	return 0
+}
+
+// discoverInstallArtifact exposes only the currently running installed CLI.
+// The standalone web development command has no matching install runtime.
+func discoverInstallArtifact() *web.InstallArtifact {
+	info, ok := debug.ReadBuildInfo()
+	const cliPackage = "github.com/wingsky-1/MeshMux/cmd/meshmux"
+	if !ok || info.Path != cliPackage || strings.Contains(info.Main.Version, "meshmux-web") {
+		return nil
+	}
+	path, err := os.Executable()
+	if err != nil || !isTrustedLocalExecutable(path) {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	sum := sha256.New()
+	n, err := io.Copy(sum, io.LimitReader(f, 128<<20+1))
+	if err != nil || n > 128<<20 || n < 1 {
+		return nil
+	}
+	if _, ok := node.KernelReleaseFor(runtime.GOARCH); !ok {
+		return nil
+	}
+	return &web.InstallArtifact{
+		Path:         path,
+		Version:      node.CurrentAgentVersion,
+		Architecture: runtime.GOARCH,
+		SHA256:       hex.EncodeToString(sum.Sum(nil)),
+	}
+}
+
+func isTrustedLocalExecutable(path string) bool {
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return false
+	}
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0
 }

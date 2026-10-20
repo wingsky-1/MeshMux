@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
 type Artifact struct {
@@ -36,8 +38,26 @@ var artifacts = map[string][]Artifact{
 	},
 }
 
+// Node artifacts are kept separate from the Hub allowlist. Extending the
+// shared verifier must not make a Node kernel acceptable to Hub installs.
+var nodeArtifacts = map[string][]Artifact{
+	"amd64": {
+		{Component: "sing-box", Version: node.KernelVersion, Source: "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz", SHA256: "e2bdf179c15a3652955dc44867e33ca0965c9c9b91b34267dcc5a5d639a5feee", Format: "tar.gz"},
+	},
+	"arm64": {
+		{Component: "sing-box", Version: node.KernelVersion, Source: "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-arm64.tar.gz", SHA256: "29dae24d76bea3bc62d07dd3e60cfc12003de7debbd6b768df9be9c68360174e", Format: "tar.gz"},
+	},
+}
+
 func PinnedArtifacts(arch string) []Artifact {
 	a := artifacts[arch]
+	out := make([]Artifact, len(a))
+	copy(out, a)
+	return out
+}
+
+func PinnedNodeArtifacts(arch string) []Artifact {
+	a := nodeArtifacts[arch]
 	out := make([]Artifact, len(a))
 	copy(out, a)
 	return out
@@ -75,14 +95,7 @@ func DownloadVerified(ctx context.Context, client *http.Client, a Artifact, dir 
 	if !validDigest.MatchString(a.SHA256) || a.Source == "" {
 		return "", errors.New("ARTIFACT_MANIFEST_INVALID")
 	}
-	found := false
-	for _, list := range artifacts {
-		for _, pinned := range list {
-			if pinned == a {
-				found = true
-			}
-		}
-	}
+	found := trustedArtifact(a)
 	if !found {
 		return "", errors.New("ARTIFACT_SOURCE_UNTRUSTED")
 	}
@@ -136,4 +149,17 @@ func DownloadVerified(ctx context.Context, client *http.Client, a Artifact, dir 
 		return "", errors.New("ARTIFACT_STAGE_FAILED")
 	}
 	return final, nil
+}
+
+func trustedArtifact(a Artifact) bool {
+	for _, manifests := range []map[string][]Artifact{artifacts, nodeArtifacts} {
+		for _, list := range manifests {
+			for _, pinned := range list {
+				if pinned == a {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
