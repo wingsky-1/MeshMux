@@ -72,7 +72,14 @@ func TestNodeSystemVM(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("fixture status produced an invalid Node config: %v", err)
 	}
-	opts := NodeApplyOptions{Root: "/", Runner: ExecRunner{}, Executable: "/tmp/meshmux"}
+	// The meshmux binary path defaults to the QEMU guest layout and can be
+	// relocated for harnesses (e.g. a systemd container where /tmp is a
+	// tmpfs that docker cp cannot populate from outside the mount ns).
+	meshmuxBin := os.Getenv("MESHMUX_NODE_MESHMUX_BIN")
+	if meshmuxBin == "" {
+		meshmuxBin = "/tmp/meshmux"
+	}
+	opts := NodeApplyOptions{Root: "/", Runner: ExecRunner{}, Executable: meshmuxBin}
 	switch phase {
 	case "install":
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)

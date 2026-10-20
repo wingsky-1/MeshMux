@@ -517,6 +517,12 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	} else if _, err := opts.Runner.Run(ctx, "fail2ban-client", "reload"); err != nil {
 		return failVerifiedPartial(result, state, opts, record, "verify", "FAIL2BAN_RELOAD_FAILED", "Review Fail2ban logs and preserve existing jails.")
 	}
+	// The daemon answers fail2ban-client only after its socket exists and the
+	// jail is loaded. Querying immediately after (re)start loses with exit
+	// 255 on fast hosts, so wait for the jail to become queryable first.
+	if err := waitFail2banJail(ctx, opts.Runner); err != nil {
+		return failVerifiedPartial(result, state, opts, record, "verify", "FAIL2BAN_START_FAILED", "The Fail2ban service never became queryable; inspect the service and run --repair.")
+	}
 	if err := verifyNodeSSHJail(ctx, opts.Runner, installedCfg.SSHPort); err != nil {
 		return failVerifiedPartial(result, state, opts, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
 	}
@@ -993,6 +999,31 @@ func usedPackage(packages []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// fail2banReadyTimeout/Interval bound the wait for the daemon socket and
+// our jail after (re)start. Tests shrink them; production uses the defaults.
+var fail2banReadyTimeout = 30 * time.Second
+var fail2banReadyInterval = time.Second
+
+// waitFail2banJail blocks until our jail answers queries. `enable --now` and
+// `reload` return before the daemon recreates its socket and loads the jail,
+// so an immediate readback fails with exit 255 on fast hosts.
+func waitFail2banJail(ctx context.Context, runner CommandRunner) error {
+	deadline := time.Now().Add(fail2banReadyTimeout)
+	for {
+		if _, err := runner.Run(ctx, "fail2ban-client", "status", "meshmux-node-sshd"); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("FAIL2BAN_JAIL_UNAVAILABLE")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(fail2banReadyInterval):
+		}
+	}
 }
 
 func verifyNodeSSHJail(ctx context.Context, runner CommandRunner, ssh ...int) error {

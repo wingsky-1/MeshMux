@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
@@ -283,6 +284,42 @@ func TestNodeRepairPreservesRecordedBinaryHashes(t *testing.T) {
 // Agent must be a copy of: a real install compares against itself, while an
 // explicit Executable (the VM harness stages /tmp/meshmux from install.test)
 // compares against that binary instead of the test driver.
+// TestNodeFail2banJailWaitRetriesSlowDaemon pins the startup race: right
+// after enable/reload the daemon socket may not answer yet, so the first
+// jail status probe fails and the installer waits instead of failing the
+// readback with exit 255.
+func TestNodeFail2banJailWaitRetriesSlowDaemon(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	f.runner.failCall = "status meshmux-node-sshd"
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err != nil || result.Status != "installed" {
+		t.Fatalf("slow fail2ban start = %+v %v", result, err)
+	}
+}
+
+// failNeverRunner always fails; used to prove the jail wait gives up.
+type failNeverRunner struct{ calls int }
+
+func (f *failNeverRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	f.calls++
+	return nil, errors.New("daemon down")
+}
+
+// TestNodeFail2banJailWaitTimesOut pins the bound: a daemon that never
+// answers fails the install instead of blocking forever.
+func TestNodeFail2banJailWaitTimesOut(t *testing.T) {
+	oldTimeout, oldInterval := fail2banReadyTimeout, fail2banReadyInterval
+	fail2banReadyTimeout, fail2banReadyInterval = 60*time.Millisecond, 5*time.Millisecond
+	defer func() { fail2banReadyTimeout, fail2banReadyInterval = oldTimeout, oldInterval }()
+	r := &failNeverRunner{}
+	if err := waitFail2banJail(context.Background(), r); err == nil {
+		t.Fatal("dead daemon was accepted as ready")
+	}
+	if r.calls < 2 {
+		t.Fatalf("waited only %d probe(s), want retries", r.calls)
+	}
+}
+
 func TestNodeAgentReferencePinsStagedBinary(t *testing.T) {
 	if got := nodeAgentReference(""); got != "/proc/self/exe" {
 		t.Fatalf("empty executable resolved to %q", got)
