@@ -238,6 +238,47 @@ func TestNodeFileOwnedByBoundary(t *testing.T) {
 	}
 }
 
+// TestNodeRepairPreservesRecordedBinaryHashes pins the ledger invariant
+// behind repair preflight: after the first install records the verified
+// binary hashes, a repair must not wipe them back to the hashless user
+// config, otherwise the next repair cannot recognize its own kernel
+// listener and fails with PORT_CONFLICT.
+func TestNodeRepairPreservesRecordedBinaryHashes(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	if _, err := f.install(t, false, strings.Repeat("A", 43)); err != nil {
+		t.Fatalf("first install failed: %v", err)
+	}
+	compiled, err := node.CompileCandidate(f.candidate.Candidate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiledHash := sha256.Sum256(compiled)
+	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
+		return node.Readback{
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
+			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 7,
+			ConfigSHA256: hex.EncodeToString(compiledHash[:]), LocalActive: true,
+		}, nil
+	}
+	recorded, exists, err := ReadState(f.root)
+	if err != nil || !exists || recorded.Node == nil || recorded.Node.KernelSHA256 == "" {
+		t.Fatalf("first install did not record kernel hash: %+v %v", recorded.Node, err)
+	}
+	if _, err := f.install(t, true, ""); err != nil {
+		t.Fatalf("repair failed: %v", err)
+	}
+	after, exists, err := ReadState(f.root)
+	if err != nil || !exists || after.Node == nil {
+		t.Fatalf("repair lost the node record: %+v %v", after.Node, err)
+	}
+	if after.Node.KernelSHA256 != recorded.Node.KernelSHA256 || after.Node.AgentSHA256 != recorded.Node.AgentSHA256 {
+		t.Fatalf("repair wiped recorded hashes: was %q/%q, now %q/%q",
+			recorded.Node.KernelSHA256, recorded.Node.AgentSHA256,
+			after.Node.KernelSHA256, after.Node.AgentSHA256)
+	}
+}
+
 // TestNodeAgentReferencePinsStagedBinary pins which executable the staged
 // Agent must be a copy of: a real install compares against itself, while an
 // explicit Executable (the VM harness stages /tmp/meshmux from install.test)

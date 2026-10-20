@@ -207,7 +207,17 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	state.OperationID, state.LastOperation = operationID, operationID
 	state.Status, state.Stage = "installing", "stage"
 	state.Config = Config{}
-	state.Node = cloneNodeConfig(&cfg)
+	// The recorded Node carries the verified binary hashes after the first
+	// install. A repair must not wipe them back to the hashless user config,
+	// otherwise the next repair preflight cannot recognize its own kernel
+	// listener and fails with PORT_CONFLICT.
+	// The recorded Node carries the verified binary hashes after the first
+	// install. A repair must not wipe them back to the hashless user config,
+	// otherwise the next repair preflight cannot recognize its own kernel
+	// listener and fails with PORT_CONFLICT.
+	if !hasState || state.Node == nil {
+		state.Node = cloneNodeConfig(&cfg)
+	}
 	state.Artifacts["sing-box"] = artifacts[0].SHA256
 	state.Architecture, state.SSHPorts, state.ErrorCode, state.Recovery = architecture, sortedInts(sshPorts), "", ""
 	state.UpdatedAt = now
