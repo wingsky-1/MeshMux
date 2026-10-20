@@ -184,7 +184,7 @@ func requireNodeListeners(t *testing.T, ctx context.Context, runner ExecRunner, 
 	if err != nil || !strings.Contains(string(out), ":"+strconv.Itoa(cfg.VLESSPort)) {
 		t.Fatal("VLESS TCP listener missing")
 	}
-	out, err = runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "port")
+	out, err = runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "port")
 	if err != nil || !strings.Contains(string(out), strconv.Itoa(cfg.SSHPort)) {
 		t.Fatalf("SSH jail does not cover %d", cfg.SSHPort)
 	}
