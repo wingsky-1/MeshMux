@@ -767,8 +767,9 @@ func boundedDetail(data []byte) string {
 	}
 	compact = make(map[string]json.RawMessage)
 	for _, key := range []string{
-		"active_revision", "agent_sha256", "agent_version",
+		"active_revision", "agent_sha256", "agent_version", "architecture",
 		"config_sha256", "kernel_sha256", "kernel_version", "local_active",
+		"out_default_deny",
 	} {
 		if value, ok := full[key]; ok {
 			compact[key] = value
