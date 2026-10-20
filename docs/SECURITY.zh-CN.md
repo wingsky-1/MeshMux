@@ -4,7 +4,7 @@
 
 - 外网：Caddy HTTPS 是唯一 Hub Web 入口；Web Go HTTP 服务必须以非 root 身份监听 loopback。
 - Web：单管理员（无自助注册），强密码哈希（Argon2id），服务端会话、Secure/HttpOnly/SameSite cookie，精确 Origin + CSRF 验证，身份失败限速及注销/失效。
-- Privilege boundary：Web API 不直接执行 root 命令；通过固定 schema/allowlist 的特权执行器或 Agent 权限边界访问 systemd、Headscale 与 sing-box；不得提供任意 Shell、下载 URL、进程参数或文件路径。Node Agent 实际为受限 root，只允许固定任务/路径/argv；独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行。不能把该 Agent 描述为 unprivileged。Agent 的 systemd capability 集合为 `CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE`；其中 `CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash。权限边界和该 capability 的真实必要性仍需 Debian 13 VM 验证，当前不宣称已证明全部权限最小。
+- Privilege boundary：Web API 不直接执行 root 命令；通过固定 schema/allowlist 的特权执行器或 Agent 权限边界访问 systemd、Headscale 与 sing-box；不得提供任意 Shell、下载 URL、进程参数或文件路径。Node Agent 实际为受限 root，只允许固定任务/路径/argv；独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行。不能把该 Agent 描述为 unprivileged。Agent 的 systemd capability 集合为 `CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE`；其中 `CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash，`CAP_DAC_READ_SEARCH` 用于 `ss -p` 解析非 root 进程的监听映射（无 `CAP_DAC_OVERRIDE`）。权限边界和该 capability 的真实必要性仍需 Debian 13 VM 验证，当前不宣称已证明全部权限最小。
 - Node pairing：短期一次性注册码仅首次使用，可信 TLS 验证，配对后升级为节点专属可轮换和可吊销身份，所有任务携带单调修订/超时/审计 ID。用户 CLI 的 `edge|out` 不接受 pairing-code/token flag；43 字符 code 只在 plan 与确认后从 stdin 单行读取，并只传给安装调用，不写入 argv、URL、Node config、InstallState、日志或结果输出。
 - Auth secrets、数据库、Headscale 身份及 REALITY 私钥保持本地 0600 root/服务账户边界，备份加密、可恢复，不在公开 Git、诊断包或通用日志中。
 

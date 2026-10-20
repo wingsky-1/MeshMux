@@ -40,7 +40,7 @@ Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本�
 
 ## 4. Technology Architecture — 技术
 
-Go 1.27.2、Debian 13、单一 Web/API Hub、Caddy HTTPS、SQLite、轻量后台任务、Headscale 0.29.5、sing-box 1.14.3、systemd、nftables、Fail2ban、结构化 slog。Web 层优先 chi + templ/HTMX，但仅在使用时引入依赖并固定其版本；初始脚手架只有 Go 标准库。Agent systemd unit 使用 root，并仅保留 `CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE` 的 capability bounding/ambient 集合；`CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash。该权限边界仍需真实 Debian 13 VM 验证，当前不能宣称所有权限已经最小化验收。
+Go 1.27.2、Debian 13、单一 Web/API Hub、Caddy HTTPS、SQLite、轻量后台任务、Headscale 0.29.5、sing-box 1.14.3、systemd、nftables、Fail2ban、结构化 slog。Web 层优先 chi + templ/HTMX，但仅在使用时引入依赖并固定其版本；初始脚手架只有 Go 标准库。Agent systemd unit 使用 root，并仅保留 `CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE` 的 capability bounding/ambient 集合；`CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash，`CAP_DAC_READ_SEARCH` 用于 `ss -p` 解析非 root sing-box 的 `/proc/PID/fd` 监听映射（无 `CAP_DAC_OVERRIDE`）。该权限边界仍需真实 Debian 13 VM 验证，当前不能宣称所有权限已经最小化验收。
 
 ~~~mermaid
 flowchart LR

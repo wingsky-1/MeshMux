@@ -98,9 +98,10 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 ReadWritePaths=/var/lib/meshmux-agent /var/lib/meshmux-singbox
 ReadOnlyPaths=/etc/meshmux/agent.json /usr/local/libexec/meshmuxd /usr/local/libexec/meshmux-sing-box
-# Required only to read /proc/PID/exe and cmdline of the non-root sing-box process.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE
-AmbientCapabilities=CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE
+# ss -p must resolve the non-root sing-box PID via /proc/PID/fd, which needs
+# DAC_READ_SEARCH; exe/cmdline also needs SYS_PTRACE. No DAC_OVERRIDE.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 StandardOutput=journal
 StandardError=journal

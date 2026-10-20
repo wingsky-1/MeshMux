@@ -252,9 +252,9 @@ func TestNodeUnitsKeepRoleDependenciesAndSandboxPathsPrecise(t *testing.T) {
 		strings.Contains(agent, "/run/nftables") {
 		t.Fatalf("Agent sandbox has overbroad or missing paths:\n%s", agent)
 	}
-	if !strings.Contains(agent, "CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE\n") ||
-		!strings.Contains(agent, "AmbientCapabilities=CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE\n") {
-		t.Fatalf("Agent lacks the minimum process-read capability required for live exe/cmdline verification:\n%s", agent)
+	if !strings.Contains(agent, "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE\n") ||
+		!strings.Contains(agent, "AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE\n") {
+		t.Fatalf("Agent lacks the minimum process-read capability required for live exe/cmdline/ss verification:\n%s", agent)
 	}
 	edgeKernel := edge["/etc/systemd/system/"+node.SingBoxUnit].Body
 	if strings.Contains(edgeKernel, "Requires=meshmux-out-acl.service") || strings.Contains(edgeKernel, "After=meshmux-out-acl.service") {
