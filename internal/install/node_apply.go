@@ -1036,7 +1036,10 @@ func parseFail2banPorts(output string) ([]int, error) {
 	return ports, nil
 }
 
-var fail2banDportPattern = regexp.MustCompile(`dport\s+(?:\{([^}]*)\}|([0-9]+))`)
+// Real fail2ban 1.1.0 actionstart commands shell-escape the set braces
+// (dport \{ ... \}), while older output used bare braces. Accept both so
+// the readback works against the daemon instead of only the L1 fake.
+var fail2banDportPattern = regexp.MustCompile(`dport\s+(?:\\?\{([^}]*)\}|([0-9]+))`)
 var fail2banInteger = regexp.MustCompile(`\b[0-9]+\b`)
 
 func parseFail2banActionPorts(output string) ([]int, error) {

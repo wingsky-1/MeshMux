@@ -73,7 +73,9 @@ func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]
 		}
 		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
 			args[2] == "action" && args[3] == "nftables-multiport" && args[4] == "actionstart" {
-			return []byte("nft -- add rule inet f2b-table f2b-chain tcp dport { 2222 } ip saddr @addr-set-meshmux-node-sshd reject\n"), nil
+			// Real fail2ban 1.1.0 shell-escapes the set braces; the L1 fake
+			// uses the exact daemon format so the readback is validated.
+			return []byte("nft add rule inet f2b-table f2b-chain $proto dport \\{ $(echo '2222' | sed s/:/-/g) \\} <addr_family> saddr @<addr_set> reject\n"), nil
 		}
 	case "systemctl":
 		if len(args) > 1 && args[0] == "show" && strings.Contains(call, node.SingBoxUnit) {
@@ -414,6 +416,7 @@ func TestParseFail2banSSHPortSets(t *testing.T) {
 	}{
 		{"debian-13-multiport", "2200,2222\n", "nft add rule inet f2b-table f2b-chain tcp dport { 2200, 2222 } ip saddr @addr-set-meshmux-node-sshd reject\n", []int{2200, 2222}},
 		{"single-action-port", "2222", "tcp dport 2222 ip saddr @addr-set-meshmux-node-sshd reject", []int{2222}},
+		{"real-1.1.0-actionstart", "22", "nft add rule inet f2b-table f2b-chain $proto dport \\{ $(echo '22' | sed s/:/-/g) \\} <addr_family> saddr @<addr_set> reject", []int{22}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gotPorts, err := parseFail2banPorts(tc.ports)
