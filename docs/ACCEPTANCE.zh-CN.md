@@ -67,10 +67,10 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 - [x] PR-A（已合入）：独立模型、SQLite schema 4、哈希 Token、逐 Line UUID、严格 v2 REALITY 与 v1 编译兼容、合法空用户；主控独立检出 gofmt/vet/test（435）/race/build 全通过。合并 `3f9ffb3`，head `3789a3a`、tree `0f13577`。
 - [x] PR-A：固定 sing-box 1.14.3 check、合法空用户、正确/错误/删除 UUID 的 REALITY 握手；[hub-vm 39382159464](https://github.com/wingsky-1/MeshMux/actions/runs/39382159464) 的 Edge/Out job 实际执行 native check 与三类 UUID 握手 PASS（主控已检查日志）。这是隔离 VM 自动化结果，不是公网或客户端可用证据。
 - [x] PR-A：当前 head 对应 L2 amd64/arm64 与隔离 Debian 13 QEMU 全 success：[ci 39382159453](https://github.com/wingsky-1/MeshMux/actions/runs/39382159453)、[hub-components 39382159461](https://github.com/wingsky-1/MeshMux/actions/runs/39382159461)、[hub-vm 39382159464](https://github.com/wingsky-1/MeshMux/actions/runs/39382159464)；证据只覆盖上述 head/tree，不复用 #6。
-- [ ] PR-B（分支未验收）：Web 增停删、线路选择/改名/排序、两种标准订阅真实导入、Token 撤销/轮换、跨 Line partial 与幂等重试、精确 readback。代码在分支 `verify/issue7-sub-lifecycle`：`22282ae`（Web 生命周期/双格式下载）、`563c7ca`（同步证据与 fan-out）、`db3e887`（全链收敛与注入时钟）；本地 `go test ./...` 558 通过、`-race` 4 包 381 通过，评审通过。缺：拆分后的 PR CI、双客户端导入 CI（本地两个测试 SKIP，无外置二进制）、真实 VM。
-- [ ] PR-C（分支未验收）：Hub 兼任 Line、独立安装台账与恢复、零 Out 端到端隔离 VM 证据。代码在 `3bda4ed`（有效 Line 台账用于 repair/预检）；本地 558/race 381 通过，评审通过。缺：PR CI 与隔离 VM；`local_line_vm_test.go` 尚不存在。
+- [x] PR-B（已合入）：Web 增停删、线路选择/改名/排序、两种标准订阅真实导入、Token 撤销/轮换、跨 Line partial 与幂等重试、精确 readback。合并 `c8033ab`（PR #21），head `452450e`。CI 全绿：[go 39425886188](https://github.com/wingsky-1/MeshMux/actions/runs/39425886188)、[components 39425886175](https://github.com/wingsky-1/MeshMux/actions/runs/39425886175)（amd64/arm64）、[subscription-clients 39425886213](https://github.com/wingsky-1/MeshMux/actions/runs/39425886213)（amd64/arm64 双架构真实导入+数据面）、[hub-vm 39425886103](https://github.com/wingsky-1/MeshMux/actions/runs/39425886103)（hub/edge/out 全 success）；证据只覆盖上述 head。独立评审 R1/R2/R4/R5/R6 通过。
+- [x] PR-C（已合入）：Hub 兼任 Line、独立安装台账与恢复、零 Out 端到端隔离 VM 证据。合并 `983b1bc`（PR #22），head `1327b2b`。CI 全绿：[go 39434860540](https://github.com/wingsky-1/MeshMux/actions/runs/39434860540)、[components 39434860624](https://github.com/wingsky-1/MeshMux/actions/runs/39434860624)（amd64/arm64）、[hub-vm 39434860336](https://github.com/wingsky-1/MeshMux/actions/runs/39434860336)（hub/edge/out 全 success；hub job 内 `TestLocalLineSystemVM` install phase 真跑 110s PASS、reboot 后 post-reboot PASS，`Co-located Line full-system acceptance PASS`）。独立评审 R3/R7/R8 通过。
 
-真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。PR-A 证据只覆盖其 head/tree；Issue #7 仍 OPEN，PR-B/PR-C 尚未拆分开 PR、未合入 `main`。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
+真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。各 PR 证据只覆盖其 head。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
 
 ## v1.0.0 必须完成的真实用户闭环
 
