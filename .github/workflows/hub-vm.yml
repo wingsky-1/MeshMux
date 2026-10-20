@@ -43,7 +43,7 @@ jobs:
       matrix:
         include:
           - profile: hub
-            timeout: 45
+            timeout: 75
             artifact: hub-vm-serial
           - profile: edge
             timeout: 60
