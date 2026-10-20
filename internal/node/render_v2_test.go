@@ -371,9 +371,9 @@ func TestCompileCandidateV2LargeUserSetIsDeterministicAndBounded(t *testing.T) {
 	if string(document) != string(other) {
 		t.Fatal("the rendered candidate depends on the credential order")
 	}
-	renderedUsers := renderedUsers(t, renderedInbound(t, document))
-	if len(renderedUsers) != maxCandidateUsers {
-		t.Fatalf("rendered %d users, want %d", len(renderedUsers), maxCandidateUsers)
+	largeUsers := renderedUsers(t, renderedInbound(t, document))
+	if len(largeUsers) != maxCandidateUsers {
+		t.Fatalf("rendered %d users, want %d", len(largeUsers), maxCandidateUsers)
 	}
 }
 
