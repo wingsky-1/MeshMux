@@ -42,9 +42,9 @@ func runInternalAgentVersion(args []string, stdout, stderr io.Writer) int {
 // a host-mutating call.
 type nodeRunner interface {
 	PreflightNode(context.Context, node.Config, bool) ([]install.Check, []int)
-	BuildNodePlan(string, node.Config, string, []install.Check, []int) install.NodePlan
+	BuildNodePlanForRoot(string, string, node.Config, string, []install.Check, []int) install.NodePlan
 	InstallNode(context.Context, node.Config, string, bool, string, install.NodeApplyOptions) (install.InstallResult, error)
-	ReadState(string) (install.InstallState, bool, error)
+	ReadNodeState(string) (install.InstallState, bool, error)
 }
 
 type productionNodeRunner struct{}
@@ -53,16 +53,18 @@ func (productionNodeRunner) PreflightNode(ctx context.Context, cfg node.Config, 
 	return install.PreflightNode(ctx, cfg, allowManaged)
 }
 
-func (productionNodeRunner) BuildNodePlan(id string, cfg node.Config, architecture string, checks []install.Check, ssh []int) install.NodePlan {
-	return install.BuildNodePlan(id, cfg, architecture, checks, ssh)
+func (productionNodeRunner) BuildNodePlanForRoot(root, id string, cfg node.Config, architecture string, checks []install.Check, ssh []int) install.NodePlan {
+	return install.BuildNodePlanForRoot(root, id, cfg, architecture, checks, ssh)
 }
 
 func (productionNodeRunner) InstallNode(ctx context.Context, cfg node.Config, operationID string, repair bool, pairingCode string, opts install.NodeApplyOptions) (install.InstallResult, error) {
 	return install.InstallNode(ctx, cfg, operationID, repair, pairingCode, opts)
 }
 
-func (productionNodeRunner) ReadState(root string) (install.InstallState, bool, error) {
-	return install.ReadState(root)
+// ReadNodeState reads the Node ledger this host actually owns. On a
+// co-located Hub host that is the local-Line ledger, never the Hub ledger.
+func (productionNodeRunner) ReadNodeState(root string) (install.InstallState, bool, error) {
+	return install.ReadNodeState(root)
 }
 
 type agentService interface {
@@ -102,9 +104,14 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		return 2
 	}
 
-	state, exists, err := runner.ReadState("/")
+	state, exists, err := runner.ReadNodeState("/")
 	if err != nil {
-		fmt.Fprintln(stderr, "INSTALL_STATE_INVALID: inspect the recorded installer state; do not delete application data")
+		code := "INSTALL_STATE_INVALID"
+		var ie *install.InstallError
+		if errors.As(err, &ie) && ie.Code != "" {
+			code = ie.Code
+		}
+		fmt.Fprintf(stderr, "%s: inspect the recorded installer state; do not delete application data\n", code)
 		return 1
 	}
 	if *repair && (!exists || state.Node == nil) {
@@ -124,7 +131,7 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	ctx, cancel := context.WithTimeout(context.Background(), nodePlanTimeout)
 	checks, sshPorts := runner.PreflightNode(ctx, cfg, state.Node != nil)
 	cancel()
-	plan := runner.BuildNodePlan(operationID, cfg, runtime.GOARCH, checks, sshPorts)
+	plan := runner.BuildNodePlanForRoot("/", operationID, cfg, runtime.GOARCH, checks, sshPorts)
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(plan); err != nil {

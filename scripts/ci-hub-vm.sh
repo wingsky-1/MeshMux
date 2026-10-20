@@ -128,3 +128,22 @@ scp_vm .ci/bin/install.test /tmp/install.test
 ssh_vm "sudo chmod 755 /tmp/install.test"
 ssh_vm 'sudo env MESHMUX_HUB_SYSTEM_VM=1 MESHMUX_HUB_SYSTEM_PHASE=post-reboot /tmp/install.test -test.run "^TestHubSystemVM$" -test.timeout=10m -test.v'
 echo 'Hub Debian 13 full-system installation/restart/recovery acceptance PASS'
+
+# Co-located Line lifecycle (Issue #7 PR-C). Runs only after the Hub itself
+# is verified above. Phase 1 installs a local Line through the real Web
+# pairing flow and proves the Hub ledger, pins and services survive; then the
+# guest really reboots and phase 2 proves both ledgers persist.
+ssh_vm 'sudo env MESHMUX_LOCAL_LINE_VM=1 MESHMUX_LOCAL_LINE_PHASE=install /tmp/install.test -test.run "^TestLocalLineSystemVM$" -test.timeout=30m -test.v'
+boot_before_line="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
+ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
+sleep 8
+wait_ssh
+boot_after_line="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
+if [[ "$boot_before_line" == "$boot_after_line" ]]; then
+  echo 'VM did not actually reboot before local-Line post-reboot; refusing to count persistence as verified' >&2
+  exit 1
+fi
+scp_vm .ci/bin/install.test /tmp/install.test
+ssh_vm "sudo chmod 755 /tmp/install.test"
+ssh_vm 'sudo env MESHMUX_LOCAL_LINE_VM=1 MESHMUX_LOCAL_LINE_PHASE=post-reboot /tmp/install.test -test.run "^TestLocalLineSystemVM$" -test.timeout=10m -test.v'
+echo 'Co-located Line full-system installation/restart/recovery acceptance PASS'

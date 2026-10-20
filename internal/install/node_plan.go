@@ -54,20 +54,24 @@ type NodeApplyOptions struct {
 }
 
 type NodePlan struct {
-	OperationID     string             `json:"operation_id"`
-	Stage           string             `json:"stage"`
-	Status          string             `json:"status"`
-	OS              string             `json:"os"`
-	Architecture    string             `json:"architecture"`
-	Config          node.Config        `json:"config"`
-	Checks          []Check            `json:"checks"`
-	Artifacts       []Artifact         `json:"artifacts"`
-	Components      []Component        `json:"components"`
-	Ports           []Port             `json:"ports"`
-	Units           []string           `json:"systemd_units"`
-	Paths           []string           `json:"managed_paths"`
-	SSHPPorts       []int              `json:"ssh_listening_ports,omitempty"`
-	ACLTable        string             `json:"acl_table,omitempty"`
+	OperationID  string      `json:"operation_id"`
+	Stage        string      `json:"stage"`
+	Status       string      `json:"status"`
+	OS           string      `json:"os"`
+	Architecture string      `json:"architecture"`
+	Config       node.Config `json:"config"`
+	Checks       []Check     `json:"checks"`
+	Artifacts    []Artifact  `json:"artifacts"`
+	Components   []Component `json:"components"`
+	Ports        []Port      `json:"ports"`
+	Units        []string    `json:"systemd_units"`
+	Paths        []string    `json:"managed_paths"`
+	SSHPPorts    []int       `json:"ssh_listening_ports,omitempty"`
+	ACLTable     string      `json:"acl_table,omitempty"`
+	// ReusedPaths lists fixed paths this Node operation proves and uses but
+	// never writes. A co-located Line reuses the Hub-owned runtime binary
+	// and the Hub's Fail2ban SSH jail, so neither appears in Paths.
+	ReusedPaths     []string           `json:"reused_paths,omitempty"`
 	ApplyAvailable  bool               `json:"apply_available"`
 	NextAction      string             `json:"next_action"`
 	ExternalPending []string           `json:"external_checks_pending,omitempty"`
@@ -75,14 +79,17 @@ type NodePlan struct {
 }
 
 func PreflightNode(ctx context.Context, cfg node.Config, allowManaged bool) ([]Check, []int) {
-	return preflightNode(ctx, cfg, allowManaged, ExecRunner{})
+	return preflightNode(ctx, cfg, allowManaged, "/", ExecRunner{})
 }
 
-func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, runner CommandRunner) ([]Check, []int) {
+func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, root string, runner CommandRunner) ([]Check, []int) {
+	if runner == nil {
+		runner = ExecRunner{}
+	}
 	var checks []Check
 	checks = append(checks, check("node_config", "CONFIG_INVALID", "Supply a valid HTTPS Hub URL, node identity, role, VLESS port and SSH port.", cfg.Validate()))
 	osErr := errors.New("os-release unavailable")
-	if data, err := os.ReadFile("/etc/os-release"); err == nil {
+	if data, err := os.ReadFile(rooted(root, "/etc/os-release")); err == nil {
 		osErr = nil
 		if !osSupported(string(data)) {
 			osErr = errors.New("not Debian 13")
@@ -123,7 +130,7 @@ func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, runn
 	checks = append(checks, check("system_roots", "CA_BUNDLE_UNAVAILABLE", "Install and populate ca-certificates before pairing.", caErr))
 
 	checks = append(checks, nodeHTTPSPreflight(ctx, cfg.HubURL))
-	checks = append(checks, nodePortPreflight(ctx, cfg, allowManaged)...)
+	checks = append(checks, nodePortPreflight(ctx, cfg, allowManaged, root, runner)...)
 	ssh, sshErr := sshPortsWithRunner(ctx, runner)
 	if sshErr == nil && !containsPort(ssh, cfg.SSHPort) {
 		sshErr = errors.New("configured SSH port is not an actual listener")
@@ -138,7 +145,7 @@ func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, runn
 	nftPackage := packageAvailability(ctx, runner, "nftables")
 	checks = append(checks, nftPackage)
 	if nftPackage.Detail == "installed" {
-		checks = append(checks, nodeTableOwnership(ctx, runner, cfg, allowManaged).checkName("out_acl_table"))
+		checks = append(checks, nodeTableOwnership(ctx, root, runner, cfg, allowManaged).checkName("out_acl_table"))
 	} else {
 		checks = append(checks, Check{
 			Name: "out_acl_table", Status: "pending", Code: "PACKAGE_INSTALL_PENDING",
@@ -180,6 +187,38 @@ func waitForClockSync(ctx context.Context, runner CommandRunner) error {
 }
 
 func BuildNodePlan(id string, cfg node.Config, architecture string, checks []Check, ssh []int) NodePlan {
+	return buildNodePlan(id, cfg, architecture, checks, ssh, nodeLayout{})
+}
+
+// BuildNodePlanForRoot builds the read-only plan from the host's own recorded
+// layout. A co-located Line never writes the Hub-owned runtime binary or a
+// second SSH jail, so those belong in ReusedPaths instead of Paths. A host
+// whose layout cannot be resolved fails closed through a blocking check rather
+// than advertising standalone writes it cannot prove.
+func BuildNodePlanForRoot(root, id string, cfg node.Config, architecture string, checks []Check, ssh []int) NodePlan {
+	layout, err := resolveNodeLayout(root)
+	if err == nil && layout.HubHost && !layout.CoLocated {
+		err = nodeOwnershipError(
+			"This host records a Hub layout that cannot host a co-located Line because the Hub does not publish a pinned reusable MeshMux runtime. Repair the Hub layout first; a Line never falls back to the Hub ledger.")
+	}
+	if err != nil {
+		code, recovery := "INSTALL_STATE_INVALID", "Inspect the recorded installer state; do not delete MeshMux data."
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			code = ie.Code
+			if ie.Recovery != "" {
+				recovery = ie.Recovery
+			}
+		}
+		blocked := append(append([]Check(nil), checks...), Check{
+			Name: "node_layout", Status: "fail", Code: code, Recovery: recovery,
+		})
+		return buildNodePlan(id, cfg, architecture, blocked, ssh, nodeLayout{})
+	}
+	return buildNodePlan(id, cfg, architecture, checks, ssh, layout)
+}
+
+func buildNodePlan(id string, cfg node.Config, architecture string, checks []Check, ssh []int, layout nodeLayout) NodePlan {
 	ready := true
 	var pending []string
 	for _, c := range checks {
@@ -196,12 +235,16 @@ func BuildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 	}
 	release, _ := node.KernelReleaseFor(architecture)
 	artifacts := PinnedNodeArtifacts(architecture)
+	agentDistribution := "same executable as the invoked CLI; self-copy SHA-256 verified"
+	if layout.CoLocated {
+		agentDistribution = "reuses the Hub-owned runtime binary verbatim; SHA-256 verified, never written by the Line"
+	}
 	plan := NodePlan{
 		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13",
 		Architecture: architecture, Config: cfg, Checks: checks,
 		Artifacts: artifacts,
 		Components: []Component{
-			{Name: "MeshMux Agent", Version: node.CurrentAgentVersion, Distribution: "same executable as the invoked CLI; self-copy SHA-256 verified"},
+			{Name: "MeshMux Agent", Version: node.CurrentAgentVersion, Distribution: agentDistribution},
 			{Name: "sing-box", Version: node.KernelVersion, Distribution: "pinned official GitHub archive; archive and binary SHA-256 verified"},
 			{Name: "Fail2ban", Version: "Debian 13 package", Distribution: "official Debian repository"},
 			{Name: "nftables", Version: "Debian 13 package", Distribution: "official Debian repository"},
@@ -213,13 +256,22 @@ func BuildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 		},
 		Units: []string{node.AgentUnit, node.SingBoxUnit},
 		Paths: []string{
-			node.AgentBinaryPath, node.SingBoxBinaryPath, node.AgentConfigPath,
+			node.SingBoxBinaryPath, node.AgentConfigPath,
 			"/var/lib/meshmux-agent/", "/var/lib/meshmux-singbox/",
 			"/etc/systemd/system/" + node.AgentUnit, "/etc/systemd/system/" + node.SingBoxUnit,
-			"/etc/fail2ban/jail.d/meshmux-node-ssh.local",
 		},
 		ApplyAvailable: ready, NextAction: "Review the fixed Node layout, then run the install with the one-time code entered on stdin. Pairing is consumed only after local staging and checks pass.",
 		ExternalPending: pending, Kernel: release,
+	}
+	if !layout.CoLocated {
+		plan.Paths = append([]string{node.AgentBinaryPath}, plan.Paths...)
+	} else if layout.SharedAgent != "" {
+		plan.ReusedPaths = append(plan.ReusedPaths, layout.SharedAgent)
+	}
+	if layout.ReuseHubSSHJail {
+		plan.ReusedPaths = append(plan.ReusedPaths, hubSSHJailPath)
+	} else {
+		plan.Paths = append(plan.Paths, nodeSSHJailPath)
 	}
 	if cfg.Role == node.RoleOut {
 		plan.Units = append([]string{node.ACLUnit}, plan.Units...)
@@ -349,11 +401,35 @@ func nodeHTTPSPreflightWithClient(ctx context.Context, hubURL string, base *http
 	return check("hub_and_github_https", "NETWORK_UNAVAILABLE", "Check DNS, system trust roots, time and outbound HTTPS to the Hub and official GitHub assets.", lastErr)
 }
 
-func nodePortPreflight(ctx context.Context, cfg node.Config, allowManaged bool) []Check {
+func nodePortPreflight(ctx context.Context, cfg node.Config, allowManaged bool, root string, runner CommandRunner) []Check {
+	if runner == nil {
+		runner = ExecRunner{}
+	}
+	// A managed repair reads ownership evidence only from the effective Node
+	// ledger of this host, bound to cfg, never from the Hub ledger. A missing
+	// or unreadable ledger is a stable ownership/state failure for both VLESS
+	// checks: reporting the listener as a third-party PORT_CONFLICT would
+	// either blame MeshMux's own kernel or adopt an unverified process.
 	if allowManaged && cfg.KernelSHA256 == "" {
-		if state, ok, err := ReadState("/"); err == nil && ok && state.Node != nil {
-			cfg.KernelSHA256 = state.Node.KernelSHA256
+		digest, err := effectiveNodeKernelDigest(root, cfg)
+		if err != nil {
+			code := "INSTALL_STATE_INVALID"
+			recovery := "Inspect the effective Node ledger; do not delete MeshMux state."
+			var ie *InstallError
+			if errors.As(err, &ie) {
+				if ie.Code == nodeOwnershipUnverified || ie.Code == "INSTALL_STATE_INVALID" {
+					code = ie.Code
+				}
+				if ie.Recovery != "" {
+					recovery = ie.Recovery
+				}
+			}
+			return []Check{
+				{Name: "vless_tcp", Status: "fail", Code: code, Recovery: recovery},
+				{Name: "vless_udp", Status: "fail", Code: code, Recovery: recovery},
+			}
 		}
+		cfg.KernelSHA256 = digest
 	}
 	if !allowManaged {
 		return []Check{
@@ -361,7 +437,7 @@ func nodePortPreflight(ctx context.Context, cfg node.Config, allowManaged bool) 
 			nodeCanBind("vless_udp", "udp", cfg.VLESSPort),
 		}
 	}
-	listeners, err := ExecRunner{}.Run(ctx, "ss", "-H", "-lntup")
+	listeners, err := runner.Run(ctx, "ss", "-H", "-lntup")
 	if err != nil {
 		return []Check{
 			{Name: "vless_tcp", Status: "fail", Code: "PORT_OWNER_UNVERIFIED", Recovery: "Inspect ss and confirm the recorded sing-box listener."},
@@ -504,7 +580,19 @@ func packageAvailability(ctx context.Context, runner CommandRunner, pkg string) 
 	return Check{Name: pkg, Status: "pass", Detail: "missing; install will query and install only this fixed Debian package"}
 }
 
-func nodeTableOwnership(ctx context.Context, runner CommandRunner, cfg node.Config, allowManaged bool) tableOwnershipResult {
+// nodeTableOwnership classifies the existing inet meshmux_out table of this
+// host.
+//
+// A table that is present is only ever adopted when allowManaged is set and
+// the effective Node ledger of this host provably records exactly cfg
+// (nodeLedgerBindsConfig). The Hub ledger is never used as Node ownership
+// evidence: on a co-located host it is a different ledger, and its Node
+// record is nil by construction. An unreadable ledger stays a stable
+// state/ownership failure instead of being downgraded to "no ledger".
+func nodeTableOwnership(ctx context.Context, root string, runner CommandRunner, cfg node.Config, allowManaged bool) tableOwnershipResult {
+	if runner == nil {
+		runner = ExecRunner{}
+	}
 	out, err := runner.Run(ctx, "nft", "list", "table", "inet", node.ACLTable)
 	if err != nil {
 		if missingTableOutput(string(out), err) {
@@ -527,13 +615,35 @@ func nodeTableOwnership(ctx context.Context, runner CommandRunner, cfg node.Conf
 			Recovery: "An existing inet meshmux_out table is Out-only; inspect and remove it manually only if it is not managed by MeshMux.",
 		}}
 	}
-	if allowManaged {
-		return tableOwnershipResult{Kind: tableManaged, Check: Check{Name: "out_acl_table", Status: "pass", Detail: "recorded MeshMux Out table"}}
+	if !allowManaged {
+		return tableOwnershipResult{Kind: tableConflict, Check: Check{
+			Name: "out_acl_table", Status: "fail", Code: "ACL_TABLE_CONFLICT",
+			Recovery: "An inet meshmux_out table exists without an installer ledger; inspect it manually. MeshMux will not adopt or overwrite it.",
+		}}
 	}
-	return tableOwnershipResult{Kind: tableConflict, Check: Check{
-		Name: "out_acl_table", Status: "fail", Code: "ACL_TABLE_CONFLICT",
-		Recovery: "An inet meshmux_out table exists without an installer ledger; inspect it manually. MeshMux will not adopt or overwrite it.",
-	}}
+	bound, err := nodeLedgerBindsConfig(root, cfg)
+	if err != nil {
+		code, recovery := "INSTALL_STATE_INVALID", "Inspect the effective Node ledger; do not delete MeshMux state."
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			if ie.Code == nodeOwnershipUnverified || ie.Code == "INSTALL_STATE_INVALID" {
+				code = ie.Code
+			}
+			if ie.Recovery != "" {
+				recovery = ie.Recovery
+			}
+		}
+		return tableOwnershipResult{Kind: tableProbeFailed, Check: Check{
+			Name: "out_acl_table", Status: "fail", Code: code, Recovery: recovery,
+		}}
+	}
+	if !bound {
+		return tableOwnershipResult{Kind: tableConflict, Check: Check{
+			Name: "out_acl_table", Status: "fail", Code: "ACL_TABLE_CONFLICT",
+			Recovery: "An inet meshmux_out table exists but the effective Node ledger of this host does not record this exact Node configuration; inspect it manually. MeshMux will not adopt or overwrite it.",
+		}}
+	}
+	return tableOwnershipResult{Kind: tableManaged, Check: Check{Name: "out_acl_table", Status: "pass", Detail: "recorded MeshMux Out table"}}
 }
 
 type tableOwnershipKind int

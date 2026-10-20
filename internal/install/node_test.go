@@ -13,6 +13,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,30 @@ type fakeNodeRunner struct {
 	// the file is absent. It emulates a clean host where nft -f cannot
 	// apply a table file that installNodeDynamic has not written yet.
 	aclRequiresFile string
+	// jailPorts is the SSH port set the fixture's Fail2ban jail reports.
+	// The installer now requires the jail to cover every actual SSH
+	// listener, so the fixture answers with the same set its preflight
+	// detects instead of a single hard-coded port.
+	jailPorts []int
+}
+
+// fixtureSSHPorts is the SSH listener set the node fixture detects. The
+// fixture preflight and its Fail2ban jail readback both use it, so a real
+// host with more than one SSH listener is represented consistently.
+var fixtureSSHPorts = []int{2222, 2200}
+
+func (f *fakeNodeRunner) fail2banJailPorts() string {
+	ports := f.jailPorts
+	if len(ports) == 0 {
+		ports = fixtureSSHPorts
+	}
+	sorted := append([]int(nil), ports...)
+	sort.Ints(sorted)
+	values := make([]string, 0, len(sorted))
+	for _, port := range sorted {
+		values = append(values, strconv.Itoa(port))
+	}
+	return strings.Join(values, ",")
 }
 
 func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -70,13 +96,13 @@ func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]
 		// jail port back through the nftables-multiport action instance.
 		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
 			args[2] == "action" && args[3] == "nftables-multiport" && args[4] == "port" {
-			return []byte("2222\n"), nil
+			return []byte(f.fail2banJailPorts() + "\n"), nil
 		}
 		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
 			args[2] == "action" && args[3] == "nftables-multiport" && args[4] == "actionstart" {
 			// Real fail2ban 1.1.0 shell-escapes the set braces; the L1 fake
 			// uses the exact daemon format so the readback is validated.
-			return []byte("nft add rule inet f2b-table f2b-chain $proto dport \\{ $(echo '2222' | sed s/:/-/g) \\} <addr_family> saddr @<addr_set> reject\n"), nil
+			return []byte("nft add rule inet f2b-table f2b-chain $proto dport \\{ $(echo '" + f.fail2banJailPorts() + "' | sed s/:/-/g) \\} <addr_family> saddr @<addr_set> reject\n"), nil
 		}
 	case "systemctl":
 		if len(args) > 1 && args[0] == "show" && strings.Contains(call, node.SingBoxUnit) {
@@ -317,16 +343,115 @@ func TestNodeLayoutConflictNeverOverwritesHubState(t *testing.T) {
 	if err := writeState(f.root, hub); err != nil {
 		t.Fatal(err)
 	}
+	// A Hub ledger that publishes no SharedBinaries cannot host a
+	// co-located Line: resolveNodeLayout reports HubHost without CoLocated,
+	// so InstallNode fails closed at preflight with NODE_OWNERSHIP_UNVERIFIED
+	// before readNodeState, rather than reporting a HOST_LAYOUT_CONFLICT from
+	// the Hub ledger's nil Node record. The Hub ledger is never treated as
+	// Node ownership evidence.
 	result, err := f.install(t, false, strings.Repeat("A", 43))
-	if err == nil || result.ErrorCode != "HOST_LAYOUT_CONFLICT" {
-		t.Fatalf("Hub layout conflict = %+v %v", result, err)
+	if err == nil || result.ErrorCode != "NODE_OWNERSHIP_UNVERIFIED" {
+		t.Fatalf("Hub without shared runtime = %+v %v", result, err)
 	}
 	state, _, _ := ReadState(f.root)
 	if state.Config.ManagementDomain != "hub.example.invalid" || state.Node != nil {
 		t.Fatal("Node operation changed Hub ownership state")
 	}
 	if len(f.runner.calls) != 0 {
-		t.Fatalf("role conflict reached host commands: %v", f.runner.calls)
+		t.Fatalf("ownership failure reached host commands: %v", f.runner.calls)
+	}
+}
+
+// TestNodeLayoutRepairUsesEffectiveLineLedgerNotHubLedger pins the repair
+// ownership source on a co-located host: the Hub ledger at the historical
+// path has Node=nil, so only the Line's own ledger may supply the kernel
+// digest and bind it to this exact Node, role and port set.
+func TestNodeLayoutRepairUsesEffectiveLineLedgerNotHubLedger(t *testing.T) {
+	root := t.TempDir()
+	hub, _ := writeLocalLineHubLedger(t, root, []int{2222})
+	if hub.Node != nil {
+		t.Fatal("fixture Hub ledger unexpectedly records a Node")
+	}
+	cfg := node.Config{
+		HubURL: localLineHubOrigin, NodeID: strings.Repeat("a", 32),
+		Role: node.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
+	}
+	recorded := cfg
+	recorded.AgentVersion = node.CurrentAgentVersion
+	recorded.AgentSHA256 = strings.Repeat("b", 64)
+	recorded.KernelSHA256 = strings.Repeat("c", 64)
+	if err := writeLocalLineState(root, InstallState{
+		Schema: 1, OperationID: strings.Repeat("2", 32), Status: "installed",
+		Node: &recorded, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCgroup := cgroupOf
+	oldExecutable := processExecutableOf
+	oldExecutableHash := processExecutableHashOf
+	defer func() { cgroupOf = oldCgroup }()
+	defer func() { processExecutableOf = oldExecutable }()
+	defer func() { processExecutableHashOf = oldExecutableHash }()
+	cgroupOf = func(pid string) ([]byte, error) {
+		return []byte("0::/system.slice/" + node.SingBoxUnit + "\n"), nil
+	}
+	processExecutableOf = func(string) (string, error) { return node.SingBoxBinaryPath, nil }
+	processExecutableHashOf = func(string) (string, error) { return recorded.KernelSHA256, nil }
+
+	runner := &fixedNodeRunner{name: "ss", output: []byte(
+		"tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=6))\n" +
+			"udp UNCONN 0 0 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=7))\n",
+	)}
+	checks := nodePortPreflight(context.Background(), cfg, true, root, runner)
+	for _, check := range checks {
+		if check.Status != "pass" {
+			t.Fatalf("effective Line ledger did not authorize its kernel listener: %+v", check)
+		}
+	}
+}
+
+// TestNodeLayoutRepairRejectsUnboundLineLedger pins that a ledger which does
+// not bind this exact Node, or records no verified kernel digest, yields the
+// stable ownership code instead of blaming a third-party PORT_CONFLICT.
+func TestNodeLayoutRepairRejectsUnboundLineLedger(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*node.Config)
+	}{
+		{"node id", func(cfg *node.Config) { cfg.NodeID = strings.Repeat("f", 32) }},
+		{"role", func(cfg *node.Config) { cfg.Role = node.RoleOut }},
+		{"vless port", func(cfg *node.Config) { cfg.VLESSPort = 9443 }},
+		{"ssh port", func(cfg *node.Config) { cfg.SSHPort = 2200 }},
+		{"missing kernel digest", func(cfg *node.Config) { cfg.KernelSHA256 = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeLocalLineHubLedger(t, root, []int{2222})
+			cfg := node.Config{
+				HubURL: localLineHubOrigin, NodeID: strings.Repeat("a", 32),
+				Role: node.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
+			}
+			recorded := cfg
+			recorded.AgentVersion = node.CurrentAgentVersion
+			recorded.AgentSHA256 = strings.Repeat("b", 64)
+			recorded.KernelSHA256 = strings.Repeat("c", 64)
+			tc.mutate(&recorded)
+			if err := writeLocalLineState(root, InstallState{
+				Schema: 1, OperationID: strings.Repeat("2", 32), Status: "installed",
+				Node: &recorded, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			listeners := "tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=6))\n"
+			checks := nodePortPreflight(context.Background(), cfg, true, root,
+				&fixedNodeRunner{name: "ss", output: []byte(listeners)})
+			for _, check := range checks {
+				if check.Status != "fail" || check.Code != nodeOwnershipUnverified {
+					t.Fatalf("unbound ledger = %+v, want %s", check, nodeOwnershipUnverified)
+				}
+			}
+		})
 	}
 }
 
@@ -557,6 +682,18 @@ func TestNodeTableOwnershipDistinguishesAbsentAndProbeFailure(t *testing.T) {
 		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
 		Role: node.RoleOut, VLESSPort: 8443, SSHPort: 2222,
 	}
+	// A recorded table is only adopted when this host's own Node ledger
+	// binds the exact config, so the ledger lives under a temporary root
+	// instead of the real /var/lib/meshmux-installer.
+	root := t.TempDir()
+	recorded := cfg
+	recorded.AgentVersion, recorded.AgentSHA256, recorded.KernelSHA256 =
+		node.CurrentAgentVersion, strings.Repeat("b", 64), strings.Repeat("c", 64)
+	if err := writeState(root, InstallState{
+		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "installed", Node: &recorded,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name       string
 		output     string
@@ -574,7 +711,7 @@ func TestNodeTableOwnershipDistinguishesAbsentAndProbeFailure(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &fixedNodeRunner{name: "nft", output: []byte(tc.output), err: tc.err}
-			got := nodeTableOwnership(context.Background(), runner, cfg, tc.allow)
+			got := nodeTableOwnership(context.Background(), root, runner, cfg, tc.allow)
 			if got.Kind != tc.wantKind {
 				t.Fatalf("kind = %v, want %v", got.Kind, tc.wantKind)
 			}
@@ -593,11 +730,13 @@ func TestNodeTableOwnershipIsRecheckedAfterNftablesInstall(t *testing.T) {
 	runner := &fixedNodeRunner{
 		name: "nft", output: []byte("Operation not permitted\n"), err: errors.New("exit"),
 	}
-	if err := verifyNodeTableOwnershipAfterInstall(context.Background(), runner, cfg, false); err == nil {
+	// The recheck only classifies the table; the ledger root is empty here.
+	root := t.TempDir()
+	if err := verifyNodeTableOwnershipAfterInstall(context.Background(), root, runner, cfg, false); err == nil {
 		t.Fatal("permission failure was accepted after nftables install")
 	}
 	runner.output, runner.err = []byte("Error: No such file or directory\n"), errors.New("exit")
-	if err := verifyNodeTableOwnershipAfterInstall(context.Background(), runner, cfg, false); err != nil {
+	if err := verifyNodeTableOwnershipAfterInstall(context.Background(), root, runner, cfg, false); err != nil {
 		t.Fatalf("explicit absent table after nftables install: %v", err)
 	}
 }
@@ -814,7 +953,7 @@ func TestNodeFirstInstallAndLedger(t *testing.T) {
 	// Exercise the mutation path with the focused read-only checks used by the
 	// VM harness, while retaining the real Client + pair + candidate flow.
 	f.opts.Preflight = func(context.Context, node.Config, bool) ([]Check, []int) {
-		return []Check{{Name: "fixture", Status: "pass"}}, []int{2222}
+		return []Check{{Name: "fixture", Status: "pass"}}, append([]int(nil), fixtureSSHPorts...)
 	}
 	runner.failCall = ""
 	runner.calls = nil
@@ -825,6 +964,11 @@ func TestNodeFirstInstallAndLedger(t *testing.T) {
 	state, exists, err := ReadState(f.root)
 	if err != nil || !exists || state.Status != "installed" || state.Node == nil || state.Node.NodeID != f.cfg.NodeID {
 		t.Fatalf("Node state = %+v %v", state, err)
+	}
+	// The standalone Line owns one jail for every actual SSH listener, not
+	// just the configured rescue port, and records that full set.
+	if !equalIntSets(state.SSHPorts, fixtureSSHPorts) {
+		t.Fatalf("recorded SSH ports = %v, want %v", state.SSHPorts, fixtureSSHPorts)
 	}
 	for _, path := range []string{node.AgentConfigPath, node.IdentityPath, "/etc/systemd/system/" + node.AgentUnit, "/etc/systemd/system/" + node.SingBoxUnit, "/etc/fail2ban/jail.d/meshmux-node-ssh.local"} {
 		if _, statErr := os.Stat(rooted(f.root, path)); statErr != nil {

@@ -19,6 +19,14 @@ type nodeManagedFile struct {
 }
 
 func nodeManagedFiles(cfg node.Config, ssh []int, identity node.Identity) (map[string]nodeManagedFile, error) {
+	return nodeManagedFilesForLayout(cfg, ssh, identity, standaloneNodeLayout())
+}
+
+// nodeManagedFilesForLayout renders the fixed managed file set of a Node
+// operation. A co-located Line reuses the Hub's Fail2ban SSH jail instead of
+// installing a second jail for the same SSH listeners, so it never writes
+// the jail file the Hub owns.
+func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identity, layout nodeLayout) (map[string]nodeManagedFile, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -57,9 +65,11 @@ func nodeManagedFiles(cfg node.Config, ssh []int, identity node.Identity) (map[s
 		"/etc/systemd/system/" + node.SingBoxUnit: {
 			Path: "/etc/systemd/system/" + node.SingBoxUnit, Body: nodeSingBoxUnitFor(cfg.Role == node.RoleOut), Mode: 0644, Owner: "root:root", Static: true,
 		},
-		"/etc/fail2ban/jail.d/meshmux-node-ssh.local": {
-			Path: "/etc/fail2ban/jail.d/meshmux-node-ssh.local", Body: nodeSSHJail(ssh), Mode: 0644, Owner: "root:root", Static: true,
-		},
+	}
+	if !layout.ReuseHubSSHJail {
+		files[nodeSSHJailPath] = nodeManagedFile{
+			Path: nodeSSHJailPath, Body: nodeSSHJail(ssh), Mode: 0644, Owner: "root:root", Static: true,
+		}
 	}
 	if cfg.Role == node.RoleOut {
 		// The path is owned by the installer but the bytes are dynamic and are
