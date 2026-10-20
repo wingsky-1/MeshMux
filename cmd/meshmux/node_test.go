@@ -38,7 +38,7 @@ func (f *fakeNodeRunner) PreflightNode(context.Context, node.Config, bool) ([]in
 	return f.checks, f.ssh
 }
 
-func (f *fakeNodeRunner) BuildNodePlan(_ string, cfg node.Config, _ string, checks []install.Check, ssh []int) install.NodePlan {
+func (f *fakeNodeRunner) BuildNodePlanForRoot(_, _ string, cfg node.Config, _ string, checks []install.Check, ssh []int) install.NodePlan {
 	if f.plan.Status == "" {
 		status := "preflight_passed"
 		applyAvailable := true
@@ -74,7 +74,7 @@ func (f *fakeNodeRunner) InstallNode(_ context.Context, cfg node.Config, operati
 	return install.InstallResult{OperationID: operationID, Stage: "apply", Status: "installed"}, err
 }
 
-func (f *fakeNodeRunner) ReadState(string) (install.InstallState, bool, error) {
+func (f *fakeNodeRunner) ReadNodeState(string) (install.InstallState, bool, error) {
 	f.reads++
 	return f.state, f.hasState, f.stateErr
 }

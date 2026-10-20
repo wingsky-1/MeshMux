@@ -63,7 +63,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	if opts.Preflight == nil {
 		opts.Preflight = func(ctx context.Context, cfg node.Config, allowManaged bool) ([]Check, []int) {
-			return preflightNode(ctx, cfg, allowManaged, opts.Runner)
+			return preflightNode(ctx, cfg, allowManaged, opts.Root, opts.Runner)
 		}
 	}
 	if opts.DownloadArtifact == nil {
@@ -122,7 +122,36 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
-	state, hasState, err := ReadState(opts.Root)
+	// The ledger this operation owns is selected from the host's own
+	// recorded state. A host that already runs the Hub hosts one
+	// co-located Line with a separate ledger; the Hub ledger, its
+	// services and its Fail2ban jail are never rewritten here.
+	layout, err := resolveNodeLayout(opts.Root)
+	if err != nil {
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			return fail(ie.Stage, ie.Code, ie.Recovery)
+		}
+		return fail("preflight", "INSTALL_STATE_INVALID", "Inspect the recorded installer state before retrying.")
+	}
+	if layout.HubHost && !layout.CoLocated {
+		// A Hub host that cannot publish a pinned reusable runtime cannot
+		// host a Line. The Line ledger would have to record a second MeshMux
+		// binary, and the Hub ledger can never prove Node ownership. This is
+		// an ownership failure, not a layout conflict: repair the Hub first.
+		return fail("preflight", nodeOwnershipUnverified,
+			"This host records a Hub layout that cannot host a co-located Line because the Hub does not publish a pinned reusable MeshMux runtime. Repair the Hub layout first; a Line never falls back to the Hub ledger.")
+	}
+	if layout.CoLocated {
+		// A co-located Line may only talk to the Hub that owns this host.
+		// Any other Hub origin is a remote node, not this local Line.
+		if origin := hubOriginFor(layout.HubState); origin == "" || cfg.HubURL != origin {
+			return fail("preflight", "LOCAL_LINE_HUB_MISMATCH",
+				"A Line co-located with this Hub must use the Hub origin of the installed management host.")
+		}
+	}
+
+	state, hasState, err := readNodeState(opts.Root, layout)
 	if err != nil {
 		return fail("preflight", "INSTALL_STATE_INVALID", "Inspect the recorded installer state; do not delete Agent identity or kernel data.")
 	}
@@ -165,6 +194,18 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	if containsPort(sshPorts, cfg.VLESSPort) {
 		return fail("preflight", "PORT_CONFLICT", "VLESS cannot use any actual SSH listener port.")
 	}
+	// A co-located Line reuses the Hub's Fail2ban SSH jail. The reuse is
+	// only safe when the Hub's jail provably covers this host's actual SSH
+	// listeners; otherwise the Line refuses rather than duplicating the
+	// jail or leaving the listener unprotected.
+	if err := checkLocalLineSSHJailReuse(layout, sshPorts); err != nil {
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			return fail(ie.Stage, ie.Code, ie.Recovery)
+		}
+		return fail("preflight", "SSH_JAIL_REUSE_CONFLICT",
+			"The Hub's Fail2ban SSH jail does not cover this host's actual SSH listeners. Repair the Hub so its jail matches, then install the Line.")
+	}
 
 	architecture, err := dpkgArchitecture(ctx, opts.Runner)
 	if err != nil {
@@ -185,7 +226,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		!validDigest.MatchString(artifacts[0].SHA256) || artifacts[0].Source != release.SourceURL {
 		return fail("stage", "ARTIFACT_MANIFEST_INVALID", "Use exactly the pinned sing-box release; latest and caller-supplied URLs are rejected.")
 	}
-	if err := checkNodeTargets(opts.Root, cfg, sshPorts, state, hasState); err != nil {
+	if err := checkNodeTargets(opts.Root, cfg, sshPorts, state, hasState, layout); err != nil {
 		var ie *InstallError
 		if errors.As(err, &ie) {
 			return fail(ie.Stage, ie.Code, ie.Recovery)
@@ -220,59 +261,70 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	state.Artifacts["sing-box"] = artifacts[0].SHA256
 	state.Architecture, state.SSHPorts, state.ErrorCode, state.Recovery = architecture, sortedInts(sshPorts), "", ""
+	if layout.CoLocated {
+		// The Line pins the exact Hub-owned runtime build it reuses. The pin
+		// is what lets a later Hub repair detect a mismatching shared
+		// binary instead of silently moving the Line to another build.
+		if state.SharedBinaries == nil {
+			state.SharedBinaries = map[string]SharedBinary{}
+		}
+		state.SharedBinaries[sharedAgentKey] = SharedBinary{
+			Path:   layout.SharedAgent,
+			SHA256: layout.SharedAgentSHA256,
+		}
+	}
 	state.UpdatedAt = now
-	if err := writeState(opts.Root, state); err != nil {
+	if err := writeNodeState(opts.Root, layout, state); err != nil {
 		return fail("stage", "INSTALL_STATE_WRITE_FAILED", "Check disk space and permissions under /var/lib/meshmux-installer.")
 	}
-	operationDir := rooted(opts.Root, "/var/lib/meshmux-installer/operations/"+operationID)
+	operationDir := rooted(opts.Root, layout.OperationDir+"/"+operationID)
 	journalPath := filepath.Join(operationDir, "events.jsonl")
 	record := func(stage, status, code string) error {
 		return appendOperationEvent(journalPath, operationEvent{OperationID: operationID, Stage: stage, Status: status, ErrorCode: code, Time: time.Now().UTC()})
 	}
 	if err := record("stage", "started", ""); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
 
-	stageDir := rooted(opts.Root, "/var/cache/meshmux-installer/"+operationID)
+	stageDir := rooted(opts.Root, layout.StageRoot+"/"+operationID)
 	artifactsDir := filepath.Join(stageDir, "artifacts")
 	if err := os.RemoveAll(stageDir); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Remove only the incomplete staging directory for this operation and retry.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Remove only the incomplete staging directory for this operation and retry.")
 	}
 	if err := ensureDirectory(stageDir, 0700); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions; no host files were applied.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions; no host files were applied.")
 	}
 	if err := ensureDirectory(artifactsDir, 0700); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions; no host files were applied.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions; no host files were applied.")
 	}
 	archivePath, err := opts.DownloadArtifact(ctx, artifacts[0], artifactsDir)
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", artifactErrorCode(err), "Check outbound HTTPS to the pinned official GitHub asset; unverified archives are never applied.")
+		return failNodePartial(result, state, opts, layout, record, "stage", artifactErrorCode(err), "Check outbound HTTPS to the pinned official GitHub asset; unverified archives are never applied.")
 	}
 	if err := VerifyFile(archivePath, artifacts[0].SHA256); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "ARTIFACT_CHECKSUM_MISMATCH", "Delete the staged archive and retry; never bypass archive SHA-256 verification.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "ARTIFACT_CHECKSUM_MISMATCH", "Delete the staged archive and retry; never bypass archive SHA-256 verification.")
 	}
 	kernelPath := filepath.Join(stageDir, "meshmux-sing-box")
 	if err := extractNodeKernel(archivePath, kernelPath); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "ARTIFACT_FORMAT_INVALID", "Use the official pinned sing-box archive for this architecture.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "ARTIFACT_FORMAT_INVALID", "Use the official pinned sing-box archive for this architecture.")
 	}
 	kernelHash, err := sha256File(kernelPath)
 	if err != nil || (opts.Root == "/" && kernelHash != release.BinarySHA256) {
-		return failNodePartial(result, state, opts, record, "stage", "KERNEL_CHECKSUM_MISMATCH", "Delete the staged kernel and retry; the binary must match the release manifest.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "KERNEL_CHECKSUM_MISMATCH", "Delete the staged kernel and retry; the binary must match the release manifest.")
 	}
 	if err := verifyBinaryVersion(ctx, opts.Runner, kernelPath, node.KernelVersion); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "KERNEL_VERSION_INVALID", "Use the exact pinned sing-box release for this architecture.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "KERNEL_VERSION_INVALID", "Use the exact pinned sing-box release for this architecture.")
 	}
-	executable := opts.Executable
-	if executable == "" {
-		executable = "/proc/self/exe"
-	}
-	agentPath := filepath.Join(stageDir, "meshmuxd")
-	agentHash, err := copyExecutable(executable, agentPath)
+	// The Agent binary is resolved from the host layout. A co-located Line
+	// reuses the Hub-owned runtime verbatim and never stages, overwrites or
+	// snapshots a replacement.
+	agentPath, agentHash, err := resolveNodeAgent(ctx, opts, layout, stageDir)
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "MESHMUX_BINARY_INVALID", "Run the installer from a regular MeshMux executable and retry.")
-	}
-	if err := verifyAgentBinary(ctx, opts, agentPath, agentHash); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "MESHMUX_BINARY_INVALID", "Run the installer from the exact MeshMux build being installed; external Agent binaries are rejected.")
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			return failNodePartial(result, state, opts, layout, record, ie.Stage, ie.Code, ie.Recovery)
+		}
+		return failNodePartial(result, state, opts, layout, record, "stage", "MESHMUX_BINARY_INVALID", "Run the installer from a regular MeshMux executable and retry.")
 	}
 	installedCfg := cfg
 	installedCfg.AgentVersion = node.CurrentAgentVersion
@@ -283,35 +335,35 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
 	})
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Node role and VLESS port.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Node role and VLESS port.")
 	}
 	stagedCandidate := filepath.Join(stageDir, "config.json")
 	if err := os.WriteFile(stagedCandidate, compiled, 0600); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
 	}
 	if _, err := opts.Runner.Run(ctx, kernelPath, "check", "-c", stagedCandidate); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "KERNEL_CONFIG_INVALID", "Review the generated native sing-box configuration.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "KERNEL_CONFIG_INVALID", "Review the generated native sing-box configuration.")
 	}
 	// The staged Out ACL is syntax-checked with nft -c below, so the Debian
 	// packages must be installed before that check, not later in apply.
 	missing := missingDebianPackages(ctx, opts.Runner, "ca-certificates", "fail2ban", "nftables")
 	if len(missing) > 0 {
 		if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
-			return failNodePartial(result, state, opts, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no package upgrade or third-party repository is used.")
+			return failNodePartial(result, state, opts, layout, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no package upgrade or third-party repository is used.")
 		}
 		args := append([]string{"install", "-y", "--no-install-recommends"}, missing...)
 		if _, err := opts.Runner.Run(ctx, "apt-get", args...); err != nil {
-			return failNodePartial(result, state, opts, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status; only the listed missing packages are installed.")
+			return failNodePartial(result, state, opts, layout, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status; only the listed missing packages are installed.")
 		}
 	}
 	if usedPackage(missing, "nftables") {
-		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Runner, installedCfg, hasState); err != nil {
+		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Root, opts.Runner, installedCfg, hasState); err != nil {
 			code, recovery := "ACL_TABLE_PROBE_FAILED", "Re-run the exact nft ownership readback. MeshMux will not adopt, overwrite or delete an unverified table."
 			var ie *InstallError
 			if errors.As(err, &ie) {
 				code, recovery = ie.Code, ie.Recovery
 			}
-			return failNodePartial(result, state, opts, record, "apply", code, recovery)
+			return failNodePartial(result, state, opts, layout, record, "apply", code, recovery)
 		}
 	}
 	if cfg.Role == node.RoleOut {
@@ -320,23 +372,23 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 			VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
 		})
 		if err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "ACL_RENDER_FAILED", "Review the Out role configuration.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "ACL_RENDER_FAILED", "Review the Out role configuration.")
 		}
 		aclPath := filepath.Join(stageDir, "out.nft")
 		if err := os.WriteFile(aclPath, acl, 0600); err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
 		}
 		if _, err := opts.Runner.Run(ctx, "nft", "-c", "-f", aclPath); err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "ACL_CONFIG_INVALID", "Review the generated default-deny Out table; the host ruleset was not changed.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "ACL_CONFIG_INVALID", "Review the generated default-deny Out table; the host ruleset was not changed.")
 		}
 	}
 	if err := record("stage", "validated", ""); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
 
 	identity, identityLoaded, err := loadNodeIdentity(opts.Root, installedCfg)
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "IDENTITY_INVALID", "Inspect the private Agent identity; do not delete it until the Hub identity is revoked.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "IDENTITY_INVALID", "Inspect the private Agent identity; do not delete it until the Hub identity is revoked.")
 	}
 	var metadata node.Metadata
 	var candidate node.CandidateDocument
@@ -351,7 +403,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 					pairErr = persistNodeIdentity(opts.Root, fresh)
 				}
 				if pairErr != nil {
-					return failNodePartial(result, state, opts, record, "stage", "PAIRING_FAILED", "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed; reissue a code before retrying.")
+					return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_FAILED", "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed; reissue a code before retrying.")
 				}
 				identity = fresh
 			}
@@ -367,21 +419,21 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 			}
 			if err != nil {
 				if clientUnauthorized(err) {
-					return failNodePartial(result, state, opts, record, "stage", "PAIRING_REQUIRED", "The recorded identity was revoked or replaced. Reissue a pairing code in Hub Web and run --repair with the fresh code.")
+					return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_REQUIRED", "The recorded identity was revoked or replaced. Reissue a pairing code in Hub Web and run --repair with the fresh code.")
 				}
-				return failNodePartial(result, state, opts, record, "stage", "PAIRING_METADATA_FAILED", "The private identity is preserved. Fix Hub metadata/candidate availability and run --repair; do not request another code.")
+				return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_METADATA_FAILED", "The private identity is preserved. Fix Hub metadata/candidate availability and run --repair; do not request another code.")
 			}
 		}
 	} else {
 		if repair {
-			return failNodePartial(result, state, opts, record, "stage", "IDENTITY_MISSING", "A repair reuses the private identity when it is still valid. Restore the identity, or revoke and re-enroll the node; a revoked identity needs a fresh pairing code.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "IDENTITY_MISSING", "A repair reuses the private identity when it is still valid. Restore the identity, or revoke and re-enroll the node; a revoked identity needs a fresh pairing code.")
 		}
 		if pairingCode == "" {
 			state.Stage = "pairing"
 			state.Status = "partial"
 			state.ErrorCode, state.Recovery = "PAIRING_CODE_REQUIRED", "Enter the current one-time code on stdin after local staging checks pass."
 			state.UpdatedAt = time.Now().UTC()
-			_ = writeState(opts.Root, state)
+			_ = writeNodeState(opts.Root, layout, state)
 			result.Stage, result.Status, result.ErrorCode, result.Recovery = "pairing", "partial", state.ErrorCode, state.Recovery
 			_ = record("pairing", "waiting", state.ErrorCode)
 			return result, &InstallError{Stage: "pairing", Code: state.ErrorCode, Recovery: state.Recovery}
@@ -391,17 +443,17 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 			err = identity.ValidateFor(installedCfg)
 		}
 		if err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "PAIRING_FAILED", "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_FAILED", "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed.")
 		}
 		if err := ensurePrivateNodeDirectory(rooted(opts.Root, nodeAgentStateDir)); err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "AGENT_STATE_UNSAFE", "Use a root-owned 0700 Agent directory; the kernel group must not read identity tokens.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "AGENT_STATE_UNSAFE", "Use a root-owned 0700 Agent directory; the kernel group must not read identity tokens.")
 		}
 		if err := persistNodeIdentity(opts.Root, identity); err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "IDENTITY_PERSIST_FAILED", "The Hub code may already be consumed. Preserve this operation's journal, reissue a code for the same node in Web and retry after fixing disk permissions.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "IDENTITY_PERSIST_FAILED", "The Hub code may already be consumed. Preserve this operation's journal, reissue a code for the same node in Web and retry after fixing disk permissions.")
 		}
 		state.Node = cloneNodeConfig(&installedCfg)
-		if err := writeState(opts.Root, state); err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "INSTALL_STATE_WRITE_FAILED", "Check installer state disk space and permissions; preserve the private identity.")
+		if err := writeNodeState(opts.Root, layout, state); err != nil {
+			return failNodePartial(result, state, opts, layout, record, "stage", "INSTALL_STATE_WRITE_FAILED", "Check installer state disk space and permissions; preserve the private identity.")
 		}
 		metadata, err = opts.Metadata(ctx, installedCfg, identity)
 		if err == nil {
@@ -414,7 +466,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 			err = candidate.ValidateFor(installedCfg)
 		}
 		if err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "PAIRING_METADATA_FAILED", "The private identity is persisted. Fix Hub metadata/candidate availability and run --repair; do not request another code.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_METADATA_FAILED", "The private identity is persisted. Fix Hub metadata/candidate availability and run --repair; do not request another code.")
 		}
 	}
 	activeCandidate := candidate
@@ -431,19 +483,19 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	candidateBody, err := jsonMarshal(activeCandidate)
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Hub candidate response and retry with --repair.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Hub candidate response and retry with --repair.")
 	}
 	candidateConfig, err := node.CompileCandidate(activeCandidate.Candidate())
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Hub candidate role, node and port binding.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Hub candidate role, node and port binding.")
 	}
 	if err := verifyNodeCandidate(ctx, opts, kernelPath, candidateConfig, stageDir); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "CANDIDATE_INVALID", "The Hub candidate failed local validation; no active kernel configuration was replaced.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_INVALID", "The Hub candidate failed local validation; no active kernel configuration was replaced.")
 	}
 
-	managed, err := nodeManagedFiles(installedCfg, sshPorts, identity)
+	managed, err := nodeManagedFilesForLayout(installedCfg, sshPorts, identity, layout)
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "CONFIG_RENDER_FAILED", "Review the actual SSH listeners and the fixed Node service layout.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "CONFIG_RENDER_FAILED", "Review the actual SSH listeners and the fixed Node service layout.")
 	}
 	stagedManaged := map[string]string{}
 	for path, file := range managed {
@@ -452,93 +504,118 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		}
 		staged := filepath.Join(stageDir, "managed", strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", "_"))
 		if err := writeBytesAtomic(staged, []byte(file.Body), os.FileMode(file.Mode)); err != nil {
-			return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
+			return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
 		}
 		stagedManaged[path] = staged
 	}
 	if err := writeBytesAtomic(filepath.Join(stageDir, "active-candidate.json"), candidateBody, 0600); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
 	}
 	if err := writeBytesAtomic(filepath.Join(stageDir, "config.json"), candidateConfig, 0640); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
 	}
 	if err := record("stage", "candidate_validated", ""); err != nil {
-		return failNodePartial(result, state, opts, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
+		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
 
 	if err := ensureNodeAccounts(ctx, opts.Runner, opts.Root, hasState); err != nil {
-		return failNodePartial(result, state, opts, record, "apply", "ACCOUNT_CREATE_FAILED", "Inspect meshmux-singbox and meshmux-agent accounts before retrying.")
+		return failNodePartial(result, state, opts, layout, record, "apply", "ACCOUNT_CREATE_FAILED", "Inspect meshmux-singbox and meshmux-agent accounts before retrying.")
 	}
 	if err := ensureNodeDirectories(ctx, opts); err != nil {
-		return failNodePartial(result, state, opts, record, "apply", "DATA_DIRECTORY_FAILED", "Check Agent and kernel data directory ownership; never expose the identity directory to the kernel group.")
+		return failNodePartial(result, state, opts, layout, record, "apply", "DATA_DIRECTORY_FAILED", "Check Agent and kernel data directory ownership; never expose the identity directory to the kernel group.")
 	}
 
 	backupDir := filepath.Join(operationDir, "backup")
 	if err := ensureDirectory(backupDir, 0700); err != nil {
-		return failNodePartial(result, state, opts, record, "apply", "BACKUP_FAILED", "Check installer state disk space.")
+		return failNodePartial(result, state, opts, layout, record, "apply", "BACKUP_FAILED", "Check installer state disk space.")
 	}
 	staticTargets := nodeStaticTargets(managed)
 	allTargets := append(append([]string{}, staticTargets...), node.AgentBinaryPath, node.SingBoxBinaryPath)
 	if repair {
 		allTargets = append(allTargets, node.ActiveCandidatePath, node.ActiveConfigPath)
 	}
+	// A co-located Line reuses the Hub-owned MeshMux runtime verbatim. The
+	// shared binary is neither snapshotted nor rolled back, and it is never
+	// rewritten by the Line.
+	sharedAgent := ""
+	if layout.CoLocated {
+		sharedAgent = layout.SharedAgent
+		allTargets = removeTarget(allTargets, sharedAgent)
+	}
 	snapshots, err := snapshotNodeTargets(opts.Root, allTargets, state, hasState, backupDir)
 	if err != nil {
-		return failNodePartial(result, state, opts, record, "apply", "BACKUP_FAILED", "No managed files were replaced; inspect the operation journal.")
+		return failNodePartial(result, state, opts, layout, record, "apply", "BACKUP_FAILED", "No managed files were replaced; inspect the operation journal.")
 	}
 	applyFiles := map[string]string{
-		node.AgentBinaryPath: agentPath, node.SingBoxBinaryPath: kernelPath,
+		node.SingBoxBinaryPath: kernelPath,
+	}
+	if sharedAgent == "" {
+		applyFiles[node.AgentBinaryPath] = agentPath
 	}
 	for path, staged := range stagedManaged {
 		applyFiles[path] = staged
 	}
-	if err := applyNodeFiles(ctx, opts, state, managed, applyFiles, backupDir); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, snapshots, record, "apply", err)
+	if err := applyNodeFiles(ctx, opts, layout, state, managed, applyFiles, backupDir); err != nil {
+		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", err)
 	}
 	if err := record("apply", "files_written", ""); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, snapshots, record, "apply", &InstallError{Code: "OPERATION_LOG_FAILED", Recovery: "Restore the journal before another apply."})
+		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", &InstallError{Code: "OPERATION_LOG_FAILED", Recovery: "Restore the journal before another apply."})
 	}
 
 	unitPaths := nodeUnitPaths(opts.Root, cfg)
 	if _, err := opts.Runner.Run(ctx, "systemd-analyze", append([]string{"verify"}, unitPaths...)...); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, snapshots, record, "verify", &InstallError{Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the fixed Agent, kernel and ACL units; no Node is installed until validation succeeds."})
+		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "verify", &InstallError{Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the fixed Agent, kernel and ACL units; no Node is installed until validation succeeds."})
 	}
 	if _, err := opts.Runner.Run(ctx, "fail2ban-client", "-t"); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, snapshots, record, "verify", &InstallError{Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the Node SSH jail and preserve all existing Fail2ban jails."})
+		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "verify", &InstallError{Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the Node SSH jail and preserve all existing Fail2ban jails."})
 	}
 	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, snapshots, record, "apply", &InstallError{Code: "SYSTEMD_RELOAD_FAILED", Recovery: "Inspect systemd and run --repair."})
+		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", &InstallError{Code: "SYSTEMD_RELOAD_FAILED", Recovery: "Inspect systemd and run --repair."})
 	}
 
 	if _, err := opts.Runner.Run(ctx, "systemctl", "is-active", "--quiet", "fail2ban.service"); err != nil {
 		if _, startErr := opts.Runner.Run(ctx, "systemctl", "enable", "--now", "fail2ban.service"); startErr != nil {
-			return failVerifiedPartial(result, state, opts, record, "verify", "FAIL2BAN_START_FAILED", "Review Fail2ban logs and the Node SSH jail; do not alter sshd or flush nftables.")
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_START_FAILED", "Review Fail2ban logs and the Node SSH jail; do not alter sshd or flush nftables.")
 		}
 	} else if _, err := opts.Runner.Run(ctx, "fail2ban-client", "reload"); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "FAIL2BAN_RELOAD_FAILED", "Review Fail2ban logs and preserve existing jails.")
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_RELOAD_FAILED", "Review Fail2ban logs and preserve existing jails.")
 	}
 	// The daemon answers fail2ban-client only after its socket exists and the
 	// jail is loaded. Querying immediately after (re)start loses with exit
 	// 255 on fast hosts, so wait for the jail to become queryable first.
-	if err := waitFail2banJail(ctx, opts.Runner); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "FAIL2BAN_START_FAILED", "The Fail2ban service never became queryable; inspect the service and run --repair.")
-	}
-	if err := verifyNodeSSHJail(ctx, opts.Runner, installedCfg.SSHPort); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
+	//
+	// A standalone Line owns its own SSH jail. A co-located Line reuses the
+	// Hub's jail: a second jail for the same listeners would duplicate the
+	// ban rules, so the Line verifies the existing jail instead of
+	// installing one.
+	if layout.ReuseHubSSHJail {
+		if err := waitFail2banJailNamed(ctx, opts.Runner, hubSSHJailName); err != nil {
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_START_FAILED", "The Fail2ban service never became queryable; inspect the service and run --repair.")
+		}
+		if err := verifyFail2banJailPorts(ctx, opts.Runner, hubSSHJailName, sshPorts); err != nil {
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Hub Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
+		}
+	} else {
+		if err := waitFail2banJail(ctx, opts.Runner); err != nil {
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_START_FAILED", "The Fail2ban service never became queryable; inspect the service and run --repair.")
+		}
+		if err := verifyNodeSSHJail(ctx, opts.Runner, sshPorts...); err != nil {
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
+		}
 	}
 	if repair {
 		lockCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		lock, lockErr := node.AcquireRuntimeLock(lockCtx, opts.Root)
 		cancel()
 		if lockErr != nil {
-			return failVerifiedPartial(result, state, opts, record, "verify", "NODE_RUNTIME_BUSY", "The Agent runtime is applying a task. Preserve the active data plane and repair after the shared runtime lock is free.")
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "NODE_RUNTIME_BUSY", "The Agent runtime is applying a task. Preserve the active data plane and repair after the shared runtime lock is free.")
 		}
 		defer lock.Close()
 	}
 	_, lkgOK := nodeValidLKG(opts.Root, installedCfg)
 	if !repair || !lkgOK {
 		if err := installNodeDynamic(ctx, opts, activeCandidate, candidateConfig, installedCfg.Role); err != nil {
-			return failVerifiedPartial(result, state, opts, record, "apply", "KERNEL_CONFIG_APPLY_FAILED", "The validated data plane files could not be installed; no Agent was started.")
+			return failVerifiedPartial(result, state, opts, layout, record, "apply", "KERNEL_CONFIG_APPLY_FAILED", "The validated data plane files could not be installed; no Agent was started.")
 		}
 	}
 	if cfg.Role == node.RoleOut {
@@ -546,14 +623,14 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		// written by installNodeDynamic above. Starting it earlier fails on
 		// a clean host where the file does not exist yet.
 		if err := activateNodeUnit(ctx, opts.Runner, node.ACLUnit, repair); err != nil {
-			return failVerifiedPartial(result, state, opts, record, "verify", "OUT_ACL_APPLY_FAILED", "Out ACL failed before the kernel started; no VLESS data plane is considered installed.")
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "OUT_ACL_APPLY_FAILED", "Out ACL failed before the kernel started; no VLESS data plane is considered installed.")
 		}
 		if err := verifyNodeACLReadback(ctx, opts.Runner, installedCfg.VLESSPort); err != nil {
-			return failVerifiedPartial(result, state, opts, record, "verify", "OUT_ACL_READBACK_FAILED", "Out ACL ownership or default-deny readback failed; keep the kernel stopped and repair the exact table.")
+			return failVerifiedPartial(result, state, opts, layout, record, "verify", "OUT_ACL_READBACK_FAILED", "Out ACL ownership or default-deny readback failed; keep the kernel stopped and repair the exact table.")
 		}
 	}
 	if err := activateNodeUnit(ctx, opts.Runner, node.SingBoxUnit, repair); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "KERNEL_START_FAILED", "Review sing-box logs and the active configuration; the Agent remains stopped.")
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "KERNEL_START_FAILED", "Review sing-box logs and the active configuration; the Agent remains stopped.")
 	}
 	nativeReadback, err := pollNodeReadback(ctx, opts, installedCfg)
 	if err == nil {
@@ -568,24 +645,24 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		}
 	}
 	if err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "NATIVE_READBACK_FAILED", fmt.Sprintf("The kernel remains active but native readback failed (%v). Repair the data plane; the Agent was not started.", err))
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "NATIVE_READBACK_FAILED", fmt.Sprintf("The kernel remains active but native readback failed (%v). Repair the data plane; the Agent was not started.", err))
 	}
 	if err := record("verify", "data_plane_active", ""); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "OPERATION_LOG_FAILED", "The validated data plane is active; restore the journal before retrying.")
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "OPERATION_LOG_FAILED", "The validated data plane is active; restore the journal before retrying.")
 	}
 	// The installer holds the shared runtime lock here. Do not restart an
 	// already-running Agent: restart would make the new process wait on this
 	// same lock. enable --now is idempotent and starts it only when inactive.
 	if _, err := opts.Runner.Run(ctx, "systemctl", "enable", "--now", node.AgentUnit); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "AGENT_START_FAILED", "The verified data plane remains active. Repair only the Agent service; do not stop sing-box.")
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "AGENT_START_FAILED", "The verified data plane remains active. Repair only the Agent service; do not stop sing-box.")
 	}
 	state.Status, state.Stage, state.ErrorCode, state.Recovery = "installed", "verify", "", ""
 	state.UpdatedAt = time.Now().UTC()
-	if err := writeState(opts.Root, state); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "INSTALL_STATE_WRITE_FAILED", "The data plane and Agent are active but the final ledger failed; preserve them and repair state.")
+	if err := writeNodeState(opts.Root, layout, state); err != nil {
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "INSTALL_STATE_WRITE_FAILED", "The data plane and Agent are active but the final ledger failed; preserve them and repair state.")
 	}
 	if err := record("verify", "pass", ""); err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "OPERATION_LOG_FAILED", "The Node is active but the journal write failed; repair only state/logging.")
+		return failVerifiedPartial(result, state, opts, layout, record, "verify", "OPERATION_LOG_FAILED", "The Node is active but the journal write failed; repair only state/logging.")
 	}
 	_ = os.RemoveAll(stageDir)
 	_ = os.RemoveAll(backupDir)
@@ -594,22 +671,22 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	return result, nil
 }
 
-func failNodePartial(result InstallResult, state InstallState, opts NodeApplyOptions, record func(string, string, string) error, stage, code, recovery string) (InstallResult, error) {
+func failNodePartial(result InstallResult, state InstallState, opts NodeApplyOptions, layout nodeLayout, record func(string, string, string) error, stage, code, recovery string) (InstallResult, error) {
 	state.Status, state.Stage, state.ErrorCode, state.Recovery = "partial", stage, code, recovery
 	state.UpdatedAt = time.Now().UTC()
-	_ = writeState(opts.Root, state)
+	_ = writeNodeState(opts.Root, layout, state)
 	result.Stage, result.Status, result.ErrorCode, result.Recovery = stage, "partial", code, recovery
 	_ = record(stage, "failed", code)
 	return result, &InstallError{Stage: stage, Code: code, Recovery: recovery}
 }
 
-func failVerifiedPartial(result InstallResult, state InstallState, opts NodeApplyOptions, record func(string, string, string) error, stage, code, recovery string) (InstallResult, error) {
+func failVerifiedPartial(result InstallResult, state InstallState, opts NodeApplyOptions, layout nodeLayout, record func(string, string, string) error, stage, code, recovery string) (InstallResult, error) {
 	// The validated data plane is intentionally left running. Do not call
 	// Hub rollback: it would stop unrelated Hub units or the active kernel.
-	return failNodePartial(result, state, opts, record, stage, code, recovery)
+	return failNodePartial(result, state, opts, layout, record, stage, code, recovery)
 }
 
-func rollbackNodeFailure(result InstallResult, state, previous InstallState, hadPrevious bool, opts NodeApplyOptions, snapshots []fileSnapshot, record func(string, string, string) error, stage string, cause error) (InstallResult, error) {
+func rollbackNodeFailure(result InstallResult, state, previous InstallState, hadPrevious bool, opts NodeApplyOptions, layout nodeLayout, snapshots []fileSnapshot, record func(string, string, string) error, stage string, cause error) (InstallResult, error) {
 	code, recovery := "NODE_APPLY_FAILED", "No Agent is considered installed. Inspect the operation journal and run --repair."
 	var ie *InstallError
 	if errors.As(cause, &ie) {
@@ -619,7 +696,7 @@ func rollbackNodeFailure(result InstallResult, state, previous InstallState, had
 	if rollbackOK && hadPrevious && previous.Status == "installed" {
 		previous.LastOperation, previous.ErrorCode, previous.Recovery = state.OperationID, code, recovery
 		previous.UpdatedAt = time.Now().UTC()
-		_ = writeState(opts.Root, previous)
+		_ = writeNodeState(opts.Root, layout, previous)
 		result.Stage, result.Status, result.ErrorCode, result.Recovery = stage, "rolled_back", code, recovery
 	} else {
 		state.Status, state.Stage, state.ErrorCode, state.Recovery = "partial", stage, code, recovery
@@ -627,7 +704,7 @@ func rollbackNodeFailure(result InstallResult, state, previous InstallState, had
 		if rollbackOK {
 			reconcileManagedLedger(&state, snapshots)
 		}
-		_ = writeState(opts.Root, state)
+		_ = writeNodeState(opts.Root, layout, state)
 		result.Stage, result.Status, result.ErrorCode, result.Recovery = stage, "partial", code, recovery
 	}
 	if !rollbackOK {
@@ -674,7 +751,7 @@ func rollbackNodeFiles(ctx context.Context, opts NodeApplyOptions, snapshots []f
 	return ok
 }
 
-func applyNodeFiles(ctx context.Context, opts NodeApplyOptions, state InstallState, managed map[string]nodeManagedFile, files map[string]string, backupDir string) error {
+func applyNodeFiles(ctx context.Context, opts NodeApplyOptions, layout nodeLayout, state InstallState, managed map[string]nodeManagedFile, files map[string]string, backupDir string) error {
 	keys := make([]string, 0, len(files))
 	for path := range files {
 		keys = append(keys, path)
@@ -710,7 +787,7 @@ func applyNodeFiles(ctx context.Context, opts NodeApplyOptions, state InstallSta
 			// as MANAGED_FILE_DRIFT.
 			state.ManagedFiles[target] = digest
 		}
-		if err := writeState(opts.Root, state); err != nil {
+		if err := writeNodeState(opts.Root, layout, state); err != nil {
 			return &InstallError{Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "The file ledger failed to persist; preserve the journal and run --repair."}
 		}
 	}
@@ -762,17 +839,36 @@ func stateOwnsNodeState(state InstallState) bool {
 	return state.Node != nil && state.Schema == 1 && operationIDPattern.MatchString(state.OperationID)
 }
 
-func checkNodeTargets(root string, cfg node.Config, ssh []int, state InstallState, hasState bool) error {
+// checkNodeTargets verifies that the paths this Node operation will write
+// are either free or recorded as MeshMux-managed by this Node's own ledger.
+//
+// A co-located Line does not own the Hub's runtime binary: the shared
+// binary is verified separately against the digest the Hub published, and
+// it is never adopted into the Line's own managed-file ledger.
+func checkNodeTargets(root string, cfg node.Config, ssh []int, state InstallState, hasState bool, layout nodeLayout) error {
 	paths := []string{
 		node.AgentBinaryPath, node.SingBoxBinaryPath, node.AgentConfigPath,
 		"/etc/systemd/system/" + node.AgentUnit, "/etc/systemd/system/" + node.SingBoxUnit,
-		"/etc/fail2ban/jail.d/meshmux-node-ssh.local",
+	}
+	if !layout.ReuseHubSSHJail {
+		paths = append(paths, nodeSSHJailPath)
 	}
 	if cfg.Role == node.RoleOut {
 		paths = append(paths, "/etc/systemd/system/"+node.ACLUnit)
 	}
+	if layout.CoLocated {
+		// The Hub owns the shared runtime. The Line verifies the recorded
+		// digest instead of claiming ownership of the file.
+		paths = removeTarget(paths, layout.SharedAgent)
+	}
 	if err := checkTargetOwnership(root, paths, state, hasState); err != nil {
 		return err
+	}
+	if layout.CoLocated {
+		if !sharedAgentMatches(root, layout.SharedAgent, layout.SharedAgentSHA256) {
+			return &InstallError{Stage: "preflight", Code: "SHARED_BINARY_MISMATCH",
+				Recovery: "The Hub-owned MeshMux runtime on this host no longer matches the recorded digest. Repair the Hub and the Line together; the Line never replaces the shared binary."}
+		}
 	}
 	if cfg.Role == node.RoleOut {
 		if err := checkDynamicNodeTarget(root, node.ACLPath, state, hasState); err != nil {
@@ -978,8 +1074,8 @@ func verifyNodeACLReadback(ctx context.Context, runner CommandRunner, vlessPort 
 	return nil
 }
 
-func verifyNodeTableOwnershipAfterInstall(ctx context.Context, runner CommandRunner, cfg node.Config, hasState bool) error {
-	result := nodeTableOwnership(ctx, runner, cfg, hasState)
+func verifyNodeTableOwnershipAfterInstall(ctx context.Context, root string, runner CommandRunner, cfg node.Config, hasState bool) error {
+	result := nodeTableOwnership(ctx, root, runner, cfg, hasState)
 	if result.Kind == tableAbsent ||
 		(result.Kind == tableManaged && tableOwnedByLedger(cfg, hasState)) {
 		return nil
@@ -1006,13 +1102,24 @@ func usedPackage(packages []string, want string) bool {
 var fail2banReadyTimeout = 30 * time.Second
 var fail2banReadyInterval = time.Second
 
-// waitFail2banJail blocks until our jail answers queries. `enable --now` and
-// `reload` return before the daemon recreates its socket and loads the jail,
-// so an immediate readback fails with exit 255 on fast hosts.
+// waitFail2banJail blocks until the Line's own jail answers queries.
+// `enable --now` and `reload` return before the daemon recreates its socket
+// and loads the jail, so an immediate readback fails with exit 255 on fast
+// hosts.
 func waitFail2banJail(ctx context.Context, runner CommandRunner) error {
+	return waitFail2banJailNamed(ctx, runner, nodeSSHJailName)
+}
+
+// waitFail2banJailNamed blocks until the named jail answers queries. A
+// co-located Line reuses the Hub's jail instead of installing a second one
+// for the same SSH listeners.
+func waitFail2banJailNamed(ctx context.Context, runner CommandRunner, jail string) error {
+	if jail == "" {
+		jail = nodeSSHJailName
+	}
 	deadline := time.Now().Add(fail2banReadyTimeout)
 	for {
-		if _, err := runner.Run(ctx, "fail2ban-client", "status", "meshmux-node-sshd"); err == nil {
+		if _, err := runner.Run(ctx, "fail2ban-client", "status", jail); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -1026,15 +1133,28 @@ func waitFail2banJail(ctx context.Context, runner CommandRunner) error {
 	}
 }
 
+// verifyNodeSSHJail reads the Line's own jail port set back from the running
+// daemon.
 func verifyNodeSSHJail(ctx context.Context, runner CommandRunner, ssh ...int) error {
-	// fail2ban 1.1.0 (Debian 13) removed `get <JAIL> port`; the jail port
-	// is read back through the nftables-multiport action instance, which
-	// also proves the daemon loaded the jail (an unknown jail errors out).
-	portsOut, err := runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "port")
+	return verifyFail2banJailPorts(ctx, runner, nodeSSHJailName, ssh)
+}
+
+// verifyFail2banJailPorts reads a named jail's effective port set back from
+// the running daemon. The jail name is explicit: a co-located Line verifies
+// the Hub's jail instead of a second jail of its own.
+//
+// fail2ban 1.1.0 (Debian 13) removed `get <JAIL> port`; the jail port is
+// read back through the nftables-multiport action instance, which also
+// proves the daemon loaded the jail (an unknown jail errors out).
+func verifyFail2banJailPorts(ctx context.Context, runner CommandRunner, jail string, ssh []int) error {
+	if jail == "" {
+		jail = nodeSSHJailName
+	}
+	portsOut, err := runner.Run(ctx, "fail2ban-client", "get", jail, "action", "nftables-multiport", "port")
 	if err != nil {
 		return fmt.Errorf("SSH_JAIL_QUERY_FAILED jail port readback: %v", err)
 	}
-	actionOut, err := runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "actionstart")
+	actionOut, err := runner.Run(ctx, "fail2ban-client", "get", jail, "action", "nftables-multiport", "actionstart")
 	if err != nil {
 		return fmt.Errorf("SSH_JAIL_QUERY_FAILED acl action readback: %v", err)
 	}
@@ -1112,8 +1232,11 @@ func equalIntSets(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i] != b[i] {
+	sortedA, sortedB := append([]int(nil), a...), append([]int(nil), b...)
+	sort.Ints(sortedA)
+	sort.Ints(sortedB)
+	for i := range sortedA {
+		if sortedA[i] != sortedB[i] {
 			return false
 		}
 	}

@@ -28,12 +28,24 @@ import (
 )
 
 const (
-	installerStatePath  = "/var/lib/meshmux-installer/state.json"
+	installerStatePath = "/var/lib/meshmux-installer/state.json"
+	// localLineStatePath is the ledger of a Line that shares the host with
+	// the Hub. The path is fixed and selected internally from the recorded
+	// Hub state; no caller, user or remote request may choose a path.
+	localLineStatePath  = "/var/lib/meshmux-installer/local-line/state.json"
 	runtimeBinaryPath   = "/usr/local/libexec/meshmuxd"
 	caddyBinaryPath     = "/usr/local/libexec/meshmux-caddy"
 	headscaleBinaryPath = "/usr/local/libexec/meshmux-headscale"
 	maxInstallerFile    = 128 << 20
 )
+
+// SharedBinary records a Hub-owned runtime binary that a co-located Line
+// reuses verbatim. It is nil for every standalone layout, so Hub ledgers and
+// standalone Node ledgers stay byte-for-byte compatible.
+type SharedBinary struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
 
 type InstallState struct {
 	Schema        int               "json:\"schema\""
@@ -53,6 +65,10 @@ type InstallState struct {
 	// Node is present only when this host layout is a Line or Out node.
 	// Hub configurations remain byte-for-byte compatible when this is nil.
 	Node *node.Config `json:"node,omitempty"`
+	// SharedBinaries records the MeshMux runtime builds this layout owns
+	// and that a co-located Line reuses verbatim. It is empty for every
+	// standalone layout, so existing ledgers stay byte-for-byte compatible.
+	SharedBinaries map[string]SharedBinary `json:"shared_binaries,omitempty"`
 }
 
 type InstallResult struct {
@@ -121,8 +137,15 @@ type fileSnapshot struct {
 var operationIDPattern = regexp.MustCompile("^[a-f0-9]{32}$")
 
 func ReadState(root string) (InstallState, bool, error) {
+	return readStateAt(root, installerStatePath)
+}
+
+// readStateAt reads one ledger from a fixed installer path. The path is
+// always an internal constant: no caller, user input or remote request can
+// select an arbitrary ledger location.
+func readStateAt(root, logicalPath string) (InstallState, bool, error) {
 	var state InstallState
-	path := rooted(root, installerStatePath)
+	path := rooted(root, logicalPath)
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return state, false, nil
@@ -238,6 +261,20 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	architecture := architectureForRuntime()
 	if architecture == "" {
 		return fail("preflight", "ARCH_UNSUPPORTED", "Use Debian 13 on amd64 or arm64.")
+	}
+	// A co-located Line pins the exact Hub runtime build it reuses. The Hub
+	// must not move to a different build while that pin exists: the Line
+	// would silently run a MeshMux binary it never verified. The coordinated
+	// Web upgrade that changes both layouts at once is Issue #11; this
+	// profile only refuses the unsafe single-sided change. The check runs
+	// before any file is replaced.
+	if err := checkLocalLineSharedBinaryForExecutable(opts.Root, opts); err != nil {
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			return fail(ie.Stage, ie.Code, ie.Recovery)
+		}
+		return fail("preflight", "SHARED_BINARY_MISMATCH",
+			"The co-located Line pins a different MeshMux runtime build. Restore the matching build on both layouts, or use the validated coordinated Web upgrade from Issue #11 once it is available.")
 	}
 	artifacts := opts.Artifacts
 	if len(artifacts) == 0 {
@@ -368,6 +405,20 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	if err != nil {
 		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "MESHMUX_BINARY_INVALID", "Run the installer from a regular, readable MeshMux executable and retry.")
 	}
+	// A co-located Line pins the exact Hub runtime build it reuses. The Hub
+	// must not move to a different build while that pin exists: the Line
+	// would silently run a different MeshMux binary than the one it
+	// verified. The coordinated Web upgrade that changes both layouts at
+	// once is Issue #11; this profile only refuses the unsafe single-sided
+	// change.
+	if err := checkLocalLineSharedBinary(opts.Root, runtimeHash); err != nil {
+		var ie *InstallError
+		if errors.As(err, &ie) {
+			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, ie.Stage, ie.Code, ie.Recovery)
+		}
+		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "preflight", "SHARED_BINARY_MISMATCH",
+			"The co-located Line pins a different MeshMux runtime build. Restore the matching build on both layouts, or use the validated coordinated Web upgrade from Issue #11 once it is available.")
+	}
 
 	configDir := filepath.Join(stageDir, "config")
 	if err := ensureDirectory(configDir, 0700); err != nil {
@@ -477,6 +528,16 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		state.ManagedFiles[target] = digest
 		if target == runtimeBinaryPath {
 			state.ManagedFiles[target] = runtimeHash
+			// The Hub publishes the exact runtime build a co-located Line
+			// may reuse. The Line verifies this digest before it runs the
+			// shared binary and never replaces it.
+			if state.SharedBinaries == nil {
+				state.SharedBinaries = map[string]SharedBinary{}
+			}
+			state.SharedBinaries[sharedAgentKey] = SharedBinary{
+				Path:   runtimeBinaryPath,
+				SHA256: runtimeHash,
+			}
 		}
 		if err := writeState(opts.Root, state); err != nil {
 			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "INSTALL_STATE_WRITE_FAILED", "Do not remove state or data; inspect disk space and run --repair.")
@@ -964,11 +1025,17 @@ func copyAtomicFromReader(source io.Reader, target string, mode os.FileMode) err
 }
 
 func writeState(root string, state InstallState) error {
+	return writeStateAt(root, installerStatePath, state)
+}
+
+// writeStateAt persists one ledger to a fixed installer path. The path is
+// always an internal constant selected from the recorded layout.
+func writeStateAt(root, logicalPath string, state InstallState) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeBytesAtomic(rooted(root, installerStatePath), append(data, '\n'), 0600)
+	return writeBytesAtomic(rooted(root, logicalPath), append(data, '\n'), 0600)
 }
 
 func writeBytesAtomic(path string, data []byte, mode os.FileMode) error {
@@ -1260,6 +1327,10 @@ func cloneInstallState(source InstallState) InstallState {
 	copyState.Artifacts = make(map[string]string, len(source.Artifacts))
 	for key, value := range source.Artifacts {
 		copyState.Artifacts[key] = value
+	}
+	copyState.SharedBinaries = make(map[string]SharedBinary, len(source.SharedBinaries))
+	for key, value := range source.SharedBinaries {
+		copyState.SharedBinaries[key] = value
 	}
 	copyState.SSHPorts = append([]int(nil), source.SSHPorts...)
 	return copyState
