@@ -58,6 +58,15 @@ PRAGMA user_version=1;
 		t.Fatal(err)
 	}
 
+	// Hermetic fixture: explicit 0700/0600 independent of ambient umask
+	// (local 077 masks this; CI 022 exposes DATA_PERMISSIONS).
+	if err = os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(filepath.Join(dir, "meshmux.db"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
 	s, err := openStore(dir)
 	if err != nil {
 		t.Fatal(err)
