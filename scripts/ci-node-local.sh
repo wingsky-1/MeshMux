@@ -94,13 +94,20 @@ docker cp "$WORK/bin/web.test" "$CONTAINER:$BINDIR/web.test"
 docker cp "$WORK/bin/meshmux" "$CONTAINER:$BINDIR/meshmux"
 dc chmod 755 "$BINDIR/install.test" "$BINDIR/web.test" "$BINDIR/meshmux"
 
+# The Hub fixture dies with the container on restart while its ready file
+# survives, so every boot removes the stale marker and (re)starts it.
+start_fixture() {
+  dc rm -f "$FIXTURE_DIR/fixture-ready"
+  dc bash -lc "MESHMUX_NODE_HUB_FIXTURE_DIR=$FIXTURE_DIR MESHMUX_NODE_HUB_FIXTURE_ROLE=$role MESHMUX_NODE_HUB_FIXTURE_SSH_PORT=22 $BINDIR/web.test -test.run '^TestNodeHubFixture\$' -test.v > $BINDIR/fixture.log 2>&1 &"
+  for _ in $(seq 1 60); do
+    if dc test -f "$FIXTURE_DIR/fixture-ready" >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  dc test -f "$FIXTURE_DIR/fixture-ready"
+}
+
 echo "--- start Hub fixture inside the container (loopback)"
-dc bash -lc "MESHMUX_NODE_HUB_FIXTURE_DIR=$FIXTURE_DIR MESHMUX_NODE_HUB_FIXTURE_ROLE=$role MESHMUX_NODE_HUB_FIXTURE_SSH_PORT=22 $BINDIR/web.test -test.run '^TestNodeHubFixture\$' -test.v > $BINDIR/fixture.log 2>&1 &"
-for _ in $(seq 1 60); do
-  if dc test -f "$FIXTURE_DIR/fixture-ready" >/dev/null 2>&1; then break; fi
-  sleep 2
-done
-dc test -f "$FIXTURE_DIR/fixture-ready"
+start_fixture
 
 echo "--- install phase (first install, repair, fault injection)"
 dc env "MESHMUX_NODE_SYSTEM_VM=1" "MESHMUX_NODE_ROLE=$role" MESHMUX_NODE_PHASE=install "MESHMUX_NODE_FIXTURE_STATUS=$FIXTURE_DIR/node-fixture.json" "MESHMUX_NODE_FIXTURE_CA=$FIXTURE_DIR/ca.crt" "MESHMUX_NODE_MESHMUX_BIN=$BINDIR/meshmux" $BINDIR/install.test -test.run '^TestNodeSystemVM$' -test.v -test.timeout 20m
@@ -108,6 +115,8 @@ dc env "MESHMUX_NODE_SYSTEM_VM=1" "MESHMUX_NODE_ROLE=$role" MESHMUX_NODE_PHASE=i
 echo "--- reboot (container restart keeps the filesystem)"
 docker restart -t 30 "$CONTAINER" >/dev/null
 wait_systemd
+echo "--- restart Hub fixture (it does not survive reboot)"
+start_fixture
 
 echo "--- post-reboot phase (repair persistence)"
 dc env "MESHMUX_NODE_SYSTEM_VM=1" "MESHMUX_NODE_ROLE=$role" MESHMUX_NODE_PHASE=post-reboot "MESHMUX_NODE_FIXTURE_STATUS=$FIXTURE_DIR/node-fixture.json" "MESHMUX_NODE_FIXTURE_CA=$FIXTURE_DIR/ca.crt" "MESHMUX_NODE_MESHMUX_BIN=$BINDIR/meshmux" $BINDIR/install.test -test.run '^TestNodeSystemVM$' -test.v -test.timeout 8m

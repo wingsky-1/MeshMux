@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -201,8 +202,30 @@ func RunCommand(args []string, stderr io.Writer) int {
 			break
 		}
 	}
-	_, _ = io.WriteString(stderr, code+"\n")
+	// Always include the underlying error detail (capped): the exit code
+	// alone cannot distinguish a missing file from a poisoned state, and
+	// that distinction is exactly what post-reboot debugging needs. Values
+	// reaching here are ports, paths, hashes and stable codes.
+	detail := firstErrorLine(err.Error())
+	if detail == "" || detail == code {
+		_, _ = io.WriteString(stderr, code+"\n")
+	} else {
+		_, _ = io.WriteString(stderr, code+": "+detail+"\n")
+	}
 	return 1
+}
+
+// firstErrorLine returns the first line of an error message, capped so logs
+// stay one line and cannot smuggle multi-line payloads into journal output.
+func firstErrorLine(msg string) string {
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	msg = strings.TrimSpace(msg)
+	if len(msg) > 300 {
+		msg = msg[:300]
+	}
+	return msg
 }
 
 type stableError string
