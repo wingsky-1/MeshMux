@@ -11,6 +11,7 @@ on:
       - '.github/workflows/hub-components.yml'
       - 'scripts/ci-hub-components.sh'
       - 'scripts/ci-node-components.sh'
+      - 'scripts/ci-node-reality.sh'
   workflow_dispatch:
 
 permissions:
@@ -35,6 +36,7 @@ jobs:
         run: |
           mkdir -p .ci/bin
           go test -c -o .ci/bin/install.test ./internal/install
+          go test -c -o .ci/bin/node.test ./internal/node
           go test -c -o .ci/bin/web.test ./internal/web
           go build -o .ci/bin/meshmux-web ./cmd/meshmux-web
           go build -o .ci/bin/meshmux ./cmd/meshmux
@@ -52,6 +54,18 @@ jobs:
             -w /workspace \
             --privileged \
             debian:13 bash /workspace/scripts/ci-node-components.sh
+      - name: Debian 13 native REALITY acceptance fixture (Issue #7 first PR L2)
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e RUNNER_TEMP=/tmp \
+            debian:13 bash -c '
+              apt-get update &&
+              apt-get install -y --no-install-recommends ca-certificates curl tar gzip coreutils &&
+              bash scripts/ci-node-reality.sh
+            '
       - name: Upload reviewable installer and source-bound checksum
         uses: actions/upload-artifact@v4
         with:
