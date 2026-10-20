@@ -539,7 +539,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	if err := activateNodeUnit(ctx, opts.Runner, node.SingBoxUnit, repair); err != nil {
 		return failVerifiedPartial(result, state, opts, record, "verify", "KERNEL_START_FAILED", "Review sing-box logs and the active configuration; the Agent remains stopped.")
 	}
-	nativeReadback, err := opts.Readback(ctx, installedCfg, opts.Root, opts.Runner)
+	nativeReadback, err := pollNodeReadback(ctx, opts, installedCfg)
 	if err == nil {
 		err = nativeReadback.Validate()
 	}
@@ -552,7 +552,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		}
 	}
 	if err != nil {
-		return failVerifiedPartial(result, state, opts, record, "verify", "NATIVE_READBACK_FAILED", "The kernel remains active but native readback failed. Repair the data plane; the Agent was not started.")
+		return failVerifiedPartial(result, state, opts, record, "verify", "NATIVE_READBACK_FAILED", fmt.Sprintf("The kernel remains active but native readback failed (%v). Repair the data plane; the Agent was not started.", err))
 	}
 	if err := record("verify", "data_plane_active", ""); err != nil {
 		return failVerifiedPartial(result, state, opts, record, "verify", "OPERATION_LOG_FAILED", "The validated data plane is active; restore the journal before retrying.")
@@ -1162,6 +1162,42 @@ func nodeAgentReference(executable string) string {
 		return "/proc/self/exe"
 	}
 	return executable
+}
+
+// pollNodeReadback re-reads the live data plane until it validates or the
+// deadline hits. The kernel needs a moment after (re)start before its
+// process, listeners and nft state are observable, especially under QEMU
+// software emulation. Only startup-transient failures are retried; a
+// deterministic config or ownership failure still fails fast so a broken
+// data plane is never mistaken for a slow one.
+func pollNodeReadback(ctx context.Context, opts NodeApplyOptions, cfg node.Config) (node.Readback, error) {
+	deadline := time.Now().Add(60 * time.Second)
+	var last error = errors.New("NATIVE_READBACK_UNAVAILABLE")
+	for {
+		readback, err := opts.Readback(ctx, cfg, opts.Root, opts.Runner)
+		if err == nil {
+			return readback, nil
+		}
+		last = err
+		if !nodeReadbackRetriable(err) || time.Now().After(deadline) {
+			return node.Readback{}, last
+		}
+		select {
+		case <-ctx.Done():
+			return node.Readback{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// nodeReadbackRetriable reports whether a live-readback failure looks like a
+// kernel that has not finished starting yet. Anything else (config bytes,
+// ownership, hashes, table content) is deterministic and fails immediately.
+func nodeReadbackRetriable(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "SINGBOX_NOT_RUNNING") ||
+		strings.Contains(msg, "SINGBOX_PID_CHANGED") ||
+		strings.Contains(msg, "LISTENER_")
 }
 
 // nodeFileOwnedBy checks exact UID and group ownership. It is only used for

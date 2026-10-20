@@ -251,6 +251,49 @@ func TestNodeAgentReferencePinsStagedBinary(t *testing.T) {
 	}
 }
 
+// TestNodeReadbackRetriesSlowKernelStart pins the startup race handling: a
+// kernel that reports SINGBOX_NOT_RUNNING while it boots is re-polled until
+// the readback validates, instead of failing the install.
+func TestNodeReadbackRetriesSlowKernelStart(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	calls := 0
+	valid := f.opts.Readback
+	f.opts.Readback = func(ctx context.Context, cfg node.Config, root string, runner node.CommandRunner) (node.Readback, error) {
+		calls++
+		if calls < 3 {
+			return node.Readback{}, errors.New("SINGBOX_NOT_RUNNING")
+		}
+		return valid(ctx, cfg, root, runner)
+	}
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err != nil || result.Status != "installed" {
+		t.Fatalf("slow kernel start = %+v %v", result, err)
+	}
+	if calls != 3 {
+		t.Fatalf("readback polled %d times, want 3", calls)
+	}
+}
+
+// TestNodeReadbackDeterministicFailureFailsFast pins the other side: a
+// config-level readback failure is not a slow kernel and must fail the
+// install on the first attempt without polling to the deadline.
+func TestNodeReadbackDeterministicFailureFailsFast(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	calls := 0
+	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
+		calls++
+		return node.Readback{}, errors.New("ACTIVE_CONFIG_HASH_MISMATCH")
+	}
+	_, err := f.install(t, false, strings.Repeat("A", 43))
+	var ie *InstallError
+	if !errors.As(err, &ie) || ie.Code != "NATIVE_READBACK_FAILED" {
+		t.Fatalf("deterministic readback failure = %v, want NATIVE_READBACK_FAILED", err)
+	}
+	if calls != 1 {
+		t.Fatalf("deterministic failure polled %d times, want 1", calls)
+	}
+}
+
 // TestNodeSSHJailQueryFailureKeepsOuterCode pins the fail-closed contract:
 // when the jail port readback itself errors, the install reports the stable
 // SSH_FAIL2BAN_JAIL_UNAVAILABLE code (with the inner detail in Recovery).
