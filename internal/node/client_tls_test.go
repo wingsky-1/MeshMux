@@ -124,7 +124,6 @@ func TestClientSetsFiniteTimeoutWhenMissing(t *testing.T) {
 
 func TestClientStalledTLSResponsesTimeOut(t *testing.T) {
 	block := make(chan struct{})
-	defer close(block)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/config/1") {
 			w.Header().Set("Content-Type", "application/json")
@@ -137,12 +136,19 @@ func TestClientStalledTLSResponsesTimeOut(t *testing.T) {
 				flusher.Flush()
 			}
 		}
+		// Block only on the test channel, never on the request context: once
+		// the client deadline fires the server must still be stalled, so a
+		// legitimately completed response can never win the race against the
+		// timeout assertion below. The deferred close releases the handler.
 		select {
 		case <-block:
-		case <-r.Context().Done():
 		}
 	}))
 	defer server.Close()
+	// Release stalled handlers before the server closes: httptest Server.Close
+	// waits for active handlers, so closing the channel must come first in
+	// LIFO order.
+	defer close(block)
 
 	config := validConfig()
 	config.HubURL = server.URL
@@ -175,14 +181,20 @@ func TestClientStalledTLSResponsesTimeOut(t *testing.T) {
 
 func TestClientRequestTimeoutWithBackgroundContext(t *testing.T) {
 	block := make(chan struct{})
-	defer close(block)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Block only on the test channel, never on the request context: once
+		// the client deadline fires the server must still be stalled, so a
+		// legitimately completed response can never win the race against the
+		// timeout assertion below. The deferred close releases the handler.
 		select {
 		case <-block:
-		case <-r.Context().Done():
 		}
 	}))
 	defer server.Close()
+	// Release stalled handlers before the server closes: httptest Server.Close
+	// waits for active handlers, so closing the channel must come first in
+	// LIFO order.
+	defer close(block)
 
 	config := validConfig()
 	config.HubURL = server.URL
