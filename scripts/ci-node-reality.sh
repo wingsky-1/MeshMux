@@ -92,25 +92,21 @@ if [[ ! -x "${TEST_BINARY}" ]]; then
   fail "prebuilt test binary not found or not executable: ${TEST_BINARY}; the CI workflow must build it before running this script"
 fi
 
-# The pin is rendered by the installer fixture, which reads the same
-# internal/node/release.go the compiler and the node test use.
-FIXTURE_TEST_BINARY="${REPO_ROOT}/.ci/bin/install.test"
-if [[ ! -x "${FIXTURE_TEST_BINARY}" ]]; then
-  fail "prebuilt fixture test binary not found or not executable: ${FIXTURE_TEST_BINARY}; the CI workflow must build it before running this script"
-fi
-
+# The pin is rendered by the node package itself, which reads the same
+# internal/node/release.go the compiler and the acceptance fixture use.
+#
 # --- Render the in-tree pin ------------------------------------------------
 # The fixture writes releases.tsv from internal/node/release.go, so the script
 # consumes the repository's own pin instead of a second hardcoded copy.
 PIN_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/meshmux-reality-pin.XXXXXX")" ||
   fail "could not create the pin fixture directory"
-MESHMUX_NODE_FIXTURE_DIR="${PIN_TEMP}" "${FIXTURE_TEST_BINARY}" \
-  -test.run '^TestWriteNodeComponentFixtures$' -test.v >"${PIN_TEMP}/fixture.log" 2>&1 ||
-  fail "could not render the Node component fixture; see ${PIN_TEMP}/fixture.log"
+MESHMUX_REALITY_PIN_DIR="${PIN_TEMP}" "${TEST_BINARY}" \
+  -test.run '^TestWriteRealityReleasePin$' -test.v >"${PIN_TEMP}/fixture.log" 2>&1 ||
+  fail "could not render the Node release pin; see ${PIN_TEMP}/fixture.log"
 
 RELEASES_TSV="${PIN_TEMP}/releases.tsv"
 if [[ ! -f "${RELEASES_TSV}" ]]; then
-  fail "the Node component fixture did not produce releases.tsv"
+  fail "the release pin fixture did not produce releases.tsv"
 fi
 
 # The first row is the header; the pin rows are architecture, version,

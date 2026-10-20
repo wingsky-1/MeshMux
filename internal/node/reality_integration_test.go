@@ -558,6 +558,45 @@ func (f *realityFixture) clientConfig(socksPort, vlessPort int, uuid string) map
 	}
 }
 
+// TestWriteRealityReleasePin renders the in-tree release pin of this package
+// as a TSV manifest, so a CI script can fetch and verify the pinned kernel
+// without hardcoding a second copy of the pin.
+//
+// The manifest is written only when MESHMUX_REALITY_PIN_DIR names a
+// directory. The format is the same one internal/install renders:
+// architecture, version, source_url, archive_sha256 and binary_sha256.
+func TestWriteRealityReleasePin(t *testing.T) {
+	dir := strings.TrimSpace(os.Getenv("MESHMUX_REALITY_PIN_DIR"))
+	if dir == "" {
+		t.Skip("only used by the Debian 13 native REALITY CI script")
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var manifest strings.Builder
+	manifest.WriteString("architecture\tversion\tsource_url\tarchive_sha256\tbinary_sha256\n")
+	for _, arch := range []string{"amd64", "arm64"} {
+		release, ok := KernelReleaseFor(arch)
+		if !ok {
+			t.Fatalf("%s Node kernel release is not pinned", arch)
+		}
+		if release.Version != KernelVersion ||
+			!strings.HasPrefix(release.SourceURL, "https://github.com/SagerNet/sing-box/releases/download/v") {
+			t.Fatalf("%s Node release is not the fixed official version", arch)
+		}
+		if len(release.ArchiveSHA256) != 64 || len(release.BinarySHA256) != 64 {
+			t.Fatalf("%s Node release digests are incomplete", arch)
+		}
+		if _, err := fmt.Fprintf(&manifest, "%s\t%s\t%s\t%s\t%s\n",
+			arch, release.Version, release.SourceURL, release.ArchiveSHA256, release.BinarySHA256); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "releases.tsv"), []byte(manifest.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials is the gated
 // native handshake acceptance fixture of the Issue #7 first PR.
 //
