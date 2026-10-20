@@ -23,6 +23,10 @@ const (
 	maxFinalCache      = 1024
 )
 
+// errRuntimeStateTooLarge refuses a runtime state that does not fit the
+// state size bound. The previous readable state stays untouched.
+var errRuntimeStateTooLarge = errors.New("RUNTIME_STATE_TOO_LARGE")
+
 // Controller is the narrow outbound Hub control-plane boundary.
 type Controller interface {
 	Candidate(context.Context, int64) (CandidateDocument, error)
@@ -203,7 +207,7 @@ func (r *Runtime) ensureLayout() error {
 
 func (r *Runtime) loadOrInitializeState() (runtimeState, error) {
 	path := rooted(r.root, RuntimeStatePath)
-	data, _, err := readPrivateFile(path)
+	data, _, err := readRuntimeStateFile(path)
 	if os.IsNotExist(err) {
 		state := emptyRuntimeState(r.cfg)
 		if err := r.bootstrapLKG(&state); err != nil {
@@ -298,11 +302,18 @@ func (r *Runtime) persistState(state *runtimeState) error {
 	if err != nil {
 		return errors.New("RUNTIME_STATE_ENCODE_FAILED")
 	}
+	data = append(data, '\n')
+	// The size is checked before the atomic replace, so a state that does not
+	// fit never reaches the disk and the previous readable state stays in
+	// place for the next start.
+	if len(data) > maxRuntimeStateSize {
+		return errRuntimeStateTooLarge
+	}
 	path := rooted(r.root, RuntimeStatePath)
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
-		return writeAtomic(path, append(data, '\n'), 0600, false)
+		return writeAtomic(path, data, 0600, false)
 	}
-	return writeAtomic(path, append(data, '\n'), 0600, true)
+	return writeAtomic(path, data, 0600, true)
 }
 
 func (r *Runtime) saveState(state *runtimeState) error {
@@ -310,6 +321,17 @@ func (r *Runtime) saveState(state *runtimeState) error {
 		return r.writeState(state)
 	}
 	return r.persistState(state)
+}
+
+// statePersistCode maps a state persistence failure to a stable error code.
+// A state that does not fit the size bound keeps its own code, because the
+// previous readable state is still in place and only the new state was
+// refused.
+func statePersistCode(err error) string {
+	if errors.Is(err, errRuntimeStateTooLarge) {
+		return "RUNTIME_STATE_TOO_LARGE"
+	}
+	return "STATE_PERSIST_FAILED"
 }
 
 func (s *runtimeState) trimAcknowledged() {
@@ -415,7 +437,7 @@ func (r *Runtime) Execute(ctx context.Context, task agent.Task) agent.TaskResult
 	if err := r.saveState(&state); err != nil {
 		r.logger.ErrorContext(ctx, "persist final task result failed",
 			"operation_id", task.OperationID, "error_code", errorCode(err))
-		return failedResult(result, "STATE_PERSIST_FAILED")
+		return failedResult(result, statePersistCode(err))
 	}
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "final", "error_code", result.ErrorCode)
@@ -424,7 +446,7 @@ func (r *Runtime) Execute(ctx context.Context, task agent.Task) agent.TaskResult
 
 func (r *Runtime) loadStateForExecution() (runtimeState, error) {
 	path := rooted(r.root, RuntimeStatePath)
-	data, _, err := readPrivateFile(path)
+	data, _, err := readRuntimeStateFile(path)
 	if err != nil {
 		return runtimeState{}, errors.New("RUNTIME_STATE_UNSAFE")
 	}

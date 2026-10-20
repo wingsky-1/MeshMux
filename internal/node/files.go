@@ -13,10 +13,21 @@ import (
 )
 
 const (
-	agentDataDir       = "/var/lib/meshmux-agent"
-	stagedDir          = "/var/lib/meshmux-agent/staged"
-	activeConfigDir    = "/var/lib/meshmux-singbox"
+	agentDataDir    = "/var/lib/meshmux-agent"
+	stagedDir       = "/var/lib/meshmux-agent/staged"
+	activeConfigDir = "/var/lib/meshmux-singbox"
+	// maxRuntimeFileSize bounds the small runtime files: the agent config,
+	// the identity record, the active candidate, the staged revisions and the
+	// active kernel config. A candidate carries at most 1024 users and the
+	// Hub candidate body stays bounded at 1 MiB, so these files stay small.
 	maxRuntimeFileSize = 1 << 20
+	// maxRuntimeStateSize bounds the runtime state file. The state carries the
+	// LKG config, the apply journal (candidate and config, base64 inflated by
+	// the JSON encoding) and the idempotency and final-result caches with up
+	// to 1024 entries each, so it needs more room than the small files. The
+	// state is written atomically and a write above this bound is refused, so
+	// a state that was accepted stays readable after the next start.
+	maxRuntimeStateSize = 4 << 20
 )
 
 func rooted(root, path string) string {
@@ -200,6 +211,13 @@ func verifyOwner(info os.FileInfo, uid int) error {
 }
 
 func readRegularFile(path string, requirePrivate bool) ([]byte, os.FileInfo, error) {
+	return readRegularFileLimited(path, requirePrivate, maxRuntimeFileSize)
+}
+
+// readRegularFileLimited reads one regular file and refuses anything above
+// the given limit. The limit is applied while reading, so an oversized file
+// is never fully buffered.
+func readRegularFileLimited(path string, requirePrivate bool, limit int64) ([]byte, os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, nil, err
@@ -215,11 +233,11 @@ func readRegularFile(path string, requirePrivate bool) ([]byte, os.FileInfo, err
 		return nil, nil, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxRuntimeFileSize+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(data) > maxRuntimeFileSize {
+	if int64(len(data)) > limit {
 		return nil, nil, errors.New("FILE_TOO_LARGE")
 	}
 	return data, info, nil
@@ -238,7 +256,14 @@ func readRegularFileOwnedBy(path string, mode os.FileMode, uid int) ([]byte, os.
 }
 
 func readPrivateFile(path string) ([]byte, os.FileInfo, error) {
-	data, info, err := readRegularFile(path, true)
+	return readPrivateFileLimited(path, maxRuntimeFileSize)
+}
+
+// readPrivateFileLimited reads one private file and refuses anything above
+// the given limit. The limit is applied while reading, so an oversized file
+// is never fully buffered.
+func readPrivateFileLimited(path string, limit int64) ([]byte, os.FileInfo, error) {
+	data, info, err := readRegularFileLimited(path, true, limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -247,6 +272,13 @@ func readPrivateFile(path string) ([]byte, os.FileInfo, error) {
 		return nil, nil, errors.New("FILE_PERMISSIONS: private file must be owned 0600")
 	}
 	return data, info, nil
+}
+
+// readRuntimeStateFile reads the runtime state file with the state limit. The
+// state carries the LKG config, the apply journal and the task caches, so it
+// gets its own bound instead of the small runtime-file bound.
+func readRuntimeStateFile(path string) ([]byte, os.FileInfo, error) {
+	return readPrivateFileLimited(path, maxRuntimeStateSize)
 }
 
 func managedFileUID(root string) int {

@@ -78,7 +78,7 @@ func ReadbackLocal(ctx context.Context, cfg Config, root string, runner CommandR
 		runner = ExecRunner{}
 	}
 	runtimeInstance := &Runtime{cfg: cfg, root: absRoot, runner: runner, procRoot: rooted(absRoot, "/proc")}
-	stateData, _, err := readPrivateFile(rooted(absRoot, RuntimeStatePath))
+	stateData, _, err := readRuntimeStateFile(rooted(absRoot, RuntimeStatePath))
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return Readback{}, errors.New("RUNTIME_STATE_UNSAFE")
