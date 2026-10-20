@@ -156,7 +156,7 @@ func TestCandidateStrictDecoding(t *testing.T) {
 	if err := json.Unmarshal([]byte(valid), &candidate); err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Schema != CandidateSchema || candidate.Candidate() != validCandidate() {
+	if candidate.Schema != CandidateSchema || !candidate.Candidate().Equal(validCandidate()) {
 		t.Fatalf("decoded candidate = %+v", candidate)
 	}
 	if err := candidate.ValidateFor(validConfig()); err != nil {

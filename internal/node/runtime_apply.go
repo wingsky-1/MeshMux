@@ -190,7 +190,7 @@ func (r *Runtime) validateStaged(ctx context.Context, revision int64, document C
 		return errors.New("STAGED_CANDIDATE_INVALID")
 	}
 	var decoded CandidateDocument
-	if decodeStrictJSON(stagedCandidate, &decoded) != nil || decoded != document {
+	if decodeStrictJSON(stagedCandidate, &decoded) != nil || !decoded.Equal(document) {
 		return errors.New("STAGED_CANDIDATE_INVALID")
 	}
 	stagedConfig, _, err := readPrivateFile(stagedConfigPath(r.root, revision))

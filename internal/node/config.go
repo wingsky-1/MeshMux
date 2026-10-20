@@ -70,30 +70,41 @@ type Metadata struct {
 	SSHPort   int    `json:"ssh_port"`
 }
 
-// Candidate is the complete, non-secret dynamic configuration input.
+// Candidate is the complete dynamic configuration input. The first five
+// fields are the frozen v1 baseline. Users and Reality are the v2 blocks:
+// they carry node secrets, so a candidate that uses them only travels over the
+// authenticated Hub<->Agent channel and never enters a public response, a
+// subscription artifact or a generic log line.
 type Candidate struct {
-	NodeID        string `json:"node_id"`
-	Role          Role   `json:"role"`
-	Revision      int64  `json:"revision"`
-	VLESSPort     int    `json:"vless_port"`
-	KernelVersion string `json:"kernel_version"`
+	NodeID        string         `json:"node_id"`
+	Role          Role           `json:"role"`
+	Revision      int64          `json:"revision"`
+	VLESSPort     int            `json:"vless_port"`
+	KernelVersion string         `json:"kernel_version"`
+	Users         []VLESSUser    `json:"users,omitempty"`
+	Reality       *RealityConfig `json:"reality,omitempty"`
 }
 
 // CandidateDocument is the exact JSON document used for the mutable active
-// candidate and immutable candidate transport. Schema is always
-// meshmux-node/v1 and the remaining fields are exactly Candidate's fields.
+// candidate and immutable candidate transport. Schema is meshmux-node/v1 for
+// the frozen six-field non-secret baseline and meshmux-node/v2 for the
+// baseline plus the users and reality blocks.
 type CandidateDocument struct {
-	Schema        string `json:"schema"`
-	NodeID        string `json:"node_id"`
-	Role          Role   `json:"role"`
-	Revision      int64  `json:"revision"`
-	VLESSPort     int    `json:"vless_port"`
-	KernelVersion string `json:"kernel_version"`
+	Schema        string         `json:"schema"`
+	NodeID        string         `json:"node_id"`
+	Role          Role           `json:"role"`
+	Revision      int64          `json:"revision"`
+	VLESSPort     int            `json:"vless_port"`
+	KernelVersion string         `json:"kernel_version"`
+	Users         []VLESSUser    `json:"users,omitempty"`
+	Reality       *RealityConfig `json:"reality,omitempty"`
 }
 
-// NewCandidateDocument binds a candidate to the frozen schema identifier.
+// NewCandidateDocument binds a candidate to a schema identifier. A candidate
+// without users and without a reality block stays on the frozen v1 document;
+// anything else is written as a v2 document.
 func NewCandidateDocument(candidate Candidate) CandidateDocument {
-	return CandidateDocument{
+	document := CandidateDocument{
 		Schema:        CandidateSchema,
 		NodeID:        candidate.NodeID,
 		Role:          candidate.Role,
@@ -101,6 +112,16 @@ func NewCandidateDocument(candidate Candidate) CandidateDocument {
 		VLESSPort:     candidate.VLESSPort,
 		KernelVersion: candidate.KernelVersion,
 	}
+	if candidate.Reality == nil && len(candidate.Users) == 0 {
+		return document
+	}
+	document.Schema = CandidateSchemaV2
+	document.Users = candidate.Users
+	if document.Users == nil {
+		document.Users = []VLESSUser{}
+	}
+	document.Reality = candidate.Reality
+	return document
 }
 
 // Candidate returns the validated configuration input represented by the
@@ -112,7 +133,95 @@ func (d CandidateDocument) Candidate() Candidate {
 		Revision:      d.Revision,
 		VLESSPort:     d.VLESSPort,
 		KernelVersion: d.KernelVersion,
+		Users:         d.Users,
+		Reality:       d.Reality,
 	}
+}
+
+// MarshalJSON writes the frozen v1 document byte for byte as before, or the
+// v2 document with the users and reality blocks. The v1 shape never carries
+// the new fields, so an existing v1 revision keeps its exact bytes.
+//
+// The document is validated first, so an unknown schema or a document whose
+// schema does not match its own users and reality blocks fails closed instead
+// of silently dropping credentials.
+func (d CandidateDocument) MarshalJSON() ([]byte, error) {
+	if err := d.Validate(); err != nil {
+		return nil, err
+	}
+	if d.Schema == CandidateSchemaV2 {
+		type v2Document struct {
+			Schema        string         `json:"schema"`
+			NodeID        string         `json:"node_id"`
+			Role          Role           `json:"role"`
+			Revision      int64          `json:"revision"`
+			VLESSPort     int            `json:"vless_port"`
+			KernelVersion string         `json:"kernel_version"`
+			Users         []VLESSUser    `json:"users"`
+			Reality       *RealityConfig `json:"reality"`
+		}
+		users := d.Users
+		if users == nil {
+			users = []VLESSUser{}
+		}
+		return json.Marshal(v2Document{
+			Schema:        d.Schema,
+			NodeID:        d.NodeID,
+			Role:          d.Role,
+			Revision:      d.Revision,
+			VLESSPort:     d.VLESSPort,
+			KernelVersion: d.KernelVersion,
+			Users:         users,
+			Reality:       d.Reality,
+		})
+	}
+	type v1Document struct {
+		Schema        string `json:"schema"`
+		NodeID        string `json:"node_id"`
+		Role          Role   `json:"role"`
+		Revision      int64  `json:"revision"`
+		VLESSPort     int    `json:"vless_port"`
+		KernelVersion string `json:"kernel_version"`
+	}
+	return json.Marshal(v1Document{
+		Schema:        d.Schema,
+		NodeID:        d.NodeID,
+		Role:          d.Role,
+		Revision:      d.Revision,
+		VLESSPort:     d.VLESSPort,
+		KernelVersion: d.KernelVersion,
+	})
+}
+
+// Equal reports whether two documents carry exactly the same content. It
+// replaces the direct struct comparison, which no longer compiles once the
+// document owns a user slice.
+func (d CandidateDocument) Equal(other CandidateDocument) bool {
+	if d.Schema != other.Schema {
+		return false
+	}
+	return d.Candidate().Equal(other.Candidate())
+}
+
+// Equal reports whether two candidates carry exactly the same content,
+// including the optional v2 blocks.
+func (c Candidate) Equal(other Candidate) bool {
+	if c.NodeID != other.NodeID || c.Role != other.Role || c.Revision != other.Revision ||
+		c.VLESSPort != other.VLESSPort || c.KernelVersion != other.KernelVersion {
+		return false
+	}
+	if len(c.Users) != len(other.Users) {
+		return false
+	}
+	for i := range c.Users {
+		if c.Users[i] != other.Users[i] {
+			return false
+		}
+	}
+	if c.Reality == nil || other.Reality == nil {
+		return c.Reality == nil && other.Reality == nil
+	}
+	return *c.Reality == *other.Reality
 }
 
 // Readback contains only local evidence. Its fields deliberately cannot claim
@@ -277,7 +386,8 @@ func (m Metadata) ValidateFor(c Config) error {
 	return nil
 }
 
-// Validate checks the frozen candidate fields.
+// Validate checks the frozen candidate fields and, when present, the optional
+// v2 users and reality blocks.
 func (c Candidate) Validate() error {
 	if !nodeIDPattern.MatchString(c.NodeID) {
 		return errors.New("CANDIDATE_INVALID: node identity does not match")
@@ -294,7 +404,7 @@ func (c Candidate) Validate() error {
 	if c.KernelVersion != KernelVersion {
 		return errors.New("KERNEL_VERSION_INVALID: candidate requires the pinned kernel version")
 	}
-	return nil
+	return c.validateV2Fields()
 }
 
 // ValidateFor binds a candidate to the configured node, role and VLESS port.
@@ -314,8 +424,20 @@ func (c Candidate) ValidateFor(config Config) error {
 // Validate checks the schema and immutable candidate constraints. Callers can
 // use it before trusting a programmatically constructed document.
 func (d CandidateDocument) Validate() error {
-	if d.Schema != CandidateSchema {
-		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1")
+	switch d.Schema {
+	case CandidateSchema:
+		if d.Reality != nil || len(d.Users) > 0 {
+			return errors.New("CANDIDATE_INVALID: users and reality are not allowed in meshmux-node/v1")
+		}
+	case CandidateSchemaV2:
+		if d.Reality == nil {
+			return errors.New("REALITY_REQUIRED: reality is required in meshmux-node/v2")
+		}
+		if d.Users == nil {
+			return errors.New("CANDIDATE_INVALID: users must be an array in meshmux-node/v2")
+		}
+	default:
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1 or meshmux-node/v2")
 	}
 	return d.Candidate().Validate()
 }
@@ -328,13 +450,31 @@ func (d CandidateDocument) ValidateFor(c Config) error {
 	return d.Candidate().ValidateFor(c)
 }
 
-// UnmarshalJSON accepts exactly one object with the schema and five frozen
-// candidate fields. It rejects unknown, duplicate, null and malformed values.
+// UnmarshalJSON accepts exactly one object with the schema and the candidate
+// fields of that schema. It rejects unknown, duplicate, null and malformed
+// values, and never mixes the v1 and v2 shapes.
 func (d *CandidateDocument) UnmarshalJSON(data []byte) error {
 	obj, err := decodeExactObject(data)
 	if err != nil {
 		return errors.New("CANDIDATE_INVALID: malformed candidate JSON")
 	}
+	schema := new(string)
+	if err := decodeStringField(obj["schema"], schema); err != nil {
+		return errors.New("CANDIDATE_INVALID: field type invalid")
+	}
+	switch *schema {
+	case CandidateSchema:
+		return d.unmarshalV1(obj)
+	case CandidateSchemaV2:
+		return d.unmarshalV2(obj)
+	default:
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1 or meshmux-node/v2")
+	}
+}
+
+// unmarshalV1 decodes the frozen six-field non-secret document. The v1 shape
+// never carries the v2 blocks.
+func (d *CandidateDocument) unmarshalV1(obj map[string]json.RawMessage) error {
 	required := []string{"schema", "node_id", "role", "revision", "vless_port", "kernel_version"}
 	if len(obj) != len(required) {
 		return errors.New("CANDIDATE_INVALID: malformed candidate JSON")
@@ -360,9 +500,11 @@ func (d *CandidateDocument) UnmarshalJSON(data []byte) error {
 		return errors.New("CANDIDATE_INVALID: field type invalid")
 	}
 	decoded.Role = Role(role)
-	if decoded.Revision, err = decodePositiveInt64(obj["revision"]); err != nil {
+	revision, err := decodePositiveInt64(obj["revision"])
+	if err != nil {
 		return errors.New("CANDIDATE_INVALID: revision must be a positive int64")
 	}
+	decoded.Revision = revision
 	port, err := decodePositiveInt64(obj["vless_port"])
 	if err != nil || port > 65535 {
 		return errors.New("CANDIDATE_INVALID: VLESS port must be an integer")
@@ -371,6 +513,64 @@ func (d *CandidateDocument) UnmarshalJSON(data []byte) error {
 	if err := decodeStringField(obj["kernel_version"], &decoded.KernelVersion); err != nil {
 		return errors.New("CANDIDATE_INVALID: field type invalid")
 	}
+	if err := decoded.Validate(); err != nil {
+		return err
+	}
+	*d = decoded
+	return nil
+}
+
+// unmarshalV2 decodes the v2 document: the frozen six fields plus exactly the
+// users array and the reality block.
+func (d *CandidateDocument) unmarshalV2(obj map[string]json.RawMessage) error {
+	required := []string{"schema", "node_id", "role", "revision", "vless_port", "kernel_version", "users", "reality"}
+	if len(obj) != len(required) {
+		return errors.New("CANDIDATE_INVALID: malformed candidate JSON")
+	}
+	for _, name := range required {
+		if _, ok := obj[name]; !ok {
+			return errors.New("CANDIDATE_INVALID: malformed candidate JSON")
+		}
+	}
+
+	var decoded CandidateDocument
+	if err := decodeStringField(obj["schema"], &decoded.Schema); err != nil {
+		return errors.New("CANDIDATE_INVALID: field type invalid")
+	}
+	if decoded.Schema != CandidateSchemaV2 {
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v2")
+	}
+	if err := decodeStringField(obj["node_id"], &decoded.NodeID); err != nil {
+		return errors.New("CANDIDATE_INVALID: field type invalid")
+	}
+	var role string
+	if err := decodeStringField(obj["role"], &role); err != nil {
+		return errors.New("CANDIDATE_INVALID: field type invalid")
+	}
+	decoded.Role = Role(role)
+	revision, err := decodePositiveInt64(obj["revision"])
+	if err != nil {
+		return errors.New("CANDIDATE_INVALID: revision must be a positive int64")
+	}
+	decoded.Revision = revision
+	port, err := decodePositiveInt64(obj["vless_port"])
+	if err != nil || port > 65535 {
+		return errors.New("CANDIDATE_INVALID: VLESS port must be an integer")
+	}
+	decoded.VLESSPort = int(port)
+	if err := decodeStringField(obj["kernel_version"], &decoded.KernelVersion); err != nil {
+		return errors.New("CANDIDATE_INVALID: field type invalid")
+	}
+	users, err := decodeUsers(obj["users"])
+	if err != nil {
+		return err
+	}
+	decoded.Users = users
+	reality, err := decodeReality(obj["reality"])
+	if err != nil {
+		return err
+	}
+	decoded.Reality = reality
 	if err := decoded.Validate(); err != nil {
 		return err
 	}

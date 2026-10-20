@@ -149,7 +149,7 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 	}
 	var activeDocument CandidateDocument
 	if err = decodeStrictJSON(activeCandidateData, &activeDocument); err != nil ||
-		activeDocument.ValidateFor(r.cfg) != nil || activeDocument.Candidate() != candidate {
+		activeDocument.ValidateFor(r.cfg) != nil || !activeDocument.Candidate().Equal(candidate) {
 		return Readback{}, errors.New("ACTIVE_CANDIDATE_MISMATCH")
 	}
 	props, err := r.systemdProperties(ctx)
