@@ -78,7 +78,7 @@ func ReadbackLocal(ctx context.Context, cfg Config, root string, runner CommandR
 		runner = ExecRunner{}
 	}
 	runtimeInstance := &Runtime{cfg: cfg, root: absRoot, runner: runner, procRoot: rooted(absRoot, "/proc")}
-	stateData, _, err := readPrivateFile(rooted(absRoot, RuntimeStatePath))
+	stateData, _, err := readRuntimeStateFile(rooted(absRoot, RuntimeStatePath))
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return Readback{}, errors.New("RUNTIME_STATE_UNSAFE")
@@ -149,7 +149,7 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 	}
 	var activeDocument CandidateDocument
 	if err = decodeStrictJSON(activeCandidateData, &activeDocument); err != nil ||
-		activeDocument.ValidateFor(r.cfg) != nil || activeDocument.Candidate() != candidate {
+		activeDocument.ValidateFor(r.cfg) != nil || !activeDocument.Candidate().Equal(candidate) {
 		return Readback{}, errors.New("ACTIVE_CANDIDATE_MISMATCH")
 	}
 	props, err := r.systemdProperties(ctx)

@@ -84,6 +84,8 @@ require_test() {
 
 require_test .ci/bin/install.test TestNodeSystemVM
 require_test .ci/bin/web.test TestNodeHubFixture
+require_test .ci/bin/node.test TestRealityNativeCheck
+require_test .ci/bin/node.test TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials
 
 echo 'Downloading official pinned Debian 13 cloud image'
 curl -fL --retry 3 --connect-timeout 15 --max-time 320 \
@@ -169,7 +171,30 @@ copy_test_binaries() {
   scp_vm .ci/bin/meshmux /tmp/meshmux
   scp_vm .ci/bin/install.test /tmp/install.test
   scp_vm .ci/bin/web.test /tmp/web.test
-  ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test /tmp/web.test'
+  scp_vm .ci/bin/node.test /tmp/node.test
+  ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test /tmp/web.test /tmp/node.test'
+}
+run_reality_fixture() {
+  # Run the gated native REALITY acceptance fixture inside the guest against
+  # the sing-box binary the installer already placed and digest-verified at
+  # /usr/local/libexec/meshmux-sing-box. The guest handshake never leaves the
+  # guest: the fixture binds loopback only, and the REALITY handshake target
+  # is a TLS 1.3 server the fixture starts on the guest loopback.
+  #
+  # The binary is copied to a private path first, because the fixture
+  # compares the file digest against the in-tree release pin and the
+  # installed file must not be modified or replaced in place.
+  ssh_vm '
+    set -e
+    sudo install -m 0755 -o root -g root \
+      /usr/local/libexec/meshmux-sing-box /tmp/meshmux-sing-box-fixture
+    sudo env MESHMUX_REALITY_CHECK_BINARY=/tmp/meshmux-sing-box-fixture \
+      MESHMUX_REALITY_INTEGRATION_BINARY=/tmp/meshmux-sing-box-fixture \
+      /tmp/node.test \
+      -test.run "^TestRealityNativeCheck$|^TestRealityIntegrationHandshake" \
+      -test.v -test.timeout=5m
+    sudo rm -f /tmp/meshmux-sing-box-fixture
+  '
 }
 start_node_fixture() {
   # Launch the real Hub fixture (persistent SQLite + private TLS CA) on the
@@ -233,6 +258,9 @@ wait_time_sync
 copy_test_binaries
 start_node_fixture
 ssh_vm "sudo env MESHMUX_NODE_SYSTEM_VM=1 MESHMUX_NODE_ROLE=${role} MESHMUX_NODE_PHASE=install MESHMUX_NODE_FIXTURE_STATUS=/tmp/node-fixture.status MESHMUX_NODE_FIXTURE_CA=/tmp/node-fixture-ca.crt /tmp/install.test -test.run '^TestNodeSystemVM$' -test.timeout=25m -test.v"
+# The installer has now placed and digest-verified the pinned kernel, so the
+# native REALITY acceptance fixture can run against that exact binary.
+run_reality_fixture
 boot_before="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
 ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
 sleep 8

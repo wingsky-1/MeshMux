@@ -6,12 +6,12 @@
 
 - **Web 基座**：单管理员认证、安全会话、SQLite、基础控制台和节点工作区已提供隔离验收入口。
 - **Hub 安装**：Issue #5 的 Hub `--plan`、确认后 apply、`--repair`、受管文件台账与有限恢复已合并，并有 L1/L2/L3 amd64 自动化证据；仍不是正式发行包。
-- **Line / Out（PR-B 实现中）**：`meshmux install edge|out`、真实 preflight、固定制品、stdin 配对码、systemd Agent/sing-box、state/owned paths、structured partial/failed 与有限 LKG 恢复已写入当前工作树；尚未完成全仓和隔离 Debian 13 验收，尚无 PR-B CI 链接。
-- **Node baseline**：sing-box VLESS 候选的 `users` 为空，没有 TLS/REALITY、代理用户、客户端凭据或订阅；#7 未实现。当前没有证据证明公网可达、真实协议握手或客户端可用。
-- **Out**：安装产物可选；当前 ACL 实现仍为 `policy accept` 加 VLESS 目标端口 TCP/UDP drop，尚未满足“空授权时默认全拒绝，仅目标端口可用”的验收语义。
-- **独立阶段**：#8、#9 不在本轮实现范围；#11 Web 全节点统一升级仍是 v1.0.0 P0，但不属于本轮实现或验收。
+- **Line / Out（Issue #6 已关闭）**：`meshmux install edge|out`、真实 preflight、固定制品、stdin 配对码、systemd Agent/sing-box、state/owned paths、structured partial/failed、有限 LKG 恢复与 Web 固定 recheck/reissue 已随 PR #18 合并进 `main`（merge `17c4e4c`）。证据：L2 [39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)、L3 [39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`、tree `e35fc88`）与 PR CI [39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962)（head `0149581`）全 success。
+- **Node baseline 与 Issue #7（进行中）**：`main` 上仍是空 `users` 的 v1 VLESS 候选，没有 TLS/REALITY、用户或订阅。#7 首个 PR 只交付独立订阅域模型（SQLite schema 4、仅存哈希的 ≥288 bit Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器（legacy v1 逐字节不变）；不含 Web 用户操作、公开订阅下载与跨节点凭据生命周期，尚无公网可达、真实握手或客户端可用证据。
+- **Out**：安装产物可选；当前 ACL 实现仍为 `policy accept` 加 VLESS 目标端口 TCP/UDP drop，尚未满足“空授权时默认全拒绝，仅目标端口可用”的验收语义；跨源 ACL 与 AI 双跳属 #8，不在 #7 范围。
+- **独立阶段**：#7 只做订阅模型与原生 REALITY 编译器；#8、#9 不在其实现范围；#11 Web 全节点统一升级仍是 v1.0.0 P0，但不属于本轮实现或验收。
 
-详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)、[Hub 安装](INSTALL_HUB.zh-CN.md) 与 [Line / Out 安装](INSTALL_NODE.zh-CN.md)。下表仍是发行目标，不是 PR-B 的验收结论。
+详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)、[Hub 安装](INSTALL_HUB.zh-CN.md) 与 [Line / Out 安装](INSTALL_NODE.zh-CN.md)。下表仍是发行目标，不是任何单个 PR 的验收结论。
 
 ## P0：v1.0.0 最小可用闭环
 
@@ -20,9 +20,9 @@
 | 安装 | Debian 13 amd64/arm64；Hub / Line / Out 宿主机 `install` | 干净 VM 能重复安装，错误有阶段与恢复方案 |
 | 管理 | Hub 单管理员 Web、数据库、HTTPS；Out 可不部署 | 不依赖 Zero Trust；单机 Hub+Line、多 Line、可选 Out 都能工作 |
 | 纳管 | Web 一次性配对，Line/Out 安装后 Agent 主动 HTTPS 连接；节点状态与展示名 | 目标机只需 install；身份可重签/撤销，非法任务拒绝 |
-| 代理 | 固定 sing-box 1.14.3，VLESS/REALITY 入站，自定义监听端口，Line 生命周期 | 用户/凭据与订阅在 #7 闭环后，客户端可真正连接；当前 baseline 不满足此项 |
+| 代理 | 固定 sing-box 1.14.3，VLESS/REALITY 入站，自定义监听端口，Line 生命周期 | #7 首个 PR 仅交付模型与编译器；客户端真正连接需后续真实握手证据，当前 baseline 不满足此项 |
 | 聚合 | 多 Line 线路选择、命名、标准订阅导出 sing-box / Mihomo | 客户端导入成功，新增 Line 按选择更新配置 |
-| 订阅 | 用户创建、禁用、删除，精确撤销跨节点 VLESS 凭据与下载 Token | 旧 URL 不可下载；删除时部分失败不假完成 |
+| 订阅 | 用户创建、禁用、删除，Token 撤销与 per-Line VLESS UUID 删除分离，精确跨节点凭据撤销 | 旧 URL 不可下载；删除先门禁公开下载，远端部分失败不假完成 |
 | Mesh | Headscale 注册/注销、Mesh-only、独立子网路由及路由批准 | 无代理订阅的 NAS 可以入网并实际路由 |
 | 单 VPN | 设备专属 sing-box 代理 + Mesh 配置，SSID 与远程家庭网段 | 经过 iOS/Android 真机以及两种网络验证 |
 | 分流 | Web 配置客户端 CN/国际/Tailnet/DNS 与服务端域名/IP/规则集；AI Line→Out 或 Line 直出 | 不存在 Out 不生成无效配置；Out 出错默认不泄漏回退出口 |

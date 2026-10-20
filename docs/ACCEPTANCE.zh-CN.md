@@ -38,11 +38,11 @@
 ## Issue #6 PR-A 本地验收
 
 - [x] **PR-A 本地验收（A/L1）**：Agent 严格协议、配对、任务状态与持久化边界，以及 Web 节点基础能力已由主控完成本地验收；完整 race、格式与 diff check 通过，浏览器复核完成，关键协议、迁移和 Web mutation 证据见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md)。
-- [ ] **PR-A 远端 CI**：当前无新的远端 CI 结论；不得用本地 L1 结果替代远端流水线或 L2/L3 宿主机安装验收。
+- [x] **#6 合入状态**：PR #18 已合入 `17c4e4c`，Issue #6 已关闭。最终 head `0149581` 的 [ci 39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) success；不得把这一历史证据用于 #7 的新实现验收。
 
 ## Issue #6 PR-B 实现与验收
 
-PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当前工作树，PR-A 已本地 ff 合入 `adb7558`。以下勾选必须等待主控给出真实运行结果后回填；L3 已有成功运行链接（L2 正对新 head 刷新），源码存在、定向测试通过或 plan 成功都不能替代全仓与隔离宿主机验收。
+PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 合入 `main`（`17c4e4c`）。以下为 #6 历史验收记录；源码存在、定向测试通过或 plan 成功不能替代全仓与隔离宿主机验收。
 
 | 层级 | 待验范围 | 状态 |
 | --- | --- | --- |
@@ -54,11 +54,23 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当�
 
 - [x] **全仓自动化**：本地 `gofmt` 干净、`go vet ./...` 通过、`go build ./...` 通过；`go test` 分包全过（product/agent 52、node 46、install 85、web 56、cmd 三包 68），`go test -race` 全过（install/web/node/cmd 及 product/agent/webcmd 五包 120，无 DATA RACE）。
 - [x] **PR-B CI**：L2 [hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)（head `78e259b`，tree `e35fc88`）amd64/arm64 全绿；L3 [hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（同 head/tree）edge/out/hub 全 success。后续链接必须指向对应 head，并说明该 head 的 Git tree。
-- [ ] **L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；本阶段 baseline 无 TLS/REALITY、无用户、无订阅，#7 未实现。
+- [ ] **#6 L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；#6 baseline 无 TLS/REALITY、无用户、无订阅。#7 新实现及证据见下节。
 - [ ] **Out ACL 语义**：当前源码为 `policy accept` 加目标 VLESS TCP/UDP drop，和“空授权默认拒绝、仅目标端口可用”的验收要求不一致；必须先修正并有真实 nft readback/流量证据。
-- [ ] **自定义端口**：SSH 与 VLESS 端口必须不同；Fail2ban jail/action 必须覆盖全部实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。该结论待 L2/L3 实测。
+- [x] **#6 自定义端口**：SSH 与 VLESS 端口不同；Fail2ban jail/action 与实际 SSH listener 匹配，nft 只替换 MeshMux 自有表。证据限于上述隔离 L2/L3 场景，不代表任意现网端口均已验证。
 
 实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#8、#9 与 #11 不在本轮验收范围，#11 仍是 v1.0.0 P0。
+
+## Issue #7 Phase 3A 分 PR 验收（进行中）
+
+#6 已由 PR #18 合入 `main`（`17c4e4c`，tree `40eed1f651cb19f47bbf69a96a6d3410e6e7d031`）并关闭。最终 head `0149581` 与该 merge tree 相同，PR [ci 39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) 与 [hub-vm 39373760970](https://github.com/wingsky-1/MeshMux/actions/runs/39373760970) 均 success；上文早期 PR-A/PR-B 的状态记录不代表当前待办。
+
+- [ ] PR-A：独立模型、SQLite schema 4、哈希 Token、逐 Line UUID、严格 v2 REALITY 与 v1 编译兼容；主控 L1 全仓检查待回填。
+- [ ] PR-A：固定 sing-box 1.14.3 check、合法空用户、正确/错误/删除 UUID 的本地隔离 REALITY 握手；真实结果待回填。
+- [ ] PR-A：当前 head 对应 L2 amd64/arm64 与隔离 Debian 13 QEMU 结果待回填，不复用 #6 作为新实现证据。
+- [ ] PR-B：Web 增停删、线路选择/改名/排序、两种标准订阅真实导入、Token 撤销/轮换、跨 Line partial 与幂等重试、精确 readback。
+- [ ] PR-C：Hub 兼任 Line、独立安装台账与恢复、零 Out 端到端隔离 VM 证据。
+
+真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
 
 ## v1.0.0 必须完成的真实用户闭环
 

@@ -33,11 +33,15 @@ const (
 	agentTasksPath     = "/api/agent/tasks"
 	agentResultPath    = "/api/agent/result"
 
-	configSHA256Header    = "X-MeshMux-Config-SHA256"
-	maxErrorBody          = 4 << 10
-	maxPairBody           = 4 << 10
-	maxMetadataBody       = 4 << 10
-	maxConfigBody         = 64 << 10
+	configSHA256Header = "X-MeshMux-Config-SHA256"
+	maxErrorBody       = 4 << 10
+	maxPairBody        = 4 << 10
+	maxMetadataBody    = 4 << 10
+	// maxConfigBody bounds one candidate document. The v2 document carries
+	// the per-Line VLESS users and the REALITY block, so the bound is sized
+	// for the fixed maximum of 1024 users and stays bounded: a larger body
+	// is rejected instead of being buffered.
+	maxConfigBody         = 1 << 20
 	maxHeartbeatBody      = 4 << 10
 	maxTasksBody          = 64 << 10
 	maxResultBody         = 4 << 10

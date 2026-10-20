@@ -13,6 +13,7 @@ on:
       - 'cmd/meshmux-web/**'
       - 'scripts/ci-hub-vm.sh'
       - 'scripts/ci-node-vm.sh'
+      - 'scripts/ci-node-reality.sh'
       - '.github/workflows/hub-vm.yml'
       - 'docs/CI_HUB_VALIDATION.zh-CN.md'
       - 'docs/ACCEPTANCE.zh-CN.md'
@@ -65,6 +66,7 @@ jobs:
           CGO_ENABLED=0 go build -o .ci/bin/meshmux ./cmd/meshmux
           go test -c -o .ci/bin/install.test ./internal/install
           go test -c -o .ci/bin/web.test ./internal/web
+          go test -c -o .ci/bin/node.test ./internal/node
       - name: Install QEMU and cloud-init image tools
         run: |
           sudo apt-get update -qq

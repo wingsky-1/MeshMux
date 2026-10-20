@@ -4,7 +4,7 @@
 
 MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管理原生 sing-box 代理线路、Headscale/Tailscale 异地组网，以及可选 AI Out 出口。手机可使用一份 sing-box 配置同时实现代理与 Mesh；也支持不需要代理订阅的纯 Mesh 设备和子网路由。
 
-> **分支状态：Issue #5 已关闭；Hub 安装、幂等与恢复已按 L1/L2/L3 amd64 自动化验收合入远端 `main`（`17baaa1`）。Issue #6 PR-A 已在本地 ff 合入 `adb7558`；PR-B 的 Node CLI、安装事务、runtime 与 Web 固定操作已写入当前工作树，仍在进行全仓与隔离宿主机验收，尚无 PR-B CI 结论。禁止把未发布代码当作生产发行版。** #11 的 Web 全节点统一升级是 v1.0.0 P0，不属于本轮实现或验收范围。
+> **分支状态：Issue #5、#6 均已关闭；PR #18 已合并进 `main`（merge `17c4e4c`）。#6 证据：L2 [hub-components 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917) 与 L3 [hub-vm 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`、tree `e35fc88`）及 PR CI [39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962)（head `0149581`）全 success，只证明其各自 head/tree。Issue #7（Phase 3A）首个 PR 正在实现：独立订阅域模型（SQLite schema 4、仅存哈希的 ≥288 bit Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器（legacy v1 逐字节不变），不含 Web 用户操作、公开订阅下载与跨节点凭据生命周期，尚无真实握手证据。未发布代码不得当作生产发行版，不创建 Tag/Release。** #11 的 Web 全节点统一升级是 v1.0.0 P0，不属于本轮实现或验收范围。
 
 ## Issue #5 · Hub 预检（PR A）与安装执行（PR B）
 
@@ -14,16 +14,16 @@ MeshMux 是面向自托管场景的轻量级 Go 控制台：通过一个 Web 管
 
 ## Issue #6 · Line / Out 安装与纳管
 
-- PR-A 的 Agent 严格协议、一次性配对、节点身份和 Web 节点基础能力已在本地评审与 L1 验证；本地 ff merge 为 `adb7558`，远端 `main` 仍为 `17baaa1`。
-- PR-B 已实现 `meshmux install edge|out`、真实预检、固定 sing-box 制品、配对码仅从 stdin 读取、systemd 布局、state/受管文件台账、partial/failed 结果、有限 LKG 恢复，以及 Web 的固定重新校验与身份重签入口。当前状态是**实现中/待验收**，不是已完成交付。
+- PR #18 已合并进 `main`（merge `17c4e4c`）：Agent 严格协议、一次性配对、节点身份、Web 节点基础能力、`meshmux install edge|out`、真实预检、固定 sing-box 制品、stdin 配对码、systemd 布局、state/受管文件台账、partial/failed 结果、有限 LKG 恢复及 Web 固定重新校验与身份重签均已合入；Issue #6 已关闭。
+- 证据（各自 head/tree）：L2 [hub-components 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917) 与 L3 [hub-vm 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751) 为 head `78e259b`、tree `e35fc88`；PR CI [39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) 为 head `0149581`、tree `40eed1f`，全 success。这些都不证明公网可达或真实协议握手。
 - 用户 CLI 仍只有 `meshmux install hub|edge|out`；没有用户侧 `upgrade`、`rollback` 或 `status` 管理命令。`__internal-agent` 与零参数 `__internal-agent-version` 只供固定 systemd 服务/安装器使用。
-- 当前 Node baseline 生成空 `users` 的 VLESS 本地候选：**没有 TLS/REALITY、代理用户、客户端凭据或订阅**；Issue #7 未实现。不得据此宣称公网可达、真实协议握手或客户端可用。
-- Out 可选。#8、#9 与 #11 不在本轮实现范围内；#11 仍是 v1.0.0 P0，需独立实现与验收。
+- `main` 上的 Node baseline 仍生成空 `users` 的 v1 VLESS 本地候选，没有 TLS/REALITY、用户或订阅。**Issue #7（Phase 3A）首个 PR 正在实现**：独立订阅域模型（SQLite schema 4、仅存哈希的 ≥288 bit Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器（legacy v1 逐字节不变）；不含 Web 用户操作、公开订阅下载与跨节点凭据生命周期。在真实握手证据出现前，不得据此宣称公网可达、真实协议握手或客户端可用。
+- Out 可选；AI 双跳与跨源 ACL 属 #8，Mesh 属 #9，统一升级属 #11，均不在 #7 本轮实现或验收范围内；#11 仍是 v1.0.0 P0，需独立实现与验收。
 - 安装、修复和受管路径说明见 [Line / Out 安装与恢复](docs/INSTALL_NODE.zh-CN.md)。宿主机安装未经单独授权不得在现网执行。
 
 ## 体验当前 Web
 
-已实现单管理员初始化、登录/退出/改密、服务端会话、SQLite、安全校验和手机/桌面基础管理台。Node 页面可创建待纳管节点、显示一次性配对码、展示本机 strict readback、固定配置重新校验和身份重签入口；心跳缺失或超过 2 分钟视为离线，离线时不投递会改动节点状态的任务。`paired`、plan 成功或 `check` 成功都不等于 Native ready。代理用户、TLS/REALITY、订阅和 Mesh 业务仍未实现。详细边界见 [Phase 2B 实施评审](docs/PHASE2B_REVIEW.zh-CN.md)。
+已实现单管理员初始化、登录/退出/改密、服务端会话、SQLite、安全校验和手机/桌面基础管理台。Node 页面可创建待纳管节点、显示一次性配对码、展示本机 strict readback、固定配置重新校验和身份重签入口；心跳缺失或超过 2 分钟视为离线，离线时不投递会改动节点状态的任务。`paired`、plan 成功或 `check` 成功都不等于 Native ready。Web 仍没有订阅用户操作、公开订阅下载、REALITY 节点发布与 Mesh 业务；#7 首个 PR 只建立模型与编译器。详细边界见 [Phase 2B 实施评审](docs/PHASE2B_REVIEW.zh-CN.md)。
 
 在普通用户的隔离 Linux 环境（Go 1.27.2）运行：
 
