@@ -60,6 +60,18 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已写入当�
 
 实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#8、#9 与 #11 不在本轮验收范围，#11 仍是 v1.0.0 P0。
 
+## Issue #7 Phase 3A 分 PR 验收（进行中）
+
+#6 已由 PR #18 合入 `main`（`17c4e4c`，tree `40eed1f651cb19f47bbf69a96a6d3410e6e7d031`）并关闭。最终 head `0149581` 与该 merge tree 相同，PR [ci 39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) 与 [hub-vm 39373760970](https://github.com/wingsky-1/MeshMux/actions/runs/39373760970) 均 success；上文早期 PR-A/PR-B 的状态记录不代表当前待办。
+
+- [ ] PR-A：独立模型、SQLite schema 4、哈希 Token、逐 Line UUID、严格 v2 REALITY 与 v1 编译兼容；主控 L1 全仓检查待回填。
+- [ ] PR-A：固定 sing-box 1.14.3 check、合法空用户、正确/错误/删除 UUID 的本地隔离 REALITY 握手；真实结果待回填。
+- [ ] PR-A：当前 head 对应 L2 amd64/arm64 与隔离 Debian 13 QEMU 结果待回填，不复用 #6 作为新实现证据。
+- [ ] PR-B：Web 增停删、线路选择/改名/排序、两种标准订阅真实导入、Token 撤销/轮换、跨 Line partial 与幂等重试、精确 readback。
+- [ ] PR-C：Hub 兼任 Line、独立安装台账与恢复、零 Out 端到端隔离 VM 证据。
+
+真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
+
 ## v1.0.0 必须完成的真实用户闭环
 
 - [ ] Debian 13 新环境可执行 install hub|edge|out，单机 Hub+Line、Hub+Line、Hub+Line+Out 三种拓扑正常，Out 可选。
