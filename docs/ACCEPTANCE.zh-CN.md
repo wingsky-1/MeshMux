@@ -64,13 +64,13 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 
 #6 已由 PR #18 合入 `main`（`17c4e4c`，tree `40eed1f651cb19f47bbf69a96a6d3410e6e7d031`）并关闭。最终 head `0149581` 与该 merge tree 相同，PR [ci 39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) 与 [hub-vm 39373760970](https://github.com/wingsky-1/MeshMux/actions/runs/39373760970) 均 success；上文早期 PR-A/PR-B 的状态记录不代表当前待办。
 
-- [ ] PR-A：独立模型、SQLite schema 4、哈希 Token、逐 Line UUID、严格 v2 REALITY 与 v1 编译兼容；主控 L1 全仓检查待回填。
-- [ ] PR-A：固定 sing-box 1.14.3 check、合法空用户、正确/错误/删除 UUID 的本地隔离 REALITY 握手；真实结果待回填。
-- [ ] PR-A：当前 head 对应 L2 amd64/arm64 与隔离 Debian 13 QEMU 结果待回填，不复用 #6 作为新实现证据。
-- [ ] PR-B：Web 增停删、线路选择/改名/排序、两种标准订阅真实导入、Token 撤销/轮换、跨 Line partial 与幂等重试、精确 readback。
-- [ ] PR-C：Hub 兼任 Line、独立安装台账与恢复、零 Out 端到端隔离 VM 证据。
+- [x] PR-A（已合入）：独立模型、SQLite schema 4、哈希 Token、逐 Line UUID、严格 v2 REALITY 与 v1 编译兼容、合法空用户；主控独立检出 gofmt/vet/test（435）/race/build 全通过。合并 `3f9ffb3`，head `3789a3a`、tree `0f13577`。
+- [x] PR-A：固定 sing-box 1.14.3 check、合法空用户、正确/错误/删除 UUID 的 REALITY 握手；[hub-vm 39382159464](https://github.com/wingsky-1/MeshMux/actions/runs/39382159464) 的 Edge/Out job 实际执行 native check 与三类 UUID 握手 PASS（主控已检查日志）。这是隔离 VM 自动化结果，不是公网或客户端可用证据。
+- [x] PR-A：当前 head 对应 L2 amd64/arm64 与隔离 Debian 13 QEMU 全 success：[ci 39382159453](https://github.com/wingsky-1/MeshMux/actions/runs/39382159453)、[hub-components 39382159461](https://github.com/wingsky-1/MeshMux/actions/runs/39382159461)、[hub-vm 39382159464](https://github.com/wingsky-1/MeshMux/actions/runs/39382159464)；证据只覆盖上述 head/tree，不复用 #6。
+- [ ] PR-B（分支未验收）：Web 增停删、线路选择/改名/排序、两种标准订阅真实导入、Token 撤销/轮换、跨 Line partial 与幂等重试、精确 readback。代码在分支 `verify/issue7-sub-lifecycle`：`22282ae`（Web 生命周期/双格式下载）、`563c7ca`（同步证据与 fan-out）、`db3e887`（全链收敛与注入时钟）；本地 `go test ./...` 558 通过、`-race` 4 包 381 通过，评审通过。缺：拆分后的 PR CI、双客户端导入 CI（本地两个测试 SKIP，无外置二进制）、真实 VM。
+- [ ] PR-C（分支未验收）：Hub 兼任 Line、独立安装台账与恢复、零 Out 端到端隔离 VM 证据。代码在 `3bda4ed`（有效 Line 台账用于 repair/预检）；本地 558/race 381 通过，评审通过。缺：PR CI 与隔离 VM；`local_line_vm_test.go` 尚不存在。
 
-真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
+真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。PR-A 证据只覆盖其 head/tree；Issue #7 仍 OPEN，PR-B/PR-C 尚未拆分开 PR、未合入 `main`。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
 
 ## v1.0.0 必须完成的真实用户闭环
 

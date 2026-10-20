@@ -1,0 +1,47 @@
+name: subscription-clients
+
+on:
+  pull_request:
+    paths:
+      - 'internal/subscription/**'
+      - 'internal/node/**'
+      - 'scripts/ci-subscription-clients.sh'
+      - '.github/workflows/subscription-clients.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clients:
+    name: Subscription client import (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      # Only the test binary crosses into the Debian 13 container. The official
+      # sing-box and Mihomo builds used for the import check are GPL-3.0 and are
+      # downloaded inside the container for this test only; they are never part
+      # of the MeshMux server distribution bundle.
+      - name: Build subscription test binary
+        run: |
+          mkdir -p .ci/bin
+          go test -c -o .ci/bin/subscription.test ./internal/subscription
+      # The container installs its own apt dependencies; the host is never
+      # modified and no service is started on the runner.
+      - name: Debian 13 subscription client import check
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e RUNNER_TEMP=/tmp \
+            debian:13 bash -c 'apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tar gzip && bash scripts/ci-subscription-clients.sh'

@@ -198,6 +198,13 @@ type rowScanner interface {
 }
 
 func scanNode(row rowScanner) (Node, error) {
+	return scanNodeAt(row, time.Now())
+}
+
+// scanNodeAt evaluates the offline window against one explicit clock, so the
+// Web projection and the task delivery window cannot disagree because they
+// read the wall clock at different moments.
+func scanNodeAt(row rowScanner, now time.Time) (Node, error) {
 	var n Node
 	err := row.Scan(
 		&n.ID, &n.Role, &n.DisplayName, &n.VlessPort, &n.SSHPort, &n.Status,
@@ -218,13 +225,19 @@ func scanNode(row rowScanner) (Node, error) {
 	if err != nil {
 		return Node{}, err
 	}
-	n.Offline = n.Status == "pending" || n.LastHeartbeat == 0 || time.Since(time.Unix(n.LastHeartbeat, 0)) > offlineAfter
+	n.Offline = n.Status == "pending" || n.LastHeartbeat == 0 || now.Sub(time.Unix(n.LastHeartbeat, 0)) > offlineAfter
 	n.LocalVerified = n.ObservedAt > 0
 	n.NativeReady = nativeReady(n)
 	return n, nil
 }
 
 func (s *store) listNodes() ([]Node, error) {
+	return s.listNodesAt(time.Now())
+}
+
+// listNodesAt evaluates every row's offline window against one explicit clock,
+// so a list projection cannot mix two different wall-clock readings.
+func (s *store) listNodesAt(now time.Time) ([]Node, error) {
 	rows, err := s.db.Query(nodeSelect + ` ORDER BY n.created_at ASC`)
 	if err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
@@ -232,7 +245,7 @@ func (s *store) listNodes() ([]Node, error) {
 	defer rows.Close()
 	var out []Node
 	for rows.Next() {
-		n, err := scanNode(rows)
+		n, err := scanNodeAt(rows, now)
 		if err != nil {
 			return nil, errors.New("DATABASE_UNAVAILABLE")
 		}
@@ -242,7 +255,11 @@ func (s *store) listNodes() ([]Node, error) {
 }
 
 func (s *store) getNode(id string) (Node, error) {
-	n, err := scanNode(s.db.QueryRow(nodeSelect+` WHERE n.id=?`, id))
+	return s.getNodeAt(id, time.Now())
+}
+
+func (s *store) getNodeAt(id string, now time.Time) (Node, error) {
+	n, err := scanNodeAt(s.db.QueryRow(nodeSelect+` WHERE n.id=?`, id), now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Node{}, errors.New("NODE_NOT_FOUND")
 	}
@@ -290,7 +307,7 @@ func (s *store) consumePairing(nodeID, role, code, agentVersion, kernelVersion s
 		if _, err = tx.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID); err != nil {
 			return "", errors.New("DATABASE_UNAVAILABLE")
 		}
-		if err = seedInitialTasksTx(tx, nodeID); err != nil {
+		if err = seedInitialTasksTx(tx, nodeID, now); err != nil {
 			return "", err
 		}
 		if err = tx.Commit(); err != nil {
@@ -322,10 +339,16 @@ func (s *store) consumePairing(nodeID, role, code, agentVersion, kernelVersion s
 // authenticateAgent maps a Bearer identity to its node. Revoked or unknown
 // tokens fail closed without revealing which nodes exist.
 func (s *store) authenticateAgent(token string) (Node, error) {
+	return s.authenticateAgentAt(token, time.Now())
+}
+
+// authenticateAgentAt binds the returned readiness window to the request
+// clock, so the Agent task endpoint and the Web projection agree.
+func (s *store) authenticateAgentAt(token string, now time.Time) (Node, error) {
 	if len(token) != 43 {
 		return Node{}, errors.New("AGENT_UNAUTHORIZED")
 	}
-	n, err := scanNode(s.db.QueryRow(nodeSelect+` JOIN node_identities i ON n.id=i.node_id WHERE i.token_hash=? AND i.revoked=0`, tokenHash(token)))
+	n, err := scanNodeAt(s.db.QueryRow(nodeSelect+` JOIN node_identities i ON n.id=i.node_id WHERE i.token_hash=? AND i.revoked=0`, tokenHash(token)), now)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Node{}, errors.New("AGENT_UNAUTHORIZED")
 	}
@@ -340,6 +363,9 @@ func (s *store) heartbeat(nodeID, agentVersion, kernelVersion string, now time.T
 	if n, _ := res.RowsAffected(); n != 1 {
 		return errors.New("NODE_NOT_FOUND")
 	}
+	// A reconnecting Line picks up the persisted subscriber intent even if
+	// the Hub crashed before the tasks of a change were enqueued.
+	s.drainSubscriberNode(nodeID, now)
 	return nil
 }
 
@@ -430,13 +456,20 @@ func normalizeParams(raw json.RawMessage) string {
 // a revision that would rewind the node chain is stale. Reserved
 // upgrade/rollback kinds never reach storage because agent.ValidateTask
 // rejects them first.
+//
+// The wrapper keeps the wall-clock default for direct callers; every request
+// path threads the handler clock through enqueueTaskAt instead.
 func (s *store) enqueueTask(task agent.Task) error {
+	return s.enqueueTaskAt(task, time.Now())
+}
+
+func (s *store) enqueueTaskAt(task agent.Task, now time.Time) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	defer tx.Rollback()
-	if err = enqueueTaskTx(tx, task); err != nil {
+	if err = enqueueTaskTx(tx, task, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -447,8 +480,10 @@ func (s *store) enqueueTask(task agent.Task) error {
 
 // enqueueTaskTx is the sole task insertion path. It never begins or commits a
 // transaction, so candidate publication and pairing can include tasks without
-// nesting transactions on the MaxOpenConns(1) SQLite pool.
-func enqueueTaskTx(tx *sql.Tx, task agent.Task) error {
+// nesting transactions on the MaxOpenConns(1) SQLite pool. The caller-supplied
+// clock is shared with the candidate inserted in the same transaction, so one
+// publication has one consistent timestamp.
+func enqueueTaskTx(tx *sql.Tx, task agent.Task, now time.Time) error {
 	if err := agent.ValidateTask(task); err != nil {
 		return err
 	}
@@ -480,8 +515,8 @@ func enqueueTaskTx(tx *sql.Tx, task agent.Task) error {
 	if maxRev.Valid && task.Revision <= maxRev.Int64 {
 		return errors.New("REVISION_STALE: revision must increase monotonically")
 	}
-	now := time.Now().Unix()
-	if _, err = tx.Exec(`INSERT INTO agent_tasks(operation_id, node_id, kind, revision, idempotency_key, status, params, created_at, updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, task.OperationID, task.NodeID, task.Kind, task.Revision, task.IdempotencyKey, params, now, now); err != nil {
+	stamp := now.Unix()
+	if _, err = tx.Exec(`INSERT INTO agent_tasks(operation_id, node_id, kind, revision, idempotency_key, status, params, created_at, updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, task.OperationID, task.NodeID, task.Kind, task.Revision, task.IdempotencyKey, params, stamp, stamp); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	return nil
@@ -527,6 +562,10 @@ func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent
 	if limit < 1 || limit > 32 {
 		limit = 8
 	}
+	// Reconcile the persisted subscriber intent before handing out tasks, so
+	// a change that happened after the last publication is not missed by this
+	// poll. The drain uses its own transaction and never fails the poll.
+	s.drainSubscriberNode(nodeID, now)
 	rows, err := s.db.Query(`SELECT t.operation_id, t.revision, t.idempotency_key, t.kind, t.params
  FROM agent_tasks t JOIN nodes n ON n.id=t.node_id
  WHERE t.node_id=? AND n.last_heartbeat>=? AND t.status IN ('pending','applying','verifying')
@@ -560,12 +599,15 @@ func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent
 // no-op; a different terminal rewrite is rejected; non-terminal states may be
 // re-reported; the state machine never regresses.
 func (s *store) reportResult(nodeID string, res agent.TaskResult) error {
-	_, err := s.reportResultAudited(nodeID, res)
+	_, err := s.reportResultAudited(nodeID, res, time.Now())
 	return err
 }
 
 // reportResultAudited records one result and reports whether it changed a row.
-func (s *store) reportResultAudited(nodeID string, res agent.TaskResult) (bool, error) {
+// All timestamps of the request (task update, node success, observation and
+// the follow-up drain) use one caller-supplied clock, so a fixed-clock request
+// cannot be split across two wall-clock readings.
+func (s *store) reportResultAudited(nodeID string, res agent.TaskResult, now time.Time) (bool, error) {
 	if err := agent.ValidateTaskResult(res); err != nil {
 		return false, err
 	}
@@ -621,14 +663,14 @@ func (s *store) reportResultAudited(nodeID string, res agent.TaskResult) (bool, 
 	if !allowedTransition(current, res.Status) {
 		return false, errors.New("TASK_STATE_INVALID: task state cannot regress")
 	}
-	now := time.Now().Unix()
+	stamp := now.Unix()
 	if _, err = tx.Exec(`UPDATE agent_tasks SET status=?, error_code=?, detail=?, updated_at=? WHERE operation_id=? AND node_id=?`,
-		res.Status, res.ErrorCode, detailToStore, now, res.OperationID, nodeID); err != nil {
+		res.Status, res.ErrorCode, detailToStore, stamp, res.OperationID, nodeID); err != nil {
 		return false, errors.New("DATABASE_UNAVAILABLE")
 	}
 	if res.Status == "healthy" {
-		lastSuccess := time.Unix(now, 0).UTC().Format(time.RFC3339)
-		if _, err = tx.Exec(`UPDATE nodes SET last_success=?, last_success_at=?, updated_at=? WHERE id=?`, lastSuccess, now, now, nodeID); err != nil {
+		lastSuccess := now.UTC().Format(time.RFC3339)
+		if _, err = tx.Exec(`UPDATE nodes SET last_success=?, last_success_at=?, updated_at=? WHERE id=?`, lastSuccess, stamp, stamp, nodeID); err != nil {
 			return false, errors.New("DATABASE_UNAVAILABLE")
 		}
 		if taskKind == agent.KindConfigReadback {
@@ -639,15 +681,26 @@ func (s *store) reportResultAudited(nodeID string, res agent.TaskResult) (bool, 
  WHERE id=? AND observed_task_revision<=? AND observed_revision<=?`,
 				readback.ActiveRevision, readback.ConfigSHA256, readback.Architecture,
 				readback.AgentVersion, readback.AgentSHA256, readback.KernelVersion,
-				readback.KernelSHA256, readback.OutDefaultDeny, now, taskRevision, res.OperationID,
+				readback.KernelSHA256, readback.OutDefaultDeny, stamp, taskRevision, res.OperationID,
 				nodeID, taskRevision, readback.ActiveRevision); err != nil {
 				return false, errors.New("DATABASE_UNAVAILABLE")
 			}
+			// A deleting subscriber becomes deleted only once the Line proved
+			// the exact desired snapshot without its historical UUIDs. The
+			// check runs in this transaction, directly after the observation,
+			// so the result request itself can complete the deletion. Failing
+			// to finalize never rejects the recorded result: the state stays
+			// "deleting" and the next drain retries.
+			_ = finalizeDeletingSubscribersTx(tx, nodeID, now)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, errors.New("DATABASE_UNAVAILABLE")
 	}
+	// A finished chain may make the persisted subscriber intent publishable
+	// (removal of a deleted subscriber, follow-up after a changed snapshot).
+	// The drain owns its transaction and never fails the recorded result.
+	s.drainSubscriberNode(nodeID, now)
 	return true, nil
 }
 

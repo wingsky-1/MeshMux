@@ -28,21 +28,9 @@ import (
 
 // Run starts the unprivileged loopback Web service.
 func Run(args []string) int {
-	var c web.Config
-	flags := flag.NewFlagSet("meshmux-web", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	flags.StringVar(&c.Listen, "listen", "127.0.0.1:9080", "literal loopback address")
-	flags.StringVar(&c.Origin, "origin", "", "exact public HTTPS origin")
-	flags.StringVar(&c.DataDir, "data-dir", "", "private directory owned by service user")
-	flags.BoolVar(&c.DevHTTP, "dev-http", false, "isolated loopback HTTP only; never publish this mode")
-	flags.BoolVar(&c.DirectProxy, "direct-caddy", false, "trust the dedicated client IP header from a directly exposed local Caddy")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+	c, err := parseConfig(args, os.Stderr)
+	if err != nil {
 		return 2
-	}
-	if !c.DevHTTP {
-		if origin, err := url.Parse(c.Origin); err == nil && origin.Scheme == "https" {
-			c.InstallArtifact = discoverInstallArtifact()
-		}
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 		if a.Key == slog.TimeKey && len(groups) == 0 {
@@ -50,6 +38,15 @@ func Run(args []string) int {
 		}
 		return a
 	}}))
+	if err := subscriptionOrigin(c); err != nil {
+		logger.Error("startup_failed", "error_code", "SUBSCRIPTION_ORIGIN_INVALID")
+		return 1
+	}
+	if !c.DevHTTP {
+		if origin, err := url.Parse(c.Origin); err == nil && origin.Scheme == "https" {
+			c.InstallArtifact = discoverInstallArtifact()
+		}
+	}
 	app, err := web.New(c, logger)
 	if err != nil {
 		logger.Error("startup_failed", "error_code", "STARTUP_FAILED")
@@ -89,6 +86,47 @@ func Run(args []string) int {
 	}
 	logger.Info("web_stopped", "stage", "shutdown", "error_code", "WEB_STOPPED")
 	return 0
+}
+
+// parseConfig turns the internal command line into the operator configuration.
+// The subscription origin is optional: an empty value keeps the management
+// origin serving the fixed download routes, which preserves every existing
+// call that never passes the flag.
+func parseConfig(args []string, output io.Writer) (web.Config, error) {
+	var c web.Config
+	flags := flag.NewFlagSet("meshmux-web", flag.ContinueOnError)
+	flags.SetOutput(output)
+	flags.StringVar(&c.Listen, "listen", "127.0.0.1:9080", "literal loopback address")
+	flags.StringVar(&c.Origin, "origin", "", "exact public HTTPS origin")
+	flags.StringVar(&c.SubscriptionOrigin, "subscription-origin", "", "exact public HTTPS origin serving only the two fixed subscription download routes; empty keeps the management origin")
+	flags.StringVar(&c.DataDir, "data-dir", "", "private directory owned by service user")
+	flags.BoolVar(&c.DevHTTP, "dev-http", false, "isolated loopback HTTP only; never publish this mode")
+	flags.BoolVar(&c.DirectProxy, "direct-caddy", false, "trust the dedicated client IP header from a directly exposed local Caddy")
+	if err := flags.Parse(args); err != nil {
+		return web.Config{}, err
+	}
+	if flags.NArg() != 0 {
+		return web.Config{}, errors.New("unexpected positional argument")
+	}
+	return c, nil
+}
+
+// subscriptionOrigin rejects a subscription origin that is not one exact
+// origin without a path. The empty value is valid and keeps the management
+// origin in charge of the download routes.
+func subscriptionOrigin(c web.Config) error {
+	if c.SubscriptionOrigin == "" {
+		return nil
+	}
+	u, err := url.Parse(c.SubscriptionOrigin)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" || u.User != nil ||
+		u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.ForceQuery {
+		return errors.New("SUBSCRIPTION_ORIGIN_INVALID: provide one exact origin without a path")
+	}
+	if !c.DevHTTP && u.Scheme != "https" {
+		return errors.New("SUBSCRIPTION_ORIGIN_INVALID: the subscription origin must use HTTPS")
+	}
+	return nil
 }
 
 // discoverInstallArtifact exposes only the currently running installed CLI.

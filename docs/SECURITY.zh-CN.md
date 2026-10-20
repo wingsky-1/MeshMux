@@ -20,7 +20,7 @@ SSH 保护必须绑定实际 listener：安装器从 `ssh.socket`、`ss` 和传�
 
 ## 订阅 Token 与凭据生命周期（#7）
 
-随机独立 Token 至少维持现有 ~288 bit 熵基线，禁止顺序 ID、用户名拼 URL、目录索引或自动暴露路径。标准与 Mesh 设备 Token 独立。**#7 首个 PR 的 schema 4 只持久化 Token 哈希，原始值仅在创建时展示一次**；泄漏后通过撤销/轮换失效，旧 URL 验证不再通过。只公布固定 JSON/YAML 下载路由，保持 Cache-Control: private, no-store、noindex、no-referrer；Caddy/程序访问日志不写完整 URL 或 bearer Token。
+随机独立 Token 至少维持现有 ~288 bit 熵基线，禁止顺序 ID、用户名拼 URL、目录索引或自动暴露路径。标准与 Mesh 设备 Token 独立。**#7 PR-A 的 schema 4 只持久化 Token 哈希，原始值仅在创建时展示一次**；泄漏后通过撤销/轮换失效，旧 URL 验证不再通过。只公布固定 JSON/YAML 下载路由，保持 Cache-Control: private, no-store、noindex、no-referrer；Caddy/程序访问日志不写完整 URL 或 bearer Token。
 
 Token 撤销与 VLESS UUID 删除是**独立操作**：撤销/轮换 Token 不触碰任何 UUID；删除凭据按精确 UUID 匹配目标 Line，绝不误删其他订阅者的 UUID。删除/暂停先完成公开侧门禁（先停止/撤销公开下载），再同步并回读远端凭据移除；远端同步部分失败必须显式 `partial`，不得标记 healthy。已下载到客户端的配置无法远程撤回，需明示该边界。
 
@@ -42,4 +42,4 @@ Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，�
 
 Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
 
-Issue #6 已关闭，Node/Agent 边界以上文固定通道为准。Issue #7 首个 PR 只引入订阅域模型（schema 4、仅哈希 Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器；Web 用户操作、公开下载、远端凭据同步与跨节点生命周期尚未实现，也不得据此宣称真实握手或客户端可用。
+Issue #6 已关闭，Node/Agent 边界以上文固定通道为准。Issue #7 PR-A 已合入订阅域模型（schema 4、仅哈希 Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器；Web 用户操作、双格式下载、跨 Line 收敛与 Hub 共存代码已在 `verify/issue7-sub-lifecycle` 分支，尚未通过 PR-B/PR-C 的 CI 与隔离 VM 验收，也不得据此宣称真实握手或客户端可用。

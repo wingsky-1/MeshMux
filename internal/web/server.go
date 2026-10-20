@@ -70,6 +70,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	}
 	app := &Server{cfg: c, store: s, log: logger, now: time.Now, authSlot: make(chan struct{}, 1)}
 	r := chi.NewRouter()
+	// The public download boundary runs before the management boundary: a
+	// bearer download never carries an admin session and never touches the
+	// login rate limit.
+	r.Use(app.route)
 	r.Use(app.boundary)
 	r.Get("/healthz", app.health)
 	static, _ := fs.Sub(assets, "assets")
@@ -105,8 +109,11 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Get("/api/agent/tasks", app.agentTasks)
 	r.Post("/api/agent/heartbeat", app.agentHeartbeat)
 	r.Post("/api/agent/result", app.agentResult)
+	// The subscriber and Line routes are registered before the generic
+	// navigation loop, so the real subscriber page owns its path.
+	app.registerSubscriberRoutes(r)
 	for _, page := range navigation {
-		if page.Path == "/nodes" {
+		if page.Path == "/nodes" || page.Path == "/subscribers" {
 			continue
 		}
 		p := page

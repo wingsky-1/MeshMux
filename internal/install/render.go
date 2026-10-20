@@ -47,7 +47,13 @@ func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, e
 	}
 }
 %s {
-%s	respond "Subscription service is not yet installed" 404
+%s	route {
+		@subscription path /subscription/*
+		reverse_proxy @subscription 127.0.0.1:9080 {
+			header_up -X-MeshMux-Client-IP
+		}
+		respond 404
+	}
 }
 %s {
 %s	@private path /api/* /swagger* /metrics* /debug/*
@@ -122,7 +128,7 @@ User=meshmux
 Group=meshmux
 StateDirectory=meshmux
 StateDirectoryMode=0700
-ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --data-dir /var/lib/meshmux%s
+ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --subscription-origin https://%s --data-dir /var/lib/meshmux%s
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -142,7 +148,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, c.ManagementDomain, directCaddyArg(c))
+`, c.ManagementDomain, c.SubscriptionDomain, directCaddyArg(c))
 
 	headscaleUnit := `[Unit]
 Description=MeshMux Headscale coordination and embedded DERP/STUN

@@ -30,6 +30,13 @@ type Config struct {
 	Origin  string
 	DataDir string
 	DevHTTP bool
+	// SubscriptionOrigin is the optional dedicated origin that serves the two
+	// fixed public subscription download routes. It must be one exact HTTPS
+	// origin without a path. Empty means the management Origin also serves
+	// those routes, which is the single-host development default. A distinct
+	// value moves downloads to their own host; that host then exposes nothing
+	// except the two download routes.
+	SubscriptionOrigin string
 	// InstallArtifact is populated by the installed CLI runtime. The
 	// development-only meshmux-web binary deliberately leaves it nil.
 	InstallArtifact *InstallArtifact
@@ -62,6 +69,9 @@ func (c Config) Validate(uid int) error {
 	if c.DataDir == "" {
 		return errors.New("DATA_DIR_REQUIRED")
 	}
+	if err := c.validateSubscriptionOrigin(u); err != nil {
+		return err
+	}
 	if c.InstallArtifact != nil {
 		if c.DevHTTP || u.Scheme != "https" {
 			return errors.New("INSTALL_ARTIFACT_INVALID: CLI download and install commands require an HTTPS Hub")
@@ -85,3 +95,40 @@ func (c Config) Validate(uid int) error {
 }
 
 func (c Config) validate() error { return c.Validate(os.Geteuid()) }
+
+// validateSubscriptionOrigin checks the optional dedicated download origin.
+//
+// The value must be one exact origin without a path, query, fragment or
+// credentials. It must use HTTPS, except for the local development mode
+// where it has to match the loopback listener exactly.
+//
+// An empty value is valid and keeps the management origin in charge of the
+// two fixed download routes.
+func (c Config) validateSubscriptionOrigin(management *url.URL) error {
+	if c.SubscriptionOrigin == "" {
+		return nil
+	}
+	u, err := url.Parse(c.SubscriptionOrigin)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" || u.User != nil ||
+		u.Path != "" || u.RawPath != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.ForceQuery {
+		return errors.New("SUBSCRIPTION_ORIGIN_INVALID: provide one exact origin without a path")
+	}
+	if c.DevHTTP {
+		if u.Scheme != "http" || u.Host != c.Listen {
+			return errors.New("SUBSCRIPTION_ORIGIN_INVALID: development HTTP must match the loopback listener")
+		}
+		return nil
+	}
+	if u.Scheme != "https" {
+		return errors.New("SUBSCRIPTION_ORIGIN_INVALID: the subscription origin must use HTTPS")
+	}
+	if management != nil && u.Host == management.Host {
+		// A distinct download host is the point of the separate origin. The
+		// same host is still accepted, but it must be spelled the same way in
+		// both fields, so the served Host is never ambiguous.
+		if c.SubscriptionOrigin != management.Scheme+"://"+management.Host {
+			return errors.New("SUBSCRIPTION_ORIGIN_INVALID: the subscription origin must be spelled exactly like the management origin")
+		}
+	}
+	return nil
+}
