@@ -42,4 +42,4 @@ Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，�
 
 Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
 
-Issue #6 已关闭，Node/Agent 边界以上文固定通道为准。Issue #7 PR-A 已合入订阅域模型（schema 4、仅哈希 Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器；Web 用户操作、双格式下载、跨 Line 收敛与 Hub 共存代码已在 `verify/issue7-sub-lifecycle` 分支，尚未通过 PR-B/PR-C 的 CI 与隔离 VM 验收，也不得据此宣称真实握手或客户端可用。
+Issue #6 已关闭，Node/Agent 边界以上文固定通道为准。Issue #7 PR-A 已合入订阅域模型（schema 4、仅哈希 Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器；Web 用户操作、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含 CI 与隔离 VM 证据），也不得据此宣称真实公网握手或客户端可用。
