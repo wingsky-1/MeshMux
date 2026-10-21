@@ -70,6 +70,7 @@ type runtimeState struct {
 	Digest           string                         `json:"digest,omitempty"`
 	LKG              []byte                         `json:"lkg,omitempty"`
 	LKGDigest        string                         `json:"lkg_digest,omitempty"`
+	AllowedSources   []string                       `json:"allowed_sources,omitempty"`
 	Journal          *applyJournal                  `json:"journal,omitempty"`
 	Idempotency      map[string]idempotencyItem     `json:"idempotency,omitempty"`
 	FinalResults     map[string]protocol.TaskResult `json:"final_results,omitempty"`
@@ -83,18 +84,19 @@ type idempotencyItem struct {
 }
 
 type applyJournal struct {
-	Schema       string `json:"schema"`
-	OperationID  string `json:"operation_id"`
-	Idempotency  string `json:"idempotency_key"`
-	Payload      string `json:"payload_digest"`
-	TaskRevision int64  `json:"task_revision"`
-	Revision     int64  `json:"revision"`
-	Digest       string `json:"digest"`
-	Candidate    []byte `json:"candidate"`
-	Config       []byte `json:"config"`
-	Reported     bool   `json:"reported"`
-	ExpectedPID  int    `json:"expected_pid,omitempty"`
-	PreviousPID  int    `json:"previous_pid,omitempty"`
+	Schema         string   `json:"schema"`
+	OperationID    string   `json:"operation_id"`
+	Idempotency    string   `json:"idempotency_key"`
+	Payload        string   `json:"payload_digest"`
+	TaskRevision   int64    `json:"task_revision"`
+	Revision       int64    `json:"revision"`
+	Digest         string   `json:"digest"`
+	Candidate      []byte   `json:"candidate"`
+	Config         []byte   `json:"config"`
+	Reported       bool     `json:"reported"`
+	ExpectedPID    int      `json:"expected_pid,omitempty"`
+	PreviousPID    int      `json:"previous_pid,omitempty"`
+	AllowedSources []string `json:"allowed_sources,omitempty"`
 }
 
 func emptyRuntimeState(cfg Config) runtimeState {
@@ -266,13 +268,17 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	if err = writeStageAtomic(r.root, stagedConfigPath(r.root, document.Revision), configData); err != nil {
 		return err
 	}
+	allowed, err := r.bootstrapAllowedSources(document.Candidate())
+	if err != nil {
+		return err
+	}
 	// The kernel may still be starting (systemd runs Agent and kernel
 	// concurrently with no ordering between them). Poll a bounded number of
 	// times for startup-transient signals; anything deterministic fails fast
 	// so a broken data plane is never mistaken for a slow one.
 	var readback Readback
 	for i := 0; ; i++ {
-		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData))
+		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData), allowed)
 		if err == nil || !TransientReadback(err) || i >= 29 {
 			break
 		}
@@ -285,7 +291,28 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	state.Digest = sha256Hex(candidateData)
 	state.LKG = append([]byte(nil), configData...)
 	state.LKGDigest = readback.ConfigSHA256
+	state.AllowedSources = allowed
 	return nil
+}
+
+// bootstrapAllowedSources recovers the applied source allowlist from the
+// managed ACL file when the Agent has no runtime state yet (fresh install or a
+// lost state file). The file must be exactly the canonical render for the
+// candidate, so a hand-edited table cannot bootstrap an authorization the Hub
+// never granted. An Edge has no Out table, so it authorizes nothing.
+func (r *Runtime) bootstrapAllowedSources(candidate Candidate) ([]string, error) {
+	if r.cfg.Role != RoleOut {
+		return nil, nil
+	}
+	acl, _, err := readRegularFile(rooted(r.root, ACLPath), true)
+	if err != nil {
+		return nil, errors.New("BOOTSTRAP_ACL_UNAVAILABLE")
+	}
+	allowed, err := ParseACLAllowed(candidate, acl)
+	if err != nil {
+		return nil, errors.New("BOOTSTRAP_ACL_INVALID")
+	}
+	return allowed, nil
 }
 
 func (r *Runtime) persistState(state *runtimeState) error {
@@ -393,6 +420,10 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 		return failedResult(result, "FINAL_OUTBOX_FULL")
 	}
 	taskContext := withOperation(ctx, task.OperationID)
+	allowed, hasAllowed, err := taskAllowedSources(task)
+	if err != nil {
+		return failedResult(result, errorCode(err))
+	}
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "validate", "error_code", "")
 	var executeErr error
@@ -402,21 +433,21 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
-		result, executeErr = r.check(taskContext, revision)
+		result, executeErr = r.check(taskContext, revision, allowed)
 	case protocol.KindConfigStage:
 		if state.Journal != nil {
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
-		result, executeErr = r.stage(taskContext, revision)
+		result, executeErr = r.stage(taskContext, revision, allowed)
 	case protocol.KindConfigApply:
 		if state.Journal != nil {
 			return failedResult(result, "RECOVERY_REQUIRED")
 		}
-		applyResult := r.apply(taskContext, task, digest, revision, state)
+		applyResult := r.apply(taskContext, task, digest, revision, state, allowed)
 		return applyResult
 	case protocol.KindConfigReadback:
-		result, executeErr = r.readback(taskContext, revision)
+		result, executeErr = r.readback(taskContext, revision, allowed, hasAllowed)
 	case protocol.KindHealthStatus, protocol.KindNodeStatus:
 		result, executeErr = r.status(taskContext)
 	default:
@@ -677,6 +708,30 @@ func taskRevision(task protocol.Task) (int64, error) {
 		return 0, errors.New("REVISION_INVALID")
 	}
 	return revision, nil
+}
+
+// taskAllowedSources extracts the optional per-Line source allowlist the Hub
+// attaches to a config task. The boolean reports whether the task carried the
+// key at all, so an explicit empty array ("authorize nobody") is distinct from
+// an absent key ("no expectation"). An unknown or malformed value fails the
+// task instead of silently applying a different authorization.
+func taskAllowedSources(task protocol.Task) ([]string, bool, error) {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(task.Params, &values); err != nil {
+		return nil, false, errors.New("PARAMS_INVALID")
+	}
+	raw, ok := values["allowed_sources"]
+	if !ok {
+		return nil, false, nil
+	}
+	var allowed []string
+	if err := json.Unmarshal(raw, &allowed); err != nil || allowed == nil {
+		return nil, false, errors.New("ACL_SOURCE_INVALID: allowed_sources must be an array of strings")
+	}
+	if _, err := normalizeACLSources(allowed); err != nil {
+		return nil, false, err
+	}
+	return allowed, true, nil
 }
 
 func currentOperation(ctx context.Context) string {

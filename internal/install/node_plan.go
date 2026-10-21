@@ -639,7 +639,7 @@ func nodeTableOwnership(ctx context.Context, root string, runner CommandRunner, 
 			Recovery: "An inet meshmux_out table exists but the effective Node ledger of this host does not record this exact Node configuration; inspect it manually. MeshMux will not adopt or overwrite it.",
 		}}
 	}
-	return tableOwnershipResult{Kind: tableManaged, Check: Check{Name: "out_acl_table", Status: "pass", Detail: "recorded MeshMux Out table"}}
+	return tableOwnershipResult{Kind: tableManaged, Check: Check{Name: "out_acl_table", Status: "pass", Detail: "recorded MeshMux Out table; its exact guard content is replaced and proven during apply/readback, not by this ownership probe"}}
 }
 
 type tableOwnershipKind int

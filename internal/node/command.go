@@ -142,8 +142,8 @@ func checkSingBox(ctx context.Context, runner CommandRunner, binary, configPath 
 	return err
 }
 
-func checkOutACL(ctx context.Context, runner CommandRunner, root string, candidate Candidate) error {
-	data, err := CompileACL(candidate)
+func checkOutACL(ctx context.Context, runner CommandRunner, root string, candidate Candidate, allowed []string) error {
+	data, err := CompileACL(candidate, allowed)
 	if err != nil {
 		return err
 	}

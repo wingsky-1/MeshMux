@@ -11,7 +11,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
-func (r *Runtime) check(ctx context.Context, revision int64) (protocol.TaskResult, error) {
+func (r *Runtime) check(ctx context.Context, revision int64, allowed []string) (protocol.TaskResult, error) {
 	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	_, candidate, _, err := r.validatedCandidate(ctx, revision)
 	if err != nil {
@@ -40,7 +40,7 @@ func (r *Runtime) check(ctx context.Context, revision int64) (protocol.TaskResul
 		err = checkSingBox(ctx, r.runner, binary, name)
 	}
 	if err == nil {
-		err = checkOutACL(ctx, r.runner, r.root, candidate)
+		err = checkOutACL(ctx, r.runner, r.root, candidate, allowed)
 	}
 	if err != nil {
 		return failedResult(result, errorCodeOr(err, "CANDIDATE_CHECK_FAILED")), err
@@ -49,7 +49,7 @@ func (r *Runtime) check(ctx context.Context, revision int64) (protocol.TaskResul
 	return result, nil
 }
 
-func (r *Runtime) stage(ctx context.Context, revision int64) (protocol.TaskResult, error) {
+func (r *Runtime) stage(ctx context.Context, revision int64, allowed []string) (protocol.TaskResult, error) {
 	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	document, candidate, config, err := r.validatedCandidate(ctx, revision)
 	if err != nil {
@@ -68,7 +68,7 @@ func (r *Runtime) stage(ctx context.Context, revision int64) (protocol.TaskResul
 	if err = checkSingBox(ctx, r.runner, rootedOptionalBinary(r.root, SingBoxBinaryPath), stagedConfigPath(r.root, revision)); err != nil {
 		return failedResult(result, "CANDIDATE_CHECK_FAILED"), err
 	}
-	if err = checkOutACL(ctx, r.runner, r.root, candidate); err != nil {
+	if err = checkOutACL(ctx, r.runner, r.root, candidate, allowed); err != nil {
 		return failedResult(result, "OUT_ACL_CHECK_FAILED"), err
 	}
 	result.Status = "healthy"
@@ -101,7 +101,7 @@ func rootedOptionalBinary(root, path string) string {
 	return rooted(root, path)
 }
 
-func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string, revision int64, state runtimeState) protocol.TaskResult {
+func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string, revision int64, state runtimeState, allowed []string) protocol.TaskResult {
 	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
 	if state.Journal != nil {
 		return failedResult(result, "RECOVERY_REQUIRED")
@@ -117,20 +117,21 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	if err = r.stageCandidateFiles(revision, documentData, config); err != nil {
 		return r.finishApply(ctx, &state, task, payload, failedResult(result, errorCode(err)))
 	}
-	if err = r.validateStaged(ctx, revision, document, candidate); err != nil {
+	if err = r.validateStaged(ctx, revision, document, candidate, allowed); err != nil {
 		return r.finishApply(ctx, &state, task, payload, failedResult(result, errorCode(err)))
 	}
 	digest := sha256Hex(config)
 	journal := &applyJournal{
-		Schema:       journalTXNSchema,
-		OperationID:  task.OperationID,
-		Idempotency:  task.IdempotencyKey,
-		Payload:      payload,
-		TaskRevision: task.Revision,
-		Revision:     revision,
-		Digest:       digest,
-		Candidate:    documentData,
-		Config:       config,
+		Schema:         journalTXNSchema,
+		OperationID:    task.OperationID,
+		Idempotency:    task.IdempotencyKey,
+		Payload:        payload,
+		TaskRevision:   task.Revision,
+		Revision:       revision,
+		Digest:         digest,
+		Candidate:      documentData,
+		Config:         config,
+		AllowedSources: append([]string(nil), allowed...),
 	}
 	state.Journal = journal
 	state.LastTaskRevision = task.Revision
@@ -159,7 +160,7 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	if journal.ExpectedPID > 0 {
 		expectedPID = strconv.Itoa(journal.ExpectedPID)
 	}
-	readback, err := r.readbackForProcess(ctx, r.cfg.Role, candidate, digest, expectedPID)
+	readback, err := r.readbackForProcess(ctx, r.cfg.Role, candidate, digest, expectedPID, allowed)
 	if err != nil {
 		return r.finishApply(ctx, &state, task, payload, r.recoverFailedApply(ctx, &state, journal, err))
 	}
@@ -171,6 +172,7 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	state.Digest = sha256Hex(documentData)
 	state.LKG = append([]byte(nil), config...)
 	state.LKGDigest = readback.ConfigSHA256
+	state.AllowedSources = append([]string(nil), allowed...)
 	state.Journal = nil
 	result.Status = "healthy"
 	result.Detail = boundedDetail(detail)
@@ -184,7 +186,7 @@ func (r *Runtime) stageCandidateFiles(revision int64, document, config []byte) e
 	return writeStageAtomic(r.root, stagedConfigPath(r.root, revision), config)
 }
 
-func (r *Runtime) validateStaged(ctx context.Context, revision int64, document CandidateDocument, candidate Candidate) error {
+func (r *Runtime) validateStaged(ctx context.Context, revision int64, document CandidateDocument, candidate Candidate, allowed []string) error {
 	stagedCandidate, _, err := readPrivateFile(stagedCandidatePath(r.root, revision))
 	if err != nil {
 		return errors.New("STAGED_CANDIDATE_INVALID")
@@ -204,7 +206,7 @@ func (r *Runtime) validateStaged(ctx context.Context, revision int64, document C
 	if err = checkSingBox(ctx, r.runner, rootedOptionalBinary(r.root, SingBoxBinaryPath), stagedConfigPath(r.root, revision)); err != nil {
 		return errors.New("CANDIDATE_CHECK_FAILED")
 	}
-	if err = checkOutACL(ctx, r.runner, r.root, candidate); err != nil {
+	if err = checkOutACL(ctx, r.runner, r.root, candidate, allowed); err != nil {
 		return errors.New("OUT_ACL_CHECK_FAILED")
 	}
 	return nil
@@ -222,7 +224,7 @@ func (r *Runtime) activate(ctx context.Context, state *runtimeState, journal *ap
 		return err
 	}
 	if candidate.Role == RoleOut {
-		acl, err := CompileACL(candidate)
+		acl, err := CompileACL(candidate, journal.AllowedSources)
 		if err != nil {
 			return err
 		}
@@ -291,6 +293,23 @@ func (r *Runtime) restoreLKG(ctx context.Context, state *runtimeState) error {
 	if props, err := r.systemdProperties(ctx); err == nil {
 		previousPID = props.MainPID
 	}
+	candidate := candidateFromStaged(candidateData)
+	if candidate == nil {
+		return errors.New("LKG_CANDIDATE_INVALID")
+	}
+	// The ACL is restored before the kernel restart on purpose: the guard must
+	// never admit the new revision's sources while the previous revision's
+	// config is running, and nft -f replaces the whole table in one
+	// transaction so a failed restore leaves the previous authorization intact.
+	if candidate.Role == RoleOut {
+		acl, err := CompileACL(*candidate, state.AllowedSources)
+		if err != nil || prepareACL(r.root, acl) != nil {
+			return errors.New("LKG_ACL_RESTORE_FAILED")
+		}
+		if _, err := r.runner.Run(ctx, nftPath, "-f", rooted(r.root, ACLPath)); err != nil {
+			return errors.New("LKG_ACL_RESTORE_FAILED")
+		}
+	}
 	if restoreConfig || restoreCandidate {
 		if _, err := r.runner.Run(ctx, systemctlPath, "restart", SingBoxUnit); err != nil {
 			return errors.New("LKG_RESTART_FAILED")
@@ -300,20 +319,7 @@ func (r *Runtime) restoreLKG(ctx context.Context, state *runtimeState) error {
 			return errors.New("LKG_PID_NOT_REPLACED")
 		}
 	}
-	candidate := candidateFromStaged(candidateData)
-	if candidate == nil {
-		return errors.New("LKG_CANDIDATE_INVALID")
-	}
-	if candidate.Role == RoleOut {
-		acl, err := CompileACL(*candidate)
-		if err != nil || prepareACL(r.root, acl) != nil {
-			return errors.New("LKG_ACL_RESTORE_FAILED")
-		}
-		if _, err := r.runner.Run(ctx, nftPath, "-f", rooted(r.root, ACLPath)); err != nil {
-			return errors.New("LKG_ACL_RESTORE_FAILED")
-		}
-	}
-	if _, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest); err != nil {
+	if _, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, state.AllowedSources); err != nil {
 		return errors.New("LKG_READBACK_FAILED")
 	}
 	state.Journal = nil

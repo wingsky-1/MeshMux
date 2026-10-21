@@ -133,7 +133,7 @@ func stageNodeArtifacts(ctx context.Context, result *InstallResult, state *Insta
 		acl, err := node.CompileACL(node.Candidate{
 			NodeID: cfg.NodeID, Role: cfg.Role, Revision: 1,
 			VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
-		})
+		}, nil)
 		if err != nil {
 			return fail(failures.aclRender)
 		}

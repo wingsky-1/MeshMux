@@ -28,6 +28,10 @@ type fakeNodeRunner struct {
 	failUsed bool
 	users    map[string]bool
 	packages map[string]bool
+	// aclPath, when set, makes the fake `nft -j` readback reflect the ACL
+	// file on disk, so an Agent-applied allowlist is visible to the installer
+	// the same way it is on a real host.
+	aclPath string
 	// aclRequiresFile, when set, makes the Out ACL unit fail to start while
 	// the file is absent. It emulates a clean host where nft -f cannot
 	// apply a table file that installNodeDynamic has not written yet.
@@ -37,6 +41,71 @@ type fakeNodeRunner struct {
 	// listener, so the fixture answers with the same set its preflight
 	// detects instead of a single hard-coded port.
 	jailPorts []int
+}
+
+// fixtureNFTJSON is the `nft -j list table inet meshmux_out` document of the
+// fixture's default-deny guard: the table, the base input chain and the two
+// VLESS drops, with no authorized source.
+const fixtureNFTJSON = `{"nftables":[` +
+	`{"table":{"family":"inet","name":"meshmux_out"}},` +
+	`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}},` +
+	`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}},{"drop":null}]}},` +
+	`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":8443}},{"drop":null}]}}` +
+	`]}`
+
+// fixtureACLJSON renders the `nft -j` document the fixture kernel would print
+// for the managed ACL file. When the file is absent or unreadable it falls
+// back to the default-deny guard, matching a host that has not applied any
+// authorization yet.
+func fixtureACLJSON(aclPath string) string {
+	if aclPath == "" {
+		return fixtureNFTJSON
+	}
+	data, err := os.ReadFile(aclPath)
+	if err != nil {
+		return fixtureNFTJSON
+	}
+	json := fixtureACLJSONFor(string(data), 8443)
+	return json
+}
+
+// fixtureACLJSONFor translates one rendered ACL script into nft -j output.
+func fixtureACLJSONFor(script string, port int) string {
+	rules := []string{
+		`{"table":{"family":"inet","name":"meshmux_out"}}`,
+		`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`,
+	}
+	for _, line := range strings.Split(script, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 7 && (fields[0] == "ip" || fields[0] == "ip6") && fields[1] == "saddr" &&
+			fields[3] == "tcp" && fields[4] == "dport" && fields[5] == strconv.Itoa(port) && fields[6] == "accept" {
+			family, source := fields[0], fields[2]
+			right := `"` + source + `"`
+			hostBits := "32"
+			if family == "ip6" {
+				hostBits = "128"
+			}
+			if address, bits, ok := strings.Cut(source, "/"); ok {
+				if bits == hostBits {
+					right = `"` + address + `"`
+				} else {
+					right = `{"prefix":{"addr":"` + address + `","len":` + bits + `}}`
+				}
+			}
+			rules = append(rules, `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[`+
+				`{"match":{"op":"==","left":{"payload":{"protocol":"`+family+`","field":"saddr"}},"right":`+right+`}},`+
+				`{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":`+strconv.Itoa(port)+`}},`+
+				`{"accept":null}]}}`)
+			continue
+		}
+		if len(fields) == 4 && fields[1] == "dport" && fields[3] == "drop" &&
+			(fields[0] == "tcp" || fields[0] == "udp") {
+			rules = append(rules, `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[`+
+				`{"match":{"op":"==","left":{"payload":{"protocol":"`+fields[0]+`","field":"dport"}},"right":`+strconv.Itoa(port)+`}},`+
+				`{"drop":null}]}}`)
+		}
+	}
+	return `{"nftables":[` + strings.Join(rules, ",") + `]}`
 }
 
 // fixtureSSHPorts is the SSH listener set the node fixture detects. The
@@ -114,8 +183,11 @@ func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]
 		// exercises the real preflight (e.g. TestNodeFirstInstallAndLedger).
 		return []byte("yes\n"), nil
 	case "nft":
+		if len(args) >= 2 && args[0] == "-j" && args[1] == "list" {
+			return []byte(fixtureACLJSON(f.aclPath)), nil
+		}
 		if len(args) >= 2 && args[0] == "list" {
-			return []byte("table inet meshmux_out {\n chain input { policy accept; tcp dport 8443 drop; udp dport 8443 drop; }\n}"), nil
+			return []byte("table inet meshmux_out {\n\tchain input {\n\t\ttype filter hook input priority -10; policy accept;\n\t\ttcp dport 8443 drop\n\t\tudp dport 8443 drop\n\t}\n}"), nil
 		}
 	default:
 		if len(args) == 1 && args[0] == "version" {
@@ -170,6 +242,7 @@ func makeNodeFixture(t *testing.T, role node.Role) *nodeFixture {
 		NodeID: cfg.NodeID, Role: role, Revision: 7, VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
 	})
 	runner := &fakeNodeRunner{users: map[string]bool{}, packages: map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}}
+	runner.aclPath = rooted(root, node.ACLPath)
 	readback := node.Readback{
 		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,

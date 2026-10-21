@@ -34,7 +34,10 @@ const (
 	RuntimeStatePath    = "/var/lib/meshmux-agent/state.json"
 	ActiveCandidatePath = "/var/lib/meshmux-agent/active-candidate.json"
 	ActiveConfigPath    = "/var/lib/meshmux-singbox/config.json"
-	ACLPath             = "/var/lib/meshmux-agent/out.nft"
+	// ACLPath is the managed Out VLESS guard script: the exact table
+	// replacement including the Hub-authorized source accept rules. It is
+	// applied as one nft -f transaction and read back through nft -j.
+	ACLPath = "/var/lib/meshmux-agent/out.nft"
 
 	AgentUnit   = "meshmux-agent.service"
 	SingBoxUnit = "meshmux-sing-box.service"
@@ -238,6 +241,13 @@ func (c Candidate) Equal(other Candidate) bool {
 
 // Readback contains only local evidence. Its fields deliberately cannot claim
 // public reachability, a real protocol handshake or client usability.
+//
+// OutDefaultDeny is the observed_out_default_deny the Hub persists for an Out
+// node. It means the live inet meshmux_out table was read back and proven to
+// be the exact VLESS guard: the MeshMux table, the input chain at priority
+// -10, both VLESS drops, and an accept set exactly equal to the applied
+// source allowlist. An empty allowlist is still a passing guard — that is the
+// fail-closed data plane. It never means "policy accept was seen".
 type Readback struct {
 	Architecture   string `json:"architecture"`
 	AgentVersion   string `json:"agent_version"`

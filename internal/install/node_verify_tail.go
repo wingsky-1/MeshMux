@@ -50,7 +50,7 @@ func nodeVerifyTail(ctx context.Context, result *InstallResult, state *InstallSt
 	}
 	_, lkgOK := nodeValidLKG(opts.Root, installedCfg)
 	if !repair || !lkgOK {
-		if err := installNodeDynamic(ctx, *opts, activeCandidate, candidateConfig, installedCfg.Role); err != nil {
+		if err := installNodeDynamic(ctx, *opts, activeCandidate, candidateConfig, installedCfg.Role, repair); err != nil {
 			return fail(failures.kernelConfigApply)
 		}
 	}
@@ -61,7 +61,7 @@ func nodeVerifyTail(ctx context.Context, result *InstallResult, state *InstallSt
 		if err := activateNodeUnit(ctx, opts.Runner, node.ACLUnit, repair); err != nil {
 			return fail(failures.outACLApply)
 		}
-		if err := verifyNodeACLReadback(ctx, opts.Runner, installedCfg.VLESSPort); err != nil {
+		if err := verifyNodeACLReadback(ctx, opts.Runner, opts.Root, activeCandidate.Candidate(), installedCfg.VLESSPort); err != nil {
 			return fail(failures.outACLReadback)
 		}
 	}

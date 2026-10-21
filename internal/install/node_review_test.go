@@ -190,7 +190,7 @@ func TestNodeLKGRejectsStaleOutACL(t *testing.T) {
 	if err := writeBytesAtomic(rooted(f.root, node.ActiveConfigPath), compiled, 0640); err != nil {
 		t.Fatal(err)
 	}
-	acl, err := node.CompileACL(document.Candidate())
+	acl, err := node.CompileACL(document.Candidate(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

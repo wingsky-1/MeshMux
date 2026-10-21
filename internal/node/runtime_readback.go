@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
@@ -16,7 +17,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
-func (r *Runtime) readback(ctx context.Context, revision int64) (protocol.TaskResult, error) {
+func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string, hasAllowed bool) (protocol.TaskResult, error) {
 	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	state, err := r.loadStateForExecution()
 	if err != nil {
@@ -33,7 +34,15 @@ func (r *Runtime) readback(ctx context.Context, revision int64) (protocol.TaskRe
 	if candidate == nil {
 		return failedResult(result, "LKG_CANDIDATE_INVALID"), errors.New("LKG_CANDIDATE_INVALID")
 	}
-	readback, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest)
+	// The readback proves the live table matches what was applied for this
+	// revision. The applied authorization, not the new task's request, is the
+	// expectation, so a revision whose allowlist the Hub no longer wants still
+	// reports its own state instead of silently passing.
+	expected := state.AllowedSources
+	if hasAllowed && r.cfg.Role == RoleOut && !sameACLSources(allowed, expected) {
+		return failedResult(result, "OUT_ACL_SOURCE_MISMATCH"), errors.New("OUT_ACL_SOURCE_MISMATCH")
+	}
+	readback, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, expected)
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
 	}
@@ -99,9 +108,13 @@ func ReadbackLocal(ctx context.Context, cfg Config, root string, runner CommandR
 	if candidate == nil {
 		return Readback{}, errors.New("LKG_CANDIDATE_INVALID")
 	}
-	return runtimeInstance.readbackFor(ctx, cfg.Role, *candidate, state.LKGDigest)
+	return runtimeInstance.readbackFor(ctx, cfg.Role, *candidate, state.LKGDigest, state.AllowedSources)
 }
 
+// readbackBootstrap validates an installed node before the Agent has ever held
+// runtime state. The expected authorization is recovered from the managed ACL
+// file, so a fresh install (default-deny) and a restart after losing state.json
+// on an already-authorized Out both prove the same guard.
 func (r *Runtime) readbackBootstrap(ctx context.Context) (Readback, error) {
 	uid := managedFileUID(r.root)
 	candidateData, _, err := readRegularFileOwnedBy(rooted(r.root, ActiveCandidatePath), 0600, uid)
@@ -123,7 +136,11 @@ func (r *Runtime) readbackBootstrap(ctx context.Context) (Readback, error) {
 	if err != nil || !bytes.Equal(active, expected) {
 		return Readback{}, errors.New("ACTIVE_CONFIG_INVALID")
 	}
-	return r.readbackFor(ctx, r.cfg.Role, document.Candidate(), sha256Hex(active))
+	allowed, err := r.bootstrapAllowedSources(document.Candidate())
+	if err != nil {
+		return Readback{}, err
+	}
+	return r.readbackFor(ctx, r.cfg.Role, document.Candidate(), sha256Hex(active), allowed)
 }
 
 type systemdProperties struct {
@@ -132,11 +149,11 @@ type systemdProperties struct {
 	MainPID     int
 }
 
-func (r *Runtime) readbackFor(ctx context.Context, role Role, candidate Candidate, expectedConfigHash string) (Readback, error) {
-	return r.readbackForProcess(ctx, role, candidate, expectedConfigHash, "")
+func (r *Runtime) readbackFor(ctx context.Context, role Role, candidate Candidate, expectedConfigHash string, allowed []string) (Readback, error) {
+	return r.readbackForProcess(ctx, role, candidate, expectedConfigHash, "", allowed)
 }
 
-func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate Candidate, expectedConfigHash, expectedPID string) (Readback, error) {
+func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate Candidate, expectedConfigHash, expectedPID string, allowed []string) (Readback, error) {
 	if err := verifyExecutableHash(rooted(r.root, AgentBinaryPath), r.cfg.AgentSHA256); err != nil {
 		return Readback{}, errors.New("AGENT_BINARY_MISMATCH")
 	}
@@ -203,7 +220,7 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 	}
 	outDeny := false
 	if role == RoleOut {
-		if err = r.verifyOutACL(ctx, candidate.VLESSPort); err != nil {
+		if err = r.verifyOutACL(ctx, candidate.VLESSPort, allowed); err != nil {
 			return Readback{}, err
 		}
 		outDeny = true
@@ -359,10 +376,34 @@ type nftObject struct {
 	} `json:"rule,omitempty"`
 }
 
-func (r *Runtime) verifyOutACL(ctx context.Context, port int) error {
-	output, err := r.runner.Run(ctx, nftPath, "-j", "list", "table", "inet", ACLTable)
+func (r *Runtime) verifyOutACL(ctx context.Context, port int, allowed []string) error {
+	return VerifyOutACL(ctx, r.runner, port, allowed)
+}
+
+// VerifyOutACL reads the live inet meshmux_out table through nft -j and
+// proves that it is the exact Out VLESS guard for port: the MeshMux-owned
+// table, the base input chain at priority -10, both VLESS drops, and an
+// accept set that is exactly the authorized source set.
+//
+// A table that only carries `policy accept` is not evidence of anything:
+// without the drops it denies nothing, and with an extra accept it admits a
+// source the Hub never authorized. Error codes keep those cases apart so the
+// installer and the Hub can tell a missing table from a wrong one.
+func VerifyOutACL(ctx context.Context, runner CommandRunner, port int, allowed []string) error {
+	output, err := runner.Run(ctx, nftPath, "-j", "list", "table", "inet", ACLTable)
 	if err != nil {
 		return errors.New("OUT_ACL_UNAVAILABLE")
+	}
+	return VerifyOutACLDocument(output, port, allowed)
+}
+
+// VerifyOutACLDocument checks one parsed `nft -j list table inet meshmux_out`
+// document against the expected guard. It is exported so the installer can
+// assert the same evidence without reimplementing the parser.
+func VerifyOutACLDocument(output []byte, port int, allowed []string) error {
+	expected, err := normalizeACLSources(allowed)
+	if err != nil {
+		return err
 	}
 	var document nftJSON
 	if err = json.Unmarshal(output, &document); err != nil {
@@ -370,12 +411,19 @@ func (r *Runtime) verifyOutACL(ctx context.Context, port int) error {
 	}
 	tableFound, chainFound := false, false
 	tcpDrop, udpDrop := false, false
+	dropSeen := false
+	expectedSet := make(map[netip.Prefix]struct{}, len(expected))
+	for _, source := range expected {
+		expectedSet[source.prefix] = struct{}{}
+	}
+	observed := make(map[netip.Prefix]struct{}, len(expected))
 	for _, item := range document.NFTables {
 		if item.Table != nil {
 			if item.Table.Family != "inet" || item.Table.Name != ACLTable {
 				return errors.New("OUT_ACL_FOREIGN_TABLE")
 			}
 			tableFound = true
+			continue
 		}
 		if item.Chain != nil {
 			if item.Chain.Family != "inet" || item.Chain.Table != ACLTable || item.Chain.Name != "input" ||
@@ -386,23 +434,65 @@ func (r *Runtime) verifyOutACL(ctx context.Context, port int) error {
 			chainFound = true
 			continue
 		}
-		if item.Rule != nil && item.Rule.Table == ACLTable && item.Rule.Chain == "input" {
-			proto, ok := decodeNftDropRule(item.Rule.Expr, port)
-			if !ok {
-				return errors.New("OUT_ACL_RULE_INVALID")
-			}
+		if item.Rule == nil {
+			continue
+		}
+		if item.Rule.Family != "inet" || item.Rule.Table != ACLTable || item.Rule.Chain != "input" {
+			return errors.New("OUT_ACL_RULE_INVALID")
+		}
+		if proto, ok := decodeNftDropRule(item.Rule.Expr, port); ok {
 			switch proto {
 			case "tcp":
 				tcpDrop = true
 			case "udp":
 				udpDrop = true
 			}
+			dropSeen = true
+			continue
 		}
+		prefix, ok := decodeNftAcceptRule(item.Rule.Expr, port)
+		if !ok {
+			return errors.New("OUT_ACL_RULE_INVALID")
+		}
+		// An accept after a drop is dead and would silently deny an
+		// authorized source the Hub believes is admitted.
+		if dropSeen {
+			return errors.New("OUT_ACL_RULE_INVALID")
+		}
+		if _, duplicate := observed[prefix]; duplicate {
+			return errors.New("OUT_ACL_RULE_INVALID")
+		}
+		if _, authorized := expectedSet[prefix]; !authorized {
+			return errors.New("OUT_ACL_RULE_INVALID")
+		}
+		observed[prefix] = struct{}{}
 	}
 	if !tableFound || !chainFound || !tcpDrop || !udpDrop {
 		return errors.New("OUT_ACL_DEFAULT_DENY_INCOMPLETE")
 	}
+	if len(observed) != len(expectedSet) {
+		return errors.New("OUT_ACL_RULE_INVALID")
+	}
 	return nil
+}
+
+// sameACLSources reports whether two allowlists authorize exactly the same
+// prefixes. Order and duplicates carry no meaning; the normalized sets do.
+func sameACLSources(left, right []string) bool {
+	leftSources, err := normalizeACLSources(left)
+	if err != nil {
+		return false
+	}
+	rightSources, err := normalizeACLSources(right)
+	if err != nil || len(leftSources) != len(rightSources) {
+		return false
+	}
+	for i := range leftSources {
+		if leftSources[i].prefix != rightSources[i].prefix {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeNftDropRule(expressions []json.RawMessage, port int) (string, bool) {
@@ -417,8 +507,103 @@ func decodeNftDropRule(expressions []json.RawMessage, port int) (string, bool) {
 	if _, ok := dropObject["drop"]; !ok {
 		return "", false
 	}
+	return decodeNftPortMatch(matchObject["match"], port)
+}
+
+// decodeNftAcceptRule recognizes one rendered allow rule:
+// <ip|ip6> saddr <prefix> tcp dport <port> accept.
+func decodeNftAcceptRule(expressions []json.RawMessage, port int) (netip.Prefix, bool) {
+	if len(expressions) != 3 {
+		return netip.Prefix{}, false
+	}
+	var matchObject, verdictObject map[string]json.RawMessage
+	if json.Unmarshal(expressions[0], &matchObject) != nil || len(matchObject) != 1 ||
+		json.Unmarshal(expressions[2], &verdictObject) != nil || len(verdictObject) != 1 {
+		return netip.Prefix{}, false
+	}
+	if _, ok := verdictObject["accept"]; !ok {
+		return netip.Prefix{}, false
+	}
+	prefix, ok := decodeNftSourceMatch(matchObject["match"])
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	var dportObject map[string]json.RawMessage
+	if json.Unmarshal(expressions[1], &dportObject) != nil || len(dportObject) != 1 {
+		return netip.Prefix{}, false
+	}
+	if proto, ok := decodeNftPortMatch(dportObject["match"], port); !ok || proto != "tcp" {
+		return netip.Prefix{}, false
+	}
+	return prefix, true
+}
+
+// decodeNftSourceMatch decodes one `ip saddr` / `ip6 saddr` match. nft prints
+// a prefix as an object and a bare address as a string, so both spellings are
+// accepted and normalized to the same masked prefix.
+func decodeNftSourceMatch(raw json.RawMessage) (netip.Prefix, bool) {
 	var match map[string]json.RawMessage
-	if json.Unmarshal(matchObject["match"], &match) != nil || len(match) != 3 {
+	if json.Unmarshal(raw, &match) != nil || len(match) != 3 {
+		return netip.Prefix{}, false
+	}
+	var op string
+	if json.Unmarshal(match["op"], &op) != nil || (op != "==" && op != "in") {
+		return netip.Prefix{}, false
+	}
+	var left map[string]json.RawMessage
+	if json.Unmarshal(match["left"], &left) != nil || len(left) != 1 {
+		return netip.Prefix{}, false
+	}
+	var payload map[string]any
+	if json.Unmarshal(left["payload"], &payload) != nil || len(payload) != 2 {
+		return netip.Prefix{}, false
+	}
+	protocol, _ := payload["protocol"].(string)
+	field, _ := payload["field"].(string)
+	if (protocol != "ip" && protocol != "ip6") || field != "saddr" {
+		return netip.Prefix{}, false
+	}
+	prefix, ok := decodeNftPrefix(match["right"])
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	if protocol == "ip" && !prefix.Addr().Is4() || protocol == "ip6" && !prefix.Addr().Is6() {
+		return netip.Prefix{}, false
+	}
+	return prefix, true
+}
+
+// decodeNftPrefix accepts the two spellings nft uses for an address match: a
+// bare address string for a host prefix and {"prefix":{"addr","len"}} for a
+// network.
+func decodeNftPrefix(raw json.RawMessage) (netip.Prefix, bool) {
+	var address string
+	if json.Unmarshal(raw, &address) == nil {
+		parsed, err := netip.ParseAddr(address)
+		if err != nil {
+			return netip.Prefix{}, false
+		}
+		return netip.PrefixFrom(parsed, parsed.BitLen()), true
+	}
+	var object struct {
+		Prefix *struct {
+			Addr string `json:"addr"`
+			Len  int    `json:"len"`
+		} `json:"prefix"`
+	}
+	if json.Unmarshal(raw, &object) != nil || object.Prefix == nil {
+		return netip.Prefix{}, false
+	}
+	parsed, err := netip.ParseAddr(object.Prefix.Addr)
+	if err != nil || object.Prefix.Len < 0 || object.Prefix.Len > parsed.BitLen() {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(parsed, object.Prefix.Len).Masked(), true
+}
+
+func decodeNftPortMatch(raw json.RawMessage, port int) (string, bool) {
+	var match map[string]json.RawMessage
+	if json.Unmarshal(raw, &match) != nil || len(match) != 3 {
 		return "", false
 	}
 	var op string

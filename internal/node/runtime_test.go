@@ -51,6 +51,13 @@ type runtimeTestRunner struct {
 	restartFail  bool
 	nftRules     []string
 	restartCount int
+	// aclApplied records the ACL script text the Agent pushed with nft -f.
+	aclApplied string
+	// unauthorizedAccept is one source injected into the live table for the
+	// next readback only, emulating a table tampered with during the
+	// verification window. The rollback's nft -f restores the canonical LKG,
+	// so the injected accept does not survive it.
+	unauthorizedAccept string
 }
 
 func (r *runtimeTestRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -90,11 +97,35 @@ func (r *runtimeTestRunner) Run(_ context.Context, name string, args ...string) 
 		return []byte(`tcp LISTEN 0 4096 *:` + strconv.Itoa(r.listenPort) +
 			` *:* users:(("sing-box",pid=` + strconv.Itoa(r.pid) + `,fd=3))` + "\n"), nil
 	case "/usr/sbin/nft":
+		if len(args) > 0 && args[0] == "-f" && len(args) > 1 && r.root != "" {
+			// The fake data plane reflects the exact script the Agent
+			// applied, so an ACL whose accept set drifted from the
+			// authorization is caught by the readback instead of being
+			// masked by a hard-coded fixture.
+			if data, err := os.ReadFile(args[1]); err == nil {
+				r.aclApplied = string(data)
+				r.nftRules = nftRulesFromScript(r.aclApplied, r.listenPort)
+			}
+			return nil, nil
+		}
 		if len(args) > 0 && args[0] == "-j" {
 			if len(r.nftRules) == 0 {
 				r.nftRules = validNFTRules(r.listenPort)
 			}
-			return []byte("{\"nftables\":[" + strings.Join(r.nftRules, ",") + "]}"), nil
+			rules := r.nftRules
+			if r.unauthorizedAccept != "" {
+				// Inject the out-of-band accept after the table and chain
+				// entries, before the first drop. It is one-shot: the
+				// rollback re-applies the canonical LKG, and that apply
+				// must be able to prove itself again.
+				injected := make([]string, 0, len(rules)+1)
+				injected = append(injected, rules[:2]...)
+				injected = append(injected, nftAcceptRule("ip", r.unauthorizedAccept, r.listenPort))
+				injected = append(injected, rules[2:]...)
+				rules = injected
+				r.unauthorizedAccept = ""
+			}
+			return []byte("{\"nftables\":[" + strings.Join(rules, ",") + "]}"), nil
 		}
 		return nil, nil
 	default:
@@ -102,17 +133,57 @@ func (r *runtimeTestRunner) Run(_ context.Context, name string, args ...string) 
 	}
 }
 
-func validNFTRules(port int) []string {
-	portRule := func(proto string) string {
-		return `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[` +
-			`{"match":{"op":"==","left":{"payload":{"protocol":"` + proto + `","field":"dport"}},` +
-			`"right":` + strconv.Itoa(port) + `}},{"drop":null}]}}`
+// nftRulesFromScript translates one rendered ACL script into the nft -j shape
+// the kernel would print for it.
+func nftRulesFromScript(script string, port int) []string {
+	rules := []string{
+		`{"table":{"family":"inet","name":"meshmux_out"}}`,
+		`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`,
 	}
+	for _, line := range strings.Split(script, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 7 && (fields[0] == "ip" || fields[0] == "ip6") && fields[1] == "saddr" &&
+			fields[3] == "tcp" && fields[4] == "dport" && fields[6] == "accept" {
+			rules = append(rules, nftAcceptRule(fields[0], fields[2], port))
+			continue
+		}
+		if len(fields) == 4 && fields[1] == "dport" && fields[3] == "drop" &&
+			(fields[0] == "tcp" || fields[0] == "udp") {
+			rules = append(rules, nftPortRule(fields[0], port))
+		}
+	}
+	return rules
+}
+
+func nftPortRule(proto string, port int) string {
+	return `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[` +
+		`{"match":{"op":"==","left":{"payload":{"protocol":"` + proto + `","field":"dport"}},` +
+		`"right":` + strconv.Itoa(port) + `}},{"drop":null}]}}`
+}
+
+// nftAcceptRule renders one accept rule the way nft prints a source prefix:
+// a bare address for a host prefix and a prefix object for a network.
+func nftAcceptRule(family, source string, port int) string {
+	right := `"` + source + `"`
+	if address, bits, ok := strings.Cut(source, "/"); ok {
+		if hostBits := map[string]string{"ip": "32", "ip6": "128"}[family]; bits == hostBits {
+			right = `"` + address + `"`
+		} else {
+			right = `{"prefix":{"addr":"` + address + `","len":` + bits + `}}`
+		}
+	}
+	return `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[` +
+		`{"match":{"op":"==","left":{"payload":{"protocol":"` + family + `","field":"saddr"}},"right":` + right + `}},` +
+		`{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":` + strconv.Itoa(port) + `}},` +
+		`{"accept":null}]}}`
+}
+
+func validNFTRules(port int) []string {
 	return []string{
 		`{"table":{"family":"inet","name":"meshmux_out"}}`,
 		`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`,
-		portRule("tcp"),
-		portRule("udp"),
+		nftPortRule("tcp", port),
+		nftPortRule("udp", port),
 	}
 }
 
@@ -193,6 +264,17 @@ func createRuntimeFixture(t *testing.T, role Role, revision int64) (string, Conf
 	if err = os.Chmod(rooted(root, ActiveConfigPath), 0640); err != nil {
 		t.Fatal(err)
 	}
+	// The installer writes the default-deny Out ACL before the Agent can
+	// bootstrap, so a RoleOut fixture must carry it too.
+	if role == RoleOut {
+		acl, err := CompileACL(candidate.Candidate(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(rooted(root, ACLPath), acl, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return root, cfg, identity, runner
 }
 
@@ -267,7 +349,7 @@ func TestReadbackStartupConfigMismatchRejected(t *testing.T) {
 	}
 	runtime := &Runtime{cfg: cfg, root: root, runner: runner, procRoot: filepath.Join(root, "proc"), enforceProcArgs: true}
 	candidate := testCandidate(7).Candidate()
-	if _, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, ""); err == nil {
+	if _, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, "", nil); err == nil {
 		t.Fatal("same binary started with another config accepted")
 	}
 }

@@ -216,6 +216,51 @@ func TestIndependentTaskAndParamsRevisions(t *testing.T) {
 	}
 }
 
+func TestConfigTaskAllowedSourcesParam(t *testing.T) {
+	base := validTask(t, KindConfigCheck)
+	cases := []struct {
+		name   string
+		params string
+		ok     bool
+	}{
+		{"empty array", `{"revision":3,"allowed_sources":[]}`, true},
+		{"one source", `{"revision":3,"allowed_sources":["203.0.113.7"]}`, true},
+		{"dual stack", `{"revision":3,"allowed_sources":["203.0.113.7","2001:db8::/32"]}`, true},
+		{"without revision", `{"allowed_sources":["203.0.113.7"]}`, true},
+		{"null list", `{"revision":3,"allowed_sources":null}`, false},
+		{"string list", `{"revision":3,"allowed_sources":"203.0.113.7"}`, false},
+		{"object list", `{"revision":3,"allowed_sources":{"source":"203.0.113.7"}}`, false},
+		{"number list", `{"revision":3,"allowed_sources":3}`, false},
+		{"nested list", `{"revision":3,"allowed_sources":[["203.0.113.7"]]}`, false},
+		{"numeric entry", `{"revision":3,"allowed_sources":[3]}`, false},
+		{"null entry", `{"revision":3,"allowed_sources":[null]}`, false},
+		{"empty entry", `{"revision":3,"allowed_sources":[""]}`, false},
+		{"overlong entry", `{"revision":3,"allowed_sources":["` + strings.Repeat("1", 65) + `"]}`, false},
+		{"nul entry", `{"revision":3,"allowed_sources":["203.0.113.7\u0000"]}`, false},
+		{"too many entries", `{"revision":3,"allowed_sources":[` + strings.TrimSuffix(strings.Repeat(`"203.0.113.7",`, maxAllowedSources+1), ",") + `]}`, false},
+		{"duplicate key", `{"revision":3,"allowed_sources":["203.0.113.7"],"allowed_sources":["198.51.100.1"]}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := base
+			task.Params = json.RawMessage(tc.params)
+			err := ValidateTask(task)
+			if tc.ok && err != nil {
+				t.Fatalf("valid params rejected: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("invalid params accepted: %s", tc.params)
+			}
+		})
+	}
+	// The list is a config-kind parameter only; status queries stay empty.
+	status := validTask(t, KindHealthStatus)
+	status.Params = json.RawMessage(`{"allowed_sources":["203.0.113.7"]}`)
+	if err := ValidateTask(status); err == nil {
+		t.Fatal("status task accepted an allowlist parameter")
+	}
+}
+
 func TestNodeInputsRejectBadPorts(t *testing.T) {
 	if err := ValidateNodeInputs("edge", "line-1", 8443, 2222); err != nil {
 		t.Fatal(err)
