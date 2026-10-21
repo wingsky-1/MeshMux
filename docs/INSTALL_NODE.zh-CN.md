@@ -17,7 +17,7 @@ meshmux install edge|out \
   [--plan|--yes] [--repair]
 ```
 
-- `edge` 是 Line，`out` 是可选 Out。角色由原有 `product.ParseRole` 解析后转换为 `node.Role`，不会接受任意角色字符串。
+- `edge` 是 Line，`out` 是可选 Out。角色由 `node.ParseRole` 解析（hub 在 install 侧分派，不进入 node.Role），不会接受任意角色字符串。
 - `--hub` 必须是一个直接可用的 HTTPS origin；用户信息、路径、查询串、片段、空白和换行均拒绝。
 - `--node` 必须是 32 位小写十六进制 Node ID。
 - VLESS 与 SSH 端口必须在 `1-65535` 范围内且不同。安装器还会把 VLESS 端口与当前实际 SSH listener 集合比较。

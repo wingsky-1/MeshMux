@@ -16,7 +16,7 @@ MeshMux 按 SemVer 2.0.0，**v1.0.0 是首个公开稳定版本**。开发里程
 ## 当前 Go 实现
 
 - cmd/meshmux：CLI 的 install 占位入口，返回非零、无副作用。
-- internal/product：基础角色模型和契约测试。
+- internal/node：节点契约、候选文档与角色模型（含 ParseRole 契约测试）。
 - docs/：产品、架构、运维、安全与验收；docs/adr 仅在真实架构取舍时补充。
 - .github/workflows/ci.yml：gofmt、vet、test、race、build。
 - cmd/meshmux-web、internal/web：非 root Web 服务、安全认证/会话、SQLite 和嵌入式 templ/HTMX 页面。

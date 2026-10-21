@@ -29,6 +29,22 @@ func validCandidate() Candidate {
 	}
 }
 
+func TestParseRoleAcceptsNodeRolesOnly(t *testing.T) {
+	for _, name := range []string{"edge", "out"} {
+		role, err := ParseRole(name)
+		if err != nil || string(role) != name {
+			t.Fatalf("ParseRole(%q) = %q, %v", name, role, err)
+		}
+	}
+	// "hub" is resolved on the install side, never as a node.Role; the rest
+	// are the injection cases inherited from the removed internal/product tests.
+	for _, name := range []string{"", "nas", "line", "root", "hub", "hub;rm -rf /"} {
+		if _, err := ParseRole(name); err == nil {
+			t.Fatalf("ParseRole(%q) unexpectedly succeeded", name)
+		}
+	}
+}
+
 func TestFixedHostContract(t *testing.T) {
 	got := []string{
 		AgentBinaryPath,
