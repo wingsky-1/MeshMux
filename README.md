@@ -81,7 +81,7 @@ v1.0.0 以**能安装、能纳管、能联网、能安全创建/删除、能在 
 - [4A 架构](docs/ARCHITECTURE.zh-CN.md) · [部署视图](docs/DEPLOYMENT.zh-CN.md) · [纳管时序](docs/ENROLLMENT.zh-CN.md)
 - [Hub 安装与恢复](docs/INSTALL_HUB.zh-CN.md) · [Line / Out 安装与恢复](docs/INSTALL_NODE.zh-CN.md)
 - [安全设计](docs/SECURITY.zh-CN.md) · [日志与排障](docs/OBSERVABILITY.zh-CN.md) · [验收门槛](docs/ACCEPTANCE.zh-CN.md)
-- [版本基线](docs/VERSIONS.zh-CN.md) · [开发路线](docs/ROADMAP.zh-CN.md) · [协作说明](docs/DEVELOPMENT.zh-CN.md) · [架构决策](docs/adr/)
+- [版本基线](docs/VERSIONS.zh-CN.md) · [开发路线](docs/ROADMAP.zh-CN.md) · [协作说明](docs/DEVELOPMENT.zh-CN.md) · [架构决策](docs/adr/) · [测试与环境变量](docs/TESTING.zh-CN.md)
 
 本地脚手架验证：
 

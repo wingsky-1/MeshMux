@@ -1,6 +1,6 @@
 # 测试与环境变量
 
-本文只记录**测试与 CI 代码实际读取**的 `MESHMUX_*` 环境变量。行号基准为 `main@581faaa`；代码变动后以 `grep` 重新核对，不以本文行号为准。
+本文只记录**测试与 CI 代码实际读取**的 `MESHMUX_*` 环境变量。下列 file:line 以合入时基线为准，仅供定位；代码变动后以 `grep` 重新核对，不以本文行号为准。
 
 判定口径：以 `os.Getenv` / `os.LookupEnv` / `syscall.Getenv` 及脚本中真实的取值语句为准，不按名字前缀猜测。仓库当前只使用 `os.Getenv`，没有 `LookupEnv` 或 `syscall.Getenv` 调用。
 
