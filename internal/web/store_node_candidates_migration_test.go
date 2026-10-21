@@ -58,7 +58,7 @@ INSERT INTO agent_tasks VALUES('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaa
 	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 4 {
 		t.Fatalf("user_version=%d err=%v", version, err)
 	}
-	n, err := s.getNode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	n, err := s.getNodeAt("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", time.Now())
 	if err != nil || n.DisplayName != "legacy" || n.LatestConfigRevision != 1 {
 		t.Fatalf("node migration lost data: %+v err=%v", n, err)
 	}

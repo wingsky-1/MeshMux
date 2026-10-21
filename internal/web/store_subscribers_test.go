@@ -773,7 +773,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.enqueueTask(task); err != nil {
+	if err = s.enqueueTaskAt(task, now); err != nil {
 		t.Fatal(err)
 	}
 	hash, err := hashPassword(testPassword)
@@ -790,7 +790,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodeBefore, err := s.getNode(edge)
+	nodeBefore, err := s.getNodeAt(edge, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,7 +818,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if version != 4 {
 		t.Fatalf("user_version = %d, want 4", version)
 	}
-	after, err := s.getNode(edge)
+	after, err := s.getNodeAt(edge, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -909,7 +909,7 @@ func TestSchemaV4MigrationRollsBackOnFailure(t *testing.T) {
 		t.Fatal("partial subscribers table survived the rollback")
 	}
 	// The pre-existing node data is still there.
-	if _, err = s.getNode(edge); err != nil {
+	if _, err = s.getNodeAt(edge, now); err != nil {
 		t.Fatal(err)
 	}
 }
