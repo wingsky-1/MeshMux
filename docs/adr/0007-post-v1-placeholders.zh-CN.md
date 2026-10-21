@@ -1,6 +1,10 @@
 # ADR-0007：post-v1.0.0 领域占位包（mesh / route / jobs / compiler）
 
-状态：Proposed（仅为占位，未引入任何实现；随 Issue #20 后续 PR 逐项评审）。
+状态：Accepted（原占位决策）；`internal/route` 已按 #8-D 首次破壳，范围仅限 AI 出口决定与规则集版本锁，其余三包仍为占位。
+
+## 修订记录
+
+- 2026-10-22（Issue #8-D）：`internal/route` 不再是空包。`route.RulesetPin` / `route.ResolveAIRuleset` 与 AI 出口决定（无 Out = 直出、Out 故障 = `OUT_OFFLINE_FAIL_CLOSED`、显式 opt-in 回退需 `operation_id`）在 `internal/route/out_ruleset.go` 实现，由 `internal/web` 的 `planAIEgress` 消费。该包**仍不**渲染配置、不读写订阅 Token、不做通用规则引擎、规则市场、测速或多 Out 负载均衡，也不执行主机动作。下文“空包/无导出标识符”的表述只对其余三包继续成立。
 
 ## 背景
 
@@ -26,7 +30,7 @@
 
 ## 后果
 
-- 占位包不得被 `cmd` 或其他 `internal` 包导入，避免以空壳提前固化 API；出现第一个真实调用方才提升为正式包并补充测试。
+- 占位包不得被 `cmd` 或其他 `internal` 包导入，避免以空壳提前固化 API；出现第一个真实调用方才提升为正式包并补充测试。`internal/route` 已因 #8-D 提升为正式包（见修订记录），其余三包保持占位。
 - 空包对构建、链接、二进制体积无影响，`go build ./...` 与 `gofmt` 必须保持通过。
 - 任一能力进入实现前，须先以新 ADR 或本 ADR 的修订确认职责与失败路径；本 ADR 本身**不引入任何实现**，也不改变 v1.0.0 范围。
 

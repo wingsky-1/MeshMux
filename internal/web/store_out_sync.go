@@ -280,6 +280,12 @@ func lineEgressSourceTx(tx *sql.Tx, lineID string) (string, bool, error) {
 // window republishes an empty allowlist (fail-closed) and the Line's own
 // post-reissue event restores it. Both states are explicit and self-healing;
 // neither claims the pair is healthy while the source is unproven.
+//
+// The two interfaces agree by construction: GetOutBinding reports a missing row
+// as OUT_BINDING_NOT_FOUND so an operator never mistakes "never configured" for
+// "deliberately direct", while this derivation folds exactly that one code into
+// the empty authorization. Every other read failure propagates, so an
+// unreadable binding is never published as "no Out".
 func outAuthorizationTx(tx *sql.Tx, outID string) ([]string, error) {
 	binding, err := outBindingTx(tx, outID)
 	if err != nil {

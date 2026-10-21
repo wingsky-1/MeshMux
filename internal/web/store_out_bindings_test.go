@@ -354,6 +354,170 @@ func TestOutBindingClearUnboundOutIsNoop(t *testing.T) {
 	}
 }
 
+// TestDeleteOut_CleansRoutesAndACL is the brief case: deleting an Out must
+// leave no dangling route and no extra ACL line, and the cleanup is published
+// as an explicit empty authorization that the Hub reads back before returning.
+func TestDeleteOut_CleansRoutesAndACL(t *testing.T) {
+	f := newOutSyncFixture(t)
+	s, now, out, line := f.store, f.now, f.out, f.line
+
+	if err := s.setOutBindingAt(OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	confirmChain(t, s, out, now)
+	allowed, err := s.DeriveOutAllowlist(out)
+	if err != nil || len(allowed) != 1 {
+		t.Fatalf("authorization before delete = %v err=%v", allowed, err)
+	}
+
+	if err := s.deleteOutAt(out, now); err != nil {
+		t.Fatalf("delete out failed: %v", err)
+	}
+
+	// No route row survives, so "never configured" is the Hub-level state and
+	// no preserved unbind row can read as a deliberate egress.
+	bindings, err := s.ListOutBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 0 {
+		t.Fatalf("delete left %d binding rows", len(bindings))
+	}
+	if _, err := s.GetOutBinding(out); err == nil || !hasErrorCode(err, "OUT_BINDING_NOT_FOUND") {
+		t.Fatalf("binding after delete = %v, want OUT_BINDING_NOT_FOUND", err)
+	}
+	preview, err := s.PreviewOutBinding("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Mode != "no-out-direct" || preview.Enabled {
+		t.Fatalf("hub preview after delete = %+v, want no-out-direct", preview)
+	}
+
+	// The ACL cleanup is the host-visible half: the newest chain names an
+	// explicit empty list, never an omitted key.
+	latest, err := s.latestCandidate(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, present, err := s.outReadbackAllowlist(out, latest.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present || len(reclaimed) != 0 {
+		t.Fatalf("cleanup chain = %v present=%v, want an explicit empty allowlist", reclaimed, present)
+	}
+	for _, task := range chainRevisionParams(t, s, out, latest.Revision) {
+		if task.Allowed == nil {
+			t.Fatalf("%s task omitted the cleaned allowlist", task.Kind)
+		}
+		if len(*task.Allowed) != 0 {
+			t.Fatalf("%s task still authorizes %v after delete", task.Kind, *task.Allowed)
+		}
+	}
+	// The Out still has to prove the reclaimed guard, so it is not healthy yet.
+	state, code, err := s.outSyncStatus(out, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == outSyncHealthy {
+		t.Fatalf("out status after delete = %s/%s, want a non-healthy transition", state, code)
+	}
+
+	// The Line is released from the Out gate: it is a direct Line again, and
+	// its own publication no longer depends on a deleted Out.
+	egress, _, err := s.lineEgressState(line, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if egress != lineEgressDirect {
+		t.Fatalf("line egress after delete = %s, want direct", egress)
+	}
+	if err := s.prepareSubscriberSyncForLine(line, now); err != nil {
+		t.Fatalf("line publish after delete failed: %v", err)
+	}
+
+	// Once the Out proved the cleaned guard, deleting again is an idempotent
+	// no-op: there is no route left and nothing to republish.
+	settleTasks(t, s, out)
+	if err := s.deleteOutAt(out, now); err != nil {
+		t.Fatalf("repeated delete after cleanup = %v, want a no-op success", err)
+	}
+	if bindings, err := s.ListOutBindings(); err != nil || len(bindings) != 0 {
+		t.Fatalf("repeated delete left rows = %v err=%v", bindings, err)
+	}
+}
+
+// TestDeleteOut_DefersCleanupForUnreachableOut keeps the partial-failure
+// contract: the routing model is cleaned and fail-closed, but the host cleanup
+// that could not be delivered is reported as pending instead of success.
+func TestDeleteOut_DefersCleanupForUnreachableOut(t *testing.T) {
+	f := newOutSyncFixture(t)
+	s, now, out, line := f.store, f.now, f.out, f.line
+
+	if err := s.setOutBindingAt(OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	confirmChain(t, s, out, now)
+	// The Out goes offline after its chain settled: the cleanup task cannot be
+	// delivered, and the host may still carry the last authorized guard.
+	if _, err := s.db.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
+		t.Fatal(err)
+	}
+	err := s.deleteOutAt(out, now)
+	if err == nil || !hasErrorCode(err, codeOutSyncPending) || !hasErrorCode(err, "OUT_OFFLINE") {
+		t.Fatalf("delete of an offline out = %v, want OUT_SYNC_PENDING and OUT_OFFLINE", err)
+	}
+	// The route is gone even though the host cleanup is pending: the Hub is
+	// fail-closed from now on and never authorizes the deleted Line again.
+	if _, err := s.GetOutBinding(out); err == nil || !hasErrorCode(err, "OUT_BINDING_NOT_FOUND") {
+		t.Fatalf("binding after deferred delete = %v, want none", err)
+	}
+	allowed, err := s.DeriveOutAllowlist(out)
+	if err != nil || len(allowed) != 0 {
+		t.Fatalf("derivation after deferred delete = %v err=%v, want empty", allowed, err)
+	}
+	// The durable intent is complete: once the Out returns, its own event
+	// publishes the empty authorization without another operator action.
+	markLineOnline(t, s, out, now)
+	if err := s.retryOutSync(out, now); err != nil {
+		t.Fatalf("retry after the out returned failed: %v", err)
+	}
+	latest, err := s.latestCandidate(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, present, err := s.outReadbackAllowlist(out, latest.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present || len(reclaimed) != 0 {
+		t.Fatalf("deferred cleanup chain = %v present=%v, want an explicit empty allowlist", reclaimed, present)
+	}
+}
+
+// TestDeleteOut_RefusesWrongRoleAndUnknownNode pins the validation of the
+// delete: only an existing Out node can be deleted, and a Line is never
+// silently accepted.
+func TestDeleteOut_RefusesWrongRoleAndUnknownNode(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	line := pairedStoreNode(t, s, "edge", now)
+
+	if err := s.DeleteOut(line); err == nil || !hasErrorCode(err, "OUT_ROLE_INVALID") {
+		t.Fatalf("delete of an edge = %v, want OUT_ROLE_INVALID", err)
+	}
+	if err := s.DeleteOut(strings.Repeat("d", 32)); err == nil || !hasErrorCode(err, "OUT_NOT_FOUND") {
+		t.Fatalf("delete of an unknown node = %v, want OUT_NOT_FOUND", err)
+	}
+	if err := s.DeleteOut("nope"); err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
+		t.Fatalf("delete of a malformed id = %v, want OUT_BINDING_INVALID", err)
+	}
+	// The rejected calls changed nothing.
+	if _, err := s.getNodeAt(line, now); err != nil {
+		t.Fatalf("rejected delete removed a node: %v", err)
+	}
+}
+
 // TestOutBindingPreviewFanOutCountsOnce is the I1 regression: two Out rows may
 // point at the same Line, and the credentials join then fans out. The Hub
 // aggregate must count each policy once and match the single-binding preview.

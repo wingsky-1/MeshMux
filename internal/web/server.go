@@ -104,6 +104,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// session + CSRF boundary because it is a management POST.
 	r.Post("/nodes/out/bind", app.mutation(app.outBind, true))
 	r.Post("/nodes/out/unbind", app.mutation(app.outUnbind, true))
+	r.Post("/nodes/out/delete", app.mutation(app.outDelete, true))
 	r.Post("/nodes/out/preview", app.mutation(app.outPreview, true))
 	r.Get("/api/nodes", app.authenticated(app.nodesList))
 	r.Get("/api/nodes/cli", app.authenticated(app.installArtifactDownload))

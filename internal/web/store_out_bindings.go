@@ -231,6 +231,158 @@ func (s *store) setOutBindingAt(binding OutBinding, now time.Time) error {
 	return nil
 }
 
+// DeleteOut removes one Out from the Hub's routing model in one transaction:
+// the binding route is deleted first, then the Out authorization is republished
+// as an explicit empty allowlist by the same reclaim drain that OnLineRetired
+// uses, so a deleted Out can never keep a stale accept rule that the Hub still
+// believes in.
+//
+// The readback anchor of the delete is the newest published chain of the Out:
+// it must carry the key present and empty. An omitted key would mean "no Hub
+// expectation", which is the shape-only degradation the guard must never fall
+// back to, so the whole delete is rolled back instead.
+//
+// An Out that is offline or has a chain in flight cannot apply the cleanup yet.
+// Its routing intent is still removed (the derivation is empty and fail-closed
+// from that moment on), and the call returns OUT_SYNC_PENDING joined with the
+// real deferral reason instead of claiming a cleaned host. The next Out event
+// republishes the empty authorization on its own.
+//
+// Deleting the routing model is not the same as revoking the node identity: an
+// identity revocation in the same transaction would fail the very cleanup chain
+// this call publishes, leaving an unreachable host with a stale guard while the
+// Hub reports success. Credential revocation therefore stays the explicit
+// revokeIdentity action. The node row and its immutable candidate history stay
+// as the audit trail; only the binding row is deleted, so a deleted Out is
+// "never configured" again rather than a preserved unbind row.
+func (s *store) DeleteOut(outID string) error {
+	return s.deleteOutAt(outID, time.Now())
+}
+
+// deleteOutAt is the request-clock variant used by the Web handler, so the
+// deletion, the cleanup publication and the readback share one timestamp.
+func (s *store) deleteOutAt(outID string, now time.Time) error {
+	outID = strings.TrimSpace(outID)
+	if !validBindingNodeID(outID) {
+		return errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer tx.Rollback()
+	var role string
+	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("OUT_NOT_FOUND: unknown out node")
+	}
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	if role != "out" {
+		return errors.New("OUT_ROLE_INVALID: only out nodes can carry an out binding")
+	}
+	// The Lines are read before the route disappears: after the delete there is
+	// no row left to tell which Lines have to be released from the Out gate.
+	lines, err := queryIDsTx(tx, `SELECT line_id FROM out_bindings
+ WHERE out_id=? AND line_id IS NOT NULL ORDER BY line_id ASC`, outID)
+	if err != nil {
+		return err
+	}
+	// 1. Delete the route. From this statement on every derivation of this
+	// Out's authorization is empty, so a concurrent publish cannot resurrect
+	// the deleted Line either.
+	if _, err = tx.Exec(`DELETE FROM out_bindings WHERE out_id=?`, outID); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	// 2. Clear the ACL. An Out that never published a chain has no host state
+	// to clear; otherwise the shared reclaim drain republishes the explicit
+	// empty authorization (it also refuses to race an in-flight chain and
+	// leaves an offline Out's intent durable).
+	//
+	// A repeated delete is idempotent: when the newest chain already names the
+	// explicit empty set and the node confirmed it, there is nothing left to
+	// publish and no operator action is needed.
+	revision, digest, _, published, err := latestPublishedCandidateTx(tx, outID)
+	if err != nil {
+		return err
+	}
+	deferred := false
+	var deferredErr error
+	if published {
+		clean, confirmed, err := outACLCleanTx(tx, outID, revision, digest)
+		if err != nil {
+			return err
+		}
+		if !clean || !confirmed {
+			outcome, drainErr := drainOutNodeIntentTx(tx, outID, now, true)
+			if outcome == outDrainDeferred {
+				deferred = true
+				deferredErr = drainErr
+			} else if drainErr != nil {
+				return drainErr
+			}
+		}
+	}
+	// 3. Read the cleanup back. Publishing happens in this transaction, so the
+	// anchor is exact: the newest chain must name the empty set explicitly.
+	if !deferred && published {
+		revision, digest, _, found, err := latestPublishedCandidateTx(tx, outID)
+		if err != nil {
+			return err
+		}
+		if found {
+			clean, _, err := outACLCleanTx(tx, outID, revision, digest)
+			if err != nil {
+				return err
+			}
+			if !clean {
+				return errors.New(codeOutSyncPending + ": the out acl cleanup was not published; the delete is rolled back")
+			}
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	if deferred {
+		// The routing model is already clean and fail-closed; only the host
+		// cleanup waits. Report both facts instead of a fabricated success.
+		return errors.Join(deferredErr, errOutCleanupPending)
+	}
+	// The Lines no longer have an enabled Out, so a Line that was gated may
+	// publish again. Each drain owns its own transaction and never fails the
+	// delete: the next Line event retries it.
+	for _, lineID := range lines {
+		s.drainSubscriberNode(lineID, now)
+	}
+	return nil
+}
+
+// errOutCleanupPending marks a delete whose routing cleanup succeeded but whose
+// host cleanup could not be delivered yet. It is a sentinel so the caller can
+// report "route gone, host pending" as one explicit outcome instead of matching
+// error text.
+var errOutCleanupPending = errors.New(codeOutSyncPending + ": the out acl cleanup is queued behind an in-flight or offline out; retry the out synchronization")
+
+// outACLCleanTx reports whether the newest published chain of one Out already
+// names an explicit empty authorization, and whether the node confirmed that
+// exact revision. "Clean" needs the key present and empty: an omitted key means
+// "no Hub expectation" and would hide a stale guard behind a shape-only check.
+func outACLCleanTx(tx *sql.Tx, outID string, revision int64, digest string) (bool, bool, error) {
+	allowed, present, err := outReadbackAllowlistTx(tx, outID, revision)
+	if err != nil {
+		return false, false, err
+	}
+	if !present || len(allowed) != 0 {
+		return false, false, nil
+	}
+	confirmed, err := subscriberLineReadbackConfirmedTx(tx, outID, revision, digest)
+	if err != nil {
+		return false, false, err
+	}
+	return true, confirmed, nil
+}
+
 // ClearOutBinding unbinds one Out. The row is preserved with an empty LineID
 // and Enabled=false, so the deliberate change keeps an audit trail while the
 // egress returns to the direct Line path. Repeating the call is idempotent for

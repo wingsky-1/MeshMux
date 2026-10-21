@@ -179,6 +179,117 @@ func TestOutBindingManagementAPI(t *testing.T) {
 	}
 }
 
+// TestOutDeleteManagementAPICleansTheRoute drives the real endpoint: a deleted
+// Out leaves no route, publishes the explicit empty authorization and returns
+// the operation id; an unreachable Out reports the pending cleanup instead of a
+// fabricated success.
+func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
+	app, logs := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	loginAs(t, b, testPassword)
+
+	line := createPairedWebNode(t, app, "edge", "line-del", 8443, 2222)
+	out := createPairedWebNode(t, app, "out", "out-del", 9443, 2223)
+	now := time.Now()
+	configureLine(t, app.store, line.ID, "line-del", now)
+	if err := app.store.setOutBindingAt(OutBinding{OutID: out.ID, LineID: line.ID, Enabled: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	settleTasks(t, app.store, out.ID)
+	confirmChain(t, app.store, out.ID, now)
+
+	// Missing session / CSRF never reach the handler.
+	anon := &browser{app: app}
+	requireBindingError(t, anon.req("POST", "/nodes/out/delete", url.Values{"out_id": {out.ID}}, nil), 401, "SESSION_INVALID")
+	requireBindingError(t, b.req("POST", "/nodes/out/delete", url.Values{"out_id": {out.ID}}, nil), 403, "CSRF_REJECTED")
+
+	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+	requireStatus(t, w, 200)
+	var deleted struct {
+		Status      string `json:"status"`
+		OutID       string `json:"out_id"`
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &deleted); err != nil {
+		t.Fatalf("delete body: %v %.300s", err, w.Body.String())
+	}
+	if deleted.Status != "deleted" || deleted.OutID != out.ID || deleted.OperationID == "" {
+		t.Fatalf("delete response wrong: %+v", deleted)
+	}
+	if _, err := app.store.GetOutBinding(out.ID); err == nil || !hasErrorCode(err, "OUT_BINDING_NOT_FOUND") {
+		t.Fatalf("binding after delete = %v, want none", err)
+	}
+	// The cleanup chain carries the explicit empty list.
+	latest, err := app.store.latestCandidate(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, present, err := app.store.outReadbackAllowlist(out.ID, latest.Revision)
+	if err != nil || !present || len(reclaimed) != 0 {
+		t.Fatalf("cleanup chain = %v present=%v err=%v, want an explicit empty allowlist", reclaimed, present, err)
+	}
+	// The audit event carries the stable code only.
+	if !strings.Contains(logs.String(), `"error_code":"OUT_DELETED"`) {
+		t.Fatal("missing the OUT_DELETED audit event")
+	}
+
+	// A wrong role and an unknown node use the shared error contract.
+	requireBindingError(t, b.post("/nodes/out/delete", url.Values{"out_id": {line.ID}}), 409, "OUT_ROLE_INVALID")
+	requireBindingError(t, b.post("/nodes/out/delete", url.Values{"out_id": {strings.Repeat("d", 32)}}), 404, "OUT_NOT_FOUND")
+	requireBindingError(t, b.post("/nodes/out/delete", url.Values{"out_id": {"nope"}}), 400, "OUT_BINDING_INVALID")
+}
+
+// TestOutDeleteReportsPendingCleanupWithoutClaimingSuccess pins the 202 shape:
+// the route is gone, but the host cleanup is explicitly pending and names only
+// stable codes.
+func TestOutDeleteReportsPendingCleanupWithoutClaimingSuccess(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	loginAs(t, b, testPassword)
+
+	line := createPairedWebNode(t, app, "edge", "line-del-pending", 8443, 2222)
+	out := createPairedWebNode(t, app, "out", "out-del-pending", 9443, 2223)
+	now := time.Now()
+	configureLine(t, app.store, line.ID, "line-del-pending", now)
+	if err := app.store.setOutBindingAt(OutBinding{OutID: out.ID, LineID: line.ID, Enabled: true}, now); err != nil {
+		t.Fatal(err)
+	}
+	settleTasks(t, app.store, out.ID)
+	confirmChain(t, app.store, out.ID, now)
+	// The Out stops reporting after it confirmed the last chain, so the cleanup
+	// cannot be delivered.
+	if _, err := app.store.db.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+	requireStatus(t, w, 202)
+	var pending struct {
+		Status      string `json:"status"`
+		ErrorCode   string `json:"error_code"`
+		Detail      string `json:"detail"`
+		OperationID string `json:"operation_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &pending); err != nil {
+		t.Fatalf("pending body: %v %.300s", err, w.Body.String())
+	}
+	if pending.Status != "cleanup_pending" || pending.ErrorCode != codeOutSyncPending ||
+		!strings.Contains(pending.Detail, "OUT_OFFLINE") || pending.OperationID == "" {
+		t.Fatalf("pending response wrong: %+v", pending)
+	}
+	// The detail is codes only: no SQL, no transport text, no identifiers.
+	for _, field := range strings.Fields(pending.Detail) {
+		if !syncErrorCodePattern.MatchString(field) {
+			t.Fatalf("pending detail field %q is not a stable code", field)
+		}
+	}
+	if _, err := app.store.GetOutBinding(out.ID); err == nil || !hasErrorCode(err, "OUT_BINDING_NOT_FOUND") {
+		t.Fatalf("route after pending delete = %v, want none", err)
+	}
+}
+
 func TestOutBindingManagementAPIRejections(t *testing.T) {
 	app, _ := testApp(t)
 	b := &browser{app: app}

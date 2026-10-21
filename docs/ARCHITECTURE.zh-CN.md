@@ -61,5 +61,5 @@ flowchart LR
 1. 任何部署类型都允许 **零 Out**；Out 不可用时被策略引用的请求默认阻断，只有用户显式允许才退回 Line。
 2. 管理通道与代理数据通道解耦。Edge/Out 主动出站 HTTPS，不新增公网管理 TCP 端口。
 3. 安装预检、校验、应用、回读分阶段运行；主机云安全组在本机无法修改，单独报告。`partial`/`failed` 必须显式返回，plan 或 check 成功不能当成 apply/安装成功。
-4. 不承诺 sing-box 用户编辑零中断。优先配置验证、受控重启、回退，真正热更依赖验证后的官方能力。当前 Out ACL 是 `policy accept` 加目标 VLESS TCP/UDP drop，尚未满足空授权默认全拒绝、仅目标端口可用的目标；这是上线验收阻塞。
+4. 不承诺 sing-box 用户编辑零中断。优先配置验证、受控重启、回退，真正热更依赖验证后的官方能力。Out ACL 已由 #8-B 改为空授权默认全拒绝：`inet meshmux_out` 的 `input` chain 保留 `policy accept` 只为主机 SSH/回环/回程，VLESS 目标端口的 TCP/UDP drop 先于任何来源放行，只有 Hub 授权的 Line 源在 drop 之前 `accept`；`nft -j` 回读逐条比对已应用集合。真实 nft readback 与双跳流量仍待隔离 Debian 13 VM 实测。
 5. Hub 的本地 Web / Agent 身份凭据与 Headscale 管理权限须隔离。Node 安装器只替换记录过的 MeshMux 自有文件和 `inet meshmux_out`，不接管第三方文件或 nftables 表。

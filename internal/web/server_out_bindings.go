@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -126,6 +127,67 @@ func (s *Server) outUnbind(w http.ResponseWriter, r *http.Request, _ session) {
 	}
 	s.event(r, "OUT_UNBOUND")
 	s.writeOutBinding(w, r, 200, "unbound", stored)
+}
+
+// outDelete removes one Out from the routing model and clears its ACL.
+//
+// The delete is a management action with the same session + CSRF boundary as
+// every other mutation. Success means the route is gone and the empty
+// authorization was published; a host cleanup that could not be delivered is
+// reported as OUT_SYNC_PENDING instead of a fabricated success. The node
+// identity is deliberately untouched: deleting the route is not revoking the
+// host, and the operator can still recheck or revoke it separately.
+func (s *Server) outDelete(w http.ResponseWriter, r *http.Request, _ session) {
+	now := s.now()
+	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
+	if err := s.store.deleteOutAt(outID, now); err != nil {
+		if errors.Is(err, errOutCleanupPending) {
+			s.event(r, codeOutSyncPending)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(202)
+			_ = json.NewEncoder(w).Encode(struct {
+				Status      string `json:"status"`
+				OutID       string `json:"out_id"`
+				ErrorCode   string `json:"error_code"`
+				Detail      string `json:"detail"`
+				OperationID string `json:"operation_id"`
+			}{
+				Status: "cleanup_pending", OutID: outID,
+				ErrorCode: codeOutSyncPending,
+				// Only stable codes are echoed. The joined error is reduced to
+				// its codes so no transport or SQL text can reach the client.
+				Detail:      stableDetail(err.Error()),
+				OperationID: operation(r),
+			})
+			return
+		}
+		status, code, message, next := outBindingFailure(err)
+		s.fail(w, r, status, code, message, next)
+		return
+	}
+	s.event(r, "OUT_DELETED")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Status      string `json:"status"`
+		OutID       string `json:"out_id"`
+		OperationID string `json:"operation_id"`
+	}{Status: "deleted", OutID: outID, OperationID: operation(r)})
+}
+
+// stableDetail keeps only the stable codes of a joined error, so a 202 response
+// names the pending reason without quoting any free-form text.
+func stableDetail(raw string) string {
+	codes := []string{}
+	seen := map[string]bool{}
+	for _, field := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ' ' }) {
+		code := strings.TrimSuffix(strings.TrimSpace(field), ":")
+		if code == "" || seen[code] || !syncErrorCodePattern.MatchString(code) {
+			continue
+		}
+		seen[code] = true
+		codes = append(codes, code)
+	}
+	return strings.Join(codes, " ")
 }
 
 // outPreview is a read-only projection. It goes through the mutation wrapper
