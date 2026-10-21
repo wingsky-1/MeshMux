@@ -175,6 +175,61 @@ func (s *store) migrate() error {
 	return tx.Commit()
 }
 
+// migrateSchema4 adds the subscription domain tables. It only creates new
+// tables; node, candidate and task data of schema 3 stays untouched. The
+// migration is deliberately additive so a rollback never destroys history.
+func migrateSchema4(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+CREATE TABLE subscribers (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('active','paused','deleting','deleted')),
+  revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE proxy_credentials (
+  id TEXT PRIMARY KEY,
+  subscriber_id TEXT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  uuid TEXT NOT NULL UNIQUE,
+  active INTEGER NOT NULL CHECK(active IN (0,1)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(subscriber_id, node_id)
+);
+CREATE TABLE subscription_tokens (
+  id TEXT PRIMARY KEY,
+  subscriber_id TEXT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+  token_hash BLOB NOT NULL UNIQUE,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX subscription_tokens_subscriber ON subscription_tokens(subscriber_id, revoked);
+CREATE TABLE line_settings (
+  node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+  display_name TEXT NOT NULL,
+  server TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  server_name TEXT NOT NULL,
+  handshake_server TEXT NOT NULL,
+  handshake_port INTEGER NOT NULL,
+  private_key TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  short_id TEXT NOT NULL,
+  local INTEGER NOT NULL DEFAULT 0 CHECK(local IN (0,1)),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+PRAGMA user_version=4;
+`); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *store) adminHash() (string, error) {
 	var hash string
 	err := s.db.QueryRow("SELECT password_hash FROM admin WHERE id=1").Scan(&hash)
