@@ -252,10 +252,6 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	// install. A repair must not wipe them back to the hashless user config,
 	// otherwise the next repair preflight cannot recognize its own kernel
 	// listener and fails with PORT_CONFLICT.
-	// The recorded Node carries the verified binary hashes after the first
-	// install. A repair must not wipe them back to the hashless user config,
-	// otherwise the next repair preflight cannot recognize its own kernel
-	// listener and fails with PORT_CONFLICT.
 	if !hasState || state.Node == nil {
 		state.Node = cloneNodeConfig(&cfg)
 	}
