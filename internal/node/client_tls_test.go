@@ -140,9 +140,7 @@ func TestClientStalledTLSResponsesTimeOut(t *testing.T) {
 		// the client deadline fires the server must still be stalled, so a
 		// legitimately completed response can never win the race against the
 		// timeout assertion below. The deferred close releases the handler.
-		select {
-		case <-block:
-		}
+		<-block
 	}))
 	defer server.Close()
 	// Release stalled handlers before the server closes: httptest Server.Close
@@ -186,9 +184,7 @@ func TestClientRequestTimeoutWithBackgroundContext(t *testing.T) {
 		// the client deadline fires the server must still be stalled, so a
 		// legitimately completed response can never win the race against the
 		// timeout assertion below. The deferred close releases the handler.
-		select {
-		case <-block:
-		}
+		<-block
 	}))
 	defer server.Close()
 	// Release stalled handlers before the server closes: httptest Server.Close
