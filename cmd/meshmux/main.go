@@ -17,9 +17,13 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/product"
 	"github.com/wingsky-1/MeshMux/internal/webcmd"
 )
+
+// installRoleHub is not a node role: a hub host is described by install.Config
+// (management, subscription and Headscale domains), so the install CLI resolves
+// it on the install side before node.ParseRole is consulted.
+const installRoleHub = "hub"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__internal-web" {
@@ -60,15 +64,15 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "  edge|out: --hub HTTPS_ORIGIN --node 32_HEX --vless-port PORT --ssh-port PORT [--plan|--yes] [--repair]")
 		return 2
 	}
-	role, err := product.ParseRole(args[1])
+	if args[1] == installRoleHub {
+		return runHubInstall(args[2:], stdin, stdout, stderr)
+	}
+	role, err := node.ParseRole(args[1])
 	if err != nil {
 		fmt.Fprintln(stderr, "ROLE_INVALID")
 		return 2
 	}
-	if role == product.RoleHub {
-		return runHubInstall(args[2:], stdin, stdout, stderr)
-	}
-	return runNodeInstall(node.Role(role), args[2:], stdin, stdout, stderr, nodes)
+	return runNodeInstall(role, args[2:], stdin, stdout, stderr, nodes)
 }
 
 func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
