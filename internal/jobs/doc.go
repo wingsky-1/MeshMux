@@ -7,8 +7,8 @@
 // 职责：描述任务修订、阶段状态（pending / partial / failed）、operation_id
 // 与可重试语义，使一次跨节点操作可被追踪和恢复。
 //
-// 边界：与现有轮询不同——当前 Web 层在请求内直接调用节点并靠短轮询读取状态，
-// 不引入执行器、队列或新进程；jobs 若被采纳，只是把已明确的阶段与错误码固化
+// 边界：与现有拉取模型不同——当前 Web 仅登记任务，由 Agent 轮询拉取，
+// Hub 侧没有执行器、队列或新进程；jobs 若被采纳，只是把已明确的阶段与错误码固化
 // 为持久记录，不改变 Agent allowlist，也不允许任意 shell 或外部 URL。
 //
 // See ADR-0007; v1.0.0 deliberately ships without a generic task engine.

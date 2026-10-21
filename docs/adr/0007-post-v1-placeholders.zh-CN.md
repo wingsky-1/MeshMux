@@ -21,7 +21,7 @@
 
 - **mesh vs node 运行时**：`node` 描述 Line 主机上的 sing-box 目录、配置与 Agent 数据契约；`mesh` 只描述 Headscale 侧设备身份与入网状态。二者不互相定义实体，`mesh` 不执行 Agent 动作。
 - **route vs 订阅分流**：订阅分流是把同一用户集合渲染成不同客户端所需文档的渲染选择；`route` 只表达连通性与准入，不渲染配置，不接触订阅 Token，也不定义 Out 安装/升级。
-- **jobs vs 现有轮询**：当前 Web 在请求内直接调用节点并短轮询状态，没有执行器、队列或新进程。`jobs` 若被采纳，只是把既有阶段与稳定错误码固化为持久记录；不扩展 Agent allowlist，不支持任意 shell、路径或外部 URL。
+- **jobs vs 现有轮询**：当前 Web 仅登记任务、由 Agent 轮询拉取，Hub 侧没有执行器、队列或新进程。`jobs` 若被采纳，只是把既有阶段与稳定错误码固化为持久记录；不扩展 Agent allowlist，不支持任意 shell、路径或外部 URL。
 - **compiler vs 候选渲染**：`node.CompileCandidate` 已负责把 `meshmux-node/v2` 候选规范化为节点本地配置。`compiler` 面向 Hub 侧完整文档组装，不复刻候选 schema，也不承担传输、落盘或 apply。
 
 ## 后果
