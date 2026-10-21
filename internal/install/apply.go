@@ -357,150 +357,34 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	if stageErr != nil {
 		return result, stageErr
 	}
-	stageDir, caddyPath, headscalePath := staged.stageDir, staged.caddyPath, staged.headscalePath
-	runtimeStage, runtimeHash := staged.runtimeStage, staged.runtimeHash
-	keys, stagedConfigs := staged.keys, staged.stagedConfigs
-
-	// Query first, install second (the cloud-init pattern). Repair must not
-	// re-run apt unconditionally: a transient repository failure would then
-	// block a repair that has nothing to do with packages, and an unbounded
-	// upgrade could move Fail2ban/nftables off the recorded component set.
-	_, pkgErr := ensureDebianPackages(ctx, opts.Runner,
-		&InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no third-party repository was added."},
-		&InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status and retry; do not remove existing packages or rules."})
-	if pkgErr != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, pkgErr.Stage, pkgErr.Code, pkgErr.Recovery)
+	applyFailures := hubApplyErrors{
+		packageIndex:      &InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no third-party repository was added."},
+		packageInstall:    &InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status and retry; do not remove existing packages or rules."},
+		accountCreate:     &InstallError{Stage: "apply", Code: "ACCOUNT_CREATE_FAILED", Recovery: "Inspect the three dedicated service accounts before retrying."},
+		dataDirectory:     &InstallError{Stage: "apply", Code: "DATA_DIRECTORY_FAILED", Recovery: "Check MeshMux data directory ownership; never delete SQLite or Headscale key files."},
+		backupDirectory:   &InstallError{Stage: "apply", Code: "BACKUP_FAILED", Recovery: "Check installer state disk space before applying files."},
+		backupSnapshot:    &InstallError{Stage: "apply", Code: "BACKUP_FAILED", Recovery: "No managed files were replaced; inspect the operation journal."},
+		fileApply:         &InstallError{Stage: "apply", Code: "FILE_APPLY_FAILED", Recovery: "The installer is rolling back MeshMux-managed files; inspect the operation journal if rollback is incomplete."},
+		fileOwnership:     &InstallError{Stage: "apply", Code: "FILE_OWNERSHIP_FAILED", Recovery: "The installer is restoring managed files; check service account and group ownership."},
+		fileReadback:      &InstallError{Stage: "apply", Code: "FILE_READBACK_FAILED", Recovery: "The installer is restoring managed files; check the target filesystem."},
+		stateWritePerFile: &InstallError{Stage: "apply", Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "Do not remove state or data; inspect disk space and run --repair."},
+		journalFilesWrite: &InstallError{Stage: "apply", Code: "OPERATION_LOG_FAILED", Recovery: "Inspect the operation journal and installer state."},
+		systemdUnit:       &InstallError{Stage: "verify", Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the generated unit files; no service is considered installed until validation succeeds."},
+		fail2banConfig:    &InstallError{Stage: "verify", Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the MeshMux SSH jail and preserve existing Fail2ban configuration."},
+		journalValidated:  &InstallError{Stage: "apply", Code: "OPERATION_LOG_FAILED", Recovery: "Inspect the operation journal and installer state."},
+		systemdReload:     &InstallError{Stage: "apply", Code: "SYSTEMD_RELOAD_FAILED", Recovery: "Restore MeshMux-managed units and inspect systemd."},
+		unitStartRecovery: "The installer is rolling back managed files; inspect journalctl for this unit and retry with --repair.",
+		fail2banStart:     &InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "Review Fail2ban logs and SSH jail configuration; do not alter sshd or flush nftables."},
+		fail2banReload:    &InstallError{Stage: "verify", Code: "FAIL2BAN_RELOAD_FAILED", Recovery: "Review Fail2ban logs and preserve existing jails and nftables rules."},
+		sshJail:           &InstallError{Stage: "verify", Code: "SSH_FAIL2BAN_JAIL_UNAVAILABLE", Recovery: "Verify the detected SSH ports and MeshMux-specific Fail2ban jail."},
+		caddyStart:        &InstallError{Stage: "verify", Code: "CADDY_START_FAILED", Recovery: "Check TCP 80/443 ownership and Caddy logs; no third-party web server was replaced."},
+		serviceVerify:     &InstallError{Stage: "verify", Code: "SERVICE_VERIFY_FAILED", Recovery: "Check DNS A/AAAA, TCP 80/443, certificate issuance, Headscale socket/DB and Fail2ban status; rerun --repair after fixing the cause."},
+		finalLedger:       &InstallError{Stage: "verify", Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "Services were started but state readback failed; inspect the operation journal before retrying."},
+		journalVerifyPass: &InstallError{Stage: "verify", Code: "OPERATION_LOG_FAILED", Recovery: "Inspect the operation journal and installer state."},
 	}
-	if err := ensureSystemUsers(ctx, opts.Runner, opts.Root, hasState); err != nil {
-		var ie *InstallError
-		if errors.As(err, &ie) {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", ie.Code, ie.Recovery)
-		}
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "ACCOUNT_CREATE_FAILED", "Inspect the three dedicated service accounts before retrying.")
+	if applyErr := hubApplyAndVerify(ctx, &result, &state, previous, hasState, repair, opts, record, c, operationID, operationDir, targets, staged, checks, artifacts, applyFailures); applyErr != nil {
+		return result, applyErr
 	}
-	if err := ensureDataDirectories(ctx, opts); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "DATA_DIRECTORY_FAILED", "Check MeshMux data directory ownership; never delete SQLite or Headscale key files.")
-	}
-
-	backupDir := filepath.Join(operationDir, "backup")
-	if err := ensureDirectory(backupDir, 0700); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "BACKUP_FAILED", "Check installer state disk space before applying files.")
-	}
-	snapshots, err := snapshotTargets(opts.Root, targets, state, hasState, backupDir)
-	if err != nil {
-		var ie *InstallError
-		if errors.As(err, &ie) {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", ie.Code, ie.Recovery)
-		}
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "BACKUP_FAILED", "No managed files were replaced; inspect the operation journal.")
-	}
-
-	applyFiles := map[string]string{
-		runtimeBinaryPath:   runtimeStage,
-		caddyBinaryPath:     caddyPath,
-		headscaleBinaryPath: headscalePath,
-	}
-	for _, target := range keys {
-		applyFiles[target] = stagedConfigs[target]
-	}
-	applyKeys := make([]string, 0, len(applyFiles))
-	for target := range applyFiles {
-		applyKeys = append(applyKeys, target)
-	}
-	sort.Strings(applyKeys)
-	for _, target := range applyKeys {
-		mode, owner := filePolicy(target)
-		if err := copyAtomic(applyFiles[target], rooted(opts.Root, target), mode); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "FILE_APPLY_FAILED", "The installer is rolling back MeshMux-managed files; inspect the operation journal if rollback is incomplete.")
-		}
-		if opts.Root == "/" && owner != "" {
-			if _, err := opts.Runner.Run(ctx, "chown", owner, target); err != nil {
-				return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "FILE_OWNERSHIP_FAILED", "The installer is restoring managed files; check service account and group ownership.")
-			}
-		}
-		digest, err := sha256File(rooted(opts.Root, target))
-		if err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "FILE_READBACK_FAILED", "The installer is restoring managed files; check the target filesystem.")
-		}
-		state.ManagedFiles[target] = digest
-		if target == runtimeBinaryPath {
-			state.ManagedFiles[target] = runtimeHash
-			// The Hub publishes the exact runtime build a co-located Line
-			// may reuse. The Line verifies this digest before it runs the
-			// shared binary and never replaces it.
-			if state.SharedBinaries == nil {
-				state.SharedBinaries = map[string]SharedBinary{}
-			}
-			state.SharedBinaries[sharedAgentKey] = SharedBinary{
-				Path:   runtimeBinaryPath,
-				SHA256: runtimeHash,
-			}
-		}
-		if err := writeState(opts.Root, state); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "INSTALL_STATE_WRITE_FAILED", "Do not remove state or data; inspect disk space and run --repair.")
-		}
-	}
-	if err := record("apply", "files_written", ""); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "OPERATION_LOG_FAILED", "Inspect the operation journal and installer state.")
-	}
-	units := []string{
-		rooted(opts.Root, "/etc/systemd/system/meshmux-web.service"),
-		rooted(opts.Root, "/etc/systemd/system/meshmux-headscale.service"),
-		rooted(opts.Root, "/etc/systemd/system/meshmux-caddy.service"),
-	}
-	if unitErr := validateStagedUnits(ctx, opts.Runner, units,
-		&InstallError{Stage: "verify", Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the generated unit files; no service is considered installed until validation succeeds."},
-		&InstallError{Stage: "verify", Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the MeshMux SSH jail and preserve existing Fail2ban configuration."}); unitErr != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, unitErr.Stage, unitErr.Code, unitErr.Recovery)
-	}
-	if err := record("apply", "validated", ""); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "OPERATION_LOG_FAILED", "Inspect the operation journal and installer state.")
-	}
-	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "SYSTEMD_RELOAD_FAILED", "Restore MeshMux-managed units and inspect systemd.")
-	}
-	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service"} {
-		if err := activateUnit(ctx, opts.Runner, unit, repair); err != nil {
-			code := "WEB_START_FAILED"
-			if strings.Contains(unit, "headscale") {
-				code = "HEADSCALE_START_FAILED"
-			}
-			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", code, "The installer is rolling back managed files; inspect journalctl for this unit and retry with --repair.")
-		}
-	}
-	if fail2banErr := ensureFail2banRunning(ctx, opts.Runner,
-		&InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "Review Fail2ban logs and SSH jail configuration; do not alter sshd or flush nftables."},
-		&InstallError{Stage: "verify", Code: "FAIL2BAN_RELOAD_FAILED", Recovery: "Review Fail2ban logs and preserve existing jails and nftables rules."}); fail2banErr != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, fail2banErr.Stage, fail2banErr.Code, fail2banErr.Recovery)
-	}
-	if _, err := opts.Runner.Run(ctx, "fail2ban-client", "status", "meshmux-sshd"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Verify the detected SSH ports and MeshMux-specific Fail2ban jail.")
-	}
-	if err := activateUnit(ctx, opts.Runner, "meshmux-caddy.service", repair); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "CADDY_START_FAILED", "Check TCP 80/443 ownership and Caddy logs; no third-party web server was replaced.")
-	}
-	if err := opts.Verify(ctx, c, opts.Runner, opts.TLSProbe); err != nil {
-		code := "SERVICE_VERIFY_FAILED"
-		var ie *InstallError
-		if errors.As(err, &ie) {
-			code = ie.Code
-		}
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", code, "Check DNS A/AAAA, TCP 80/443, certificate issuance, Headscale socket/DB and Fail2ban status; rerun --repair after fixing the cause.")
-	}
-
-	state.Status, state.Stage, state.ErrorCode, state.Recovery = "installed", "verify", "", ""
-	state.UpdatedAt = time.Now().UTC()
-	state.LastOperation = operationID
-	if err := writeState(opts.Root, state); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "INSTALL_STATE_WRITE_FAILED", "Services were started but state readback failed; inspect the operation journal before retrying.")
-	}
-	if err := record("verify", "pass", ""); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "OPERATION_LOG_FAILED", "Inspect the operation journal and installer state.")
-	}
-	_ = os.RemoveAll(backupDir)
-	_ = os.RemoveAll(stageDir)
-	result.Stage, result.Status, result.Checks = "verify", "installed", checks
-	result.Artifacts = componentsFor(artifacts)
 	return result, nil
 }
 
