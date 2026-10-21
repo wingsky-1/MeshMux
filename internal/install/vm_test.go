@@ -71,8 +71,7 @@ func TestHubSystemVM(t *testing.T) {
 		}
 		return errors.New("VM_TLS_PROBE_FAILED")
 	}
-	var opts ApplyOptions
-	opts = ApplyOptions{
+	opts := ApplyOptions{
 		InternalTLSForTest: true,
 		Executable:         "/tmp/meshmux",
 		TLSProbe:           tlsProbe,
