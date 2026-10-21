@@ -1,5 +1,17 @@
 // Package node defines the fixed host layout and data contracts shared by the
-// node installer and runtime. It performs no host I/O.
+// Hub, the node installer and the node runtime, and it also owns the runtime
+// half that acts on them. The contract side lives in config.go (fixed paths
+// such as AgentBinaryPath and the unit names) and in render.go and release.go
+// (CompileCandidate, KernelReleaseFor).
+//
+// The package does perform host I/O. runtime.go creates and inspects the
+// layout directories with os.Lstat and os.Mkdir, files.go writes managed files
+// through writeAtomic (os.Rename), command.go runs subprocesses through
+// exec.CommandContext and holds the shared runtime flock (AcquireRuntimeLock),
+// and ReadbackLocal in runtime_readback.go reads the live data plane back.
+//
+// The dependency direction is one way: node imports only internal/protocol.
+// internal/web and internal/install import node; node never imports either.
 package node
 
 import (

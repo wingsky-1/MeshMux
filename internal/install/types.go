@@ -1,5 +1,28 @@
-// Package install implements the read-only Hub preflight and immutable release plan.
-// Host mutations belong to the separately audited apply phase of Issue #5.
+// Package install implements the privileged Hub and Line installers and their
+// read-only preflight and planning entry points (PreflightWithMode,
+// BuildNodePlanForRoot in node_plan.go).
+//
+// Both installers journal the same stage sequence — preflight, stage, apply,
+// verify — with a pairing stage for a Line that still needs a one-time code.
+// Preflight validates the host and target ownership; stage downloads and
+// verifies pinned artifacts and renders the candidate configuration (the Hub
+// additionally runs caddy validate and headscale configtest); apply snapshots and replaces only
+// MeshMux-owned files, writing the ledger after each file; verify starts the
+// units, polls the live data plane back and writes the terminal ledger.
+// InstallHub lives in apply.go and InstallNode in node_apply.go; their phase
+// helpers are the sibling hub_stage.go, hub_apply.go, node_stage.go,
+// node_identity.go, node_candidate.go, node_apply_verify.go and
+// node_verify_tail.go files. The per-role recovery wording stays at the call
+// sites and is pinned by apply_recovery_test.go.
+//
+// The shared infrastructure is apply_shared.go (newOperationRecorder,
+// ensureDebianPackages, validateStagedUnits, ensureFail2banRunning) plus
+// acquireInstallLock in lock.go, which takes the single host-wide flock without
+// waiting so a concurrent install fails as INSTALL_BUSY instead of blocking.
+//
+// The package imports internal/node for the node domain contract and runtime
+// helpers (node.Config, node.CurrentAgentVersion, node.NewClient,
+// node.ReadbackLocal, node.AcquireRuntimeLock); node never imports install.
 package install
 
 import (
