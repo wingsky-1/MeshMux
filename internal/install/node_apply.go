@@ -293,89 +293,27 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	stageDir, kernelPath, agentPath, installedCfg := stage.stageDir, stage.kernelPath, stage.agentPath, stage.installedCfg
 
-	identity, identityLoaded, err := loadNodeIdentity(opts.Root, installedCfg)
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "IDENTITY_INVALID", "Inspect the private Agent identity; do not delete it until the Hub identity is revoked.")
+	identityFailures := nodeIdentityErrors{
+		identityInvalid:       &InstallError{Stage: "stage", Code: "IDENTITY_INVALID", Recovery: "Inspect the private Agent identity; do not delete it until the Hub identity is revoked."},
+		pairingFailedRepair:   &InstallError{Stage: "stage", Code: "PAIRING_FAILED", Recovery: "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed; reissue a code before retrying."},
+		pairingRequired:       &InstallError{Stage: "stage", Code: "PAIRING_REQUIRED", Recovery: "The recorded identity was revoked or replaced. Reissue a pairing code in Hub Web and run --repair with the fresh code."},
+		pairingMetadataRepair: &InstallError{Stage: "stage", Code: "PAIRING_METADATA_FAILED", Recovery: "The private identity is preserved. Fix Hub metadata/candidate availability and run --repair; do not request another code."},
+		pairingMetadataFresh:  &InstallError{Stage: "stage", Code: "PAIRING_METADATA_FAILED", Recovery: "The private identity is persisted. Fix Hub metadata/candidate availability and run --repair; do not request another code."},
+		identityMissing:       &InstallError{Stage: "stage", Code: "IDENTITY_MISSING", Recovery: "A repair reuses the private identity when it is still valid. Restore the identity, or revoke and re-enroll the node; a revoked identity needs a fresh pairing code."},
+		pairingCodeRequired:   &InstallError{Stage: "pairing", Code: "PAIRING_CODE_REQUIRED", Recovery: "Enter the current one-time code on stdin after local staging checks pass."},
+		pairingFailedFresh:    &InstallError{Stage: "stage", Code: "PAIRING_FAILED", Recovery: "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed."},
+		agentStateUnsafe:      &InstallError{Stage: "stage", Code: "AGENT_STATE_UNSAFE", Recovery: "Use a root-owned 0700 Agent directory; the kernel group must not read identity tokens."},
+		identityPersistFailed: &InstallError{Stage: "stage", Code: "IDENTITY_PERSIST_FAILED", Recovery: "The Hub code may already be consumed. Preserve this operation's journal, reissue a code for the same node in Web and retry after fixing disk permissions."},
+		stateWriteFailed:      &InstallError{Stage: "stage", Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "Check installer state disk space and permissions; preserve the private identity."},
 	}
-	var metadata node.Metadata
-	var candidate node.CandidateDocument
-	if identityLoaded {
-		if repair {
-			if pairingCode != "" {
-				fresh, pairErr := opts.Pair(ctx, installedCfg, pairingCode)
-				if pairErr == nil {
-					pairErr = fresh.ValidateFor(installedCfg)
-				}
-				if pairErr == nil {
-					pairErr = persistNodeIdentity(opts.Root, fresh)
-				}
-				if pairErr != nil {
-					return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_FAILED", "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed; reissue a code before retrying.")
-				}
-				identity = fresh
-			}
-			metadata, err = opts.Metadata(ctx, installedCfg, identity)
-			if err == nil {
-				candidate, err = opts.Candidate(ctx, installedCfg, identity, 1)
-			}
-			if err == nil && metadata.NodeID != "" {
-				err = metadata.ValidateFor(installedCfg)
-			}
-			if err == nil && candidate.Schema != "" {
-				err = candidate.ValidateFor(installedCfg)
-			}
-			if err != nil {
-				if clientUnauthorized(err) {
-					return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_REQUIRED", "The recorded identity was revoked or replaced. Reissue a pairing code in Hub Web and run --repair with the fresh code.")
-				}
-				return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_METADATA_FAILED", "The private identity is preserved. Fix Hub metadata/candidate availability and run --repair; do not request another code.")
-			}
-		}
-	} else {
-		if repair {
-			return failNodePartial(result, state, opts, layout, record, "stage", "IDENTITY_MISSING", "A repair reuses the private identity when it is still valid. Restore the identity, or revoke and re-enroll the node; a revoked identity needs a fresh pairing code.")
-		}
-		if pairingCode == "" {
-			state.Stage = "pairing"
-			state.Status = "partial"
-			state.ErrorCode, state.Recovery = "PAIRING_CODE_REQUIRED", "Enter the current one-time code on stdin after local staging checks pass."
-			state.UpdatedAt = time.Now().UTC()
-			_ = writeNodeState(opts.Root, layout, state)
-			result.Stage, result.Status, result.ErrorCode, result.Recovery = "pairing", "partial", state.ErrorCode, state.Recovery
-			_ = record("pairing", "waiting", state.ErrorCode)
-			return result, &InstallError{Stage: "pairing", Code: state.ErrorCode, Recovery: state.Recovery}
-		}
-		identity, err = opts.Pair(ctx, installedCfg, pairingCode)
-		if err == nil {
-			err = identity.ValidateFor(installedCfg)
-		}
-		if err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_FAILED", "Check the one-time code, Hub reachability and node role/ports. A failed request may still have been consumed.")
-		}
-		if err := ensurePrivateNodeDirectory(rooted(opts.Root, nodeAgentStateDir)); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "AGENT_STATE_UNSAFE", "Use a root-owned 0700 Agent directory; the kernel group must not read identity tokens.")
-		}
-		if err := persistNodeIdentity(opts.Root, identity); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "IDENTITY_PERSIST_FAILED", "The Hub code may already be consumed. Preserve this operation's journal, reissue a code for the same node in Web and retry after fixing disk permissions.")
-		}
-		state.Node = cloneNodeConfig(&installedCfg)
-		if err := writeNodeState(opts.Root, layout, state); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "INSTALL_STATE_WRITE_FAILED", "Check installer state disk space and permissions; preserve the private identity.")
-		}
-		metadata, err = opts.Metadata(ctx, installedCfg, identity)
-		if err == nil {
-			candidate, err = opts.Candidate(ctx, installedCfg, identity, 1)
-		}
-		if err == nil && metadata.NodeID != "" {
-			err = metadata.ValidateFor(installedCfg)
-		}
-		if err == nil && candidate.Schema != "" {
-			err = candidate.ValidateFor(installedCfg)
-		}
-		if err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "PAIRING_METADATA_FAILED", "The private identity is persisted. Fix Hub metadata/candidate availability and run --repair; do not request another code.")
-		}
+	resolved, resolveErr := nodeResolveIdentityAndCandidate(ctx, &result, &state, &opts, layout, record, installedCfg, repair, pairingCode, identityFailures)
+	if resolveErr != nil {
+		return result, resolveErr
 	}
+	if resolved.pairingPending {
+		return result, identityFailures.pairingCodeRequired
+	}
+	identity, candidate := resolved.identity, resolved.candidate
 	activeCandidate := candidate
 	if repair {
 		if existing, ok := currentNodeCandidate(opts.Root, installedCfg); ok {
