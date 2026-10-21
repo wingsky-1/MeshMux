@@ -456,6 +456,13 @@ func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 		// it. The subscriber tables keep the intent for a later drain.
 		return errors.New("LINE_OFFLINE: line is offline; synchronization stays pending")
 	}
+	// The Line's own Out path has to be authorized and confirmed before the
+	// Line may publish: a published snapshot would make clients use an egress
+	// the Out guard still drops. A Line without an enabled binding is not
+	// affected, so an Out-free deployment is unchanged.
+	if err := lineOutPublishGateTx(tx, nodeID, now); err != nil {
+		return err
+	}
 
 	var nextRevision int64
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&nextRevision); err != nil {
@@ -617,6 +624,11 @@ func (s *store) reconcileSubscriberSync(subscriberID string, now time.Time, allo
 	if err := subscription.ValidateID(subscriberID); err != nil {
 		return errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
 	}
+	// The Out direction is deliberately not drained here. A Line may only
+	// publish after the Out that serves it confirmed the authorization, so an
+	// explicit subscriber publication that races the Out chain fails the gate
+	// with OUT_NOT_AUTHORIZED instead of publishing an egress the Out would
+	// drop. The Out's own result event releases the Line (drainLinesForOut).
 	tx, err := s.db.Begin()
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
@@ -729,6 +741,21 @@ func subscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string,
 	}
 	if offline {
 		return subscriberSyncPartial, "NODE_OFFLINE", nil
+	}
+	// A Line that egresses through an Out is only converged when the pair is:
+	// the Out allowlist must authorize this Line and prove it. Reporting a
+	// confirmed inbound as healthy while the Out drops the traffic would be a
+	// false success.
+	egress, egressCode, err := lineOutEgressStatusTx(tx, nodeID, now)
+	if err != nil {
+		return subscriberSyncPartial, "DATABASE_UNAVAILABLE", err
+	}
+	switch egress {
+	case lineEgressDirect, lineEgressHealthy:
+	case lineEgressVerifying:
+		return subscriberSyncPending, egressCode, nil
+	default:
+		return subscriberSyncPartial, egressCode, nil
 	}
 	revision, digest, _, found, err := latestPublishedCandidateTx(tx, nodeID)
 	if err != nil {

@@ -45,6 +45,13 @@ type OutBindingPreview struct {
 	// AffectedSubscribers counts the distinct Subscribers behind the
 	// affected policies.
 	AffectedSubscribers int `json:"affected_subscribers"`
+	// EgressState and EgressCode report whether the Out path of the previewed
+	// Line is authorized. A proposal is never healthy: nothing has been
+	// published yet, so a preview can only report direct, pending or partial.
+	// A policy that depends on an unauthorized Out egress is not publishable,
+	// which is why the preview refuses to describe it as an established path.
+	EgressState string `json:"egress_state"`
+	EgressCode  string `json:"egress_code,omitempty"`
 }
 
 // migrateSchema5 adds the Out binding table. It is additive: every schema-4
@@ -216,6 +223,11 @@ func (s *store) setOutBindingAt(binding OutBinding, now time.Time) error {
 	if err = tx.Commit(); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
+	// The binding is the authorization intent: enabling it publishes the Out
+	// allowlist and disabling it republishes the Out with an explicit empty
+	// list. The drain owns its own transaction and never fails the mutation;
+	// the next Out event retries it.
+	s.drainOutNode(binding.OutID, now)
 	return nil
 }
 
@@ -272,6 +284,10 @@ func (s *store) clearOutBindingAt(outID string, now time.Time) error {
 	if err = tx.Commit(); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
+	// The unbound Out has to stop authorizing the Line: the drain republishes
+	// it with an explicit empty allowlist. It owns its own transaction and never
+	// fails the mutation; the next Out event retries it.
+	s.drainOutNode(outID, now)
 	return nil
 }
 
@@ -284,6 +300,12 @@ func (s *store) clearOutBindingAt(outID string, now time.Time) error {
 // active subscriber credentials of the affected Lines; no subscriber identity,
 // UUID or token is returned.
 func (s *store) PreviewOutBinding(outID, lineID string) (OutBindingPreview, error) {
+	return s.previewOutBindingAt(outID, lineID, time.Now())
+}
+
+// previewOutBindingAt is the request-clock variant of the read-only preview, so
+// the egress projection and the affected-policy counts share one clock.
+func (s *store) previewOutBindingAt(outID, lineID string, now time.Time) (OutBindingPreview, error) {
 	outID = strings.TrimSpace(outID)
 	lineID = strings.TrimSpace(lineID)
 	if outID == "" {
@@ -362,8 +384,41 @@ func (s *store) PreviewOutBinding(outID, lineID string) (OutBindingPreview, erro
 			return OutBindingPreview{}, errors.New("DATABASE_UNAVAILABLE")
 		}
 	}
+	// The egress state is what the preview must not overstate. A proposal is
+	// always pending: the Out has not even been asked to authorize the Line. An
+	// existing binding reports the real Hub-side state, so a caller can tell an
+	// established path from one whose policy would still be refused at publish.
+	if preview.LineID != "" {
+		if lineID != "" {
+			// A proposal has published nothing: the Out was never asked to
+			// authorize the Line, so a policy that depends on it is not
+			// publishable yet. Reporting the same code the publish gate uses
+			// keeps the preview and the gate from disagreeing.
+			preview.EgressState, preview.EgressCode = lineEgressPendingPreview, codeOutNotAuthorized
+		} else {
+			tx, err := s.db.Begin()
+			if err != nil {
+				return OutBindingPreview{}, errors.New("DATABASE_UNAVAILABLE")
+			}
+			state, code, egressErr := lineOutEgressStatusTx(tx, preview.LineID, now)
+			_ = tx.Rollback()
+			if egressErr != nil {
+				return OutBindingPreview{}, errors.New("DATABASE_UNAVAILABLE")
+			}
+			preview.EgressState, preview.EgressCode = state, code
+		}
+	}
 	return preview, nil
 }
+
+// lineEgressPendingPreview is the projection of a proposed egress: the Hub has
+// recorded the intent but has not authorized or confirmed it yet.
+const lineEgressPendingPreview = "pending"
+
+// codeOutNotAuthorized is the single refusal code of a policy that depends on an
+// Out egress the Hub cannot vouch for yet. The preview and the publish gate both
+// report it, so an operator never sees "preview says fine, publish says no".
+const codeOutNotAuthorized = "OUT_NOT_AUTHORIZED"
 
 // previewAllOutBindings summarizes every enabled binding in one read-only
 // query. A deployment with no binding rows reports no-out-direct, preserving
