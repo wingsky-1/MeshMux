@@ -100,6 +100,11 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/nodes/{nodeID}/reissue-pairing", app.mutation(app.nodesReissue, true))
 	r.Post("/nodes/{nodeID}/revoke", app.mutation(app.nodesRevoke, true))
 	r.Post("/nodes/{nodeID}/revoke-identity", app.mutation(app.nodesRevoke, true))
+	// Out binding management. Preview is read-only but keeps the same
+	// session + CSRF boundary because it is a management POST.
+	r.Post("/nodes/out/bind", app.mutation(app.outBind, true))
+	r.Post("/nodes/out/unbind", app.mutation(app.outUnbind, true))
+	r.Post("/nodes/out/preview", app.mutation(app.outPreview, true))
 	r.Get("/api/nodes", app.authenticated(app.nodesList))
 	r.Get("/api/nodes/cli", app.authenticated(app.installArtifactDownload))
 	// Agent endpoints use Bearer identity, not admin session + browser Origin.
@@ -178,7 +183,10 @@ func (s *Server) event(r *http.Request, code string) {
 }
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
 	s.event(r, code)
-	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
+	// The Out binding endpoints are a JSON management API even though their
+	// paths live under /nodes: success and failure always share one shape.
+	jsonError := strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/nodes/out/")
+	if jsonError {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "operation_id": operation(r), "stage": "web", "message": message, "next_action": next})
