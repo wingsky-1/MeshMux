@@ -243,6 +243,11 @@ func TestNodeACLReadbackRejectsLateInjectedAccept(t *testing.T) {
 // shape and both drops are asserted and the accept set is deliberately not
 // compared. An injected accept is therefore not evidence of a pass on its own —
 // it just cannot be distinguished without a trusted anchor.
+//
+// The extra-accept case below is the discrimination test for that contract: a
+// table whose accept set differs from any plausible constant must still pass the
+// shape-only path. That is what makes "no set assertion happened here" a real
+// claim rather than an untested assumption.
 func TestNodeACLReadbackWithoutStateAssertsShapeOnly(t *testing.T) {
 	f := newACLFixture(t)
 	f.writeACL(t, []string{"203.0.113.7"})
@@ -252,6 +257,13 @@ func TestNodeACLReadbackWithoutStateAssertsShapeOnly(t *testing.T) {
 	runner := &nftStubRunner{output: []byte(aclJSONWithAccepts(8443, "203.0.113.7/32"))}
 	if err := verifyNodeACLReadback(context.Background(), runner, f.root, f.cfg, f.cand, 8443); err != nil {
 		t.Fatalf("shape-only readback rejected a complete guard: %v", err)
+	}
+	// A different accept set also passes: with no recorded anchor the installer
+	// cannot assert a set, and must not pretend to. The Hub's own readback task
+	// (which carries allowed_sources) is what proves the set later.
+	runner = &nftStubRunner{output: []byte(aclJSONWithAccepts(8443, "203.0.113.7/32", "240.0.0.0/32"))}
+	if err := verifyNodeACLReadback(context.Background(), runner, f.root, f.cfg, f.cand, 8443); err != nil {
+		t.Fatalf("shape-only readback asserted an accept set it has no record for: %v", err)
 	}
 	// Shape is still required: a chain without the drops fails.
 	runner = &nftStubRunner{output: []byte(`{"nftables":[` +

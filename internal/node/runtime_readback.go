@@ -34,15 +34,29 @@ func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string
 	if candidate == nil {
 		return failedResult(result, "LKG_CANDIDATE_INVALID"), errors.New("LKG_CANDIDATE_INVALID")
 	}
-	// The readback proves the live table matches what was applied for this
-	// revision. The applied authorization recorded in state.json, not the new
-	// task's request, is the expectation, so a revision whose allowlist the Hub
-	// no longer wants still reports its own state instead of silently passing.
-	// A task that names a different allowlist is a Hub/Node disagreement and
-	// fails explicitly rather than reporting healthy for another authorization.
+	// Two independent anchors can prove the accept set, and the stronger one
+	// always wins:
+	//
+	//   1. the applied authorization recorded in state.json — what this
+	//      revision was actually deployed with; and
+	//   2. the allowlist carried by this readback task — the Hub's own claim,
+	//      which comes from the Hub and never from the table under test.
+	//
+	// With a recorded set, a task that names a different allowlist is a Hub/Node
+	// disagreement and fails explicitly instead of reporting healthy for another
+	// authorization. Without a recorded set (a fresh bootstrap, or a lost state
+	// file), the task parameter becomes the expectation: dropping it would
+	// silently degrade to a shape-only check and let a table with an
+	// unauthorized accept report healthy. Shape degradation is therefore
+	// reserved for a readback that carries no expectation at all.
 	exp := state.aclExpectation()
-	if hasAllowed && r.cfg.Role == RoleOut && exp.assertSet && !sameACLSources(allowed, exp.sources) {
-		return failedResult(result, "OUT_ACL_SOURCE_MISMATCH"), errors.New("OUT_ACL_SOURCE_MISMATCH")
+	if hasAllowed && r.cfg.Role == RoleOut {
+		switch {
+		case !exp.assertSet:
+			exp = aclExpectation{sources: allowed, assertSet: true}
+		case !sameACLSources(allowed, exp.sources):
+			return failedResult(result, "OUT_ACL_SOURCE_MISMATCH"), errors.New("OUT_ACL_SOURCE_MISMATCH")
+		}
 	}
 	readback, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, exp)
 	if err != nil {
