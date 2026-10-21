@@ -112,7 +112,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 		w = reportJSON(t, app, token, agent.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
 		requireStatus(t, w, 200)
 	}
-	firstObserved, err := app.store.getNode(created.ID)
+	firstObserved, err := app.store.getNodeAt(created.ID, app.now())
 	if err != nil || firstObserved.ObservedRevision != latest.Revision || firstObserved.ObservedTaskRevision != readback.Revision {
 		t.Fatalf("observed after readback: %+v err=%v", firstObserved, err)
 	}
@@ -123,7 +123,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 	if _, err = app.store.db.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	offline, err := app.store.getNode(created.ID)
+	offline, err := app.store.getNodeAt(created.ID, app.now())
 	if err != nil || !offline.Offline || offline.NativeReady || offline.ObservedRevision != latest.Revision {
 		t.Fatalf("offline history was conflated with current readiness: %+v err=%v", offline, err)
 	}
@@ -136,7 +136,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 	}
 	w = reportJSON(t, app, token, agent.TaskResult{OperationID: olderID, Status: "healthy", Detail: string(detail)})
 	requireStatus(t, w, 200)
-	after, err := app.store.getNode(created.ID)
+	after, err := app.store.getNodeAt(created.ID, app.now())
 	if err != nil || after.ObservedRevision != firstObserved.ObservedRevision || after.ObservedTaskRevision != firstObserved.ObservedTaskRevision {
 		t.Fatalf("late readback regressed observation: before=%+v after=%+v err=%v", firstObserved, after, err)
 	}

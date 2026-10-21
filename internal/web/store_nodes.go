@@ -197,10 +197,6 @@ type rowScanner interface {
 	Scan(...any) error
 }
 
-func scanNode(row rowScanner) (Node, error) {
-	return scanNodeAt(row, time.Now())
-}
-
 // scanNodeAt evaluates the offline window against one explicit clock, so the
 // Web projection and the task delivery window cannot disagree because they
 // read the wall clock at different moments.
@@ -231,10 +227,6 @@ func scanNodeAt(row rowScanner, now time.Time) (Node, error) {
 	return n, nil
 }
 
-func (s *store) listNodes() ([]Node, error) {
-	return s.listNodesAt(time.Now())
-}
-
 // listNodesAt evaluates every row's offline window against one explicit clock,
 // so a list projection cannot mix two different wall-clock readings.
 func (s *store) listNodesAt(now time.Time) ([]Node, error) {
@@ -252,10 +244,6 @@ func (s *store) listNodesAt(now time.Time) ([]Node, error) {
 		out = append(out, n)
 	}
 	return out, rows.Err()
-}
-
-func (s *store) getNode(id string) (Node, error) {
-	return s.getNodeAt(id, time.Now())
 }
 
 func (s *store) getNodeAt(id string, now time.Time) (Node, error) {
@@ -336,14 +324,10 @@ func (s *store) consumePairing(nodeID, role, code, agentVersion, kernelVersion s
 	return "", errors.New("PAIRING_INVALID: pairing code rejected")
 }
 
-// authenticateAgent maps a Bearer identity to its node. Revoked or unknown
-// tokens fail closed without revealing which nodes exist.
-func (s *store) authenticateAgent(token string) (Node, error) {
-	return s.authenticateAgentAt(token, time.Now())
-}
-
-// authenticateAgentAt binds the returned readiness window to the request
-// clock, so the Agent task endpoint and the Web projection agree.
+// authenticateAgentAt maps a Bearer identity to its node. Revoked or unknown
+// tokens fail closed without revealing which nodes exist. It binds the returned
+// readiness window to the request clock, so the Agent task endpoint and the Web
+// projection agree.
 func (s *store) authenticateAgentAt(token string, now time.Time) (Node, error) {
 	if len(token) != 43 {
 		return Node{}, errors.New("AGENT_UNAUTHORIZED")
@@ -450,19 +434,15 @@ func normalizeParams(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// enqueueTask persists a validated task with exact-envelope idempotency and a
+// enqueueTaskAt persists a validated task with exact-envelope idempotency and a
 // per-node monotonic revision. An identical re-enqueue is a success (nil); the
 // same operation_id or idempotency_key with different content is a conflict;
 // a revision that would rewind the node chain is stale. Reserved
 // upgrade/rollback kinds never reach storage because agent.ValidateTask
 // rejects them first.
 //
-// The wrapper keeps the wall-clock default for direct callers; every request
-// path threads the handler clock through enqueueTaskAt instead.
-func (s *store) enqueueTask(task agent.Task) error {
-	return s.enqueueTaskAt(task, time.Now())
-}
-
+// Every request path threads the handler clock through enqueueTaskAt, so one
+// request has one timestamp.
 func (s *store) enqueueTaskAt(task agent.Task, now time.Time) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -551,13 +531,9 @@ func lookupTask(tx *sql.Tx, where string, arg any, task agent.Task, params strin
 	return taskLookupConflict, nil
 }
 
-// pendingTasks returns every unfinished task for one node: pending, applying
+// pendingTasksAt returns every unfinished task for one node: pending, applying
 // and verifying all need to be redelivered after an Agent reconnect. Revision
 // ascending preserves the original enqueue order.
-func (s *store) pendingTasks(nodeID string, limit int) ([]agent.Task, error) {
-	return s.pendingTasksAt(nodeID, limit, time.Now())
-}
-
 func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent.Task, error) {
 	if limit < 1 || limit > 32 {
 		limit = 8
@@ -594,19 +570,13 @@ func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent
 	return out, rows.Err()
 }
 
-// reportResult records an Agent result in one transaction scoped to
-// nodeID+operation_id. A repeat of the same terminal status/error_code is a
-// no-op; a different terminal rewrite is rejected; non-terminal states may be
-// re-reported; the state machine never regresses.
-func (s *store) reportResult(nodeID string, res agent.TaskResult) error {
-	_, err := s.reportResultAudited(nodeID, res, time.Now())
-	return err
-}
-
-// reportResultAudited records one result and reports whether it changed a row.
-// All timestamps of the request (task update, node success, observation and
-// the follow-up drain) use one caller-supplied clock, so a fixed-clock request
-// cannot be split across two wall-clock readings.
+// reportResultAudited records an Agent result in one transaction scoped to
+// nodeID+operation_id and reports whether it changed a row. A repeat of the
+// same terminal status/error_code is a no-op; a different terminal rewrite is
+// rejected; non-terminal states may be re-reported; the state machine never
+// regresses. All timestamps of the request (task update, node success,
+// observation and the follow-up drain) use one caller-supplied clock, so a
+// fixed-clock request cannot be split across two wall-clock readings.
 func (s *store) reportResultAudited(nodeID string, res agent.TaskResult, now time.Time) (bool, error) {
 	if err := agent.ValidateTaskResult(res); err != nil {
 		return false, err

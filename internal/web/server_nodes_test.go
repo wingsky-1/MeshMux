@@ -172,16 +172,16 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 		return agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: idem, Revision: rev, IdempotencyKey: idem, NodeID: node.ID, Kind: kind, Params: json.RawMessage(params)}
 	}
 	id1, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(agent.KindHealthStatus, 1, id1, `{}`)); err != nil {
+	if err := app.store.enqueueTaskAt(newTask(agent.KindHealthStatus, 1, id1, `{}`), app.now()); err != nil {
 		t.Fatalf("valid status task rejected: %v", err)
 	}
 	// Duplicate idempotency key is a rejection, not a second execution.
-	if err := app.store.enqueueTask(newTask(agent.KindHealthStatus, 2, id1, `{}`)); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.store.enqueueTaskAt(newTask(agent.KindHealthStatus, 2, id1, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("duplicate idempotency accepted: %v", err)
 	}
 	// Stale revision cannot rewind the per-node monotonic chain.
 	id2, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(agent.KindHealthStatus, 1, id2, `{}`)); err == nil || !strings.Contains(err.Error(), "REVISION_STALE") {
+	if err := app.store.enqueueTaskAt(newTask(agent.KindHealthStatus, 1, id2, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "REVISION_STALE") {
 		t.Fatalf("stale revision accepted: %v", err)
 	}
 	// Malicious payloads never reach storage.
@@ -193,7 +193,7 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 		{"rollback.config", `{}`},
 	} {
 		id, _ := agent.NewID()
-		if err := app.store.enqueueTask(newTask(tc.kind, 5, id, tc.params)); err == nil {
+		if err := app.store.enqueueTaskAt(newTask(tc.kind, 5, id, tc.params), app.now()); err == nil {
 			t.Fatalf("malicious task accepted: %+v", tc)
 		}
 	}

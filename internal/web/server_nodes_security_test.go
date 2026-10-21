@@ -48,7 +48,7 @@ func TestAgentEndpointsRequireSingleJSONObject(t *testing.T) {
 	}
 	_, token := pairedNode(t, app, "strict-result")
 	taskID, _ := agent.NewID()
-	if err := app.store.enqueueTask(agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: taskID, Revision: 1, IdempotencyKey: taskID, NodeID: node.ID, Kind: agent.KindHealthStatus, Params: []byte(`{}`)}); err != nil {
+	if err := app.store.enqueueTaskAt(agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: taskID, Revision: 1, IdempotencyKey: taskID, NodeID: node.ID, Kind: agent.KindHealthStatus, Params: []byte(`{}`)}, app.now()); err != nil {
 		t.Fatal(err)
 	}
 	res, _ := json.Marshal(agent.TaskResult{OperationID: taskID, Status: "healthy"})
@@ -98,10 +98,10 @@ func TestEnqueueExactIdempotencyAndConflicts(t *testing.T) {
 	node, _ := createPendingNode(t, app, "edge", "queue-idem", 8443, 2222)
 	id, _ := agent.NewID()
 	task := agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: id, Revision: 1, IdempotencyKey: id, NodeID: node.ID, Kind: agent.KindHealthStatus, Params: []byte(`{}`)}
-	if err := app.store.enqueueTask(task); err != nil {
+	if err := app.store.enqueueTaskAt(task, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.enqueueTask(task); err != nil {
+	if err := app.store.enqueueTaskAt(task, app.now()); err != nil {
 		t.Fatalf("exact replay must succeed: %v", err)
 	}
 	var count int
@@ -112,20 +112,20 @@ func TestEnqueueExactIdempotencyAndConflicts(t *testing.T) {
 	otherOp, _ := agent.NewID()
 	keyed := task
 	keyed.OperationID, keyed.IdempotencyKey, keyed.Revision = keyID, keyID, 2
-	if err := app.store.enqueueTask(keyed); err != nil {
+	if err := app.store.enqueueTaskAt(keyed, app.now()); err != nil {
 		t.Fatal(err)
 	}
 	keyed.OperationID = otherOp
-	if err := app.store.enqueueTask(keyed); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.store.enqueueTaskAt(keyed, app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("cross-operation exact idempotency key replay accepted: %v", err)
 	}
 	task.Revision = 2
-	if err := app.store.enqueueTask(task); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.store.enqueueTaskAt(task, app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("operation content conflict accepted: %v", err)
 	}
 	other, _ := agent.NewID()
 	task.OperationID, task.Revision = other, 3
-	if err := app.store.enqueueTask(task); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.store.enqueueTaskAt(task, app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("idempotency content conflict accepted: %v", err)
 	}
 }
@@ -142,10 +142,11 @@ func TestEnqueueConcurrentRevisionIsMonotonic(t *testing.T) {
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
+	now := app.now()
 	for _, task := range tasks {
 		wg.Go(func() {
 			<-start
-			errs <- app.store.enqueueTask(task)
+			errs <- app.store.enqueueTaskAt(task, now)
 		})
 	}
 	close(start)
@@ -174,7 +175,7 @@ func TestAgentResultRejectsCrossNodeWrites(t *testing.T) {
 	_, tokenB := pairedNode(t, app, "line-b")
 	clearNodeTasks(t, app, nodeA.ID)
 	task := agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Revision: 1, IdempotencyKey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", NodeID: nodeA.ID, Kind: agent.KindHealthStatus, Params: []byte("{}")}
-	if err := app.store.enqueueTask(task); err != nil {
+	if err := app.store.enqueueTaskAt(task, app.now()); err != nil {
 		t.Fatal(err)
 	}
 	forge := agent.TaskResult{OperationID: task.OperationID, Status: "healthy"}
@@ -206,7 +207,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 		return agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: operation, Revision: revision, IdempotencyKey: operation, NodeID: node.ID, Kind: agent.KindHealthStatus, Params: []byte("{}")}
 	}
 	backward, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(backward)); err != nil {
+	if err := app.store.enqueueTaskAt(newTask(backward), app.now()); err != nil {
 		t.Fatal(err)
 	}
 	res := agent.TaskResult{OperationID: backward, Status: "applying"}
@@ -220,7 +221,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	verify, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(verify)); err != nil {
+	if err := app.store.enqueueTaskAt(newTask(verify), app.now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, agent.TaskResult{OperationID: verify, Status: "applying"})
@@ -234,7 +235,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	partial, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(partial)); err != nil {
+	if err := app.store.enqueueTaskAt(newTask(partial), app.now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, agent.TaskResult{OperationID: partial, Status: "partial", ErrorCode: "APPLY_FAILED"})
@@ -250,7 +251,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	rollback, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(rollback)); err != nil {
+	if err := app.store.enqueueTaskAt(newTask(rollback), app.now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, agent.TaskResult{OperationID: rollback, Status: "applying"})
@@ -261,7 +262,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	nonterminal, _ := agent.NewID()
-	if err := app.store.enqueueTask(newTask(nonterminal)); err != nil {
+	if err := app.store.enqueueTaskAt(newTask(nonterminal), app.now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, agent.TaskResult{OperationID: nonterminal, Status: "applying"})
@@ -278,7 +279,7 @@ func TestPendingTasksIncludeRedeliveryStates(t *testing.T) {
 	for i, status := range statuses {
 		id, _ := agent.NewID()
 		task := agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: id, Revision: int64(i + 1), IdempotencyKey: id, NodeID: node.ID, Kind: agent.KindHealthStatus, Params: []byte(`{}`)}
-		if err := app.store.enqueueTask(task); err != nil {
+		if err := app.store.enqueueTaskAt(task, app.now()); err != nil {
 			t.Fatal(err)
 		}
 		if status != "pending" {
@@ -286,7 +287,7 @@ func TestPendingTasksIncludeRedeliveryStates(t *testing.T) {
 			requireStatus(t, w, 200)
 		}
 	}
-	tasks, err := app.store.pendingTasks(node.ID, 8)
+	tasks, err := app.store.pendingTasksAt(node.ID, 8, app.now())
 	if err != nil || len(tasks) != 3 {
 		t.Fatalf("pending task states = %d err=%v", len(tasks), err)
 	}
