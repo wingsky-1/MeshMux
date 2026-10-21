@@ -19,25 +19,12 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: false
-      - name: Check gofmt
-        run: |
-          unformatted="$(gofmt -l ./cmd ./internal)"
-          if [ -n "$unformatted" ]; then
-            echo "Unformatted Go files:"
-            echo "$unformatted"
-            gofmt -d ./cmd ./internal
-            exit 1
-          fi
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
-      - name: Build
-        run: |
-          go build -o /tmp/meshmux ./cmd/meshmux
-          go build -o /tmp/meshmux-web ./cmd/meshmux-web
+      # Single gate: gofmt -s, go vet, staticcheck (pinned), go test,
+      # go test -race and both builds. The commands live in the Makefile so
+      # local runs and CI cannot drift; the build step below still consumes
+      # /tmp/meshmux and /tmp/meshmux-web, which `make verify` produces.
+      - name: Verify
+        run: make verify
       # These three invariants hold for every implementation stage of the
       # installer. They assert the system's refusal properties, not the
       # absence of an implementation: no configuration means no host changes,

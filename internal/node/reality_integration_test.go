@@ -403,16 +403,37 @@ func (p *realityProcess) stop() {
 // logContains reports whether the fixture log of one process contains the
 // given substring.
 //
+// The subprocess writes its log asynchronously, so a single read races the
+// writer: the line that proves the expected behaviour may not have reached
+// the file yet. The helper therefore polls the log for a bounded budget. It
+// still returns false on timeout, so a genuinely missing line fails the
+// caller's own assertion with its stable reason code.
+//
 // The helper returns a boolean on purpose. A fixture failure must never dump
 // the raw sing-box log: the log carries connection metadata and would turn a
 // test failure into a disclosure. The caller reports a stable reason code
 // instead.
 func (f *realityFixture) logContains(name, needle string) bool {
-	body, err := os.ReadFile(filepath.Join(f.dir, name+".log"))
-	if err != nil {
-		return false
+	const (
+		pollInterval = 100 * time.Millisecond
+		pollBudget   = 5 * time.Second
+	)
+	path := filepath.Join(f.dir, name+".log")
+	deadline := time.Now().Add(pollBudget)
+	for {
+		body, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(body), needle) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-f.ctx.Done():
+			return false
+		case <-time.After(pollInterval):
+		}
 	}
-	return strings.Contains(string(body), needle)
 }
 
 // waitPort waits until a loopback port accepts a connection. It shares the

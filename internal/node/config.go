@@ -290,6 +290,17 @@ func (r Role) valid() bool {
 	return r == RoleEdge || r == RoleOut
 }
 
+// ParseRole parses one install role argument into a node role. Hub is not a
+// node role: a hub host is described by install.Config, so "hub" is rejected
+// here and resolved on the install side instead.
+func ParseRole(value string) (Role, error) {
+	role := Role(value)
+	if !role.valid() {
+		return "", errors.New("ROLE_INVALID: role must be edge or out")
+	}
+	return role, nil
+}
+
 func validatePorts(vlessPort, sshPort int) error {
 	if vlessPort < 1 || vlessPort > 65535 || sshPort < 1 || sshPort > 65535 {
 		return errors.New("PORT_INVALID: VLESS and SSH ports must be 1-65535")
