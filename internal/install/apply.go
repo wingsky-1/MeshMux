@@ -308,9 +308,7 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return fail("stage", "OPERATION_LOG_FAILED", "Check private installer state directory permissions.")
 	}
 	journalPath := filepath.Join(operationDir, "events.jsonl")
-	record := func(stage, status, code string) error {
-		return appendOperationEvent(journalPath, operationEvent{OperationID: operationID, Stage: stage, Status: status, ErrorCode: code, Time: time.Now().UTC()})
-	}
+	record := newOperationRecorder(operationID, journalPath)
 	if err := record("preflight", "pass", ""); err != nil {
 		return fail("preflight", "OPERATION_LOG_FAILED", "Check installer state directory permissions.")
 	}
@@ -453,15 +451,11 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	// re-run apt unconditionally: a transient repository failure would then
 	// block a repair that has nothing to do with packages, and an unbounded
 	// upgrade could move Fail2ban/nftables off the recorded component set.
-	missingPackages := missingDebianPackages(ctx, opts.Runner, "ca-certificates", "fail2ban", "nftables")
-	if len(missingPackages) > 0 {
-		if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no third-party repository was added.")
-		}
-		installArgs := append([]string{"install", "-y", "--no-install-recommends"}, missingPackages...)
-		if _, err := opts.Runner.Run(ctx, "apt-get", installArgs...); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status and retry; do not remove existing packages or rules.")
-		}
+	_, pkgErr := ensureDebianPackages(ctx, opts.Runner,
+		&InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no third-party repository was added."},
+		&InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status and retry; do not remove existing packages or rules."})
+	if pkgErr != nil {
+		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, pkgErr.Stage, pkgErr.Code, pkgErr.Recovery)
 	}
 	if err := ensureSystemUsers(ctx, opts.Runner, opts.Root, hasState); err != nil {
 		var ie *InstallError
@@ -540,11 +534,10 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		rooted(opts.Root, "/etc/systemd/system/meshmux-headscale.service"),
 		rooted(opts.Root, "/etc/systemd/system/meshmux-caddy.service"),
 	}
-	if _, err := opts.Runner.Run(ctx, "systemd-analyze", append([]string{"verify"}, units...)...); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "SYSTEMD_UNIT_INVALID", "Review the generated unit files; no service is considered installed until validation succeeds.")
-	}
-	if _, err := opts.Runner.Run(ctx, "fail2ban-client", "-t"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "FAIL2BAN_CONFIG_INVALID", "Review the MeshMux SSH jail and preserve existing Fail2ban configuration.")
+	if unitErr := validateStagedUnits(ctx, opts.Runner, units,
+		&InstallError{Stage: "verify", Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the generated unit files; no service is considered installed until validation succeeds."},
+		&InstallError{Stage: "verify", Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the MeshMux SSH jail and preserve existing Fail2ban configuration."}); unitErr != nil {
+		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, unitErr.Stage, unitErr.Code, unitErr.Recovery)
 	}
 	if err := record("apply", "validated", ""); err != nil {
 		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "apply", "OPERATION_LOG_FAILED", "Inspect the operation journal and installer state.")
@@ -561,12 +554,10 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", code, "The installer is rolling back managed files; inspect journalctl for this unit and retry with --repair.")
 		}
 	}
-	if _, err := opts.Runner.Run(ctx, "systemctl", "is-active", "--quiet", "fail2ban.service"); err != nil {
-		if _, startErr := opts.Runner.Run(ctx, "systemctl", "enable", "--now", "fail2ban.service"); startErr != nil {
-			return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "FAIL2BAN_START_FAILED", "Review Fail2ban logs and SSH jail configuration; do not alter sshd or flush nftables.")
-		}
-	} else if _, err := opts.Runner.Run(ctx, "fail2ban-client", "reload"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "FAIL2BAN_RELOAD_FAILED", "Review Fail2ban logs and preserve existing jails and nftables rules.")
+	if fail2banErr := ensureFail2banRunning(ctx, opts.Runner,
+		&InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "Review Fail2ban logs and SSH jail configuration; do not alter sshd or flush nftables."},
+		&InstallError{Stage: "verify", Code: "FAIL2BAN_RELOAD_FAILED", Recovery: "Review Fail2ban logs and preserve existing jails and nftables rules."}); fail2banErr != nil {
+		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, fail2banErr.Stage, fail2banErr.Code, fail2banErr.Recovery)
 	}
 	if _, err := opts.Runner.Run(ctx, "fail2ban-client", "status", "meshmux-sshd"); err != nil {
 		return failAndRollback(result, state, previous, hasState, opts, snapshots, true, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Verify the detected SSH ports and MeshMux-specific Fail2ban jail.")

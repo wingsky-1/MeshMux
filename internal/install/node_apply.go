@@ -264,9 +264,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	operationDir := rooted(opts.Root, layout.OperationDir+"/"+operationID)
 	journalPath := filepath.Join(operationDir, "events.jsonl")
-	record := func(stage, status, code string) error {
-		return appendOperationEvent(journalPath, operationEvent{OperationID: operationID, Stage: stage, Status: status, ErrorCode: code, Time: time.Now().UTC()})
-	}
+	record := newOperationRecorder(operationID, journalPath)
 	if err := record("stage", "started", ""); err != nil {
 		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
@@ -331,15 +329,11 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	// The staged Out ACL is syntax-checked with nft -c below, so the Debian
 	// packages must be installed before that check, not later in apply.
-	missing := missingDebianPackages(ctx, opts.Runner, "ca-certificates", "fail2ban", "nftables")
-	if len(missing) > 0 {
-		if _, err := opts.Runner.Run(ctx, "apt-get", "update"); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "apply", "PACKAGE_INDEX_FAILED", "Check Debian repository connectivity; no package upgrade or third-party repository is used.")
-		}
-		args := append([]string{"install", "-y", "--no-install-recommends"}, missing...)
-		if _, err := opts.Runner.Run(ctx, "apt-get", args...); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "apply", "PACKAGE_INSTALL_FAILED", "Review Debian apt status; only the listed missing packages are installed.")
-		}
+	missing, pkgErr := ensureDebianPackages(ctx, opts.Runner,
+		&InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no package upgrade or third-party repository is used."},
+		&InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status; only the listed missing packages are installed."})
+	if pkgErr != nil {
+		return failNodePartial(result, state, opts, layout, record, pkgErr.Stage, pkgErr.Code, pkgErr.Recovery)
 	}
 	if usedPackage(missing, "nftables") {
 		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Root, opts.Runner, installedCfg, hasState); err != nil {
@@ -548,22 +542,19 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 
 	unitPaths := nodeUnitPaths(opts.Root, cfg)
-	if _, err := opts.Runner.Run(ctx, "systemd-analyze", append([]string{"verify"}, unitPaths...)...); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "verify", &InstallError{Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the fixed Agent, kernel and ACL units; no Node is installed until validation succeeds."})
-	}
-	if _, err := opts.Runner.Run(ctx, "fail2ban-client", "-t"); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "verify", &InstallError{Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the Node SSH jail and preserve all existing Fail2ban jails."})
+	if unitErr := validateStagedUnits(ctx, opts.Runner, unitPaths,
+		&InstallError{Stage: "verify", Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the fixed Agent, kernel and ACL units; no Node is installed until validation succeeds."},
+		&InstallError{Stage: "verify", Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the Node SSH jail and preserve all existing Fail2ban jails."}); unitErr != nil {
+		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, unitErr.Stage, unitErr)
 	}
 	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
 		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", &InstallError{Code: "SYSTEMD_RELOAD_FAILED", Recovery: "Inspect systemd and run --repair."})
 	}
 
-	if _, err := opts.Runner.Run(ctx, "systemctl", "is-active", "--quiet", "fail2ban.service"); err != nil {
-		if _, startErr := opts.Runner.Run(ctx, "systemctl", "enable", "--now", "fail2ban.service"); startErr != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_START_FAILED", "Review Fail2ban logs and the Node SSH jail; do not alter sshd or flush nftables.")
-		}
-	} else if _, err := opts.Runner.Run(ctx, "fail2ban-client", "reload"); err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_RELOAD_FAILED", "Review Fail2ban logs and preserve existing jails.")
+	if fail2banErr := ensureFail2banRunning(ctx, opts.Runner,
+		&InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "Review Fail2ban logs and the Node SSH jail; do not alter sshd or flush nftables."},
+		&InstallError{Stage: "verify", Code: "FAIL2BAN_RELOAD_FAILED", Recovery: "Review Fail2ban logs and preserve existing jails."}); fail2banErr != nil {
+		return failVerifiedPartial(result, state, opts, layout, record, fail2banErr.Stage, fail2banErr.Code, fail2banErr.Recovery)
 	}
 	// The daemon answers fail2ban-client only after its socket exists and the
 	// jail is loaded. Querying immediately after (re)start loses with exit
