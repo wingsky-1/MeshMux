@@ -152,10 +152,14 @@ func TestOutBindingValidationAndAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edgeUnpaired, _, err := s.createNode("edge", "line-unpaired", 9444, 2224, now)
+	edgeUnpaired, _, err := s.createNode("edge", "line-unpaired", 8443, 2224, now)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Both edge nodes carry a stored transport, so the enable gate reaches the
+	// identity check instead of stopping at LINE_NOT_CONFIGURED.
+	configureLine(t, s, edgePaired, "line-paired", now)
+	configureLine(t, s, edgeUnpaired.ID, "line-unpaired", now)
 
 	cases := []struct {
 		name    string
@@ -216,6 +220,187 @@ func TestOutBindingValidationAndAuthorization(t *testing.T) {
 	}
 	if _, err := s.PreviewOutBinding(outPaired, outPaired); err == nil || !hasErrorCode(err, "LINE_ROLE_INVALID") {
 		t.Fatalf("out-as-line preview error = %v", err)
+	}
+}
+
+// TestOutBindingEnableRequiresConfiguredLine closes the gap where a binding
+// could point at an edge node that never stored a Line transport, which could
+// never serve a client configuration.
+func TestOutBindingEnableRequiresConfiguredLine(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	out := pairedStoreNode(t, s, "out", now)
+	line := pairedStoreNode(t, s, "edge", now)
+
+	// Enabled binding to an unconfigured Line is rejected with the same code
+	// the subscriber selection path uses.
+	err := s.SetOutBinding(OutBinding{OutID: out, LineID: line, Enabled: true})
+	if err == nil || !hasErrorCode(err, "LINE_NOT_CONFIGURED") {
+		t.Fatalf("enabled unconfigured line error = %v, want LINE_NOT_CONFIGURED", err)
+	}
+	if _, err := s.GetOutBinding(out); err == nil || !hasErrorCode(err, "OUT_BINDING_NOT_FOUND") {
+		t.Fatalf("rejected enable left a row: %v", err)
+	}
+	// A read-only proposal preview refuses the same impossible egress instead
+	// of promising it.
+	if _, err := s.PreviewOutBinding(out, line); err == nil || !hasErrorCode(err, "LINE_NOT_CONFIGURED") {
+		t.Fatalf("proposal preview error = %v, want LINE_NOT_CONFIGURED", err)
+	}
+	// Disabled bindings stay allowed: they describe no egress yet.
+	if err := s.SetOutBinding(OutBinding{OutID: out, LineID: line, Enabled: false}); err != nil {
+		t.Fatalf("disabled binding rejected: %v", err)
+	}
+	// Once the transport exists, enabling succeeds.
+	configureLine(t, s, line, "line-configured", now)
+	if err := s.SetOutBinding(OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
+		t.Fatalf("configured line still rejected: %v", err)
+	}
+}
+
+// TestOutBindingStoreOwnsClock proves the audit timestamp cannot be chosen by
+// the caller: a zero, past or future UpdatedAt is always replaced by the
+// store clock of the request.
+func TestOutBindingStoreOwnsClock(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	out := pairedStoreNode(t, s, "out", now)
+	line := pairedStoreNode(t, s, "edge", now)
+	configureLine(t, s, line, "line-clock", now)
+
+	for _, supplied := range []int64{0, 1, 1 << 40} {
+		if err := s.setOutBindingAt(OutBinding{OutID: out, LineID: line, Enabled: true, UpdatedAt: supplied}, now); err != nil {
+			t.Fatalf("set with UpdatedAt=%d failed: %v", supplied, err)
+		}
+		stored, err := s.GetOutBinding(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.UpdatedAt != now.Unix() {
+			t.Fatalf("UpdatedAt=%d stored as %d, want store clock %d", supplied, stored.UpdatedAt, now.Unix())
+		}
+	}
+
+	// The unbound audit row also uses the store clock.
+	later := now.Add(time.Hour)
+	if err := s.clearOutBindingAt(out, later); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetOutBinding(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.UpdatedAt != later.Unix() {
+		t.Fatalf("clear UpdatedAt=%d, want %d", stored.UpdatedAt, later.Unix())
+	}
+}
+
+// TestOutBindingClearUnboundOutIsNoop keeps a never-configured Hub at
+// no-out-direct: unbinding an Out that has no row must not fabricate an audit
+// row that would read as a deliberate direct egress.
+func TestOutBindingClearUnboundOutIsNoop(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	out := pairedStoreNode(t, s, "out", now)
+
+	if err := s.ClearOutBinding(out); err != nil {
+		t.Fatalf("clear of unbound out failed: %v", err)
+	}
+	bindings, err := s.ListOutBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 0 {
+		t.Fatalf("clear fabricated %d binding rows", len(bindings))
+	}
+	preview, err := s.PreviewOutBinding("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Mode != "no-out-direct" {
+		t.Fatalf("hub preview after no-op clear = %s, want no-out-direct", preview.Mode)
+	}
+
+	// An existing row still becomes a preserved unbind audit row, and a
+	// repeated clear stays idempotent.
+	line := pairedStoreNode(t, s, "edge", now)
+	configureLine(t, s, line, "line-noop", now)
+	if err := s.SetOutBinding(OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearOutBinding(out); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.GetOutBinding(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.LineID != "" || first.Enabled {
+		t.Fatalf("clear did not unbind: %+v", first)
+	}
+	if err := s.ClearOutBinding(out); err != nil {
+		t.Fatalf("repeated clear failed: %v", err)
+	}
+	second, err := s.GetOutBinding(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.LineID != "" || second.Enabled {
+		t.Fatalf("repeated clear changed the row: %+v", second)
+	}
+	// The Hub now reports line-direct because a real audit row exists.
+	preview, err = s.PreviewOutBinding("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Mode != "line-direct" || preview.Enabled {
+		t.Fatalf("hub preview after real unbind = %+v", preview)
+	}
+}
+
+// TestOutBindingPreviewFanOutCountsOnce is the I1 regression: two Out rows may
+// point at the same Line, and the credentials join then fans out. The Hub
+// aggregate must count each policy once and match the single-binding preview.
+func TestOutBindingPreviewFanOutCountsOnce(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	line := pairedStoreNode(t, s, "edge", now)
+	outA := pairedStoreNode(t, s, "out", now)
+	outB := pairedStoreNode(t, s, "out", now)
+	configureLine(t, s, line, "line-fanout", now)
+	for _, name := range []string{"alice", "bob"} {
+		if _, _, err := s.createSubscriber(name, []string{line}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetOutBinding(OutBinding{OutID: outA, LineID: line, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetOutBinding(OutBinding{OutID: outB, LineID: line, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	single, err := s.PreviewOutBinding(outA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if single.AffectedLines != 1 || single.AffectedPolicies != 2 || single.AffectedSubscribers != 2 {
+		t.Fatalf("single preview wrong: %+v", single)
+	}
+	hub, err := s.PreviewOutBinding("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hub.Mode != "out-bound" || !hub.Enabled {
+		t.Fatalf("hub preview mode wrong: %+v", hub)
+	}
+	// Two Out rows, one Line, two policies: the fan-out must not double count.
+	if hub.AffectedLines != single.AffectedLines {
+		t.Fatalf("affected lines %d != single %d", hub.AffectedLines, single.AffectedLines)
+	}
+	if hub.AffectedPolicies != single.AffectedPolicies {
+		t.Fatalf("affected policies %d != single %d (fan-out double counted)", hub.AffectedPolicies, single.AffectedPolicies)
+	}
+	if hub.AffectedSubscribers != single.AffectedSubscribers {
+		t.Fatalf("affected subscribers %d != single %d", hub.AffectedSubscribers, single.AffectedSubscribers)
+	}
+	if hub.AffectedPolicies != 2 {
+		t.Fatalf("affected policies = %d, want 2", hub.AffectedPolicies)
 	}
 }
 

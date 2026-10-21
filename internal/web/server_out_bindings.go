@@ -19,6 +19,8 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 		return 404, "LINE_NOT_FOUND", "Line 节点不存在。", "请先在节点页纳管该 Line 后重试。"
 	case strings.HasPrefix(err.Error(), "LINE_ROLE_INVALID"):
 		return 409, "LINE_ROLE_INVALID", "所选节点不是 Line 角色。", "请选择角色为 Edge 的 Line。"
+	case strings.HasPrefix(err.Error(), "LINE_NOT_CONFIGURED"):
+		return 409, "LINE_NOT_CONFIGURED", "Line 尚未配置传输参数。", "请先完成该 Line 的传输配置后再启用 Out 绑定。"
 	case strings.HasPrefix(err.Error(), "OUT_NOT_AUTHORIZED"):
 		return 409, "OUT_NOT_AUTHORIZED", "绑定两端尚未完成配对或身份已撤销。", "请先完成两端配对并保持身份有效后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_BINDING_NOT_FOUND"):
@@ -59,19 +61,21 @@ func (s *Server) writeOutBinding(w http.ResponseWriter, r *http.Request, status 
 
 // outBind creates or updates one Out-to-Line binding. The mutation wrapper
 // already enforced the admin session, Origin and CSRF token before this runs.
+// The request takes one clock reading, so the stored audit time and the
+// readback share it.
 func (s *Server) outBind(w http.ResponseWriter, r *http.Request, _ session) {
+	now := s.now()
 	enabled, ok := parseOutBindingEnabled(r.PostForm.Get("enabled"))
 	if !ok {
 		s.fail(w, r, 400, "OUT_BINDING_INVALID", "启用参数不正确。", "请使用页面表单重新提交。")
 		return
 	}
 	binding := OutBinding{
-		OutID:     strings.TrimSpace(r.PostForm.Get("out_id")),
-		LineID:    strings.TrimSpace(r.PostForm.Get("line_id")),
-		Enabled:   enabled,
-		UpdatedAt: s.now().Unix(),
+		OutID:   strings.TrimSpace(r.PostForm.Get("out_id")),
+		LineID:  strings.TrimSpace(r.PostForm.Get("line_id")),
+		Enabled: enabled,
 	}
-	if err := s.store.setOutBindingAt(binding, s.now()); err != nil {
+	if err := s.store.setOutBindingAt(binding, now); err != nil {
 		status, code, message, next := outBindingFailure(err)
 		s.fail(w, r, status, code, message, next)
 		return
@@ -91,15 +95,28 @@ func (s *Server) outBind(w http.ResponseWriter, r *http.Request, _ session) {
 
 // outUnbind clears the Line of one Out and preserves the row as an audit
 // record. Traffic returns to the direct Line egress; no other state changes.
+//
+// Unbinding an Out that was never bound is a successful no-op: no audit row is
+// fabricated, so a Hub that was never configured keeps reporting
+// no-out-direct. The request takes one clock reading.
 func (s *Server) outUnbind(w http.ResponseWriter, r *http.Request, _ session) {
+	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
-	if err := s.store.clearOutBindingAt(outID, s.now()); err != nil {
+	if err := s.store.clearOutBindingAt(outID, now); err != nil {
 		status, code, message, next := outBindingFailure(err)
 		s.fail(w, r, status, code, message, next)
 		return
 	}
 	stored, err := s.store.GetOutBinding(outID)
 	if err != nil {
+		// A never-bound Out has no row to read back. Report the effective
+		// state instead of inventing one; the validation inside
+		// clearOutBindingAt already rejected unknown and non-Out nodes.
+		if strings.HasPrefix(err.Error(), "OUT_BINDING_NOT_FOUND") {
+			s.event(r, "OUT_UNBOUND")
+			s.writeOutBinding(w, r, 200, "unbound", OutBinding{OutID: outID})
+			return
+		}
 		status, code, message, next := outBindingFailure(err)
 		if status == 500 {
 			status, code, message, next = 503, "DATABASE_UNAVAILABLE", "解绑已记录，但读取回执失败。", "请重新打开页面确认绑定状态。"

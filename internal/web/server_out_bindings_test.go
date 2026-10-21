@@ -89,7 +89,31 @@ func TestOutBindingManagementAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bind enables the Out; the response is a flat readback of the stored row.
+	// Unbinding an Out that was never bound is a no-op: the Hub must stay at
+	// no-out-direct instead of gaining a fabricated audit row.
+	w = b.post("/nodes/out/unbind", url.Values{"out_id": {out.ID}})
+	requireStatus(t, w, 200)
+	var noop outBindingAPIResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &noop); err != nil {
+		t.Fatalf("no-op unbind body: %v %.300s", err, w.Body.String())
+	}
+	if noop.OutID != out.ID || noop.LineID != "" || noop.Enabled {
+		t.Fatalf("no-op unbind response wrong: %+v", noop)
+	}
+	if _, err := app.store.GetOutBinding(out.ID); err == nil || !hasErrorCode(err, "OUT_BINDING_NOT_FOUND") {
+		t.Fatalf("no-op unbind created a row: %v", err)
+	}
+	w = b.post("/nodes/out/preview", nil)
+	requireStatus(t, w, 200)
+	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("preview body: %v %.300s", err, w.Body.String())
+	}
+	if preview.Mode != "no-out-direct" {
+		t.Fatalf("hub preview after no-op unbind = %s, want no-out-direct", preview.Mode)
+	}
+
+	// Bind enables the Out; the response is a flat readback of the stored row
+	// and both readback timestamps come from the one request clock.
 	w = b.post("/nodes/out/bind", url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
 	requireStatus(t, w, 200)
 	var bound outBindingAPIResponse
@@ -103,6 +127,9 @@ func TestOutBindingManagementAPI(t *testing.T) {
 	stored, err := app.store.GetOutBinding(out.ID)
 	if err != nil || stored.LineID != line.ID || !stored.Enabled {
 		t.Fatalf("stored binding wrong: %+v err=%v", stored, err)
+	}
+	if stored.UpdatedAt != bound.UpdatedAt {
+		t.Fatalf("response UpdatedAt %d != stored %d (request used two clocks)", bound.UpdatedAt, stored.UpdatedAt)
 	}
 
 	// Preview reports the affected Line and its one active policy without
@@ -160,8 +187,14 @@ func TestOutBindingManagementAPIRejections(t *testing.T) {
 
 	line := createPairedWebNode(t, app, "edge", "line-reject", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-reject", 9443, 2223)
-	unpairedLine, _ := createPendingNode(t, app, "edge", "line-unpaired", 8444, 2224)
+	unpairedLine, _ := createPendingNode(t, app, "edge", "line-unpaired", 8443, 2224)
 	unpairedOut, _ := createPendingNode(t, app, "out", "out-unpaired", 9444, 2223)
+	// The paired Line has a stored transport; an unconfigured paired edge is
+	// added separately so the enable gate is distinguishable from the
+	// identity gate.
+	configureLine(t, app.store, line.ID, "line-reject", time.Now())
+	unconfiguredLine := createPairedWebNode(t, app, "edge", "line-no-transport", 8445, 2225)
+	configureLine(t, app.store, unpairedLine.ID, "line-unpaired", time.Now())
 
 	// Missing session and missing CSRF never reach the handler; both failures
 	// still use the same JSON contract.
@@ -181,6 +214,7 @@ func TestOutBindingManagementAPIRejections(t *testing.T) {
 		{"out as line", url.Values{"out_id": {out.ID}, "line_id": {out.ID}}, 409, "LINE_ROLE_INVALID"},
 		{"out unpaired", url.Values{"out_id": {unpairedOut.ID}, "line_id": {line.ID}}, 409, "OUT_NOT_AUTHORIZED"},
 		{"line unpaired", url.Values{"out_id": {out.ID}, "line_id": {unpairedLine.ID}}, 409, "OUT_NOT_AUTHORIZED"},
+		{"line unconfigured", url.Values{"out_id": {out.ID}, "line_id": {unconfiguredLine.ID}}, 409, "LINE_NOT_CONFIGURED"},
 		{"bad enabled", url.Values{"out_id": {out.ID}, "line_id": {line.ID}, "enabled": {"maybe"}}, 400, "OUT_BINDING_INVALID"},
 		{"bad out id", url.Values{"out_id": {"out"}, "line_id": {line.ID}}, 400, "OUT_BINDING_INVALID"},
 		{"missing line", url.Values{"out_id": {out.ID}}, 400, "OUT_BINDING_INVALID"},

@@ -133,27 +133,29 @@ func (s *store) GetOutBinding(outID string) (OutBinding, error) {
 }
 
 // SetOutBinding stores one binding. Both ends must exist with the immutable
-// roles out and edge. Enabling an Out additionally requires a current
-// non-revoked identity on both ends: an Out that was never paired (or whose
-// identity was revoked) can never become a live egress.
+// roles out and edge. Enabling an Out additionally requires a configured Line
+// and a current non-revoked identity on both ends: an Out that was never
+// paired (or whose identity was revoked) can never become a live egress.
 //
 // An empty LineID is rejected here; unbinding is an explicit ClearOutBinding
 // so a typo can never silently remove an active egress path.
+//
+// The store owns the timestamp: UpdatedAt on the input is ignored and the
+// stored value always comes from this store's clock.
 func (s *store) SetOutBinding(binding OutBinding) error {
 	return s.setOutBindingAt(binding, time.Now())
 }
 
 // setOutBindingAt is the request-clock variant used by the Web handler, so one
-// request records one timestamp.
+// request records one timestamp. The caller's UpdatedAt is ignored: a request
+// body can never choose the audit time.
 func (s *store) setOutBindingAt(binding OutBinding, now time.Time) error {
 	binding.OutID = strings.TrimSpace(binding.OutID)
 	binding.LineID = strings.TrimSpace(binding.LineID)
 	if !validBindingNodeID(binding.OutID) || !validBindingNodeID(binding.LineID) {
 		return errors.New("OUT_BINDING_INVALID: out_id and line_id must be 32 lowercase hex characters")
 	}
-	if binding.UpdatedAt <= 0 {
-		binding.UpdatedAt = now.Unix()
-	}
+	stamp := now.Unix()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
@@ -182,6 +184,16 @@ func (s *store) setOutBindingAt(binding OutBinding, now time.Time) error {
 		return errors.New("LINE_ROLE_INVALID: only edge nodes can be bound to an out")
 	}
 	if binding.Enabled {
+		// A binding may only enable an egress for a Line that already has a
+		// stored transport. An edge node without line_settings can never
+		// serve a client configuration, so it cannot anchor an Out path.
+		var configured int
+		if err = tx.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, binding.LineID).Scan(&configured); err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		if configured == 0 {
+			return errors.New("LINE_NOT_CONFIGURED: configure the line transport before enabling an out binding")
+		}
 		for _, nodeID := range []string{binding.OutID, binding.LineID} {
 			var identities int
 			if err = tx.QueryRow(`SELECT count(*) FROM node_identities WHERE node_id=? AND revoked=0`, nodeID).Scan(&identities); err != nil {
@@ -198,7 +210,7 @@ func (s *store) setOutBindingAt(binding OutBinding, now time.Time) error {
 	}
 	if _, err = tx.Exec(`INSERT INTO out_bindings(out_id, line_id, enabled, updated_at) VALUES(?,?,?,?)
  ON CONFLICT(out_id) DO UPDATE SET line_id=excluded.line_id, enabled=excluded.enabled, updated_at=excluded.updated_at`,
-		binding.OutID, binding.LineID, enabled, binding.UpdatedAt); err != nil {
+		binding.OutID, binding.LineID, enabled, stamp); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	if err = tx.Commit(); err != nil {
@@ -211,6 +223,10 @@ func (s *store) setOutBindingAt(binding OutBinding, now time.Time) error {
 // and Enabled=false, so the deliberate change keeps an audit trail while the
 // egress returns to the direct Line path. Repeating the call is idempotent for
 // an existing Out node.
+//
+// An Out that never had a binding row is a no-op: unbinding must not fabricate
+// an audit row, because that would change a Hub-level "never configured"
+// (no-out-direct) into "deliberately direct" (line-direct).
 func (s *store) ClearOutBinding(outID string) error {
 	return s.clearOutBindingAt(outID, time.Now())
 }
@@ -237,10 +253,21 @@ func (s *store) clearOutBindingAt(outID string, now time.Time) error {
 	if role != "out" {
 		return errors.New("OUT_ROLE_INVALID: only out nodes can carry an out binding")
 	}
-	if _, err = tx.Exec(`INSERT INTO out_bindings(out_id, line_id, enabled, updated_at) VALUES(?,NULL,0,?)
- ON CONFLICT(out_id) DO UPDATE SET line_id=NULL, enabled=0, updated_at=excluded.updated_at`,
-		outID, now.Unix()); err != nil {
+	res, err := tx.Exec(`UPDATE out_bindings SET line_id=NULL, enabled=0, updated_at=? WHERE out_id=?`, now.Unix(), outID)
+	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	if affected == 0 {
+		// No row existed: keep it that way. Commit the read-only transaction
+		// so the no-op is explicit rather than a silent rollback.
+		if err = tx.Commit(); err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		return nil
 	}
 	if err = tx.Commit(); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
@@ -295,6 +322,16 @@ func (s *store) PreviewOutBinding(outID, lineID string) (OutBindingPreview, erro
 		if lineRole != "edge" {
 			return OutBindingPreview{}, errors.New("LINE_ROLE_INVALID: only edge nodes can be bound to an out")
 		}
+		// A proposal preview mirrors the enable gate: a Line without a stored
+		// transport can never anchor an Out path, so the preview must not
+		// claim an egress that SetOutBinding would reject.
+		var configured int
+		if err = s.db.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, lineID).Scan(&configured); err != nil {
+			return OutBindingPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		if configured == 0 {
+			return OutBindingPreview{}, errors.New("LINE_NOT_CONFIGURED: configure the line transport before enabling an out binding")
+		}
 		preview.LineID = lineID
 		preview.Enabled = true
 		preview.Mode = "out-bound"
@@ -331,6 +368,11 @@ func (s *store) PreviewOutBinding(outID, lineID string) (OutBindingPreview, erro
 // previewAllOutBindings summarizes every enabled binding in one read-only
 // query. A deployment with no binding rows reports no-out-direct, preserving
 // the Out-free direct egress behavior.
+//
+// A Line may be the egress of more than one Out, so the credentials join
+// fans out. Every aggregate therefore deduplicates by identity: one active
+// credential is one policy no matter how many enabled Out rows point at its
+// Line, and the Hub totals match the single-binding preview.
 func (s *store) previewAllOutBindings() (OutBindingPreview, error) {
 	preview := OutBindingPreview{Mode: "no-out-direct"}
 	var rows, enabled int
@@ -346,8 +388,8 @@ func (s *store) previewAllOutBindings() (OutBindingPreview, error) {
 	preview.Mode = "out-bound"
 	preview.Enabled = true
 	if err := s.db.QueryRow(`SELECT count(DISTINCT ob.line_id),
- COALESCE(SUM(CASE WHEN pc.id IS NULL THEN 0 ELSE 1 END),0),
- count(DISTINCT pc.subscriber_id)
+ COALESCE(COUNT(DISTINCT pc.id),0),
+ COUNT(DISTINCT pc.subscriber_id)
  FROM out_bindings ob
  LEFT JOIN proxy_credentials pc ON pc.node_id=ob.line_id AND pc.active=1
  WHERE ob.enabled=1 AND ob.line_id IS NOT NULL`).
