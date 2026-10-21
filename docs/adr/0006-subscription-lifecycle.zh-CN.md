@@ -12,4 +12,4 @@ Subscriber、每个 Line 的 VLESS Credential、Node、Subscription Token 是独
 
 首个 PR 交付模型、存储与编译器；后续 PR 交付 Web 生命周期、固定订阅下载路由、多 Line 收敛及 Hub 兼任 Line。零 Out 合法，只编译直接出口。不包含 AI Out 双跳/跨源 ACL、Mesh、精确计费、外部订阅导入或 #11 升级。
 
-验收分别记录 L1、固定组件 check、隔离 Debian 13 VM 和真实客户端协议结果，不用 Mock 或服务监听替代握手。证据入口见 [验收标准](../ACCEPTANCE.zh-CN.md) 与 [Phase 3A 计划](../PHASE3A_PLAN.zh-CN.md)。
+验收分别记录 L1、固定组件 check、隔离 Debian 13 VM 和真实客户端协议结果，不用 Mock 或服务监听替代握手。证据入口见 [验收标准](../ACCEPTANCE.zh-CN.md)。

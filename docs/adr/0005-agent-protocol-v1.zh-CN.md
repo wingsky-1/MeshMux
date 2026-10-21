@@ -44,7 +44,7 @@ PR-A 冻结协议与 Hub 配对面，不做宿主机 apply。当前已完成主�
 
 - 主控最终本地验收通过：`go test -race ./... -count=1` PASS，gofmt 与 diff check
   PASS；7 项有效语义 mutation 全部变红，状态码与错误行为的准确记录见
-  [PR-A 评审](../PHASE2B_REVIEW.zh-CN.md#验证与边界)。
+  [验收标准](../ACCEPTANCE.zh-CN.md)。
 - 保留原有效 mutation：protocol 10 项、migration 2 项、Web 5 项；rollback timeout
   不计有效 mutation。Browser Free 复核已完成，详细证据见同一评审。
 - 这只是 L1；PR-A 当前无新的远端 CI 结论，也没有 L2/L3 宿主机安装证据。
