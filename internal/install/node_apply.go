@@ -269,101 +269,29 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
 
-	stageDir := rooted(opts.Root, layout.StageRoot+"/"+operationID)
-	artifactsDir := filepath.Join(stageDir, "artifacts")
-	if err := os.RemoveAll(stageDir); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Remove only the incomplete staging directory for this operation and retry.")
-	}
-	if err := ensureDirectory(stageDir, 0700); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions; no host files were applied.")
-	}
-	if err := ensureDirectory(artifactsDir, 0700); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions; no host files were applied.")
-	}
-	archivePath, err := opts.DownloadArtifact(ctx, artifacts[0], artifactsDir)
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", artifactErrorCode(err), "Check outbound HTTPS to the pinned official GitHub asset; unverified archives are never applied.")
-	}
-	if err := VerifyFile(archivePath, artifacts[0].SHA256); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "ARTIFACT_CHECKSUM_MISMATCH", "Delete the staged archive and retry; never bypass archive SHA-256 verification.")
-	}
-	kernelPath := filepath.Join(stageDir, "meshmux-sing-box")
-	if err := extractNodeKernel(archivePath, kernelPath); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "ARTIFACT_FORMAT_INVALID", "Use the official pinned sing-box archive for this architecture.")
-	}
-	kernelHash, err := sha256File(kernelPath)
-	if err != nil || (opts.Root == "/" && kernelHash != release.BinarySHA256) {
-		return failNodePartial(result, state, opts, layout, record, "stage", "KERNEL_CHECKSUM_MISMATCH", "Delete the staged kernel and retry; the binary must match the release manifest.")
-	}
-	if err := verifyBinaryVersion(ctx, opts.Runner, kernelPath, node.KernelVersion); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "KERNEL_VERSION_INVALID", "Use the exact pinned sing-box release for this architecture.")
-	}
-	// The Agent binary is resolved from the host layout. A co-located Line
-	// reuses the Hub-owned runtime verbatim and never stages, overwrites or
-	// snapshots a replacement.
-	agentPath, agentHash, err := resolveNodeAgent(ctx, opts, layout, stageDir)
-	if err != nil {
-		var ie *InstallError
-		if errors.As(err, &ie) {
-			return failNodePartial(result, state, opts, layout, record, ie.Stage, ie.Code, ie.Recovery)
-		}
-		return failNodePartial(result, state, opts, layout, record, "stage", "MESHMUX_BINARY_INVALID", "Run the installer from a regular MeshMux executable and retry.")
-	}
-	installedCfg := cfg
-	installedCfg.AgentVersion = node.CurrentAgentVersion
-	installedCfg.AgentSHA256 = agentHash
-	installedCfg.KernelSHA256 = kernelHash
-	compiled, err := node.CompileCandidate(node.Candidate{
-		NodeID: cfg.NodeID, Role: cfg.Role, Revision: 1,
-		VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
+	stage, stageErr := stageNodeArtifacts(ctx, &result, &state, &opts, layout, record, cfg, hasState, operationID, artifacts[0], release, nodeStageErrors{
+		stageRemove:              &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Remove only the incomplete staging directory for this operation and retry."},
+		stageCache:               &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check /var/cache space and permissions; no host files were applied."},
+		stageTemporary:           &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check temporary disk space and permissions."},
+		artifactDownloadRecovery: "Check outbound HTTPS to the pinned official GitHub asset; unverified archives are never applied.",
+		artifactChecksum:         &InstallError{Stage: "stage", Code: "ARTIFACT_CHECKSUM_MISMATCH", Recovery: "Delete the staged archive and retry; never bypass archive SHA-256 verification."},
+		artifactFormat:           &InstallError{Stage: "stage", Code: "ARTIFACT_FORMAT_INVALID", Recovery: "Use the official pinned sing-box archive for this architecture."},
+		kernelChecksum:           &InstallError{Stage: "stage", Code: "KERNEL_CHECKSUM_MISMATCH", Recovery: "Delete the staged kernel and retry; the binary must match the release manifest."},
+		kernelVersion:            &InstallError{Stage: "stage", Code: "KERNEL_VERSION_INVALID", Recovery: "Use the exact pinned sing-box release for this architecture."},
+		meshmuxBinary:            &InstallError{Stage: "stage", Code: "MESHMUX_BINARY_INVALID", Recovery: "Run the installer from a regular MeshMux executable and retry."},
+		candidateRender:          &InstallError{Stage: "stage", Code: "CANDIDATE_RENDER_FAILED", Recovery: "Review the Node role and VLESS port."},
+		kernelConfig:             &InstallError{Stage: "stage", Code: "KERNEL_CONFIG_INVALID", Recovery: "Review the generated native sing-box configuration."},
+		packageIndex:             &InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no package upgrade or third-party repository is used."},
+		packageInstall:           &InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status; only the listed missing packages are installed."},
+		aclProbe:                 &InstallError{Stage: "apply", Code: "ACL_TABLE_PROBE_FAILED", Recovery: "Re-run the exact nft ownership readback. MeshMux will not adopt, overwrite or delete an unverified table."},
+		aclRender:                &InstallError{Stage: "stage", Code: "ACL_RENDER_FAILED", Recovery: "Review the Out role configuration."},
+		aclConfig:                &InstallError{Stage: "stage", Code: "ACL_CONFIG_INVALID", Recovery: "Review the generated default-deny Out table; the host ruleset was not changed."},
+		operationLog:             &InstallError{Stage: "stage", Code: "OPERATION_LOG_FAILED", Recovery: "Check installer state directory permissions and run --repair."},
 	})
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Node role and VLESS port.")
+	if stageErr != nil {
+		return result, stageErr
 	}
-	stagedCandidate := filepath.Join(stageDir, "config.json")
-	if err := os.WriteFile(stagedCandidate, compiled, 0600); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-	}
-	if _, err := opts.Runner.Run(ctx, kernelPath, "check", "-c", stagedCandidate); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "KERNEL_CONFIG_INVALID", "Review the generated native sing-box configuration.")
-	}
-	// The staged Out ACL is syntax-checked with nft -c below, so the Debian
-	// packages must be installed before that check, not later in apply.
-	missing, pkgErr := ensureDebianPackages(ctx, opts.Runner,
-		&InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no package upgrade or third-party repository is used."},
-		&InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status; only the listed missing packages are installed."})
-	if pkgErr != nil {
-		return failNodePartial(result, state, opts, layout, record, pkgErr.Stage, pkgErr.Code, pkgErr.Recovery)
-	}
-	if usedPackage(missing, "nftables") {
-		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Root, opts.Runner, installedCfg, hasState); err != nil {
-			code, recovery := "ACL_TABLE_PROBE_FAILED", "Re-run the exact nft ownership readback. MeshMux will not adopt, overwrite or delete an unverified table."
-			var ie *InstallError
-			if errors.As(err, &ie) {
-				code, recovery = ie.Code, ie.Recovery
-			}
-			return failNodePartial(result, state, opts, layout, record, "apply", code, recovery)
-		}
-	}
-	if cfg.Role == node.RoleOut {
-		acl, err := node.CompileACL(node.Candidate{
-			NodeID: cfg.NodeID, Role: cfg.Role, Revision: 1,
-			VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
-		})
-		if err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "ACL_RENDER_FAILED", "Review the Out role configuration.")
-		}
-		aclPath := filepath.Join(stageDir, "out.nft")
-		if err := os.WriteFile(aclPath, acl, 0600); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-		}
-		if _, err := opts.Runner.Run(ctx, "nft", "-c", "-f", aclPath); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "ACL_CONFIG_INVALID", "Review the generated default-deny Out table; the host ruleset was not changed.")
-		}
-	}
-	if err := record("stage", "validated", ""); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
-	}
+	stageDir, kernelPath, agentPath, installedCfg := stage.stageDir, stage.kernelPath, stage.agentPath, stage.installedCfg
 
 	identity, identityLoaded, err := loadNodeIdentity(opts.Root, installedCfg)
 	if err != nil {
