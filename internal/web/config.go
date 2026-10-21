@@ -1,4 +1,21 @@
-// Package web implements the unprivileged, local-only Hub security foundation.
+// Package web implements the unprivileged, local-only Hub control plane: the
+// HTTP surface, administrator authentication, the SQLite store and the
+// orchestration that turns operator actions into protocol tasks.
+//
+// The layers are: server.go plus the server_*.go handlers (routing, CSRF and
+// origin checks in boundary, rendering), password.go and the session/rate-limit
+// half of store.go (argon2id password hashing, hashed session tokens, login
+// throttling), and the store_*.go files that persist state. Handlers never
+// touch SQL directly; they call store methods.
+//
+// The store speaks to nodes only through internal/protocol: it builds
+// protocol.Task values and persists their results. The four publication kinds
+// are shared through protocol.PublicationKinds, used by
+// store_node_candidates.go and aliased as subscriberChainKinds in
+// store_subscriber_sync.go, so producers and consumers cannot drift.
+//
+// The package imports internal/node for the node domain contract and does not
+// import internal/install; installation stays behind the CLI boundary.
 package web
 
 import (
