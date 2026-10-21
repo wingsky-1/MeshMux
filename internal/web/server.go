@@ -255,12 +255,12 @@ func (s *Server) authPage(w http.ResponseWriter, r *http.Request, setup bool) {
 		return
 	}
 	if !setup && hash == "" {
-		http.Redirect(w, r, "/setup", 303)
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
 	sess, err := s.current(r)
 	if err == nil && sess.Auth {
-		http.Redirect(w, r, "/", 303)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	if err != nil {
@@ -417,7 +417,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.cookie(w, "", 0)
 	s.event(r, "ADMIN_INITIALIZED")
-	http.Redirect(w, r, "/login", 303)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
@@ -457,7 +457,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.cookie(w, token, expires)
 	s.event(r, "LOGIN_SUCCEEDED")
-	http.Redirect(w, r, "/", 303)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, sess session) {
@@ -467,7 +467,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.cookie(w, "", 0)
 	s.event(r, "LOGOUT_SUCCEEDED")
-	http.Redirect(w, r, "/login", 303)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) {
@@ -512,7 +512,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 	}
 	s.cookie(w, "", 0)
 	s.event(r, "PASSWORD_CHANGED")
-	http.Redirect(w, r, "/login", 303)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

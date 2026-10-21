@@ -186,11 +186,7 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ sess
 		projection.Subscribers = append(projection.Subscribers, entry)
 	}
 	for _, line := range view.Lines {
-		projection.Lines = append(projection.Lines, lineProjection{
-			NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server, Port: line.Port,
-			SortOrder: line.SortOrder, ServerName: line.ServerName, Handshake: line.Handshake,
-			HandshakePort: line.HandshakePort, Local: line.Local,
-		})
+		projection.Lines = append(projection.Lines, lineProjection(line))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(projection)
