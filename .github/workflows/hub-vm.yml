@@ -1,23 +1,19 @@
 name: hub-vm
 
+# L3 is the acceptance gate for the installer, but one full Debian 13 QEMU
+# install costs up to 75 minutes per profile. It must therefore run only for
+# changes that can reach the installer, or when a maintainer asks for it.
+#
+# Why the path list is not in `on.pull_request.paths`: GitHub evaluates path
+# filters for every pull_request activity type, `labeled` included. A filter at
+# the trigger would suppress the run entirely for a pull request that only
+# changes Web or subscription code, so adding the `run-l3` label afterwards
+# could not start it either. The list therefore lives in the `gate` job below:
+# it finishes in seconds, and the QEMU matrix starts only when the label is
+# present or a listed path changed.
 on:
-  # L3 is the acceptance gate for the installer. Run it on the PR itself:
-  # otherwise every later commit merges with no full-system evidence.
   pull_request:
-    paths:
-      - 'internal/install/**'
-      - 'internal/node/**'
-      - 'internal/agent/**'
-      - 'internal/web/**'
-      - 'cmd/meshmux/**'
-      - 'cmd/meshmux-web/**'
-      - 'scripts/ci-hub-vm.sh'
-      - 'scripts/ci-node-vm.sh'
-      - 'scripts/ci-node-reality.sh'
-      - '.github/workflows/hub-vm.yml'
-      - 'docs/CI_HUB_VALIDATION.zh-CN.md'
-      - 'docs/ACCEPTANCE.zh-CN.md'
-      - 'docs/INSTALL_HUB.zh-CN.md'
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       ref:
@@ -34,8 +30,65 @@ permissions:
   contents: read
 
 jobs:
+  gate:
+    name: Match run-l3 label or installer paths
+    # Only the opt-in label is a reason to start a run; adding any other label
+    # to an installer pull request must not repeat a 75 minute matrix.
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'run-l3'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Checkout pull request head
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Decide
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -Eeuo pipefail
+          emit() {
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice::$2"
+          }
+          # workflow_dispatch and the verify/* push channels ask for L3 directly.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            emit true "$EVENT_NAME always runs L3"
+            exit 0
+          fi
+          # A maintainer decision overrides the path list.
+          if printf '%s' "$PR_LABELS" | grep -Fq '"run-l3"'; then
+            emit true "label run-l3 is set"
+            exit 0
+          fi
+          if ! changed="$(git diff --name-only "${BASE_SHA}...HEAD")"; then
+            emit true "cannot diff ${BASE_SHA}...HEAD; running L3 instead of skipping it"
+            exit 0
+          fi
+          while IFS= read -r file; do
+            case "$file" in
+              internal/install/*|internal/node/*|internal/agent/*|cmd/meshmux/*|\
+              scripts/ci-hub-vm.sh|scripts/ci-node-vm.sh|scripts/ci-node-reality.sh|\
+              .github/workflows/hub-vm.yml|docs/CI_HUB_VALIDATION.zh-CN.md|\
+              docs/ACCEPTANCE.zh-CN.md|docs/INSTALL_HUB.zh-CN.md)
+                emit true "$file reaches the installer"
+                exit 0
+                ;;
+            esac
+          done <<< "$changed"
+          emit false "no run-l3 label and no installer path changed"
+
   debian13-systemd:
     name: Debian 13 QEMU ${{ matrix.profile }} full install
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
