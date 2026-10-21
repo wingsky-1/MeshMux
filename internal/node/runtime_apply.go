@@ -8,11 +8,11 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
-func (r *Runtime) check(ctx context.Context, revision int64) (agent.TaskResult, error) {
-	result := agent.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
+func (r *Runtime) check(ctx context.Context, revision int64) (protocol.TaskResult, error) {
+	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	_, candidate, _, err := r.validatedCandidate(ctx, revision)
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
@@ -49,8 +49,8 @@ func (r *Runtime) check(ctx context.Context, revision int64) (agent.TaskResult, 
 	return result, nil
 }
 
-func (r *Runtime) stage(ctx context.Context, revision int64) (agent.TaskResult, error) {
-	result := agent.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
+func (r *Runtime) stage(ctx context.Context, revision int64) (protocol.TaskResult, error) {
+	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	document, candidate, config, err := r.validatedCandidate(ctx, revision)
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
@@ -101,8 +101,8 @@ func rootedOptionalBinary(root, path string) string {
 	return rooted(root, path)
 }
 
-func (r *Runtime) apply(ctx context.Context, task agent.Task, payload string, revision int64, state runtimeState) agent.TaskResult {
-	result := agent.TaskResult{OperationID: task.OperationID, Status: "failed"}
+func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string, revision int64, state runtimeState) protocol.TaskResult {
+	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
 	if state.Journal != nil {
 		return failedResult(result, "RECOVERY_REQUIRED")
 	}
@@ -137,7 +137,7 @@ func (r *Runtime) apply(ctx context.Context, task agent.Task, payload string, re
 	if err = r.saveState(&state); err != nil {
 		return failedResult(result, "JOURNAL_WRITE_FAILED")
 	}
-	progress := agent.TaskResult{OperationID: task.OperationID, Status: "applying"}
+	progress := protocol.TaskResult{OperationID: task.OperationID, Status: "applying"}
 	if !applyAcknowledged(ctx) {
 		if err = r.controller.Report(ctx, progress); err != nil {
 			return r.finishApply(ctx, &state, task, payload, failedResult(result, "APPLYING_REPORT_FAILED"))
@@ -150,7 +150,7 @@ func (r *Runtime) apply(ctx context.Context, task agent.Task, payload string, re
 	if err = r.activate(ctx, &state, journal, candidate); err != nil {
 		return r.finishApply(ctx, &state, task, payload, r.recoverFailedApply(ctx, &state, journal, err))
 	}
-	if err = r.controller.Report(ctx, agent.TaskResult{
+	if err = r.controller.Report(ctx, protocol.TaskResult{
 		OperationID: task.OperationID, Status: "verifying",
 	}); err != nil {
 		return r.finishApply(ctx, &state, task, payload, r.recoverFailedApply(ctx, &state, journal, errors.New("VERIFYING_REPORT_FAILED")))
@@ -250,8 +250,8 @@ func (r *Runtime) activate(ctx context.Context, state *runtimeState, journal *ap
 	return nil
 }
 
-func (r *Runtime) recoverFailedApply(ctx context.Context, state *runtimeState, journal *applyJournal, cause error) agent.TaskResult {
-	result := agent.TaskResult{OperationID: journal.OperationID, Status: "failed", ErrorCode: errorCode(cause)}
+func (r *Runtime) recoverFailedApply(ctx context.Context, state *runtimeState, journal *applyJournal, cause error) protocol.TaskResult {
+	result := protocol.TaskResult{OperationID: journal.OperationID, Status: "failed", ErrorCode: errorCode(cause)}
 	restoreErr := r.restoreLKG(ctx, state)
 	if restoreErr != nil {
 		result.Status = "partial"
@@ -356,7 +356,7 @@ func (r *Runtime) recoverJournal(ctx context.Context, state *runtimeState) error
 	}
 	if len(state.LKG) > 0 {
 		if err := r.restoreLKG(ctx, state); err != nil {
-			result := agent.TaskResult{OperationID: journal.OperationID, Status: "partial", ErrorCode: errorCode(err)}
+			result := protocol.TaskResult{OperationID: journal.OperationID, Status: "partial", ErrorCode: errorCode(err)}
 			state.Idempotency[journal.Idempotency] = idempotencyItem{
 				PayloadDigest: journal.Payload, TaskRevision: journal.TaskRevision,
 				OperationID: journal.OperationID, Result: result,
@@ -369,7 +369,7 @@ func (r *Runtime) recoverJournal(ctx context.Context, state *runtimeState) error
 	} else {
 		return errors.New("JOURNAL_WITHOUT_LKG")
 	}
-	result := agent.TaskResult{OperationID: journal.OperationID, Status: "rolled_back", ErrorCode: "RECOVERED_AFTER_CRASH"}
+	result := protocol.TaskResult{OperationID: journal.OperationID, Status: "rolled_back", ErrorCode: "RECOVERED_AFTER_CRASH"}
 	state.Idempotency[journal.Idempotency] = idempotencyItem{
 		PayloadDigest: journal.Payload, TaskRevision: journal.TaskRevision,
 		OperationID: journal.OperationID, Result: result,
@@ -381,8 +381,8 @@ func (r *Runtime) recoverJournal(ctx context.Context, state *runtimeState) error
 	return nil
 }
 
-func (r *Runtime) finishApply(ctx context.Context, state *runtimeState, task agent.Task, payload string, result agent.TaskResult) agent.TaskResult {
-	if err := agent.ValidateTaskResult(result); err != nil {
+func (r *Runtime) finishApply(ctx context.Context, state *runtimeState, task protocol.Task, payload string, result protocol.TaskResult) protocol.TaskResult {
+	if err := protocol.ValidateTaskResult(result); err != nil {
 		result = failedResult(result, "RESULT_INVALID")
 	}
 	state.Idempotency[task.IdempotencyKey] = idempotencyItem{

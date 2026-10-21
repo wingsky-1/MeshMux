@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wingsky-1/MeshMux/internal/agent"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // agentAPI reports whether the path is an outbound-Agent endpoint. These
@@ -88,7 +88,7 @@ func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess sessio
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
 	vless, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("vless_port")))
 	ssh, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("ssh_port")))
-	if err := agent.ValidateNodeInputs(role, displayName, vless, ssh); err != nil {
+	if err := protocol.ValidateNodeInputs(role, displayName, vless, ssh); err != nil {
 		s.fail(w, r, 400, "NODE_INVALID", "节点参数不正确。", "请检查角色、名称与端口后重试。")
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 // stable error codes are recorded.
 func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	var req agent.PairingRequest
+	var req protocol.PairingRequest
 	if err := decodeAgentJSON(r, &req); err != nil {
 		s.agentFail(w, r, 400, "PAIRING_INVALID", "配对请求不正确。", "请使用 Web 显示的一次性配对指令重试。")
 		return
@@ -277,7 +277,7 @@ func (s *Server) agentTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if node.Offline {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []agent.Task{}, "operation_id": operation(r)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{}, "operation_id": operation(r)})
 		return
 	}
 	tasks, err := s.store.pendingTasksAt(node.ID, 8, s.now())
@@ -286,7 +286,7 @@ func (s *Server) agentTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tasks == nil {
-		tasks = []agent.Task{}
+		tasks = []protocol.Task{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "operation_id": operation(r)})
@@ -298,7 +298,7 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2048)
-	var body agent.HeartbeatRequest
+	var body protocol.HeartbeatRequest
 	if err := decodeAgentJSON(r, &body); err != nil {
 		s.agentFail(w, r, 400, "HEARTBEAT_INVALID", "心跳格式不正确。", "请上报 agent 与内核版本。")
 		return
@@ -359,7 +359,7 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	var res agent.TaskResult
+	var res protocol.TaskResult
 	if err := decodeAgentJSON(r, &res); err != nil {
 		s.agentFail(w, r, 400, "RESULT_INVALID", "任务结果格式不正确。", "请按固定 task schema 上报。")
 		return

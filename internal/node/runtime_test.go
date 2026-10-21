@@ -14,27 +14,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 type runtimeTestController struct {
 	candidate CandidateDocument
-	tasks     []agent.Task
-	reports   []agent.TaskResult
-	onReport  func(agent.TaskResult) error
+	tasks     []protocol.Task
+	reports   []protocol.TaskResult
+	onReport  func(protocol.TaskResult) error
 }
 
 func (c *runtimeTestController) Candidate(context.Context, int64) (CandidateDocument, error) {
 	return c.candidate, nil
 }
 
-func (*runtimeTestController) Heartbeat(context.Context, agent.HeartbeatRequest) error { return nil }
+func (*runtimeTestController) Heartbeat(context.Context, protocol.HeartbeatRequest) error { return nil }
 
-func (c *runtimeTestController) Tasks(context.Context) ([]agent.Task, error) {
-	return append([]agent.Task(nil), c.tasks...), nil
+func (c *runtimeTestController) Tasks(context.Context) ([]protocol.Task, error) {
+	return append([]protocol.Task(nil), c.tasks...), nil
 }
 
-func (c *runtimeTestController) Report(_ context.Context, result agent.TaskResult) error {
+func (c *runtimeTestController) Report(_ context.Context, result protocol.TaskResult) error {
 	c.reports = append(c.reports, result)
 	if c.onReport != nil {
 		return c.onReport(result)
@@ -223,14 +223,14 @@ func newTestRuntime(t *testing.T, root string, cfg Config, identity Identity, ru
 	return runtime
 }
 
-func task(kind string, operationID, key string, revision, configRevision int64) agent.Task {
+func task(kind string, operationID, key string, revision, configRevision int64) protocol.Task {
 	params := json.RawMessage(`{}`)
-	if kind == agent.KindConfigCheck || kind == agent.KindConfigStage ||
-		kind == agent.KindConfigApply || kind == agent.KindConfigReadback {
+	if kind == protocol.KindConfigCheck || kind == protocol.KindConfigStage ||
+		kind == protocol.KindConfigApply || kind == protocol.KindConfigReadback {
 		params, _ = json.Marshal(map[string]int64{"revision": configRevision})
 	}
-	return agent.Task{
-		Schema: agent.Schema, Version: agent.Version,
+	return protocol.Task{
+		Schema: protocol.Schema, Version: protocol.Version,
 		OperationID: operationID, Revision: revision, IdempotencyKey: key,
 		NodeID: strings.Repeat("a", 32), Kind: kind, Params: params,
 	}
@@ -369,7 +369,7 @@ func TestTaskRevisionAndOperationReuseAcrossRestart(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	controller := &runtimeTestController{candidate: testCandidate(7)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
-	first := task(agent.KindHealthStatus, strings.Repeat("1", 32), strings.Repeat("2", 32), 10, 7)
+	first := task(protocol.KindHealthStatus, strings.Repeat("1", 32), strings.Repeat("2", 32), 10, 7)
 	result := runtime.Execute(context.Background(), first)
 	if result.Status != "healthy" {
 		t.Fatalf("first result = %+v", result)
@@ -383,7 +383,7 @@ func TestTaskRevisionAndOperationReuseAcrossRestart(t *testing.T) {
 	if got := runtime.Execute(context.Background(), reuse); got.ErrorCode != "OPERATION_REUSE_CONFLICT" {
 		t.Fatalf("operation reuse = %+v", got)
 	}
-	stale := task(agent.KindHealthStatus, strings.Repeat("4", 32), strings.Repeat("5", 32), 9, 7)
+	stale := task(protocol.KindHealthStatus, strings.Repeat("4", 32), strings.Repeat("5", 32), 9, 7)
 	if got := runtime.Execute(context.Background(), stale); got.ErrorCode != "TASK_REVISION_STALE" {
 		t.Fatalf("stale revision = %+v", got)
 	}
@@ -393,7 +393,7 @@ func TestConfigApplyReportsProgressBeforeRestart(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	controller := &runtimeTestController{candidate: testCandidate(9)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
-	apply := task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
+	apply := task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
 	result := runtime.Execute(context.Background(), apply)
 	if result.Status != "healthy" || result.Detail == "" {
 		t.Fatalf("apply result = %+v", result)
@@ -419,11 +419,11 @@ func TestFourTaskCycleLeavesNoNonterminalOutbox(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	controller := &runtimeTestController{candidate: testCandidate(9)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
-	controller.tasks = []agent.Task{
-		task(agent.KindConfigCheck, strings.Repeat("1", 32), strings.Repeat("a", 32), 10, 9),
-		task(agent.KindConfigStage, strings.Repeat("2", 32), strings.Repeat("b", 32), 11, 9),
-		task(agent.KindConfigApply, strings.Repeat("3", 32), strings.Repeat("c", 32), 12, 9),
-		task(agent.KindConfigReadback, strings.Repeat("4", 32), strings.Repeat("d", 32), 13, 9),
+	controller.tasks = []protocol.Task{
+		task(protocol.KindConfigCheck, strings.Repeat("1", 32), strings.Repeat("a", 32), 10, 9),
+		task(protocol.KindConfigStage, strings.Repeat("2", 32), strings.Repeat("b", 32), 11, 9),
+		task(protocol.KindConfigApply, strings.Repeat("3", 32), strings.Repeat("c", 32), 12, 9),
+		task(protocol.KindConfigReadback, strings.Repeat("4", 32), strings.Repeat("d", 32), 13, 9),
 	}
 	runtime.cycle(context.Background())
 	state, err := runtime.loadStateForExecution()
@@ -454,7 +454,7 @@ func TestApplyingReportFailureDoesNotTouchDataPlane(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	controller := &runtimeTestController{
 		candidate: testCandidate(9),
-		onReport: func(result agent.TaskResult) error {
+		onReport: func(result protocol.TaskResult) error {
 			if result.Status == "applying" {
 				return errors.New("offline")
 			}
@@ -462,7 +462,7 @@ func TestApplyingReportFailureDoesNotTouchDataPlane(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
-	apply := task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
+	apply := task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
 	result := runtime.Execute(context.Background(), apply)
 	if result.Status != "failed" || result.ErrorCode != "APPLYING_REPORT_FAILED" {
 		t.Fatalf("apply = %+v", result)
@@ -485,7 +485,7 @@ func TestRestartFailureRestoresLKG(t *testing.T) {
 	controller := &runtimeTestController{candidate: testCandidate(9)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
 	runner.restartFail = true
-	apply := task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
+	apply := task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
 	result := runtime.Execute(context.Background(), apply)
 	if result.Status != "rolled_back" || result.ErrorCode != "SINGBOX_RESTART_FAILED" {
 		t.Fatalf("apply = %+v", result)
@@ -502,25 +502,25 @@ func TestCachedResultReplayAndAlreadyFinalClear(t *testing.T) {
 	controller := &runtimeTestController{candidate: testCandidate(7)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
 	operationID := strings.Repeat("1", 32)
-	apply := task(agent.KindConfigApply, operationID, strings.Repeat("2", 32), 12, 7)
+	apply := task(protocol.KindConfigApply, operationID, strings.Repeat("2", 32), 12, 7)
 	state, _ := runtime.loadStateForExecution()
 	payload, _ := json.Marshal(apply)
 	state.LastTaskRevision = apply.Revision
 	state.Idempotency[apply.IdempotencyKey] = idempotencyItem{
 		PayloadDigest: sha256Hex(payload), TaskRevision: apply.Revision,
-		OperationID: operationID, Result: agent.TaskResult{OperationID: operationID, Status: "failed", ErrorCode: "TEST_FAILURE"},
+		OperationID: operationID, Result: protocol.TaskResult{OperationID: operationID, Status: "failed", ErrorCode: "TEST_FAILURE"},
 	}
 	state.FinalResults[operationID] = state.Idempotency[apply.IdempotencyKey].Result
 	if err := runtime.persistState(&state); err != nil {
 		t.Fatal(err)
 	}
-	controller.onReport = func(result agent.TaskResult) error {
+	controller.onReport = func(result protocol.TaskResult) error {
 		if result.Status == "failed" {
 			return &ClientError{Code: "TASK_ALREADY_FINAL", StatusCode: 409}
 		}
 		return nil
 	}
-	controller.tasks = []agent.Task{apply}
+	controller.tasks = []protocol.Task{apply}
 	runtime.cycle(context.Background())
 	state, _ = runtime.loadStateForExecution()
 	if _, exists := state.FinalResults[operationID]; exists {
@@ -534,12 +534,12 @@ func TestOutboxLimitDoesNotDropUnacknowledgedResults(t *testing.T) {
 	state, _ := runtime.loadStateForExecution()
 	for i := range maxFinalCache {
 		id := fmt.Sprintf("%032x", i+1)
-		state.FinalResults[id] = agent.TaskResult{OperationID: id, Status: "failed", ErrorCode: "TEST_FAILURE"}
+		state.FinalResults[id] = protocol.TaskResult{OperationID: id, Status: "failed", ErrorCode: "TEST_FAILURE"}
 	}
 	if err := runtime.persistState(&state); err != nil {
 		t.Fatal(err)
 	}
-	result := runtime.Execute(context.Background(), task(agent.KindHealthStatus, strings.Repeat("f", 32), strings.Repeat("e", 32), 12, 7))
+	result := runtime.Execute(context.Background(), task(protocol.KindHealthStatus, strings.Repeat("f", 32), strings.Repeat("e", 32), 12, 7))
 	if result.ErrorCode != "FINAL_OUTBOX_FULL" {
 		t.Fatalf("execute = %+v", result)
 	}
@@ -554,7 +554,7 @@ func TestStatePersistenceFailureCannotReportHealthy(t *testing.T) {
 	controller := &runtimeTestController{candidate: testCandidate(9)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
 	runtime.writeState = func(*runtimeState) error { return errors.New("disk full") }
-	apply := task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
+	apply := task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9)
 	result := runtime.Execute(context.Background(), apply)
 	if result.Status == "healthy" || result.ErrorCode == "" {
 		t.Fatalf("apply persistence failure = %+v", result)
@@ -571,8 +571,8 @@ func TestFinalPersistFailureDowngradesHealthy(t *testing.T) {
 	runtime := newTestRuntime(t, root, cfg, identity, runner, &runtimeTestController{candidate: testCandidate(7)})
 	runtime.writeState = func(*runtimeState) error { return errors.New("disk full") }
 	state, _ := runtime.loadStateForExecution()
-	task := task(agent.KindConfigApply, strings.Repeat("3", 32), strings.Repeat("4", 32), 12, 7)
-	result := runtime.finishApply(context.Background(), &state, task, strings.Repeat("5", 64), agent.TaskResult{
+	task := task(protocol.KindConfigApply, strings.Repeat("3", 32), strings.Repeat("4", 32), 12, 7)
+	result := runtime.finishApply(context.Background(), &state, task, strings.Repeat("5", 64), protocol.TaskResult{
 		OperationID: task.OperationID, Status: "healthy", Detail: `{"local_active":true}`,
 	})
 	if result.Status != "partial" || result.ErrorCode != "STATE_PERSIST_FAILED" || result.Detail != "" {
@@ -584,7 +584,7 @@ func TestOrdinaryPersistFailureReturnsFailed(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	runtime := newTestRuntime(t, root, cfg, identity, runner, &runtimeTestController{candidate: testCandidate(7)})
 	runtime.writeState = func(*runtimeState) error { return errors.New("disk full") }
-	status := task(agent.KindHealthStatus, strings.Repeat("6", 32), strings.Repeat("7", 32), 12, 7)
+	status := task(protocol.KindHealthStatus, strings.Repeat("6", 32), strings.Repeat("7", 32), 12, 7)
 	result := runtime.Execute(context.Background(), status)
 	if result.Status != "failed" || result.ErrorCode != "STATE_PERSIST_FAILED" {
 		t.Fatalf("persist failure = %+v", result)
@@ -595,7 +595,7 @@ func TestCrashJournalRestoresLKGAndKeepsRevisionBoundary(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	controller := &runtimeTestController{candidate: testCandidate(7)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
-	journalTask := task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 22, 9)
+	journalTask := task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 22, 9)
 	payload, _ := json.Marshal(journalTask)
 	state, _ := runtime.loadStateForExecution()
 	bad, _ := CompileCandidate(testCandidate(9).Candidate())
@@ -630,7 +630,7 @@ func TestCrashJournalRestoresLKGAndKeepsRevisionBoundary(t *testing.T) {
 		t.Fatalf("changed config ref replay = %+v", got)
 	}
 	changedEnvelope := journalTask
-	changedEnvelope.Kind = agent.KindConfigCheck
+	changedEnvelope.Kind = protocol.KindConfigCheck
 	if got := runtime.Execute(context.Background(), changedEnvelope); got.ErrorCode != "IDEMPOTENCY_CONFLICT" {
 		t.Fatalf("changed task envelope replay = %+v", got)
 	}

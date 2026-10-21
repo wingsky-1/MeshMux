@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 const initialCandidateRevision int64 = 1
@@ -179,7 +179,7 @@ func (s *store) latestCandidate(nodeID string) (storedCandidate, error) {
 // and the subscriber synchronization both use it, so one Line never carries
 // two chains at the same time. The caller owns the transaction, so a failure
 // rolls the candidate and the chain back together.
-func publishCandidateTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time) ([]agent.Task, error) {
+func publishCandidateTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time) ([]protocol.Task, error) {
 	if err := insertCandidateTx(tx, candidate, now.Unix()); err != nil {
 		return nil, err
 	}
@@ -188,8 +188,8 @@ func publishCandidateTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now
 	if err != nil {
 		return nil, err
 	}
-	tasks := make([]agent.Task, 0, 4)
-	for _, kind := range []string{agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback} {
+	tasks := make([]protocol.Task, 0, 4)
+	for _, kind := range protocol.PublicationKinds {
 		task, err := newFixedTask(nodeID, kind, params, taskRevision)
 		if err != nil {
 			return nil, err
@@ -210,7 +210,7 @@ func publishCandidateTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now
 // manual reconcile never erases the credentials of another subscriber. A node
 // without Line settings keeps the frozen v1 baseline and the Out behavior is
 // unchanged.
-func (s *store) reconcileNode(nodeID string, now time.Time) (storedCandidate, []agent.Task, error) {
+func (s *store) reconcileNode(nodeID string, now time.Time) (storedCandidate, []protocol.Task, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return storedCandidate{}, nil, errors.New("DATABASE_UNAVAILABLE")
@@ -268,14 +268,14 @@ func taskRevisionAfter(tx *sql.Tx, nodeID string) (int64, error) {
 	return 1, nil
 }
 
-func newFixedTask(nodeID, kind string, params json.RawMessage, revision int64) (agent.Task, error) {
-	operationID, err := agent.NewID()
+func newFixedTask(nodeID, kind string, params json.RawMessage, revision int64) (protocol.Task, error) {
+	operationID, err := protocol.NewID()
 	if err != nil {
-		return agent.Task{}, errors.New("OPERATION_ID_FAILED")
+		return protocol.Task{}, errors.New("OPERATION_ID_FAILED")
 	}
-	return agent.Task{
-		Schema:         agent.Schema,
-		Version:        agent.Version,
+	return protocol.Task{
+		Schema:         protocol.Schema,
+		Version:        protocol.Version,
 		OperationID:    operationID,
 		Revision:       revision,
 		IdempotencyKey: operationID,
@@ -306,7 +306,7 @@ func seedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	for _, kind := range []string{agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback} {
+	for _, kind := range protocol.PublicationKinds {
 		task, err := newFixedTask(nodeID, kind, params, taskRevision)
 		if err != nil {
 			return err

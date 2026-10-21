@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 const (
@@ -30,9 +30,9 @@ var errRuntimeStateTooLarge = errors.New("RUNTIME_STATE_TOO_LARGE")
 // Controller is the narrow outbound Hub control-plane boundary.
 type Controller interface {
 	Candidate(context.Context, int64) (CandidateDocument, error)
-	Heartbeat(context.Context, agent.HeartbeatRequest) error
-	Tasks(context.Context) ([]agent.Task, error)
-	Report(context.Context, agent.TaskResult) error
+	Heartbeat(context.Context, protocol.HeartbeatRequest) error
+	Tasks(context.Context) ([]protocol.Task, error)
+	Report(context.Context, protocol.TaskResult) error
 }
 
 // RuntimeOptions supplies the fixed host boundary and outbound controller.
@@ -62,24 +62,24 @@ type Runtime struct {
 }
 
 type runtimeState struct {
-	Schema           string                      `json:"schema"`
-	NodeID           string                      `json:"node_id"`
-	Role             Role                        `json:"role"`
-	Revision         int64                       `json:"revision,omitempty"`
-	LastTaskRevision int64                       `json:"last_task_revision,omitempty"`
-	Digest           string                      `json:"digest,omitempty"`
-	LKG              []byte                      `json:"lkg,omitempty"`
-	LKGDigest        string                      `json:"lkg_digest,omitempty"`
-	Journal          *applyJournal               `json:"journal,omitempty"`
-	Idempotency      map[string]idempotencyItem  `json:"idempotency,omitempty"`
-	FinalResults     map[string]agent.TaskResult `json:"final_results,omitempty"`
+	Schema           string                         `json:"schema"`
+	NodeID           string                         `json:"node_id"`
+	Role             Role                           `json:"role"`
+	Revision         int64                          `json:"revision,omitempty"`
+	LastTaskRevision int64                          `json:"last_task_revision,omitempty"`
+	Digest           string                         `json:"digest,omitempty"`
+	LKG              []byte                         `json:"lkg,omitempty"`
+	LKGDigest        string                         `json:"lkg_digest,omitempty"`
+	Journal          *applyJournal                  `json:"journal,omitempty"`
+	Idempotency      map[string]idempotencyItem     `json:"idempotency,omitempty"`
+	FinalResults     map[string]protocol.TaskResult `json:"final_results,omitempty"`
 }
 
 type idempotencyItem struct {
-	PayloadDigest string           `json:"payload_digest"`
-	TaskRevision  int64            `json:"task_revision"`
-	OperationID   string           `json:"operation_id"`
-	Result        agent.TaskResult `json:"result"`
+	PayloadDigest string              `json:"payload_digest"`
+	TaskRevision  int64               `json:"task_revision"`
+	OperationID   string              `json:"operation_id"`
+	Result        protocol.TaskResult `json:"result"`
 }
 
 type applyJournal struct {
@@ -103,7 +103,7 @@ func emptyRuntimeState(cfg Config) runtimeState {
 		NodeID:       cfg.NodeID,
 		Role:         cfg.Role,
 		Idempotency:  make(map[string]idempotencyItem),
-		FinalResults: make(map[string]agent.TaskResult),
+		FinalResults: make(map[string]protocol.TaskResult),
 	}
 }
 
@@ -235,7 +235,7 @@ func (r *Runtime) loadOrInitializeState() (runtimeState, error) {
 		}
 	}
 	if state.FinalResults == nil {
-		state.FinalResults = make(map[string]agent.TaskResult)
+		state.FinalResults = make(map[string]protocol.TaskResult)
 	}
 	return state, nil
 }
@@ -346,19 +346,19 @@ func (s *runtimeState) trimAcknowledged() {
 }
 
 // Execute validates and executes exactly one frozen task.
-func (r *Runtime) Execute(ctx context.Context, task agent.Task) agent.TaskResult {
+func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.TaskResult {
 	lock, err := acquireRuntimeLock(ctx, r.root, true)
 	if err != nil {
-		return failedResult(agent.TaskResult{OperationID: task.OperationID, Status: "failed"}, errorCode(err))
+		return failedResult(protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}, errorCode(err))
 	}
 	defer lock.Close()
-	result := agent.TaskResult{OperationID: task.OperationID, Status: "failed"}
+	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
 	payload, err := canonicalTaskPayload(task)
 	if err != nil {
 		return failedResult(result, "TASK_ENCODE_FAILED")
 	}
 	digest := sha256Hex(payload)
-	if err = agent.ValidateTask(task); err != nil {
+	if err = protocol.ValidateTask(task); err != nil {
 		if task.OperationID == "" {
 			result.OperationID = strings.Repeat("0", 32)
 		}
@@ -397,27 +397,27 @@ func (r *Runtime) Execute(ctx context.Context, task agent.Task) agent.TaskResult
 		"operation_id", task.OperationID, "stage", "validate", "error_code", "")
 	var executeErr error
 	switch task.Kind {
-	case agent.KindConfigCheck:
+	case protocol.KindConfigCheck:
 		if state.Journal != nil {
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
 		result, executeErr = r.check(taskContext, revision)
-	case agent.KindConfigStage:
+	case protocol.KindConfigStage:
 		if state.Journal != nil {
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
 		result, executeErr = r.stage(taskContext, revision)
-	case agent.KindConfigApply:
+	case protocol.KindConfigApply:
 		if state.Journal != nil {
 			return failedResult(result, "RECOVERY_REQUIRED")
 		}
 		applyResult := r.apply(taskContext, task, digest, revision, state)
 		return applyResult
-	case agent.KindConfigReadback:
+	case protocol.KindConfigReadback:
 		result, executeErr = r.readback(taskContext, revision)
-	case agent.KindHealthStatus, agent.KindNodeStatus:
+	case protocol.KindHealthStatus, protocol.KindNodeStatus:
 		result, executeErr = r.status(taskContext)
 	default:
 		executeErr = errors.New("TASK_KIND_REJECTED")
@@ -459,7 +459,7 @@ func (r *Runtime) loadStateForExecution() (runtimeState, error) {
 		state.Idempotency = make(map[string]idempotencyItem)
 	}
 	if state.FinalResults == nil {
-		state.FinalResults = make(map[string]agent.TaskResult)
+		state.FinalResults = make(map[string]protocol.TaskResult)
 	}
 	return state, nil
 }
@@ -481,7 +481,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 }
 
 func (r *Runtime) cycle(ctx context.Context) {
-	heartbeat := agent.HeartbeatRequest{AgentVersion: r.cfg.AgentVersion, KernelVersion: KernelVersion}
+	heartbeat := protocol.HeartbeatRequest{AgentVersion: r.cfg.AgentVersion, KernelVersion: KernelVersion}
 	if err := heartbeat.Validate(); err != nil {
 		r.logger.ErrorContext(ctx, "heartbeat invalid", "error_code", errorCode(err))
 		return
@@ -502,8 +502,8 @@ func (r *Runtime) cycle(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		var result agent.TaskResult
-		if task.Kind == agent.KindConfigApply {
+		var result protocol.TaskResult
+		if task.Kind == protocol.KindConfigApply {
 			if cached, ok := r.cachedTaskResult(task); ok {
 				if reportErr := r.controller.Report(ctx, cached); reportErr != nil {
 					if isAlreadyFinal(reportErr) {
@@ -515,7 +515,7 @@ func (r *Runtime) cycle(ctx context.Context) {
 				_ = r.removeOutbox(task.OperationID)
 				continue
 			}
-			if reportErr := r.controller.Report(ctx, agent.TaskResult{
+			if reportErr := r.controller.Report(ctx, protocol.TaskResult{
 				OperationID: task.OperationID, Status: "applying",
 			}); reportErr != nil {
 				if isAlreadyFinal(reportErr) {
@@ -527,7 +527,7 @@ func (r *Runtime) cycle(ctx context.Context) {
 		} else {
 			result = r.Execute(ctx, task)
 		}
-		if err := agent.ValidateTaskResult(result); err != nil {
+		if err := protocol.ValidateTaskResult(result); err != nil {
 			result = failedResult(result, "RESULT_INVALID")
 		}
 		if err := r.controller.Report(ctx, result); err != nil {
@@ -571,9 +571,9 @@ func (r *Runtime) replayResults(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runtime) cachedTaskResult(task agent.Task) (agent.TaskResult, bool) {
-	result := agent.TaskResult{OperationID: task.OperationID, Status: "failed"}
-	if err := agent.ValidateTask(task); err != nil || task.NodeID != r.cfg.NodeID {
+func (r *Runtime) cachedTaskResult(task protocol.Task) (protocol.TaskResult, bool) {
+	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
+	if err := protocol.ValidateTask(task); err != nil || task.NodeID != r.cfg.NodeID {
 		return failedResult(result, errorCode(err)), true
 	}
 	payload, err := canonicalTaskPayload(task)
@@ -601,7 +601,7 @@ func (r *Runtime) cachedTaskResult(task agent.Task) (agent.TaskResult, bool) {
 	if len(state.FinalResults) >= maxFinalCache {
 		return failedResult(result, "FINAL_OUTBOX_FULL"), true
 	}
-	return agent.TaskResult{}, false
+	return protocol.TaskResult{}, false
 }
 
 func terminalTaskResult(status string) bool {
@@ -627,7 +627,7 @@ func isAlreadyFinal(err error) bool {
 	return errors.As(err, &clientErr) && clientErr.Code == "TASK_ALREADY_FINAL"
 }
 
-func canonicalTaskPayload(task agent.Task) ([]byte, error) {
+func canonicalTaskPayload(task protocol.Task) ([]byte, error) {
 	var params any
 	decoder := json.NewDecoder(bytes.NewReader(task.Params))
 	decoder.UseNumber()
@@ -660,7 +660,7 @@ func canonicalTaskPayload(task agent.Task) ([]byte, error) {
 	return result, nil
 }
 
-func taskRevision(task agent.Task) (int64, error) {
+func taskRevision(task protocol.Task) (int64, error) {
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal(task.Params, &values); err != nil {
 		return 0, errors.New("PARAMS_INVALID")
@@ -702,7 +702,7 @@ func applyAcknowledged(ctx context.Context) bool {
 	return value
 }
 
-func failedResult(result agent.TaskResult, code string) agent.TaskResult {
+func failedResult(result protocol.TaskResult, code string) protocol.TaskResult {
 	result.Status = "failed"
 	result.ErrorCode = stableCode(code)
 	result.Detail = ""

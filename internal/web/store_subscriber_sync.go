@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -151,12 +151,7 @@ func latestPublishedCandidateTx(tx *sql.Tx, nodeID string) (revision int64, dige
 // subscriberChainKinds is the fixed publication chain of one candidate
 // revision. Every revision is published as exactly these four tasks in this
 // order.
-var subscriberChainKinds = []string{
-	agent.KindConfigCheck,
-	agent.KindConfigStage,
-	agent.KindConfigApply,
-	agent.KindConfigReadback,
-}
+var subscriberChainKinds = protocol.PublicationKinds
 
 // subscriberChainTask is the latest row of one kind within one candidate
 // revision chain.
@@ -177,7 +172,7 @@ type subscriberChainTask struct {
 func subscriberChainTasksTx(tx *sql.Tx, nodeID string, revision int64) (map[string]subscriberChainTask, error) {
 	rows, err := tx.Query(`SELECT kind, revision, status, error_code, params FROM agent_tasks
  WHERE node_id=? AND kind IN (?,?,?,?) ORDER BY revision DESC`,
-		nodeID, agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback)
+		nodeID, protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply, protocol.KindConfigReadback)
 	if err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
@@ -241,7 +236,7 @@ func subscriberLineLatestChainTx(tx *sql.Tx, nodeID string) (map[string]subscrib
 	var raw string
 	err := tx.QueryRow(`SELECT params FROM agent_tasks
  WHERE node_id=? AND kind IN (?,?,?,?) ORDER BY revision DESC LIMIT 1`,
-		nodeID, agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback).Scan(&raw)
+		nodeID, protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply, protocol.KindConfigReadback).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}

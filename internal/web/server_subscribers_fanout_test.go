@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // TestLinesSaveFansOutToEveryCredentialSubscriber pins the #7 fan-out: saving a
@@ -162,7 +162,7 @@ func subscriberChainRevision(t *testing.T, s *store, nodeID string) int64 {
 	t.Helper()
 	var raw string
 	if err := s.db.QueryRow(`SELECT params FROM agent_tasks WHERE node_id=? AND kind=? ORDER BY revision DESC LIMIT 1`,
-		nodeID, agent.KindConfigCheck).Scan(&raw); err != nil {
+		nodeID, protocol.KindConfigCheck).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	var params struct {

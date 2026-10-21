@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 func createPendingNode(t *testing.T, app *Server, role, name string, vless, ssh int) (Node, string) {
@@ -168,31 +168,31 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
 	clearNodeTasks(t, app, node.ID)
-	newTask := func(kind string, rev int64, idem string, params string) agent.Task {
-		return agent.Task{Schema: agent.Schema, Version: agent.Version, OperationID: idem, Revision: rev, IdempotencyKey: idem, NodeID: node.ID, Kind: kind, Params: json.RawMessage(params)}
+	newTask := func(kind string, rev int64, idem string, params string) protocol.Task {
+		return protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: idem, Revision: rev, IdempotencyKey: idem, NodeID: node.ID, Kind: kind, Params: json.RawMessage(params)}
 	}
-	id1, _ := agent.NewID()
-	if err := app.store.enqueueTaskAt(newTask(agent.KindHealthStatus, 1, id1, `{}`), app.now()); err != nil {
+	id1, _ := protocol.NewID()
+	if err := app.store.enqueueTaskAt(newTask(protocol.KindHealthStatus, 1, id1, `{}`), app.now()); err != nil {
 		t.Fatalf("valid status task rejected: %v", err)
 	}
 	// Duplicate idempotency key is a rejection, not a second execution.
-	if err := app.store.enqueueTaskAt(newTask(agent.KindHealthStatus, 2, id1, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.store.enqueueTaskAt(newTask(protocol.KindHealthStatus, 2, id1, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("duplicate idempotency accepted: %v", err)
 	}
 	// Stale revision cannot rewind the per-node monotonic chain.
-	id2, _ := agent.NewID()
-	if err := app.store.enqueueTaskAt(newTask(agent.KindHealthStatus, 1, id2, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "REVISION_STALE") {
+	id2, _ := protocol.NewID()
+	if err := app.store.enqueueTaskAt(newTask(protocol.KindHealthStatus, 1, id2, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "REVISION_STALE") {
 		t.Fatalf("stale revision accepted: %v", err)
 	}
 	// Malicious payloads never reach storage.
 	for _, tc := range []struct{ kind, params string }{
 		{"exec.shell", `{"cmd":"id"}`},
-		{agent.KindConfigApply, `{"url":"https://evil.example.invalid/x"}`},
-		{agent.KindConfigApply, `{"path":"/etc/passwd"}`},
+		{protocol.KindConfigApply, `{"url":"https://evil.example.invalid/x"}`},
+		{protocol.KindConfigApply, `{"path":"/etc/passwd"}`},
 		{"upgrade.agent", `{}`},
 		{"rollback.config", `{}`},
 	} {
-		id, _ := agent.NewID()
+		id, _ := protocol.NewID()
 		if err := app.store.enqueueTaskAt(newTask(tc.kind, 5, id, tc.params), app.now()); err == nil {
 			t.Fatalf("malicious task accepted: %+v", tc)
 		}
@@ -201,23 +201,23 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 	w = bearerReq(app, "GET", "/api/agent/tasks", token, nil)
 	requireStatus(t, w, 200)
 	var tasks struct {
-		Tasks []agent.Task `json:"tasks"`
+		Tasks []protocol.Task `json:"tasks"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &tasks); err != nil || len(tasks.Tasks) != 1 || tasks.Tasks[0].OperationID != id1 {
 		t.Fatalf("pending tasks wrong: %.300s", w.Body.String())
 	}
-	res, _ := json.Marshal(agent.TaskResult{OperationID: id1, Status: "healthy"})
+	res, _ := json.Marshal(protocol.TaskResult{OperationID: id1, Status: "healthy"})
 	w = bearerReq(app, "POST", "/api/agent/result", token, res)
 	requireStatus(t, w, 200)
 	// Repeating the same terminal state is a no-op for reconnects.
 	w = bearerReq(app, "POST", "/api/agent/result", token, res)
 	requireStatus(t, w, 200)
 	// Unknown operation IDs and terminal rewrites are rejected.
-	unknown, _ := agent.NewID()
-	bad, _ := json.Marshal(agent.TaskResult{OperationID: unknown, Status: "healthy"})
+	unknown, _ := protocol.NewID()
+	bad, _ := json.Marshal(protocol.TaskResult{OperationID: unknown, Status: "healthy"})
 	w = bearerReq(app, "POST", "/api/agent/result", token, bad)
 	requireStatus(t, w, 404)
-	rewrite, _ := json.Marshal(agent.TaskResult{OperationID: id1, Status: "failed", ErrorCode: "PROBE_FAILED"})
+	rewrite, _ := json.Marshal(protocol.TaskResult{OperationID: id1, Status: "failed", ErrorCode: "PROBE_FAILED"})
 	w = bearerReq(app, "POST", "/api/agent/result", token, rewrite)
 	requireStatus(t, w, 409)
 }

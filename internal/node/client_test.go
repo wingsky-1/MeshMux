@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 const (
@@ -139,22 +139,22 @@ func setCandidate(t *testing.T, w http.ResponseWriter, body []byte) {
 	}
 }
 
-func validTaskFor(config Config, revision int64) agent.Task {
-	return agent.Task{
-		Schema:         agent.Schema,
-		Version:        agent.Version,
+func validTaskFor(config Config, revision int64) protocol.Task {
+	return protocol.Task{
+		Schema:         protocol.Schema,
+		Version:        protocol.Version,
 		OperationID:    strings.Repeat("d", 32),
 		Revision:       revision,
 		IdempotencyKey: strings.Repeat("e", 32),
 		NodeID:         config.NodeID,
-		Kind:           agent.KindConfigStage,
+		Kind:           protocol.KindConfigStage,
 		Params:         json.RawMessage(`{"revision":3}`),
 	}
 }
 
 func TestClientPairPollReportAndReconnect(t *testing.T) {
 	hub, config := newTestHub(t)
-	var pairBody agent.PairingRequest
+	var pairBody protocol.PairingRequest
 	hub.pair = func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&pairBody); err != nil {
 			t.Error(err)
@@ -188,7 +188,7 @@ func TestClientPairPollReportAndReconnect(t *testing.T) {
 		writeRawJSON(t, w, http.StatusOK, `{"tasks":[`+string(taskJSON)+`],"operation_id":"cccccccccccccccccccccc"}`)
 	}
 	hub.result = func(w http.ResponseWriter, r *http.Request) {
-		var got agent.TaskResult
+		var got protocol.TaskResult
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Error(err)
 		}
@@ -218,14 +218,14 @@ func TestClientPairPollReportAndReconnect(t *testing.T) {
 	if err != nil || candidate.Revision != 9 {
 		t.Fatalf("Candidate = %+v, %v", candidate, err)
 	}
-	if err := client.Heartbeat(context.Background(), agent.HeartbeatRequest{AgentVersion: config.AgentVersion, KernelVersion: KernelVersion}); err != nil {
+	if err := client.Heartbeat(context.Background(), protocol.HeartbeatRequest{AgentVersion: config.AgentVersion, KernelVersion: KernelVersion}); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
 	tasks, err := client.Tasks(context.Background())
 	if err != nil || len(tasks) != 1 || tasks[0].OperationID != task.OperationID {
 		t.Fatalf("Tasks = %+v, %v", tasks, err)
 	}
-	if err := client.Report(context.Background(), agent.TaskResult{OperationID: task.OperationID, Status: "applying"}); err != nil {
+	if err := client.Report(context.Background(), protocol.TaskResult{OperationID: task.OperationID, Status: "applying"}); err != nil {
 		t.Fatalf("Report: %v", err)
 	}
 
@@ -282,10 +282,10 @@ func TestClientConstructorAndAuthenticationContract(t *testing.T) {
 	} else {
 		requireClientError(t, err, "REVISION_INVALID", 0)
 	}
-	if err := client.Heartbeat(context.Background(), agent.HeartbeatRequest{}); err == nil {
+	if err := client.Heartbeat(context.Background(), protocol.HeartbeatRequest{}); err == nil {
 		t.Fatal("empty heartbeat accepted before auth")
 	}
-	if err := client.Report(context.Background(), agent.TaskResult{}); err == nil {
+	if err := client.Report(context.Background(), protocol.TaskResult{}); err == nil {
 		t.Fatal("empty result accepted")
 	} else {
 		requireClientError(t, err, "RESULT_INVALID", 0)

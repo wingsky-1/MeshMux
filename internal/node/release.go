@@ -1,9 +1,9 @@
 package node
 
-import "github.com/wingsky-1/MeshMux/internal/agent"
+import "github.com/wingsky-1/MeshMux/internal/protocol"
 
 // KernelVersion is the only sing-box version accepted by the node contract.
-const KernelVersion = agent.SingBoxVersion
+const KernelVersion = protocol.SingBoxVersion
 
 // KernelRelease pins the official sing-box archive and binary digests.
 type KernelRelease struct {

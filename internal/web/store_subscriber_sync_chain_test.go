@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // chainFixtureTask is one agent_tasks row narrowed to a candidate revision
@@ -90,7 +90,7 @@ func settleChainForRevision(t *testing.T, s *store, nodeID string, revision int6
 			t.Fatal(err)
 		}
 	}
-	readback := byKind[agent.KindConfigReadback]
+	readback := byKind[protocol.KindConfigReadback]
 	if _, err := s.db.Exec(`UPDATE nodes SET observed_revision=?, observed_config_sha256=?,
  observed_at=?, observed_task_revision=?, observed_task_operation_id=? WHERE id=?`,
 		stored.Revision, stored.ConfigSHA256, now.Unix(), readback.Revision, readback.OperationID, nodeID); err != nil {
@@ -151,7 +151,7 @@ func desiredPublishedRevision(t *testing.T, s *store, nodeID string) int64 {
 // chain failed. A partial chain must stay partial, and automatic reconciliation
 // must neither republish nor rewrite it.
 func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
-	for _, failedKind := range []string{agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply} {
+	for _, failedKind := range []string{protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply} {
 		t.Run(failedKind, func(t *testing.T) {
 			s, now := subscriberStoreFixture(t)
 			edge := createEdgeNode(t, s, now)
@@ -172,7 +172,7 @@ func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 
 			const failureCode = "CONFIG_STEP_FAILED"
 			partialChainFailure(t, s, edge, revision, failedKind, failureCode)
-			if status, code := chainTaskStatus(t, s, edge, revision, agent.KindConfigReadback); status != "healthy" || code != "" {
+			if status, code := chainTaskStatus(t, s, edge, revision, protocol.KindConfigReadback); status != "healthy" || code != "" {
 				t.Fatalf("readback after %s failure = %s/%s, want healthy", failedKind, status, code)
 			}
 
@@ -234,7 +234,7 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 	}
 	first := desiredPublishedRevision(t, s, edge)
 	settleChainForRevision(t, s, edge, first, now)
-	partialChainFailure(t, s, edge, first, agent.KindConfigCheck, "CONFIG_CHECK_FAILED")
+	partialChainFailure(t, s, edge, first, protocol.KindConfigCheck, "CONFIG_CHECK_FAILED")
 
 	if _, _, err := s.createSubscriber("bob", []string{edge}, now); err != nil {
 		t.Fatal(err)
@@ -284,7 +284,7 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 	if latestStatus != "healthy" || latestCode != "" || terminal {
 		t.Fatalf("latest chain = %s/%s terminal=%v, want healthy", latestStatus, latestCode, terminal)
 	}
-	if status, code := chainTaskStatus(t, s, edge, first, agent.KindConfigCheck); status != "failed" || code != "CONFIG_CHECK_FAILED" {
+	if status, code := chainTaskStatus(t, s, edge, first, protocol.KindConfigCheck); status != "failed" || code != "CONFIG_CHECK_FAILED" {
 		t.Fatalf("older chain was rewritten: %s/%s", status, code)
 	}
 
@@ -326,8 +326,8 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 		t.Fatalf("deletion publication revision = %d, want > %d", second, first)
 	}
 	settleChainForRevision(t, s, edge, second, now)
-	partialChainFailure(t, s, edge, second, agent.KindConfigCheck, "CONFIG_CHECK_FAILED")
-	if status, code := chainTaskStatus(t, s, edge, second, agent.KindConfigReadback); status != "healthy" {
+	partialChainFailure(t, s, edge, second, protocol.KindConfigCheck, "CONFIG_CHECK_FAILED")
+	if status, code := chainTaskStatus(t, s, edge, second, protocol.KindConfigReadback); status != "healthy" {
 		t.Fatalf("readback = %s/%s, want healthy", status, code)
 	}
 	status, code, err := s.subscriberSyncStatus(alice.ID, now)

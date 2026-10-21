@@ -1,9 +1,9 @@
-// Package agent freezes the Hub <-> node management protocol for Issue #6.
+// Package protocol freezes the Hub <-> node management protocol for Issue #6.
 // PR A (this change) freezes schema, identity model and allowlist only.
 // Host apply, sing-box control and Out ACL belong to PR B and must not be
 // added here. Upgrade/rollback kinds are reserved for Issue #11 and are
 // explicitly rejected by ValidateTask.
-package agent
+package protocol
 
 import (
 	"bytes"
@@ -52,6 +52,17 @@ var allowlist = map[string]struct{}{
 	KindConfigReadback: {},
 	KindHealthStatus:   {},
 	KindNodeStatus:     {},
+}
+
+// PublicationKinds is the fixed four-task publication chain of one candidate
+// revision, in order. It mirrors the four config kinds already permitted by
+// allowlist; it is exported only so chain producers and consumers share one
+// source instead of repeating the same four literals.
+var PublicationKinds = []string{
+	KindConfigCheck,
+	KindConfigStage,
+	KindConfigApply,
+	KindConfigReadback,
 }
 
 // Result statuses travel Hub -> Web and Agent -> Hub. partial/failed force
