@@ -47,6 +47,21 @@ cleanup() {
 trap cleanup EXIT
 trap 'redact_serial || true; echo "VM test failed; redacted serial console tail follows:"; tail -100 "$redacted_serial" 2>/dev/null || true' ERR
 
+# Observability only (Issue #20 R6): wall-clock timing per VM test phase.
+# These markers must not change timeouts, waits, retries, or phase order.
+phase_started_epoch=''
+phase_timing_start() {
+  phase_started_epoch="$(date +%s)"
+  echo "Phase $1 start (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+phase_timing_end() {
+  local finished finished_epoch
+  finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  finished_epoch="$(date +%s)"
+  echo "Phase $1 end (UTC): $finished"
+  echo "Phase $1 duration: $((finished_epoch - phase_started_epoch))s"
+}
+
 echo 'Downloading official pinned Debian 13 cloud image'
 curl -fL --retry 3 --connect-timeout 15 --max-time 320 \
   'https://cloud.debian.org/cdimage/cloud/trixie/20261001-2618/debian-13-genericcloud-amd64-20261001-2618.qcow2' -o "$image"
@@ -113,7 +128,9 @@ wait_ssh
 ssh_vm 'cloud-init status --wait; cat /etc/os-release | grep VERSION_ID; systemctl --version | head -1'
 scp_vm .ci/bin/meshmux /tmp/meshmux
 scp_vm .ci/bin/install.test /tmp/install.test
+phase_timing_start 'hub-install'
 ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test; sudo env MESHMUX_HUB_SYSTEM_VM=1 MESHMUX_HUB_SYSTEM_PHASE=install /tmp/install.test -test.run "^TestHubSystemVM$" -test.timeout=25m -test.v'
+phase_timing_end 'hub-install'
 boot_before="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
 ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
 sleep 8
@@ -126,14 +143,18 @@ fi
 # Debian may mount /tmp as tmpfs; restore only the ephemeral test executable.
 scp_vm .ci/bin/install.test /tmp/install.test
 ssh_vm "sudo chmod 755 /tmp/install.test"
+phase_timing_start 'hub-post-reboot'
 ssh_vm 'sudo env MESHMUX_HUB_SYSTEM_VM=1 MESHMUX_HUB_SYSTEM_PHASE=post-reboot /tmp/install.test -test.run "^TestHubSystemVM$" -test.timeout=10m -test.v'
+phase_timing_end 'hub-post-reboot'
 echo 'Hub Debian 13 full-system installation/restart/recovery acceptance PASS'
 
 # Co-located Line lifecycle (Issue #7 PR-C). Runs only after the Hub itself
 # is verified above. Phase 1 installs a local Line through the real Web
 # pairing flow and proves the Hub ledger, pins and services survive; then the
 # guest really reboots and phase 2 proves both ledgers persist.
+phase_timing_start 'local-line-install'
 ssh_vm 'sudo env MESHMUX_LOCAL_LINE_VM=1 MESHMUX_LOCAL_LINE_PHASE=install /tmp/install.test -test.run "^TestLocalLineSystemVM$" -test.timeout=30m -test.v'
+phase_timing_end 'local-line-install'
 boot_before_line="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
 ssh_vm 'sudo systemctl reboot' >/dev/null 2>&1 || true
 sleep 8
@@ -145,5 +166,7 @@ if [[ "$boot_before_line" == "$boot_after_line" ]]; then
 fi
 scp_vm .ci/bin/install.test /tmp/install.test
 ssh_vm "sudo chmod 755 /tmp/install.test"
+phase_timing_start 'local-line-post-reboot'
 ssh_vm 'sudo env MESHMUX_LOCAL_LINE_VM=1 MESHMUX_LOCAL_LINE_PHASE=post-reboot /tmp/install.test -test.run "^TestLocalLineSystemVM$" -test.timeout=10m -test.v'
+phase_timing_end 'local-line-post-reboot'
 echo 'Co-located Line full-system installation/restart/recovery acceptance PASS'
