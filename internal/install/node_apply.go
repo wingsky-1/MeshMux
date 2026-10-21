@@ -615,7 +615,7 @@ func extractNodeKernel(archivePath, target string) error {
 		if err != nil {
 			return err
 		}
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+		if h.Typeflag != tar.TypeReg {
 			continue
 		}
 		if filepath.Base(h.Name) != "sing-box" || h.Size < 1 || h.Size > maxInstallerFile {
@@ -1037,15 +1037,13 @@ func nodeAgentReference(executable string) string {
 // data plane is never mistaken for a slow one.
 func pollNodeReadback(ctx context.Context, opts NodeApplyOptions, cfg node.Config) (node.Readback, error) {
 	deadline := time.Now().Add(60 * time.Second)
-	var last error = errors.New("NATIVE_READBACK_UNAVAILABLE")
 	for {
 		readback, err := opts.Readback(ctx, cfg, opts.Root, opts.Runner)
 		if err == nil {
 			return readback, nil
 		}
-		last = err
 		if !node.TransientReadback(err) || time.Now().After(deadline) {
-			return node.Readback{}, last
+			return node.Readback{}, err
 		}
 		select {
 		case <-ctx.Done():

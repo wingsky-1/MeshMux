@@ -715,7 +715,7 @@ func extractCaddyBinary(archivePath, target string) error {
 		if header.Name != "caddy" {
 			continue
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA || header.Size < 1 || header.Size > maxInstallerFile {
+		if header.Typeflag != tar.TypeReg || header.Size < 1 || header.Size > maxInstallerFile {
 			return errors.New("CADDY_ARCHIVE_INVALID")
 		}
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
