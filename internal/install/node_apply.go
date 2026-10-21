@@ -314,54 +314,20 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return result, identityFailures.pairingCodeRequired
 	}
 	identity, candidate := resolved.identity, resolved.candidate
-	activeCandidate := candidate
-	if repair {
-		if existing, ok := currentNodeCandidate(opts.Root, installedCfg); ok {
-			activeCandidate = existing
-		}
+	candidateFailures := nodeCandidateErrors{
+		marshalFailed:      &InstallError{Stage: "stage", Code: "CANDIDATE_RENDER_FAILED", Recovery: "Review the Hub candidate response and retry with --repair."},
+		compileFailed:      &InstallError{Stage: "stage", Code: "CANDIDATE_RENDER_FAILED", Recovery: "Review the Hub candidate role, node and port binding."},
+		candidateInvalid:   &InstallError{Stage: "stage", Code: "CANDIDATE_INVALID", Recovery: "The Hub candidate failed local validation; no active kernel configuration was replaced."},
+		configRenderFailed: &InstallError{Stage: "stage", Code: "CONFIG_RENDER_FAILED", Recovery: "Review the actual SSH listeners and the fixed Node service layout."},
+		stageTemporary:     &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check temporary disk space and permissions."},
+		operationLog:       &InstallError{Stage: "stage", Code: "OPERATION_LOG_FAILED", Recovery: "Check installer state directory permissions and run --repair."},
 	}
-	if activeCandidate.Schema == "" {
-		activeCandidate = node.NewCandidateDocument(node.Candidate{
-			NodeID: cfg.NodeID, Role: cfg.Role, Revision: 1,
-			VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
-		})
+	finalized, finalizeErr := nodeFinalizeCandidate(ctx, &result, &state, &opts, layout, record, repair, cfg, installedCfg, identity, candidate, sshPorts, stageDir, kernelPath, candidateFailures)
+	if finalizeErr != nil {
+		return result, finalizeErr
 	}
-	candidateBody, err := jsonMarshal(activeCandidate)
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Hub candidate response and retry with --repair.")
-	}
-	candidateConfig, err := node.CompileCandidate(activeCandidate.Candidate())
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_RENDER_FAILED", "Review the Hub candidate role, node and port binding.")
-	}
-	if err := verifyNodeCandidate(ctx, opts, kernelPath, candidateConfig, stageDir); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "CANDIDATE_INVALID", "The Hub candidate failed local validation; no active kernel configuration was replaced.")
-	}
-
-	managed, err := nodeManagedFilesForLayout(installedCfg, sshPorts, identity, layout)
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "CONFIG_RENDER_FAILED", "Review the actual SSH listeners and the fixed Node service layout.")
-	}
-	stagedManaged := map[string]string{}
-	for path, file := range managed {
-		if !file.Static {
-			continue
-		}
-		staged := filepath.Join(stageDir, "managed", strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", "_"))
-		if err := writeBytesAtomic(staged, []byte(file.Body), os.FileMode(file.Mode)); err != nil {
-			return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-		}
-		stagedManaged[path] = staged
-	}
-	if err := writeBytesAtomic(filepath.Join(stageDir, "active-candidate.json"), candidateBody, 0600); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-	}
-	if err := writeBytesAtomic(filepath.Join(stageDir, "config.json"), candidateConfig, 0640); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-	}
-	if err := record("stage", "candidate_validated", ""); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
-	}
+	activeCandidate, candidateConfig := finalized.activeCandidate, finalized.candidateConfig
+	managed, stagedManaged := finalized.managed, finalized.stagedManaged
 
 	if err := ensureNodeAccounts(ctx, opts.Runner, opts.Root, hasState); err != nil {
 		return failNodePartial(result, state, opts, layout, record, "apply", "ACCOUNT_CREATE_FAILED", "Inspect meshmux-singbox and meshmux-agent accounts before retrying.")
