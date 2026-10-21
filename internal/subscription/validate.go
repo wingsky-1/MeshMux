@@ -55,7 +55,7 @@ func validHost(value string) bool {
 	if strings.HasSuffix(value, ".") || numericDotted(value) {
 		return false
 	}
-	for _, label := range strings.Split(value, ".") {
+	for label := range strings.SplitSeq(value, ".") {
 		if len(label) < 1 || len(label) > 63 {
 			return false
 		}

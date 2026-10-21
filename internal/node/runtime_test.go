@@ -336,22 +336,22 @@ func TestOutACLRequiresExactRulePairs(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := [][]string{
-		[]string{
+		{
 			runner.nftRules[0], runner.nftRules[1],
 			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"accept":null}]}}`,
 			runner.nftRules[2], runner.nftRules[3],
 		},
-		[]string{
+		{
 			runner.nftRules[0], runner.nftRules[1],
 			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}}]}}`,
 			runner.nftRules[3],
 		},
-		[]string{
+		{
 			runner.nftRules[0], runner.nftRules[1],
 			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}},{"drop":null},{"accept":null}]}}`,
 			runner.nftRules[3],
 		},
-		[]string{
+		{
 			runner.nftRules[0],
 			strings.Replace(runner.nftRules[1], `"policy":"accept"`, `"policy":"drop"`, 1),
 			runner.nftRules[2], runner.nftRules[3],
@@ -532,7 +532,7 @@ func TestOutboxLimitDoesNotDropUnacknowledgedResults(t *testing.T) {
 	root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
 	runtime := newTestRuntime(t, root, cfg, identity, runner, &runtimeTestController{candidate: testCandidate(7)})
 	state, _ := runtime.loadStateForExecution()
-	for i := 0; i < maxFinalCache; i++ {
+	for i := range maxFinalCache {
 		id := fmt.Sprintf("%032x", i+1)
 		state.FinalResults[id] = agent.TaskResult{OperationID: id, Status: "failed", ErrorCode: "TEST_FAILURE"}
 	}

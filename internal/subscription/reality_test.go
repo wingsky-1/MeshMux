@@ -8,7 +8,7 @@ import (
 
 func TestNewRealityKeyPairIsCanonicalX25519(t *testing.T) {
 	seen := make(map[string]struct{}, 32)
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		pair, err := NewRealityKeyPair()
 		if err != nil {
 			t.Fatal(err)
@@ -67,7 +67,7 @@ func TestRealityKeyValidationRejectsMismatchAndZero(t *testing.T) {
 
 func TestNewShortIDIsCanonicalAndUnique(t *testing.T) {
 	seen := make(map[string]struct{}, 64)
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		shortID, err := NewShortID()
 		if err != nil {
 			t.Fatal(err)

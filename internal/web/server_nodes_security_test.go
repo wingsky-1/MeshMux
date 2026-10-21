@@ -143,13 +143,10 @@ func TestEnqueueConcurrentRevisionIsMonotonic(t *testing.T) {
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
 	for _, task := range tasks {
-		task := task
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			errs <- app.store.enqueueTask(task)
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

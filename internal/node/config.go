@@ -315,7 +315,7 @@ func validateHubURL(raw string) error {
 		if len(host) > 253 || strings.HasSuffix(host, ".") {
 			return errors.New("HUB_URL_INVALID: provide one HTTPS origin")
 		}
-		for _, label := range strings.Split(host, ".") {
+		for label := range strings.SplitSeq(host, ".") {
 			if !dnsLabel.MatchString(label) {
 				return errors.New("HUB_URL_INVALID: provide one HTTPS origin")
 			}

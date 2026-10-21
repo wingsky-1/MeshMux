@@ -177,8 +177,7 @@ func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	defer cancel()
 	result, applyErr := install.InstallHub(ctx, c, id, *repair, install.ApplyOptions{})
 	if applyErr != nil {
-		var ie *install.InstallError
-		if errors.As(applyErr, &ie) {
+		if ie, ok := errors.AsType[*install.InstallError](applyErr); ok {
 			result.ErrorCode, result.Stage, result.Recovery = ie.Code, ie.Stage, ie.Recovery
 		} else {
 			result.ErrorCode, result.Stage = "INSTALL_FAILED", "apply"

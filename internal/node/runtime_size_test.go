@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func TestRuntimeStateTooLargeKeepsPreviousStateReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	filler := strings.Repeat("a", 512)
-	for i := 0; i < maxIdempotency; i++ {
+	for i := range maxIdempotency {
 		key := testStateKey(i, 0x5a)
 		state.Idempotency[key] = idempotencyItem{
 			PayloadDigest: strings.Repeat("b", 64),
@@ -68,9 +69,7 @@ func TestRuntimeStateTooLargeKeepsPreviousStateReadable(t *testing.T) {
 	// Now push the document above the bound and confirm the refusal.
 	oversized := state
 	oversized.Idempotency = make(map[string]idempotencyItem, len(state.Idempotency))
-	for key, item := range state.Idempotency {
-		oversized.Idempotency[key] = item
-	}
+	maps.Copy(oversized.Idempotency, state.Idempotency)
 	oversized.LKG = []byte(strings.Repeat("L", maxRuntimeStateSize+1))
 	err = runtime.persistState(&oversized)
 	if err == nil {
@@ -118,7 +117,7 @@ func TestRuntimeStateSizeBoundFitsFullCaches(t *testing.T) {
 	// A full v2 candidate with 1024 users: the journal stores it base64
 	// inflated inside the JSON document.
 	users := make([]VLESSUser, 0, maxCandidateUsers)
-	for i := 0; i < maxCandidateUsers; i++ {
+	for i := range maxCandidateUsers {
 		users = append(users, VLESSUser{
 			CredentialID: fmt.Sprintf("%032x", i+1),
 			UUID:         testStateUUID(i),
@@ -154,7 +153,7 @@ func TestRuntimeStateSizeBoundFitsFullCaches(t *testing.T) {
 
 	// Both caches are full. The 512 byte detail is the protocol maximum, so
 	// this is the worst realistic cache size, not a semantic validation.
-	for i := 0; i < maxIdempotency; i++ {
+	for i := range maxIdempotency {
 		key := testStateKey(i, 0x5a)
 		state.Idempotency[key] = idempotencyItem{
 			PayloadDigest: strings.Repeat("b", 64),

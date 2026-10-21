@@ -116,8 +116,8 @@ func subscriptionNamespace(r *http.Request) bool {
 	}
 	rest := raw[1:]
 	segment := rest
-	if index := strings.IndexByte(rest, '/'); index >= 0 {
-		segment = rest[:index]
+	if before, _, ok := strings.Cut(rest, "/"); ok {
+		segment = before
 	}
 	return segment == "subscription"
 }

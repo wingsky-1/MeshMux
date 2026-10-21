@@ -165,8 +165,7 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	}
 	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, reader, stdout, stderr)
 	if applyErr != nil {
-		var ie *install.InstallError
-		if errors.As(applyErr, &ie) {
+		if ie, ok := errors.AsType[*install.InstallError](applyErr); ok {
 			result.ErrorCode, result.Stage, result.Recovery = ie.Code, ie.Stage, ie.Recovery
 		} else {
 			result.ErrorCode, result.Stage = "INSTALL_FAILED", "apply"
@@ -218,8 +217,7 @@ func pairingRequired(err error) bool {
 	if err == nil {
 		return false
 	}
-	var ie *install.InstallError
-	if errors.As(err, &ie) {
+	if ie, ok := errors.AsType[*install.InstallError](err); ok {
 		switch ie.Code {
 		case "PAIRING_CODE_REQUIRED", "PAIRING_REQUIRED":
 			return true

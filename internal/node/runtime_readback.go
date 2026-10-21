@@ -233,12 +233,12 @@ func (r *Runtime) verifyUnitExecStart(ctx context.Context) error {
 	}
 	want := rootedOptionalBinary(r.root, SingBoxBinaryPath) + " run -c " + rooted(r.root, ActiveConfigPath)
 	text := string(output)
-	for _, line := range strings.Split(text, "\n") {
-		index := strings.Index(line, "argv[]=")
-		if index < 0 {
+	for line := range strings.SplitSeq(text, "\n") {
+		_, after, ok := strings.Cut(line, "argv[]=")
+		if !ok {
 			continue
 		}
-		value := strings.TrimSpace(line[index+len("argv[]="):])
+		value := strings.TrimSpace(after)
 		if end := strings.Index(value, " ;"); end >= 0 {
 			value = strings.TrimSpace(value[:end])
 		} else if end := strings.Index(value, ";"); end >= 0 {
@@ -318,12 +318,12 @@ func (r *Runtime) verifyListeners(ctx context.Context, pid, port int) error {
 	}
 	wantPID := "pid=" + strconv.Itoa(pid) + ","
 	wantPort := ":" + strconv.Itoa(port)
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		if !strings.Contains(line, wantPID) {
 			continue
 		}
-		fields := strings.Fields(line)
-		for _, field := range fields {
+		fields := strings.FieldsSeq(line)
+		for field := range fields {
 			if strings.HasSuffix(field, wantPort) {
 				return nil
 			}
