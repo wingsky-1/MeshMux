@@ -121,10 +121,6 @@ WantedBy=multi-user.target
 `
 }
 
-func nodeSingBoxUnit() string {
-	return nodeSingBoxUnitFor(false)
-}
-
 func nodeSingBoxUnitFor(out bool) string {
 	aclDependency := ""
 	if out {

@@ -28,7 +28,6 @@ type fakeNodeRunner struct {
 	failUsed bool
 	users    map[string]bool
 	packages map[string]bool
-	readback node.Readback
 	// aclRequiresFile, when set, makes the Out ACL unit fail to start while
 	// the file is absent. It emulates a clean host where nft -f cannot
 	// apply a table file that installNodeDynamic has not written yet.
