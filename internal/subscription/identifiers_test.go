@@ -7,7 +7,7 @@ import (
 
 func TestNewIDIsCanonicalAndUnique(t *testing.T) {
 	seen := make(map[string]struct{}, 128)
-	for i := 0; i < 128; i++ {
+	for range 128 {
 		id, err := NewID()
 		if err != nil {
 			t.Fatal(err)
@@ -48,7 +48,7 @@ func TestValidateIDRejectsNonCanonicalValues(t *testing.T) {
 
 func TestNewUUIDIsCanonicalV4AndUnique(t *testing.T) {
 	seen := make(map[string]struct{}, 128)
-	for i := 0; i < 128; i++ {
+	for range 128 {
 		uuid, err := NewUUID()
 		if err != nil {
 			t.Fatal(err)

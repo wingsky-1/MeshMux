@@ -134,7 +134,7 @@ func validRealityHost(value string) bool {
 	if numericDottedHost(value) {
 		return false
 	}
-	for _, label := range strings.Split(value, ".") {
+	for label := range strings.SplitSeq(value, ".") {
 		if !dnsLabel.MatchString(label) {
 			return false
 		}
@@ -157,7 +157,7 @@ func validDNSName(value string) bool {
 	if numericDottedHost(value) {
 		return false
 	}
-	for _, label := range strings.Split(value, ".") {
+	for label := range strings.SplitSeq(value, ".") {
 		if !dnsLabel.MatchString(label) {
 			return false
 		}
@@ -171,7 +171,7 @@ func numericDottedHost(value string) bool {
 	if !strings.Contains(value, ".") {
 		return false
 	}
-	for _, label := range strings.Split(value, ".") {
+	for label := range strings.SplitSeq(value, ".") {
 		if label == "" {
 			return false
 		}

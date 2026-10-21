@@ -268,7 +268,7 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	initialize(t, b)
 	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
 	// One attempt was used by setup. Forwarded headers must not affect the budget.
-	for i := 0; i < 9; i++ {
+	for range 9 {
 		requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-Forwarded-For": {"192.0.2.5"}, "X-MeshMux-Client-Ip": {"192.0.2.6"}}), 401)
 	}
 	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
@@ -288,7 +288,7 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	again.cfg.DirectProxy = true
 	requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-MeshMux-Client-Ip": {"192.0.2.8"}}), 401)
 	var found bool
-	for _, line := range strings.Split(logs.String(), "\n") {
+	for line := range strings.SplitSeq(logs.String(), "\n") {
 		var event map[string]any
 		if json.Unmarshal([]byte(line), &event) == nil && event["ban_candidate"] == true && event["client_ip"] == "192.0.2.8" {
 			found = true
@@ -323,7 +323,7 @@ func TestDatabaseFailureClosedAndHeaders(t *testing.T) {
 
 func TestSessionCapacityAndMigrationRollback(t *testing.T) {
 	app, _ := testApp(t)
-	for i := 0; i < 256; i++ {
+	for range 256 {
 		if _, _, err := app.store.newSession(false, time.Now()); err != nil {
 			t.Fatal(err)
 		}

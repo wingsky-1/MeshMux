@@ -85,7 +85,7 @@ func TestServiceProcess(t *testing.T) {
 	client := &http.Client{Jar: jar, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	wait := func() {
 		t.Helper()
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			r, err := client.Get(origin + "/healthz")
 			if err == nil {
 				r.Body.Close()

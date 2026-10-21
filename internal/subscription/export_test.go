@@ -755,13 +755,13 @@ func exportMihomoIdentities(t *testing.T, document []byte) map[string]exportClie
 	identities := map[string]exportClientIdentity{}
 	var current *exportClientIdentity
 
-	for _, line := range strings.Split(string(document), "\n") {
+	for line := range strings.SplitSeq(string(document), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "proxy-groups:" {
 			break
 		}
-		if strings.HasPrefix(trimmed, "- name: ") {
-			label := strings.Trim(strings.TrimPrefix(trimmed, "- name: "), "\"")
+		if after, ok := strings.CutPrefix(trimmed, "- name: "); ok {
+			label := strings.Trim(after, "\"")
 			current = &exportClientIdentity{Label: label, NodeID: exportLabelNodeID(label)}
 			identities[current.NodeID] = *current
 			continue

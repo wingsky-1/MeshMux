@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -361,8 +362,8 @@ func TestCompileCandidateV2LargeUserSetIsDeterministicAndBounded(t *testing.T) {
 		t.Fatalf("rendered candidate is %d bytes, want <= %d", len(document), maxConfigBody)
 	}
 	shuffled := make([]VLESSUser, 0, len(users))
-	for index := len(users) - 1; index >= 0; index-- {
-		shuffled = append(shuffled, users[index])
+	for _, user := range slices.Backward(users) {
+		shuffled = append(shuffled, user)
 	}
 	other, err := CompileCandidate(v2Candidate(shuffled...))
 	if err != nil {
