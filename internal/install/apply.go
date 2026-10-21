@@ -199,22 +199,11 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		opts.Verify = verifyServices
 	}
 
-	lockPath := rooted(opts.Root, "/run/lock/meshmux-install.lock")
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0755); err != nil {
-		return fail("preflight", "INSTALL_LOCK_UNAVAILABLE", "Check /run/lock permissions and retry.")
-	}
-	if err := ensureNoSymlinkAncestors(filepath.Dir(lockPath)); err != nil {
-		return fail("preflight", "INSTALL_LOCK_UNAVAILABLE", "Check /run/lock path ownership and symlinks.")
-	}
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return fail("preflight", "INSTALL_LOCK_UNAVAILABLE", "Check /run/lock permissions and retry.")
+	lock, lockErr := acquireInstallLock(opts.Root, "Check /run/lock path ownership and symlinks.")
+	if lockErr != nil {
+		return fail(lockErr.Stage, lockErr.Code, lockErr.Recovery)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return fail("preflight", "INSTALL_BUSY", "Another MeshMux installation is running; wait for it to finish.")
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	state, hasState, err := ReadState(opts.Root)
 	if err != nil {
