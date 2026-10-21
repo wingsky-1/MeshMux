@@ -118,6 +118,24 @@ sqlite3 /path/to/private-restored/meshmux.db \
 
 响应带 `X-Operation-ID`。失败页面/JSON 包含 `operation_id`、`stage`、稳定 `error_code` 和下一步建议。常见错误包括 `AUTH_REQUIRED`、`SESSION_INVALID`、`CSRF_REJECTED`、`ORIGIN_REJECTED`、`HOST_REJECTED`、`FORM_INVALID`、`AUTH_FAILED`、`AUTH_RATE_LIMITED`、`DATABASE_UNAVAILABLE`。日志也记录初始化、登录、退出、改密完成事件；原始数据库/请求内容不会写入日志。启动期的本地配置/权限错误保留原因以便管理员定位，不包含凭据值。
 
+## 订阅同步的 offline 码表
+
+订阅凭据发布到 Line 时，Line 与 Node 在本域指同一条被纳管宿主：`nodes` 表的一行既是 Hub 可见的 Node，也是承载 VLESS 凭据的 Line。离线判定只有一处实现（`internal/web/store_subscriber_sync.go` 的 `subscriberLineNodeOfflineTx`），写路径与只读投影对同一时刻给出同一结论。
+
+| 码 | 出现位置 | 触发 | 语义与影响 |
+| --- | --- | --- | --- |
+| `LINE_OFFLINE` | 写路径 `drainSubscriberNodeIntentTx` 返回 `errors.New("LINE_OFFLINE: line is offline; synchronization stays pending")`；`sanitizeSubscriberSyncCode` 截取冒号前的稳定码，作为 `web_event` 日志的 `error_code` | 显式发布/重试（`prepareSubscriberSync` / `retrySubscriberSync`）遇到离线 Line；自动 drain（Agent 轮询/心跳/结果触发的 `drainSubscriberNode`）遇到同一条件时静默丢弃该错误 | 本次不发布新候选、不入队 Agent 任务；订阅表中的意图保留，Line 恢复后由下一次轮询/心跳/结果 drain 补发。页面“同步”表单提交失败时 HTTP 响应码是 `SUBSCRIBER_SYNC_FAILED`（409），`LINE_OFFLINE` 只作为错误串和日志码出现 |
+| `NODE_OFFLINE` | 只读投影 `subscriberLineSyncViewTx` 返回 `subscriberSyncPartial, "NODE_OFFLINE"`；订阅级聚合为 `sync_status=partial`，`sync_code` 取该订阅首个非空的 Line 码（多 Line 时可能是其他码，逐 Line 的 `sync_code` 始终保留） | 同一判定为离线 | 只报告未收敛，不写任何状态；页面显示“未收敛 · 需要处理”。恢复在线并完成回读后自然转为 `healthy` |
+
+两码共用的判定（`subscriberLineNodeOfflineTx`）：
+
+- `nodes.status = 'pending'`（从未配对）或 `last_heartbeat = 0`：离线。
+- `now - last_heartbeat > offlineAfter`：离线。`offlineAfter = 2 * time.Minute`（`internal/web/store_nodes.go`）是唯一阈值。
+- 恰好等于 2 分钟仍算在线（严格大于才离线）；`now` 由调用方注入、判定不直接读墙钟，Web 写路径与页面投影传入同一请求时钟。
+- 行不存在时该判定返回离线标记并附带 `NODE_NOT_FOUND`，调用方优先按错误处理；数据库错误返回 `DATABASE_UNAVAILABLE`。两者都以对应稳定码进入 `sync_code`，不会变成 `LINE_OFFLINE` / `NODE_OFFLINE`。
+
+**不改码声明**：双码是既有对外契约，不是待清理的重复。`internal/web/store_subscriber_sync_test.go` 分别钉住 `LINE_OFFLINE`（写路径错误串）与 `NODE_OFFLINE`（投影 code）；收窄为单码会改变已合入行为与测试，超出文档范围。本节只统一语义说明，不改变任何 Go 代码、判定阈值或 HTTP 行为。
+
 ## 依赖与前端再生成
 
 依赖与许可证核查见 [DEPENDENCIES](DEPENDENCIES.zh-CN.md)。所有浏览器资源嵌入二进制，不从 CDN 加载；HTMX 仅用于只读状态刷新，关闭 eval、脚本执行和 history 缓存，网络/会话错误有文字反馈。登录、初始化、改密、退出使用原生表单，无 JavaScript 也可完成。
