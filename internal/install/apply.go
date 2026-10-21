@@ -336,116 +336,30 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions.")
 	}
 
-	stageDir := rooted(opts.Root, "/var/cache/meshmux-installer/"+operationID)
-	if err := ensureDirectory(stageDir, 0700); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions.")
+	stageFailures := hubStageErrors{
+		stageCache:               &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check /var/cache space and permissions."},
+		artifactDownloadRecovery: "Check outbound HTTPS to the pinned official GitHub release and retry; unverified files are never applied.",
+		artifactChecksum:         &InstallError{Stage: "stage", Code: "ARTIFACT_CHECKSUM_MISMATCH", Recovery: "Delete the staged download and retry; do not bypass SHA-256 verification."},
+		artifactStage:            &InstallError{Stage: "stage", Code: "ARTIFACT_STAGE_FAILED", Recovery: "Check permission on the verified Headscale binary."},
+		artifactManifest:         &InstallError{Stage: "stage", Code: "ARTIFACT_MANIFEST_INVALID", Recovery: "The manifest must contain the pinned Caddy and Headscale binaries."},
+		artifactFormat:           &InstallError{Stage: "stage", Code: "ARTIFACT_FORMAT_INVALID", Recovery: "Re-download the official Caddy archive; do not extract unverified archives."},
+		caddyVersion:             &InstallError{Stage: "stage", Code: "CADDY_VERSION_INVALID", Recovery: "Use the exact pinned Caddy release for this architecture."},
+		headscaleVersion:         &InstallError{Stage: "stage", Code: "HEADSCALE_VERSION_INVALID", Recovery: "Use the exact pinned Headscale release for this architecture."},
+		meshmuxBinary:            &InstallError{Stage: "stage", Code: "MESHMUX_BINARY_INVALID", Recovery: "Run the installer from a regular, readable MeshMux executable and retry."},
+		sharedBinary:             &InstallError{Stage: "preflight", Code: "SHARED_BINARY_MISMATCH", Recovery: "The co-located Line pins a different MeshMux runtime build. Restore the matching build on both layouts, or use the validated coordinated Web upgrade from Issue #11 once it is available."},
+		stageTemporary:           &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check temporary disk space and permissions."},
+		caddyConfig:              &InstallError{Stage: "stage", Code: "CADDY_CONFIG_INVALID", Recovery: "Review the generated Caddy configuration and domain values."},
+		stageValidation:          &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check installer staging directory permissions."},
+		headscaleConfig:          &InstallError{Stage: "stage", Code: "HEADSCALE_CONFIG_INVALID", Recovery: "Review the generated Headscale configuration for version 0.29.5."},
+		operationLog:             &InstallError{Stage: "stage", Code: "OPERATION_LOG_FAILED", Recovery: "Check installer state directory permissions."},
 	}
-	artifactsDir := filepath.Join(stageDir, "artifacts")
-	if err := ensureDirectory(artifactsDir, 0700); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check /var/cache space and permissions.")
+	staged, stageErr := hubStageArtifacts(ctx, &result, &state, previous, hasState, opts, record, operationID, artifacts, targetFiles, stageFailures)
+	if stageErr != nil {
+		return result, stageErr
 	}
-
-	stagedArtifacts := map[string]string{}
-	for _, a := range artifacts {
-		path, downloadErr := opts.DownloadArtifact(ctx, a, artifactsDir)
-		if downloadErr != nil {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", artifactErrorCode(downloadErr), "Check outbound HTTPS to the pinned official GitHub release and retry; unverified files are never applied.")
-		}
-		if err := VerifyFile(path, a.SHA256); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "ARTIFACT_CHECKSUM_MISMATCH", "Delete the staged download and retry; do not bypass SHA-256 verification.")
-		}
-		if a.Component == "headscale" {
-			if err := os.Chmod(path, 0755); err != nil {
-				return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "ARTIFACT_STAGE_FAILED", "Check permission on the verified Headscale binary.")
-			}
-		}
-		stagedArtifacts[a.Component] = path
-		state.Artifacts[a.Component] = a.SHA256
-	}
-	caddyArchive, okCaddy := stagedArtifacts["caddy"]
-	headscalePath, okHeadscale := stagedArtifacts["headscale"]
-	if !okCaddy || !okHeadscale {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "ARTIFACT_MANIFEST_INVALID", "The manifest must contain the pinned Caddy and Headscale binaries.")
-	}
-	caddyArtifact := findArtifact(artifacts, "caddy")
-	headscaleArtifact := findArtifact(artifacts, "headscale")
-	caddyPath := filepath.Join(stageDir, "meshmux-caddy")
-	if caddyArtifact.Format == "tar.gz" {
-		if err := extractCaddyBinary(caddyArchive, caddyPath); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "ARTIFACT_FORMAT_INVALID", "Re-download the official Caddy archive; do not extract unverified archives.")
-		}
-	} else {
-		caddyPath = caddyArchive
-	}
-	if err := verifyBinaryVersion(ctx, opts.Runner, caddyPath, caddyArtifact.Version); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "CADDY_VERSION_INVALID", "Use the exact pinned Caddy release for this architecture.")
-	}
-	if err := verifyBinaryVersion(ctx, opts.Runner, headscalePath, headscaleArtifact.Version); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "HEADSCALE_VERSION_INVALID", "Use the exact pinned Headscale release for this architecture.")
-	}
-	runtimeStage := filepath.Join(stageDir, "meshmuxd")
-	executable := opts.Executable
-	if executable == "" {
-		executable = "/proc/self/exe"
-	}
-	runtimeHash, err := copyExecutable(executable, runtimeStage)
-	if err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "MESHMUX_BINARY_INVALID", "Run the installer from a regular, readable MeshMux executable and retry.")
-	}
-	// A co-located Line pins the exact Hub runtime build it reuses. The Hub
-	// must not move to a different build while that pin exists: the Line
-	// would silently run a different MeshMux binary than the one it
-	// verified. The coordinated Web upgrade that changes both layouts at
-	// once is Issue #11; this profile only refuses the unsafe single-sided
-	// change.
-	if err := checkLocalLineSharedBinary(opts.Root, runtimeHash); err != nil {
-		var ie *InstallError
-		if errors.As(err, &ie) {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, ie.Stage, ie.Code, ie.Recovery)
-		}
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "preflight", "SHARED_BINARY_MISMATCH",
-			"The co-located Line pins a different MeshMux runtime build. Restore the matching build on both layouts, or use the validated coordinated Web upgrade from Issue #11 once it is available.")
-	}
-
-	configDir := filepath.Join(stageDir, "config")
-	if err := ensureDirectory(configDir, 0700); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-	}
-	stagedConfigs := map[string]string{}
-	keys := make([]string, 0, len(targetFiles))
-	for path := range targetFiles {
-		keys = append(keys, path)
-	}
-	sort.Strings(keys)
-	for _, target := range keys {
-		path := filepath.Join(configDir, filepath.Base(target))
-		if err := os.WriteFile(path, []byte(targetFiles[target]), 0600); err != nil {
-			return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check temporary disk space and permissions.")
-		}
-		stagedConfigs[target] = path
-	}
-	if _, err := opts.Runner.Run(ctx, caddyPath, "validate", "--config", stagedConfigs["/etc/meshmux/Caddyfile"], "--adapter", "caddyfile"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "CADDY_CONFIG_INVALID", "Review the generated Caddy configuration and domain values.")
-	}
-	// Configtest must never initialize the final SQLite database or production
-	// Noise/DERP keys as root. All mutable paths are redirected to a 0700
-	// operation-local scratch directory, following the my-sub staging pattern.
-	validationDir := filepath.Join(stageDir, "headscale-validation")
-	if err := ensureDirectory(validationDir, 0700); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check installer staging directory permissions.")
-	}
-	validationConfig := filepath.Join(validationDir, "headscale.yaml")
-	isolatedYAML := strings.ReplaceAll(targetFiles["/etc/meshmux/headscale.yaml"], "/var/lib/meshmux-headscale/", validationDir+"/")
-	isolatedYAML = strings.ReplaceAll(isolatedYAML, "/run/meshmux-headscale/", validationDir+"/")
-	if err := os.WriteFile(validationConfig, []byte(isolatedYAML), 0600); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "STAGE_UNAVAILABLE", "Check installer staging directory permissions.")
-	}
-	if _, err := opts.Runner.Run(ctx, headscalePath, "--config", validationConfig, "configtest"); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "HEADSCALE_CONFIG_INVALID", "Review the generated Headscale configuration for version 0.29.5.")
-	}
-	if err := record("stage", "validated", ""); err != nil {
-		return failAndRollback(result, state, previous, hasState, opts, nil, false, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions.")
-	}
+	stageDir, caddyPath, headscalePath := staged.stageDir, staged.caddyPath, staged.headscalePath
+	runtimeStage, runtimeHash := staged.runtimeStage, staged.runtimeHash
+	keys, stagedConfigs := staged.keys, staged.stagedConfigs
 
 	// Query first, install second (the cloud-init pattern). Repair must not
 	// re-run apt unconditionally: a transient repository failure would then
