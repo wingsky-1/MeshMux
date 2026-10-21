@@ -43,7 +43,7 @@ func dumpGuestServiceState(t *testing.T) {
 // identity tokens are never logged.
 func TestNodeSystemVM(t *testing.T) {
 	if os.Getenv("MESHMUX_NODE_SYSTEM_VM") != "1" {
-		t.Skip("requires an explicit disposable Debian 13 QEMU VM")
+		t.Skip("MESHMUX_NODE_SYSTEM_VM is not set to 1: requires an explicit disposable Debian 13 QEMU VM")
 	}
 	if os.Geteuid() != 0 {
 		t.Fatal("isolated VM integration test requires root")

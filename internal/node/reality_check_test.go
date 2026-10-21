@@ -29,7 +29,7 @@ import (
 func TestRealityNativeCheck(t *testing.T) {
 	binaryPath := os.Getenv("MESHMUX_REALITY_CHECK_BINARY")
 	if binaryPath == "" {
-		t.Skip("set MESHMUX_REALITY_CHECK_BINARY to the pinned sing-box binary")
+		t.Skip("MESHMUX_REALITY_CHECK_BINARY is not set: set it to an absolute path of the pinned sing-box binary")
 	}
 	if !filepath.IsAbs(binaryPath) {
 		t.Fatal("MESHMUX_REALITY_CHECK_BINARY must be an absolute path")

@@ -39,7 +39,7 @@ import (
 // never printed.
 func TestLocalLineSystemVM(t *testing.T) {
 	if os.Getenv("MESHMUX_LOCAL_LINE_VM") != "1" {
-		t.Skip("requires an explicit disposable Debian 13 QEMU VM with an installed Hub; set MESHMUX_LOCAL_LINE_VM=1")
+		t.Skip("MESHMUX_LOCAL_LINE_VM is not set to 1: requires an explicit disposable Debian 13 QEMU VM with an installed Hub")
 	}
 	if os.Geteuid() != 0 {
 		t.Fatal("isolated VM integration test requires root")
