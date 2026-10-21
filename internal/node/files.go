@@ -288,61 +288,6 @@ func managedFileUID(root string) int {
 	return os.Geteuid()
 }
 
-func writePrivateAtomic(root, path string, data []byte) error {
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return err
-	}
-	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return writeAtomic(path, data, 0600, false)
-}
-
-func writeCandidateAtomic(root, path string, data []byte) error {
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return err
-	}
-	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return errors.New("ACTIVE_CANDIDATE_UNAVAILABLE")
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
-		return errors.New("ACTIVE_CANDIDATE_PERMISSIONS: expected regular 0600")
-	}
-	return writeAtomic(path, data, 0600, true)
-}
-
-func writeExistingPrivateAtomic(root, path string, data []byte) error {
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return errors.New("PRIVATE_FILE_UNAVAILABLE")
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
-		return errors.New("PRIVATE_FILE_PERMISSIONS")
-	}
-	return writeAtomic(path, data, 0600, true)
-}
-
-func writeActiveAtomic(root, path string, data []byte) error {
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return errors.New("ACTIVE_CONFIG_UNAVAILABLE")
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0640 {
-		return errors.New("ACTIVE_CONFIG_PERMISSIONS: expected regular root:sing-box 0640")
-	}
-	return writeAtomic(path, data, 0640, true)
-}
-
 func writeStageAtomic(root, path string, data []byte) error {
 	if err := ensureNoSymlinkAncestors(root, path); err != nil {
 		return err
@@ -461,23 +406,6 @@ func writeAtomicOwned(path string, data []byte, mode os.FileMode, uid, gid int) 
 	defer dir.Close()
 	if err = dir.Sync(); err != nil {
 		return errors.New("ATOMIC_WRITE_DIRECTORY_SYNC_FAILED")
-	}
-	return nil
-}
-
-func removePrivateFile(root, path string) error {
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("PRIVATE_FILE_REMOVE_UNSAFE")
-	}
-	if err = os.Remove(path); err != nil {
-		return errors.New("PRIVATE_FILE_REMOVE_FAILED")
 	}
 	return nil
 }

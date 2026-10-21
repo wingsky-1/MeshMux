@@ -47,7 +47,6 @@ type runtimeTestRunner struct {
 	pid          int
 	listenPort   int
 	nextPID      int
-	cmdlinePath  string
 	execStart    string
 	restartFail  bool
 	nftRules     []string

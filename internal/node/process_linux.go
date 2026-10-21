@@ -78,14 +78,6 @@ func exeIsSupervisor(pid int, procRoot string) bool {
 	return strings.HasPrefix(base, "systemd-executor")
 }
 
-func processRunning(pid int) bool {
-	if pid < 1 {
-		return false
-	}
-	_, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid)))
-	return err == nil
-}
-
 func processArgv(pid int, procRoot string) ([]string, error) {
 	if pid < 1 {
 		return nil, errors.New("PROCESS_PID_INVALID")
