@@ -66,7 +66,7 @@
 
 常规本地流程（gofmt、vet、test、race、build）见 [DEVELOPMENT](DEVELOPMENT.zh-CN.md) 的“本地运行”小节，本文不重复。
 
-- 全量门禁：`make verify`。它依次执行 `fmt`、`vet`、`staticcheck`、`test`、`race`、`build`（`Makefile:35`），与 `ci` job `go` 的 step “Verify”（`.github/workflows/ci.yml:27`）一致；构建产物为 `/tmp/meshmux` 与 `/tmp/meshmux-web`（`Makefile:12,60-61`）。staticcheck 版本固定在 `Makefile:17`，首次运行需要下载模块。
+- 全量门禁：`make verify`。它依次执行 `fmt`、`vet`、`staticcheck`、`test`、`race`、`build`（`Makefile:34`），与 `ci` job `go` 的 step “Verify”（`.github/workflows/ci.yml:27`）一致；构建产物为 `/tmp/meshmux` 与 `/tmp/meshmux-web`（`Makefile:12,59-60`）。staticcheck 版本固定在 `Makefile:17`，首次运行需要下载模块。
 - 单包与快速回路：`go test ./...`；只跑一个包时用 `go test ./internal/install`、`go test ./internal/node`，加 `-run` 限定用例。竞态检测用 `go test -race ./...`。
 - 启用 opt-in 测试：第 2 节的变量未设置时相关测试会 `t.Skip`，因此 `go test ./...` 天然只跑 L1。示例：
 

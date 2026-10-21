@@ -17,12 +17,11 @@ BUILD_DIR ?= /tmp
 STATICCHECK_VERSION ?= v0.8.2
 STATICCHECK = $(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 
-# Findings already present on main when staticcheck was introduced
-# (2026-10-21): 13x U1000, 6x ST1013, 2x SA1019, 2x S1000, 1x SA4017,
-# 1x S1021, 1x S1016. They are still printed, but only these classes are
-# allowed to exit 0 until the refactor pays the debt down; every other check
-# is blocking. Never add a class here to silence findings in new code.
-STATICCHECK_BASELINE = all,-U1000,-ST1013,-SA1019,-S1000,-SA4017,-S1021,-S1016
+# Staticcheck runs with zero tolerance: the pre-existing findings present when
+# the gate was introduced (2026-10-21) were paid down to zero by Issue #20
+# (PRs #57-#60), so every check class is blocking. Never add an exemption
+# here to silence findings in new code.
+STATICCHECK_BASELINE = all
 
 .DEFAULT_GOAL := verify
 
