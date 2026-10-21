@@ -329,88 +329,31 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	activeCandidate, candidateConfig := finalized.activeCandidate, finalized.candidateConfig
 	managed, stagedManaged := finalized.managed, finalized.stagedManaged
 
-	if err := ensureNodeAccounts(ctx, opts.Runner, opts.Root, hasState); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "apply", "ACCOUNT_CREATE_FAILED", "Inspect meshmux-singbox and meshmux-agent accounts before retrying.")
+	applyFailures := nodeApplyErrors{
+		accountCreate:     &InstallError{Stage: "apply", Code: "ACCOUNT_CREATE_FAILED", Recovery: "Inspect meshmux-singbox and meshmux-agent accounts before retrying."},
+		dataDirectory:     &InstallError{Stage: "apply", Code: "DATA_DIRECTORY_FAILED", Recovery: "Check Agent and kernel data directory ownership; never expose the identity directory to the kernel group."},
+		backupDirectory:   &InstallError{Stage: "apply", Code: "BACKUP_FAILED", Recovery: "Check installer state disk space."},
+		backupSnapshot:    &InstallError{Stage: "apply", Code: "BACKUP_FAILED", Recovery: "No managed files were replaced; inspect the operation journal."},
+		journalFilesWrite: &InstallError{Stage: "apply", Code: "OPERATION_LOG_FAILED", Recovery: "Restore the journal before another apply."},
+		systemdUnit:       &InstallError{Stage: "verify", Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the fixed Agent, kernel and ACL units; no Node is installed until validation succeeds."},
+		fail2banConfig:    &InstallError{Stage: "verify", Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the Node SSH jail and preserve all existing Fail2ban jails."},
+		systemdReload:     &InstallError{Stage: "apply", Code: "SYSTEMD_RELOAD_FAILED", Recovery: "Inspect systemd and run --repair."},
+		fail2banStart:     &InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "Review Fail2ban logs and the Node SSH jail; do not alter sshd or flush nftables."},
+		fail2banReload:    &InstallError{Stage: "verify", Code: "FAIL2BAN_RELOAD_FAILED", Recovery: "Review Fail2ban logs and preserve existing jails."},
+		fail2banWait:      &InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "The Fail2ban service never became queryable; inspect the service and run --repair."},
+		hubJailReadback: func(err error) *InstallError {
+			return &InstallError{Stage: "verify", Code: "SSH_FAIL2BAN_JAIL_UNAVAILABLE", Recovery: "Read back the Hub Fail2ban action ports (" + err.Error() + ") and require every actual SSH listener, excluding VLESS."}
+		},
+		standaloneJailReadback: func(err error) *InstallError {
+			return &InstallError{Stage: "verify", Code: "SSH_FAIL2BAN_JAIL_UNAVAILABLE", Recovery: "Read back the Fail2ban action ports (" + err.Error() + ") and require every actual SSH listener, excluding VLESS."}
+		},
 	}
-	if err := ensureNodeDirectories(ctx, opts); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "apply", "DATA_DIRECTORY_FAILED", "Check Agent and kernel data directory ownership; never expose the identity directory to the kernel group.")
-	}
-
 	backupDir := filepath.Join(operationDir, "backup")
-	if err := ensureDirectory(backupDir, 0700); err != nil {
-		return failNodePartial(result, state, opts, layout, record, "apply", "BACKUP_FAILED", "Check installer state disk space.")
+	applied, applyErr := nodeApplyAndVerify(ctx, &result, &state, &opts, layout, record, previous, hasState, repair, cfg, managed, stagedManaged, agentPath, kernelPath, backupDir, sshPorts, applyFailures)
+	if applyErr != nil {
+		return result, applyErr
 	}
-	staticTargets := nodeStaticTargets(managed)
-	allTargets := append(append([]string{}, staticTargets...), node.AgentBinaryPath, node.SingBoxBinaryPath)
-	if repair {
-		allTargets = append(allTargets, node.ActiveCandidatePath, node.ActiveConfigPath)
-	}
-	// A co-located Line reuses the Hub-owned MeshMux runtime verbatim. The
-	// shared binary is neither snapshotted nor rolled back, and it is never
-	// rewritten by the Line.
-	sharedAgent := ""
-	if layout.CoLocated {
-		sharedAgent = layout.SharedAgent
-		allTargets = removeTarget(allTargets, sharedAgent)
-	}
-	snapshots, err := snapshotNodeTargets(opts.Root, allTargets, state, hasState, backupDir)
-	if err != nil {
-		return failNodePartial(result, state, opts, layout, record, "apply", "BACKUP_FAILED", "No managed files were replaced; inspect the operation journal.")
-	}
-	applyFiles := map[string]string{
-		node.SingBoxBinaryPath: kernelPath,
-	}
-	if sharedAgent == "" {
-		applyFiles[node.AgentBinaryPath] = agentPath
-	}
-	for path, staged := range stagedManaged {
-		applyFiles[path] = staged
-	}
-	if err := applyNodeFiles(ctx, opts, layout, state, managed, applyFiles, backupDir); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", err)
-	}
-	if err := record("apply", "files_written", ""); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", &InstallError{Code: "OPERATION_LOG_FAILED", Recovery: "Restore the journal before another apply."})
-	}
-
-	unitPaths := nodeUnitPaths(opts.Root, cfg)
-	if unitErr := validateStagedUnits(ctx, opts.Runner, unitPaths,
-		&InstallError{Stage: "verify", Code: "SYSTEMD_UNIT_INVALID", Recovery: "Review the fixed Agent, kernel and ACL units; no Node is installed until validation succeeds."},
-		&InstallError{Stage: "verify", Code: "FAIL2BAN_CONFIG_INVALID", Recovery: "Review the Node SSH jail and preserve all existing Fail2ban jails."}); unitErr != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, unitErr.Stage, unitErr)
-	}
-	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return rollbackNodeFailure(result, state, previous, hasState, opts, layout, snapshots, record, "apply", &InstallError{Code: "SYSTEMD_RELOAD_FAILED", Recovery: "Inspect systemd and run --repair."})
-	}
-
-	if fail2banErr := ensureFail2banRunning(ctx, opts.Runner,
-		&InstallError{Stage: "verify", Code: "FAIL2BAN_START_FAILED", Recovery: "Review Fail2ban logs and the Node SSH jail; do not alter sshd or flush nftables."},
-		&InstallError{Stage: "verify", Code: "FAIL2BAN_RELOAD_FAILED", Recovery: "Review Fail2ban logs and preserve existing jails."}); fail2banErr != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, fail2banErr.Stage, fail2banErr.Code, fail2banErr.Recovery)
-	}
-	// The daemon answers fail2ban-client only after its socket exists and the
-	// jail is loaded. Querying immediately after (re)start loses with exit
-	// 255 on fast hosts, so wait for the jail to become queryable first.
-	//
-	// A standalone Line owns its own SSH jail. A co-located Line reuses the
-	// Hub's jail: a second jail for the same listeners would duplicate the
-	// ban rules, so the Line verifies the existing jail instead of
-	// installing one.
-	if layout.ReuseHubSSHJail {
-		if err := waitFail2banJailNamed(ctx, opts.Runner, hubSSHJailName); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_START_FAILED", "The Fail2ban service never became queryable; inspect the service and run --repair.")
-		}
-		if err := verifyFail2banJailPorts(ctx, opts.Runner, hubSSHJailName, sshPorts); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Hub Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
-		}
-	} else {
-		if err := waitFail2banJail(ctx, opts.Runner); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "FAIL2BAN_START_FAILED", "The Fail2ban service never became queryable; inspect the service and run --repair.")
-		}
-		if err := verifyNodeSSHJail(ctx, opts.Runner, sshPorts...); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "SSH_FAIL2BAN_JAIL_UNAVAILABLE", "Read back the Fail2ban action ports ("+err.Error()+") and require every actual SSH listener, excluding VLESS.")
-		}
-	}
+	backupDir = applied.backupDir
 	if repair {
 		lockCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		lock, lockErr := node.AcquireRuntimeLock(lockCtx, opts.Root)
