@@ -37,7 +37,7 @@
 
 ## Issue #6 PR-A 本地验收
 
-- [x] **PR-A 本地验收（A/L1）**：Agent 严格协议、配对、任务状态与持久化边界，以及 Web 节点基础能力已由主控完成本地验收；完整 race、格式与 diff check 通过，浏览器复核完成，关键协议、迁移和 Web mutation 证据见 [PR-A 评审](PHASE2B_REVIEW.zh-CN.md)。
+- [x] **PR-A 本地验收（A/L1）**：Agent 严格协议、配对、任务状态与持久化边界，以及 Web 节点基础能力已由主控完成本地验收；完整 race、格式与 diff check 通过，浏览器复核完成，关键协议、迁移和 Web mutation 证据见下文 #6 历史验收记录。
 - [x] **#6 合入状态**：PR #18 已合入 `17c4e4c`，Issue #6 已关闭。最终 head `0149581` 的 [ci 39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) success；不得把这一历史证据用于 #7 的新实现验收。
 
 ## Issue #6 PR-B 实现与验收
