@@ -73,6 +73,58 @@ jobs:
           done
           echo "install CLI refused as expected and left no host state"
 
+  templ-drift:
+    # The committed *_templ.go files are build artifacts of the .templ sources
+    # (see .gitattributes). `templ generate` must therefore be a no-op on a
+    # clean tree: a hand-edited generated file, or a .templ change that was
+    # never regenerated, leaves a diff and fails here. The generator version is
+    # pinned by the //go:generate directive in internal/web/views.go (v0.3.1070,
+    # matching go.mod); this job rejects @latest and a pin that disagrees with
+    # go.mod, so the two cannot drift.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Generator version must be pinned and match go.mod
+        run: |
+          set -Eeuo pipefail
+          directive=$(grep -h '^//go:generate .*templ.* generate' internal/web/*.go)
+          echo "directive: $directive"
+          if echo "$directive" | grep -q '@latest'; then
+            echo "::error::templ generate must pin a version, not @latest" >&2
+            exit 1
+          fi
+          pinned=$(echo "$directive" | sed -n 's/.*@\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+          if [ -z "$pinned" ]; then
+            echo "::error::templ generate has no @vX.Y.Z pin" >&2
+            exit 1
+          fi
+          required=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          if [ "$pinned" != "$required" ]; then
+            echo "::error::templ generator $pinned does not match go.mod ($required)" >&2
+            exit 1
+          fi
+          echo "templ generator pinned to $pinned"
+      - name: Regenerate templ views
+        run: go generate ./internal/web
+      - name: Generated templ views must match their sources
+        run: |
+          set -Eeuo pipefail
+          # -N stages untracked generated files as intent-to-add so a newly
+          # created *_templ.go shows up in the diff instead of being ignored.
+          git add -N -- 'internal/web/*_templ.go'
+          if ! git diff --exit-code -- 'internal/web/*_templ.go'; then
+            echo "::error::committed *_templ.go files drift from the .templ sources; run 'go generate ./internal/web' and commit the result" >&2
+            exit 1
+          fi
+          echo "templ generated files match their sources"
+
   web-preview:
     # Real browser evidence runs here because restricted local containers may
     # have no non-root UID or browser sockets. No production credentials/services.
