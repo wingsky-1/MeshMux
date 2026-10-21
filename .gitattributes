@@ -1,0 +1,4 @@
+# templ-generated Go files are build artifacts, not hand-written source.
+# Marking them generated keeps them out of GitHub language statistics and
+# collapses them in diffs. Edit the *_templ.templ source and regenerate instead.
+*_templ.go linguist-generated=true
