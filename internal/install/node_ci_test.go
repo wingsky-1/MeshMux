@@ -163,7 +163,7 @@ func TestNodeComponentFixturesStayRoleAndPortBound(t *testing.T) {
 
 func TestNodePlanUsesPinnedKernelAndRoleUnits(t *testing.T) {
 	for _, role := range []node.Role{node.RoleEdge, node.RoleOut} {
-		plan := BuildNodePlan(strings.Repeat("d", 32), componentNodeConfig(role), "amd64",
+		plan := BuildNodePlanForRoot(t.TempDir(), strings.Repeat("d", 32), componentNodeConfig(role), "amd64",
 			[]Check{{Name: "system", Status: "pass"}}, []int{2222})
 		wantKernel, ok := node.KernelReleaseFor("amd64")
 		if !ok {

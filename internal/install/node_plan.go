@@ -186,10 +186,6 @@ func waitForClockSync(ctx context.Context, runner CommandRunner) error {
 	}
 }
 
-func BuildNodePlan(id string, cfg node.Config, architecture string, checks []Check, ssh []int) NodePlan {
-	return buildNodePlan(id, cfg, architecture, checks, ssh, nodeLayout{})
-}
-
 // BuildNodePlanForRoot builds the read-only plan from the host's own recorded
 // layout. A co-located Line never writes the Hub-owned runtime binary or a
 // second SSH jail, so those belong in ReusedPaths instead of Paths. A host

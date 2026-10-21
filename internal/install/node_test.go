@@ -261,7 +261,7 @@ func TestSameNodeConfigIgnoresInstalledDigests(t *testing.T) {
 
 func TestNodePlanRoleUnitsAndHubArtifactsRemainSeparate(t *testing.T) {
 	cfg := node.Config{HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32), Role: node.RoleOut, VLESSPort: 8443, SSHPort: 2222}
-	plan := BuildNodePlan(strings.Repeat("f", 32), cfg, "amd64", []Check{{Name: "external", Status: "pending"}}, []int{2222})
+	plan := BuildNodePlanForRoot(t.TempDir(), strings.Repeat("f", 32), cfg, "amd64", []Check{{Name: "external", Status: "pending"}}, []int{2222})
 	if plan.Config.HubURL != cfg.HubURL || plan.Config.VLESSPort != cfg.VLESSPort || !plan.ApplyAvailable {
 		t.Fatalf("Node plan config/status = %+v", plan)
 	}
