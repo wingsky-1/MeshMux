@@ -354,71 +354,21 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return result, applyErr
 	}
 	backupDir = applied.backupDir
-	if repair {
-		lockCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		lock, lockErr := node.AcquireRuntimeLock(lockCtx, opts.Root)
-		cancel()
-		if lockErr != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "NODE_RUNTIME_BUSY", "The Agent runtime is applying a task. Preserve the active data plane and repair after the shared runtime lock is free.")
-		}
-		defer lock.Close()
+	verifyFailures := nodeVerifyErrors{
+		runtimeBusy:          &InstallError{Stage: "verify", Code: "NODE_RUNTIME_BUSY", Recovery: "The Agent runtime is applying a task. Preserve the active data plane and repair after the shared runtime lock is free."},
+		kernelConfigApply:    &InstallError{Stage: "apply", Code: "KERNEL_CONFIG_APPLY_FAILED", Recovery: "The validated data plane files could not be installed; no Agent was started."},
+		outACLApply:          &InstallError{Stage: "verify", Code: "OUT_ACL_APPLY_FAILED", Recovery: "Out ACL failed before the kernel started; no VLESS data plane is considered installed."},
+		outACLReadback:       &InstallError{Stage: "verify", Code: "OUT_ACL_READBACK_FAILED", Recovery: "Out ACL ownership or default-deny readback failed; keep the kernel stopped and repair the exact table."},
+		kernelStart:          &InstallError{Stage: "verify", Code: "KERNEL_START_FAILED", Recovery: "Review sing-box logs and the active configuration; the Agent remains stopped."},
+		nativeReadbackFormat: "The kernel remains active but native readback failed (%v). Repair the data plane; the Agent was not started.",
+		journalDataPlane:     &InstallError{Stage: "verify", Code: "OPERATION_LOG_FAILED", Recovery: "The validated data plane is active; restore the journal before retrying."},
+		agentStart:           &InstallError{Stage: "verify", Code: "AGENT_START_FAILED", Recovery: "The verified data plane remains active. Repair only the Agent service; do not stop sing-box."},
+		finalLedger:          &InstallError{Stage: "verify", Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "The data plane and Agent are active but the final ledger failed; preserve them and repair state."},
+		journalVerifyPass:    &InstallError{Stage: "verify", Code: "OPERATION_LOG_FAILED", Recovery: "The Node is active but the journal write failed; repair only state/logging."},
 	}
-	_, lkgOK := nodeValidLKG(opts.Root, installedCfg)
-	if !repair || !lkgOK {
-		if err := installNodeDynamic(ctx, opts, activeCandidate, candidateConfig, installedCfg.Role); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "apply", "KERNEL_CONFIG_APPLY_FAILED", "The validated data plane files could not be installed; no Agent was started.")
-		}
+	if verifyErr := nodeVerifyTail(ctx, &result, &state, &opts, layout, record, repair, cfg, installedCfg, activeCandidate, candidateConfig, checks, artifacts, stageDir, backupDir, verifyFailures); verifyErr != nil {
+		return result, verifyErr
 	}
-	if cfg.Role == node.RoleOut {
-		// The ACL unit applies /var/lib/meshmux-agent/out.nft, which is
-		// written by installNodeDynamic above. Starting it earlier fails on
-		// a clean host where the file does not exist yet.
-		if err := activateNodeUnit(ctx, opts.Runner, node.ACLUnit, repair); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "OUT_ACL_APPLY_FAILED", "Out ACL failed before the kernel started; no VLESS data plane is considered installed.")
-		}
-		if err := verifyNodeACLReadback(ctx, opts.Runner, installedCfg.VLESSPort); err != nil {
-			return failVerifiedPartial(result, state, opts, layout, record, "verify", "OUT_ACL_READBACK_FAILED", "Out ACL ownership or default-deny readback failed; keep the kernel stopped and repair the exact table.")
-		}
-	}
-	if err := activateNodeUnit(ctx, opts.Runner, node.SingBoxUnit, repair); err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "KERNEL_START_FAILED", "Review sing-box logs and the active configuration; the Agent remains stopped.")
-	}
-	nativeReadback, err := pollNodeReadback(ctx, opts, installedCfg)
-	if err == nil {
-		err = nativeReadback.Validate()
-	}
-	if err == nil {
-		err = opts.Verify(ctx, installedCfg, opts.Runner, nativeReadback)
-	}
-	if err == nil && lkgOK {
-		if currentDigest, currentOK := nodeValidLKG(opts.Root, installedCfg); !currentOK || currentDigest != nativeReadback.ConfigSHA256 {
-			err = errors.New("LKG_READBACK_HASH_MISMATCH")
-		}
-	}
-	if err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "NATIVE_READBACK_FAILED", fmt.Sprintf("The kernel remains active but native readback failed (%v). Repair the data plane; the Agent was not started.", err))
-	}
-	if err := record("verify", "data_plane_active", ""); err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "OPERATION_LOG_FAILED", "The validated data plane is active; restore the journal before retrying.")
-	}
-	// The installer holds the shared runtime lock here. Do not restart an
-	// already-running Agent: restart would make the new process wait on this
-	// same lock. enable --now is idempotent and starts it only when inactive.
-	if _, err := opts.Runner.Run(ctx, "systemctl", "enable", "--now", node.AgentUnit); err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "AGENT_START_FAILED", "The verified data plane remains active. Repair only the Agent service; do not stop sing-box.")
-	}
-	state.Status, state.Stage, state.ErrorCode, state.Recovery = "installed", "verify", "", ""
-	state.UpdatedAt = time.Now().UTC()
-	if err := writeNodeState(opts.Root, layout, state); err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "INSTALL_STATE_WRITE_FAILED", "The data plane and Agent are active but the final ledger failed; preserve them and repair state.")
-	}
-	if err := record("verify", "pass", ""); err != nil {
-		return failVerifiedPartial(result, state, opts, layout, record, "verify", "OPERATION_LOG_FAILED", "The Node is active but the journal write failed; repair only state/logging.")
-	}
-	_ = os.RemoveAll(stageDir)
-	_ = os.RemoveAll(backupDir)
-	result.Stage, result.Status, result.Checks = "verify", "installed", checks
-	result.Artifacts = nodeComponents(artifacts)
 	return result, nil
 }
 
