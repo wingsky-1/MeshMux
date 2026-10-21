@@ -62,18 +62,36 @@ type Runtime struct {
 }
 
 type runtimeState struct {
-	Schema           string                         `json:"schema"`
-	NodeID           string                         `json:"node_id"`
-	Role             Role                           `json:"role"`
-	Revision         int64                          `json:"revision,omitempty"`
-	LastTaskRevision int64                          `json:"last_task_revision,omitempty"`
-	Digest           string                         `json:"digest,omitempty"`
-	LKG              []byte                         `json:"lkg,omitempty"`
-	LKGDigest        string                         `json:"lkg_digest,omitempty"`
-	AllowedSources   []string                       `json:"allowed_sources,omitempty"`
-	Journal          *applyJournal                  `json:"journal,omitempty"`
-	Idempotency      map[string]idempotencyItem     `json:"idempotency,omitempty"`
-	FinalResults     map[string]protocol.TaskResult `json:"final_results,omitempty"`
+	Schema           string   `json:"schema"`
+	NodeID           string   `json:"node_id"`
+	Role             Role     `json:"role"`
+	Revision         int64    `json:"revision,omitempty"`
+	LastTaskRevision int64    `json:"last_task_revision,omitempty"`
+	Digest           string   `json:"digest,omitempty"`
+	LKG              []byte   `json:"lkg,omitempty"`
+	LKGDigest        string   `json:"lkg_digest,omitempty"`
+	AllowedSources   []string `json:"allowed_sources,omitempty"`
+	// AllowedSourcesRecorded distinguishes an applied empty allowlist (the
+	// fail-closed default-deny data plane, which must be asserted exactly) from
+	// no recorded authorization at all (a fresh bootstrap or a lost state file,
+	// where only the guard shape can be proven).
+	AllowedSourcesRecorded bool                           `json:"allowed_sources_recorded,omitempty"`
+	Journal                *applyJournal                  `json:"journal,omitempty"`
+	Idempotency            map[string]idempotencyItem     `json:"idempotency,omitempty"`
+	FinalResults           map[string]protocol.TaskResult `json:"final_results,omitempty"`
+}
+
+// aclExpectation returns the readback expectation for this state: the recorded
+// applied allowlist when one exists, otherwise a shape-only expectation.
+//
+// A state written before AllowedSourcesRecorded existed may still carry a
+// non-empty list; that list is a real applied record, so it counts as recorded.
+// An empty list without the flag is "nothing recorded", never "authorize
+// nobody", because treating it as the latter would permanently fail an Out
+// whose state file was lost until the Hub re-applied.
+func (s runtimeState) aclExpectation() aclExpectation {
+	recorded := s.AllowedSourcesRecorded || len(s.AllowedSources) > 0
+	return aclExpectation{sources: s.AllowedSources, assertSet: recorded}
 }
 
 type idempotencyItem struct {
@@ -268,17 +286,18 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	if err = writeStageAtomic(r.root, stagedConfigPath(r.root, document.Revision), configData); err != nil {
 		return err
 	}
-	allowed, err := r.bootstrapAllowedSources(document.Candidate())
-	if err != nil {
-		return err
-	}
+	// No runtime state exists yet, so there is no trusted record of an applied
+	// allowlist. The managed ACL file is deliberately not read here: a file
+	// edited out of band would then authorize itself. The bootstrap readback
+	// proves only the guard shape and both drops; the real authorization
+	// arrives with the next Hub task and is recorded in state.json there.
 	// The kernel may still be starting (systemd runs Agent and kernel
 	// concurrently with no ordering between them). Poll a bounded number of
 	// times for startup-transient signals; anything deterministic fails fast
 	// so a broken data plane is never mistaken for a slow one.
 	var readback Readback
 	for i := 0; ; i++ {
-		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData), allowed)
+		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData), aclExpectation{})
 		if err == nil || !TransientReadback(err) || i >= 29 {
 			break
 		}
@@ -291,28 +310,7 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	state.Digest = sha256Hex(candidateData)
 	state.LKG = append([]byte(nil), configData...)
 	state.LKGDigest = readback.ConfigSHA256
-	state.AllowedSources = allowed
 	return nil
-}
-
-// bootstrapAllowedSources recovers the applied source allowlist from the
-// managed ACL file when the Agent has no runtime state yet (fresh install or a
-// lost state file). The file must be exactly the canonical render for the
-// candidate, so a hand-edited table cannot bootstrap an authorization the Hub
-// never granted. An Edge has no Out table, so it authorizes nothing.
-func (r *Runtime) bootstrapAllowedSources(candidate Candidate) ([]string, error) {
-	if r.cfg.Role != RoleOut {
-		return nil, nil
-	}
-	acl, _, err := readRegularFile(rooted(r.root, ACLPath), true)
-	if err != nil {
-		return nil, errors.New("BOOTSTRAP_ACL_UNAVAILABLE")
-	}
-	allowed, err := ParseACLAllowed(candidate, acl)
-	if err != nil {
-		return nil, errors.New("BOOTSTRAP_ACL_INVALID")
-	}
-	return allowed, nil
 }
 
 func (r *Runtime) persistState(state *runtimeState) error {

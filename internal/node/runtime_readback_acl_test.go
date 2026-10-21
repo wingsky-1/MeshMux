@@ -141,6 +141,222 @@ func TestReadbackACLAcceptsBothNFTPrefixSpellings(t *testing.T) {
 	}
 }
 
+// TestReadbackACLShapeOnlyWithoutState pins the degraded bootstrap path: with no
+// runtime state there is no trusted record of an applied allowlist, so only the
+// guard shape and both drops are asserted. The accept set is deliberately not
+// compared, because the only remaining candidate expectation would be the ACL
+// file itself.
+func TestReadbackACLShapeOnlyWithoutState(t *testing.T) {
+	base := validNFTRules(8443)
+	shapeOnly := []byte(`{"nftables":[` + strings.Join([]string{base[0], base[1], base[2], base[3]}, ",") + `]}`)
+	if err := VerifyOutACLShapeDocument(shapeOnly, 8443); err != nil {
+		t.Fatalf("default-deny guard rejected by shape check: %v", err)
+	}
+	// An accept the Hub never authorized is not distinguished here (there is
+	// no anchor), but the shape must still be complete.
+	withAccept := []byte(`{"nftables":[` + strings.Join([]string{base[0], base[1],
+		nftAcceptRule("ip", "240.0.0.0/32", 8443), base[2], base[3]}, ",") + `]}`)
+	if err := VerifyOutACLShapeDocument(withAccept, 8443); err != nil {
+		t.Fatalf("shape check rejected a complete guard: %v", err)
+	}
+	// Every shape violation still fails.
+	for name, output := range map[string][]byte{
+		"no drops": []byte(`{"nftables":[` + strings.Join([]string{base[0], base[1]}, ",") + `]}`),
+		"policy drop": []byte(`{"nftables":[` + strings.Join([]string{base[0],
+			strings.Replace(base[1], `"policy":"accept"`, `"policy":"drop"`, 1), base[2], base[3]}, ",") + `]}`),
+		"wrong prio": []byte(`{"nftables":[` + strings.Join([]string{base[0],
+			strings.Replace(base[1], `"prio":-10`, `"prio":0`, 1), base[2], base[3]}, ",") + `]}`),
+		"foreign table": []byte(`{"nftables":[` + strings.Join([]string{
+			strings.Replace(base[0], `"meshmux_out"`, `"other"`, 1), base[1], base[2], base[3]}, ",") + `]}`),
+		"accept after drop": []byte(`{"nftables":[` + strings.Join([]string{base[0], base[1], base[2],
+			nftAcceptRule("ip", "203.0.113.7/32", 8443), base[3]}, ",") + `]}`),
+	} {
+		if err := VerifyOutACLShapeDocument(output, 8443); err == nil {
+			t.Errorf("%s accepted by shape check", name)
+		}
+	}
+}
+
+// TestAppliedAllowedSourcesIsTheOnlyAnchor pins the accessor the installer uses:
+// the recorded allowlist is returned only from a valid state file for this exact
+// node, and a missing state is reported as "no record" rather than as an empty
+// authorization.
+func TestAppliedAllowedSourcesIsTheOnlyAnchor(t *testing.T) {
+	root, cfg, identity, runner := createRuntimeFixture(t, RoleOut, 7)
+	cfg.Role, cfg.VLESSPort = RoleOut, 8443
+	runner.listenPort = 8443
+	controller := &runtimeTestController{candidate: testCandidate(9)}
+	controller.candidate.Role = RoleOut
+	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
+
+	// A freshly bootstrapped Out has state but no recorded authorization, so the
+	// accessor reports "no record" instead of an empty allowlist. Treating it as
+	// an empty applied set would permanently fail the node until the Hub
+	// re-applied, and treating it as any set would trust nothing.
+	applied, recorded, err := AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+	if err != nil || recorded || len(applied) != 0 {
+		t.Fatalf("bootstrap accessor = %v, %v, %v; want nil,false,nil", applied, recorded, err)
+	}
+
+	allowed := []string{"203.0.113.7", "2001:db8::/32"}
+	apply := aclTask(t, protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9, allowed)
+	if result := runtime.Execute(context.Background(), apply); result.Status != "healthy" {
+		t.Fatalf("apply = %+v", result)
+	}
+	applied, recorded, err = AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+	if err != nil || !recorded || !sameACLSources(applied, allowed) {
+		t.Fatalf("accessor after apply = %v, %v, %v", applied, recorded, err)
+	}
+	// An explicitly applied empty allowlist is a real record (default deny), not
+	// "nothing recorded", so readbacks must assert it exactly.
+	emptyApply := aclTask(t, protocol.KindConfigApply, strings.Repeat("7", 32), strings.Repeat("8", 32), 13, 9, []string{})
+	if result := runtime.Execute(context.Background(), emptyApply); result.Status != "healthy" {
+		t.Fatalf("empty-allowlist apply = %+v", result)
+	}
+	applied, recorded, err = AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+	if err != nil || !recorded || len(applied) != 0 {
+		t.Fatalf("accessor after empty apply = %v, %v, %v; want [],true,nil", applied, recorded, err)
+	}
+
+	// A different node never inherits this host's record.
+	if _, recorded, err = AppliedAllowedSources(root, strings.Repeat("b", 32), cfg.Role); err == nil || recorded {
+		t.Fatalf("accessor accepted a foreign node: %v %v", recorded, err)
+	}
+	// A missing state file is "no record", never an empty authorization.
+	if err := os.Remove(rooted(root, RuntimeStatePath)); err != nil {
+		t.Fatal(err)
+	}
+	applied, recorded, err = AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+	if err != nil || recorded || len(applied) != 0 {
+		t.Fatalf("missing-state accessor = %v, %v, %v; want nil,false,nil", applied, recorded, err)
+	}
+	// A malformed state is an error, not a downgrade.
+	if err := os.WriteFile(rooted(root, RuntimeStatePath), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, recorded, err = AppliedAllowedSources(root, cfg.NodeID, cfg.Role); err == nil || recorded {
+		t.Fatalf("malformed state accepted: %v %v", recorded, err)
+	}
+}
+
+// TestReadbackBootstrapIgnoresTamperedACLFile is the fail-open regression for
+// the state-loss path: a canonical-looking ACL file with a late injected accept
+// must not become its own authorization, and the bootstrap readback must not
+// claim an exact accept set it cannot know.
+func TestReadbackBootstrapIgnoresTamperedACLFile(t *testing.T) {
+	root, cfg, _, runner := createRuntimeFixture(t, RoleOut, 7)
+	cfg.Role, cfg.VLESSPort = RoleOut, 8443
+	runner.listenPort = 8443
+	outCandidate := testCandidate(7).Candidate()
+	outCandidate.Role = RoleOut
+	base, err := CompileACL(outCandidate, []string{"203.0.113.7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(base),
+		"    tcp dport 8443 drop",
+		"    ip saddr 240.0.0.0/32 tcp dport 8443 accept\n    tcp dport 8443 drop", 1)
+	if _, err := ParseACLAllowed(outCandidate, []byte(tampered)); err != nil {
+		t.Fatalf("tampered ACL is not even a canonical render: %v", err)
+	}
+	if err := os.WriteFile(rooted(root, ACLPath), []byte(tampered), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner.nftRules = nftRulesFromScript(tampered, 8443)
+
+	// No runtime state exists: the readback may only assert shape, so it
+	// succeeds, but it must not record the injected source as authorized.
+	readback, err := ReadbackLocal(context.Background(), cfg, root, runner)
+	if err != nil {
+		t.Fatalf("shape-only bootstrap rejected a complete guard: %v", err)
+	}
+	if !readback.OutDefaultDeny {
+		t.Fatal("bootstrap readback lost the default-deny guard evidence")
+	}
+	applied, recorded, err := AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+	if err != nil || recorded || len(applied) != 0 {
+		t.Fatalf("bootstrap recorded an authorization from the file: %v %v %v", applied, recorded, err)
+	}
+}
+
+// TestReadbackRejectsLateInjectedAcceptUnderRecordedState is the second half of
+// the fail-open regression: once state.json records what the Hub authorized, the
+// same late injected accept (240.0.0.0/32 sorts after 203.0.113.7) must fail the
+// live readback instead of being accepted because the file re-renders cleanly.
+func TestReadbackRejectsLateInjectedAcceptUnderRecordedState(t *testing.T) {
+	root, cfg, identity, runner := createRuntimeFixture(t, RoleOut, 7)
+	cfg.Role, cfg.VLESSPort = RoleOut, 8443
+	runner.listenPort = 8443
+	controller := &runtimeTestController{candidate: testCandidate(9)}
+	controller.candidate.Role = RoleOut
+	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
+	apply := aclTask(t, protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9,
+		[]string{"203.0.113.7"})
+	if result := runtime.Execute(context.Background(), apply); result.Status != "healthy" {
+		t.Fatalf("apply = %+v", result)
+	}
+	// The live table now carries an accept nobody authorized.
+	runner.unauthorizedAccept = "240.0.0.0/32"
+	if _, err := ReadbackLocal(context.Background(), cfg, root, runner); err == nil ||
+		!strings.Contains(err.Error(), "OUT_ACL_RULE_INVALID") {
+		t.Fatalf("late-injected accept under recorded state = %v, want OUT_ACL_RULE_INVALID", err)
+	}
+	// A readback task with the same applied allowlist also fails. The fake
+	// injection is one-shot, so it is re-armed for this second read.
+	runner.unauthorizedAccept = "240.0.0.0/32"
+	taskReadback := aclTask(t, protocol.KindConfigReadback, strings.Repeat("3", 32), strings.Repeat("4", 32), 12, 9,
+		[]string{"203.0.113.7"})
+	if result := runtime.Execute(context.Background(), taskReadback); result.ErrorCode != "OUT_ACL_RULE_INVALID" {
+		t.Fatalf("tampered table readback task = %+v", result)
+	}
+	// A task naming a different allowlist fails as a source mismatch before the
+	// table is even compared.
+	runner.unauthorizedAccept = ""
+	other := aclTask(t, protocol.KindConfigReadback, strings.Repeat("5", 32), strings.Repeat("6", 32), 13, 9,
+		[]string{"198.51.100.0/24"})
+	if result := runtime.Execute(context.Background(), other); result.ErrorCode != "OUT_ACL_SOURCE_MISMATCH" {
+		t.Fatalf("mismatched readback task = %+v", result)
+	}
+}
+
+// TestReadbackAfterStateLossIsShapeOnly pins that losing state.json on an
+// authorized Out does not brick the node and does not launder the file into an
+// authorization: the readback proves the guard shape, reports default-deny
+// evidence, and records no allowlist until the Hub re-applies.
+func TestReadbackAfterStateLossIsShapeOnly(t *testing.T) {
+	root, cfg, identity, runner := createRuntimeFixture(t, RoleOut, 7)
+	cfg.Role, cfg.VLESSPort = RoleOut, 8443
+	runner.listenPort = 8443
+	controller := &runtimeTestController{candidate: testCandidate(9)}
+	controller.candidate.Role = RoleOut
+	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
+	apply := aclTask(t, protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9,
+		[]string{"203.0.113.7"})
+	if result := runtime.Execute(context.Background(), apply); result.Status != "healthy" {
+		t.Fatalf("apply = %+v", result)
+	}
+	// Simulate a lost state file while the applied table stays in place.
+	if err := os.Remove(rooted(root, RuntimeStatePath)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadbackLocal(context.Background(), cfg, root, runner); err != nil {
+		t.Fatalf("readback after state loss = %v; want shape-only pass", err)
+	}
+	if applied, recorded, err := AppliedAllowedSources(root, cfg.NodeID, cfg.Role); err != nil || recorded || len(applied) != 0 {
+		t.Fatalf("state loss recorded an authorization: %v %v %v", applied, recorded, err)
+	}
+	// A tampered table with an extra accept is still not distinguished here, but
+	// the next Hub readback task (which carries the Hub's own allowlist) fails on
+	// the mismatch instead of silently accepting the injected source.
+	runner.unauthorizedAccept = "240.0.0.0/32"
+	readbackTask := aclTask(t, protocol.KindConfigReadback, strings.Repeat("3", 32), strings.Repeat("4", 32), 12, 9,
+		[]string{"203.0.113.7"})
+	result := runtime.Execute(context.Background(), readbackTask)
+	if result.Status == "healthy" {
+		t.Fatalf("tampered table after state loss reported healthy: %+v", result)
+	}
+}
+
 // TestReadbackACLRejectsInvalidExpectation pins that a bad Hub allowlist never
 // reaches a comparison: it fails as ACL_SOURCE_INVALID instead of matching a
 // table by accident.

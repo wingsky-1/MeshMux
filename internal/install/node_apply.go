@@ -761,17 +761,23 @@ func activateNodeUnit(ctx context.Context, runner CommandRunner, unit string, re
 	return err
 }
 
-func verifyNodeACLReadback(ctx context.Context, runner CommandRunner, root string, candidate node.Candidate, vlessPort int) error {
+// verifyNodeACLReadback proves the live Out guard matches the authorization the
+// Agent actually recorded as applied. The managed ACL file is never used as the
+// expectation: it is the very artifact under suspicion, so a file edited out of
+// band would otherwise authorize itself (an accept appended after the sorted
+// sources re-renders to the same bytes it was parsed from).
+//
+// When state.json is absent or does not yet record an allowlist (first install,
+// or a lost state file), no trusted expectation exists. The readback then
+// degrades to a shape-only assertion — MeshMux table, input chain at priority
+// -10, both VLESS drops — and deliberately does not assert the accept set.
+func verifyNodeACLReadback(ctx context.Context, runner CommandRunner, root string, cfg node.Config, candidate node.Candidate, vlessPort int) error {
 	aclPath := rooted(root, node.ACLPath)
 	info, err := os.Lstat(aclPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
 		return errors.New("OUT_ACL_READBACK_FAILED")
 	}
-	aclData, err := os.ReadFile(aclPath)
-	if err != nil {
-		return errors.New("OUT_ACL_READBACK_FAILED")
-	}
-	allowed, err := node.ParseACLAllowed(candidate, aclData)
+	applied, recorded, err := node.AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
 	if err != nil {
 		return errors.New("OUT_ACL_READBACK_FAILED")
 	}
@@ -779,7 +785,13 @@ func verifyNodeACLReadback(ctx context.Context, runner CommandRunner, root strin
 	if err != nil {
 		return errors.New("OUT_ACL_READBACK_FAILED")
 	}
-	if err := node.VerifyOutACLDocument(out, vlessPort, allowed); err != nil {
+	if !recorded {
+		if err := node.VerifyOutACLShapeDocument(out, vlessPort); err != nil {
+			return errors.New("OUT_ACL_READBACK_FAILED")
+		}
+		return nil
+	}
+	if err := node.VerifyOutACLDocument(out, vlessPort, applied); err != nil {
 		return errors.New("OUT_ACL_READBACK_FAILED")
 	}
 	return nil
@@ -1008,12 +1020,16 @@ func nodeValidLKG(root string, cfg node.Config) (string, bool) {
 	}
 	if cfg.Role == node.RoleOut {
 		// The Out ACL unit applies this file before the kernel starts.
-		// A last-known-good data plane must include an exact ACL match,
-		// otherwise repair would restart the kernel with a stale table.
-		// The file may carry a Hub-applied source allowlist, so it is
-		// checked as the canonical render for any allowlist rather than
-		// against the empty default-deny render; rewriting it here would
-		// silently revoke every authorized Line.
+		// A last-known-good data plane must include an ACL that is both a
+		// canonical MeshMux render for this candidate and exactly the
+		// allowlist the Agent recorded as applied in state.json.
+		//
+		// The render check alone is not an authorization proof: an accept
+		// appended after the sorted sources re-renders to the same bytes it was
+		// parsed from. And with no state.json there is no trusted record of what
+		// the Hub authorized, so an unverifiable ACL is never treated as LKG;
+		// repair then rewrites the default-deny guard, which denies traffic
+		// rather than persisting an unknown authorization.
 		aclPath := rooted(root, node.ACLPath)
 		aclInfo, err := os.Lstat(aclPath)
 		if err != nil || !aclInfo.Mode().IsRegular() || aclInfo.Mode()&os.ModeSymlink != 0 || aclInfo.Mode().Perm() != 0600 {
@@ -1023,7 +1039,12 @@ func nodeValidLKG(root string, cfg node.Config) (string, bool) {
 		if err != nil {
 			return "", false
 		}
-		if _, err := node.ParseACLAllowed(active.Candidate(), aclActual); err != nil {
+		fileAllowed, err := node.ParseACLAllowed(active.Candidate(), aclActual)
+		if err != nil {
+			return "", false
+		}
+		applied, recorded, err := node.AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+		if err != nil || !recorded || !node.SameACLSourceSet(applied, fileAllowed) {
 			return "", false
 		}
 	}
@@ -1116,21 +1137,30 @@ func installNodeDynamic(ctx context.Context, opts NodeApplyOptions, candidate no
 		return err
 	}
 	if role == node.RoleOut {
-		// A first install always starts from the default-deny guard: nothing
-		// is authorized before the Hub has bound a Line. A repair preserves an
-		// existing MeshMux ACL that is already the canonical render for this
-		// candidate, because it may carry the Hub-applied source allowlist and
-		// rewriting it to the empty render would silently revoke every
-		// authorized Line. Anything that is not the canonical render is
-		// replaced by the safe default-deny script.
+		// A first install always starts from the default-deny guard: nothing is
+		// authorized before the Hub has bound a Line.
+		//
+		// A repair preserves the existing MeshMux ACL only when it is a
+		// canonical render for this candidate AND it agrees with the allowlist
+		// the Agent recorded as applied in state.json. The render check alone is
+		// not an authorization proof: an accept appended after the sorted
+		// sources re-renders to the same bytes it was parsed from, so a tampered
+		// file would otherwise be preserved (and re-applied) as if the Hub had
+		// authorized it. Without a recorded allowlist there is nothing to
+		// compare, and the safe default-deny script is written instead.
 		aclPath := rooted(opts.Root, node.ACLPath)
 		acl, err := node.CompileACL(candidate.Candidate(), nil)
 		if err != nil {
 			return err
 		}
 		if preserveAuthorizedACL {
-			if existing, readErr := os.ReadFile(aclPath); readErr == nil {
-				if _, parseErr := node.ParseACLAllowed(candidate.Candidate(), existing); parseErr == nil {
+			applied, recorded, stateErr := node.AppliedAllowedSources(opts.Root, candidate.NodeID, candidate.Role)
+			if stateErr != nil {
+				return stateErr
+			}
+			if existing, readErr := os.ReadFile(aclPath); readErr == nil && recorded {
+				if fileAllowed, parseErr := node.ParseACLAllowed(candidate.Candidate(), existing); parseErr == nil &&
+					node.SameACLSourceSet(applied, fileAllowed) {
 					return nil
 				}
 			}

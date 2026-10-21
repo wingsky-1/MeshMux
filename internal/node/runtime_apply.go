@@ -160,7 +160,8 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	if journal.ExpectedPID > 0 {
 		expectedPID = strconv.Itoa(journal.ExpectedPID)
 	}
-	readback, err := r.readbackForProcess(ctx, r.cfg.Role, candidate, digest, expectedPID, allowed)
+	readback, err := r.readbackForProcess(ctx, r.cfg.Role, candidate, digest, expectedPID,
+		aclExpectation{sources: allowed, assertSet: true})
 	if err != nil {
 		return r.finishApply(ctx, &state, task, payload, r.recoverFailedApply(ctx, &state, journal, err))
 	}
@@ -173,6 +174,7 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	state.LKG = append([]byte(nil), config...)
 	state.LKGDigest = readback.ConfigSHA256
 	state.AllowedSources = append([]string(nil), allowed...)
+	state.AllowedSourcesRecorded = true
 	state.Journal = nil
 	result.Status = "healthy"
 	result.Detail = boundedDetail(detail)
@@ -319,7 +321,7 @@ func (r *Runtime) restoreLKG(ctx context.Context, state *runtimeState) error {
 			return errors.New("LKG_PID_NOT_REPLACED")
 		}
 	}
-	if _, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, state.AllowedSources); err != nil {
+	if _, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, state.aclExpectation()); err != nil {
 		return errors.New("LKG_READBACK_FAILED")
 	}
 	state.Journal = nil

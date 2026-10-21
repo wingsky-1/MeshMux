@@ -251,10 +251,17 @@ func CompileACL(c Candidate, allowed []string) ([]byte, error) {
 	return []byte(script.String()), nil
 }
 
-// ParseACLAllowed recovers the source allowlist from one rendered Out ACL
-// script and proves the script is exactly the canonical render for that set.
-// The installer uses it to keep trusting an Agent-applied ACL through a
-// repair without knowing the Hub-side allowlist itself.
+// ParseACLAllowed parses the accept rules of one managed Out ACL script and
+// then re-renders that set to confirm the file is a canonical MeshMux render
+// rather than a hand-assembled table.
+//
+// This is an idempotency self-check, NOT an authorization proof: the input set
+// is derived from the file being checked, so any edit that still sorts into the
+// canonical order (for example an accept appended after the last authorized
+// source) reproduces itself and passes. Callers must compare the result against
+// an independent record of what the Hub authorized — the Agent's applied
+// allowlist in state.json (AppliedAllowedSources) or the Hub-supplied task
+// parameter — before treating the file as authorized.
 func ParseACLAllowed(c Candidate, script []byte) ([]string, error) {
 	invalid := errors.New("ACL_SCRIPT_INVALID: managed ACL is not the MeshMux render")
 	allowed := make([]string, 0, 8)

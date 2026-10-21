@@ -35,14 +35,16 @@ func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string
 		return failedResult(result, "LKG_CANDIDATE_INVALID"), errors.New("LKG_CANDIDATE_INVALID")
 	}
 	// The readback proves the live table matches what was applied for this
-	// revision. The applied authorization, not the new task's request, is the
-	// expectation, so a revision whose allowlist the Hub no longer wants still
-	// reports its own state instead of silently passing.
-	expected := state.AllowedSources
-	if hasAllowed && r.cfg.Role == RoleOut && !sameACLSources(allowed, expected) {
+	// revision. The applied authorization recorded in state.json, not the new
+	// task's request, is the expectation, so a revision whose allowlist the Hub
+	// no longer wants still reports its own state instead of silently passing.
+	// A task that names a different allowlist is a Hub/Node disagreement and
+	// fails explicitly rather than reporting healthy for another authorization.
+	exp := state.aclExpectation()
+	if hasAllowed && r.cfg.Role == RoleOut && exp.assertSet && !sameACLSources(allowed, exp.sources) {
 		return failedResult(result, "OUT_ACL_SOURCE_MISMATCH"), errors.New("OUT_ACL_SOURCE_MISMATCH")
 	}
-	readback, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, expected)
+	readback, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, exp)
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
 	}
@@ -68,6 +70,46 @@ func (r *Runtime) status(ctx context.Context) (protocol.TaskResult, error) {
 	result.Status = "healthy"
 	result.Detail = boundedDetail(detail)
 	return result, nil
+}
+
+// AppliedAllowedSources returns the source allowlist the Agent recorded in its
+// runtime state as applied for the active revision. It is the only trusted
+// record of the Hub authorization on the host: the managed ACL file cannot be
+// its own expectation, because a file edited out of band would then prove
+// itself.
+//
+// The boolean reports whether a trustworthy record exists at all. A missing
+// state file (a fresh install, or a lost state) returns (nil, false, nil), and
+// so does a state that has never had an allowlist applied (a bootstrapped node
+// before its first Hub task). Callers must then fall back to a shape-only
+// assertion instead of treating the empty list as an authorization. Anything
+// unreadable, unsafe or malformed is an error: it is never downgraded to "no
+// allowlist".
+func AppliedAllowedSources(root, nodeID string, role Role) ([]string, bool, error) {
+	if !nodeIDPattern.MatchString(nodeID) || !role.valid() {
+		return nil, false, errors.New("RUNTIME_STATE_QUERY_INVALID")
+	}
+	absRoot, err := trustedRoot(root)
+	if err != nil {
+		return nil, false, err
+	}
+	data, _, err := readRuntimeStateFile(rooted(absRoot, RuntimeStatePath))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, errors.New("RUNTIME_STATE_UNSAFE")
+	}
+	var state runtimeState
+	if err = decodeStrictJSON(data, &state); err != nil || state.Schema != runtimeStateSchema ||
+		state.NodeID != nodeID || state.Role != role {
+		return nil, false, errors.New("RUNTIME_STATE_INVALID")
+	}
+	recorded := state.AllowedSourcesRecorded || len(state.AllowedSources) > 0
+	if !recorded {
+		return nil, false, nil
+	}
+	return append([]string(nil), state.AllowedSources...), true, nil
 }
 
 // ReadbackLocal returns evidence from the live systemd process, kernel, socket
@@ -108,13 +150,14 @@ func ReadbackLocal(ctx context.Context, cfg Config, root string, runner CommandR
 	if candidate == nil {
 		return Readback{}, errors.New("LKG_CANDIDATE_INVALID")
 	}
-	return runtimeInstance.readbackFor(ctx, cfg.Role, *candidate, state.LKGDigest, state.AllowedSources)
+	return runtimeInstance.readbackFor(ctx, cfg.Role, *candidate, state.LKGDigest, state.aclExpectation())
 }
 
 // readbackBootstrap validates an installed node before the Agent has ever held
-// runtime state. The expected authorization is recovered from the managed ACL
-// file, so a fresh install (default-deny) and a restart after losing state.json
-// on an already-authorized Out both prove the same guard.
+// runtime state. No trusted record of an applied allowlist exists in that
+// state, and the managed ACL file is exactly what a tampered host would edit,
+// so it must not become the expectation: only the guard shape and both VLESS
+// drops are asserted here.
 func (r *Runtime) readbackBootstrap(ctx context.Context) (Readback, error) {
 	uid := managedFileUID(r.root)
 	candidateData, _, err := readRegularFileOwnedBy(rooted(r.root, ActiveCandidatePath), 0600, uid)
@@ -136,11 +179,7 @@ func (r *Runtime) readbackBootstrap(ctx context.Context) (Readback, error) {
 	if err != nil || !bytes.Equal(active, expected) {
 		return Readback{}, errors.New("ACTIVE_CONFIG_INVALID")
 	}
-	allowed, err := r.bootstrapAllowedSources(document.Candidate())
-	if err != nil {
-		return Readback{}, err
-	}
-	return r.readbackFor(ctx, r.cfg.Role, document.Candidate(), sha256Hex(active), allowed)
+	return r.readbackFor(ctx, r.cfg.Role, document.Candidate(), sha256Hex(active), aclExpectation{})
 }
 
 type systemdProperties struct {
@@ -149,11 +188,11 @@ type systemdProperties struct {
 	MainPID     int
 }
 
-func (r *Runtime) readbackFor(ctx context.Context, role Role, candidate Candidate, expectedConfigHash string, allowed []string) (Readback, error) {
-	return r.readbackForProcess(ctx, role, candidate, expectedConfigHash, "", allowed)
+func (r *Runtime) readbackFor(ctx context.Context, role Role, candidate Candidate, expectedConfigHash string, exp aclExpectation) (Readback, error) {
+	return r.readbackForProcess(ctx, role, candidate, expectedConfigHash, "", exp)
 }
 
-func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate Candidate, expectedConfigHash, expectedPID string, allowed []string) (Readback, error) {
+func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate Candidate, expectedConfigHash, expectedPID string, exp aclExpectation) (Readback, error) {
 	if err := verifyExecutableHash(rooted(r.root, AgentBinaryPath), r.cfg.AgentSHA256); err != nil {
 		return Readback{}, errors.New("AGENT_BINARY_MISMATCH")
 	}
@@ -220,7 +259,7 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 	}
 	outDeny := false
 	if role == RoleOut {
-		if err = r.verifyOutACL(ctx, candidate.VLESSPort, allowed); err != nil {
+		if err = r.verifyOutACL(ctx, candidate.VLESSPort, exp); err != nil {
 			return Readback{}, err
 		}
 		outDeny = true
@@ -376,8 +415,19 @@ type nftObject struct {
 	} `json:"rule,omitempty"`
 }
 
-func (r *Runtime) verifyOutACL(ctx context.Context, port int, allowed []string) error {
-	return VerifyOutACL(ctx, r.runner, port, allowed)
+func (r *Runtime) verifyOutACL(ctx context.Context, port int, exp aclExpectation) error {
+	return VerifyOutACLGuard(ctx, r.runner, port, exp)
+}
+
+// aclExpectation is the source allowlist a readback must prove. sources is the
+// trusted, previously applied authorization (state.json, or the Hub-supplied
+// task parameter). assertSet=false means no trusted record exists at all, so
+// only the guard shape and both VLESS drops can be proven; the accept set is
+// then deliberately not asserted, because the only remaining candidate source
+// would be the ACL file under test itself.
+type aclExpectation struct {
+	sources   []string
+	assertSet bool
 }
 
 // VerifyOutACL reads the live inet meshmux_out table through nft -j and
@@ -385,28 +435,55 @@ func (r *Runtime) verifyOutACL(ctx context.Context, port int, allowed []string) 
 // table, the base input chain at priority -10, both VLESS drops, and an
 // accept set that is exactly the authorized source set.
 //
-// A table that only carries `policy accept` is not evidence of anything:
-// without the drops it denies nothing, and with an extra accept it admits a
-// source the Hub never authorized. Error codes keep those cases apart so the
-// installer and the Hub can tell a missing table from a wrong one.
+// `policy accept` on the base chain is still part of the shape check (the
+// guard must not become a drop-all host firewall), but it is never sufficient
+// evidence on its own: without the two VLESS drops the table denies nothing,
+// and with an extra accept it admits a source the Hub never authorized. Error
+// codes keep those cases apart so the installer and the Hub can tell a missing
+// table from a wrong one.
+//
+// The allowed set must come from a trusted record of what the Hub authorized
+// (state.json, or the Hub-supplied task parameter) — never from the ACL file
+// being verified, which would let a tampered file authorize itself.
 func VerifyOutACL(ctx context.Context, runner CommandRunner, port int, allowed []string) error {
+	return VerifyOutACLGuard(ctx, runner, port, aclExpectation{sources: allowed, assertSet: true})
+}
+
+// VerifyOutACLGuard reads the live table and checks it against exp.
+func VerifyOutACLGuard(ctx context.Context, runner CommandRunner, port int, exp aclExpectation) error {
 	output, err := runner.Run(ctx, nftPath, "-j", "list", "table", "inet", ACLTable)
 	if err != nil {
 		return errors.New("OUT_ACL_UNAVAILABLE")
 	}
-	return VerifyOutACLDocument(output, port, allowed)
+	return verifyACLDocument(output, port, exp)
 }
 
 // VerifyOutACLDocument checks one parsed `nft -j list table inet meshmux_out`
-// document against the expected guard. It is exported so the installer can
-// assert the same evidence without reimplementing the parser.
+// document against the exact expected guard. It is exported so the installer
+// can assert the same evidence without reimplementing the parser.
 func VerifyOutACLDocument(output []byte, port int, allowed []string) error {
-	expected, err := normalizeACLSources(allowed)
-	if err != nil {
-		return err
+	return verifyACLDocument(output, port, aclExpectation{sources: allowed, assertSet: true})
+}
+
+// VerifyOutACLShapeDocument checks only the guard shape: the MeshMux table,
+// the input chain at priority -10, and both VLESS drops. It is the degraded
+// check for a host with no trusted record of the applied allowlist (for
+// example a missing state.json), where asserting an accept set would only
+// compare the table against itself.
+func VerifyOutACLShapeDocument(output []byte, port int) error {
+	return verifyACLDocument(output, port, aclExpectation{assertSet: false})
+}
+
+func verifyACLDocument(output []byte, port int, exp aclExpectation) error {
+	var expected []aclSource
+	if exp.assertSet {
+		var err error
+		if expected, err = normalizeACLSources(exp.sources); err != nil {
+			return err
+		}
 	}
 	var document nftJSON
-	if err = json.Unmarshal(output, &document); err != nil {
+	if err := json.Unmarshal(output, &document); err != nil {
 		return errors.New("OUT_ACL_INVALID")
 	}
 	tableFound, chainFound := false, false
@@ -459,6 +536,9 @@ func VerifyOutACLDocument(output []byte, port int, allowed []string) error {
 		if dropSeen {
 			return errors.New("OUT_ACL_RULE_INVALID")
 		}
+		if !exp.assertSet {
+			continue
+		}
 		if _, duplicate := observed[prefix]; duplicate {
 			return errors.New("OUT_ACL_RULE_INVALID")
 		}
@@ -470,10 +550,16 @@ func VerifyOutACLDocument(output []byte, port int, allowed []string) error {
 	if !tableFound || !chainFound || !tcpDrop || !udpDrop {
 		return errors.New("OUT_ACL_DEFAULT_DENY_INCOMPLETE")
 	}
-	if len(observed) != len(expectedSet) {
+	if exp.assertSet && len(observed) != len(expectedSet) {
 		return errors.New("OUT_ACL_RULE_INVALID")
 	}
 	return nil
+}
+
+// SameACLSourceSet reports whether two allowlists authorize exactly the same
+// prefixes. Order and duplicates carry no meaning; the normalized sets do.
+func SameACLSourceSet(left, right []string) bool {
+	return sameACLSources(left, right)
 }
 
 // sameACLSources reports whether two allowlists authorize exactly the same

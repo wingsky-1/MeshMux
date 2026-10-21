@@ -349,7 +349,7 @@ func TestReadbackStartupConfigMismatchRejected(t *testing.T) {
 	}
 	runtime := &Runtime{cfg: cfg, root: root, runner: runner, procRoot: filepath.Join(root, "proc"), enforceProcArgs: true}
 	candidate := testCandidate(7).Candidate()
-	if _, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, "", nil); err == nil {
+	if _, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, "", aclExpectation{}); err == nil {
 		t.Fatal("same binary started with another config accepted")
 	}
 }
