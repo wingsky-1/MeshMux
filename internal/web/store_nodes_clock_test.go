@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // fixedTaskStamp reads created_at/updated_at of one task row.
@@ -113,14 +113,14 @@ func TestEnqueueAndPublishUseInjectedClock(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	edge := createEdgeNode(t, s, now)
 
-	operationID, err := agent.NewID()
+	operationID, err := protocol.NewID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := agent.Task{
-		Schema: agent.Schema, Version: agent.Version,
+	task := protocol.Task{
+		Schema: protocol.Schema, Version: protocol.Version,
 		OperationID: operationID, Revision: 1, IdempotencyKey: operationID,
-		NodeID: edge, Kind: agent.KindHealthStatus, Params: []byte(`{}`),
+		NodeID: edge, Kind: protocol.KindHealthStatus, Params: []byte(`{}`),
 	}
 	if err := s.enqueueTaskAt(task, now); err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestReportResultUsesInjectedClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	readbackID, _ := latestTaskOfKind(t, s, edge, agent.KindConfigReadback)
+	readbackID, _ := latestTaskOfKind(t, s, edge, protocol.KindConfigReadback)
 
 	release, ok := node.KernelReleaseFor("amd64")
 	if !ok {
@@ -214,7 +214,7 @@ func TestReportResultUsesInjectedClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultAt := now.Add(30 * time.Second)
-	changed, err := s.reportResultAudited(edge, agent.TaskResult{
+	changed, err := s.reportResultAudited(edge, protocol.TaskResult{
 		OperationID: readbackID, Status: "healthy", Detail: string(detail),
 	}, resultAt)
 	if err != nil {

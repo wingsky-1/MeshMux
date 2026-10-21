@@ -13,11 +13,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
-func (r *Runtime) readback(ctx context.Context, revision int64) (agent.TaskResult, error) {
-	result := agent.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
+func (r *Runtime) readback(ctx context.Context, revision int64) (protocol.TaskResult, error) {
+	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	state, err := r.loadStateForExecution()
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
@@ -46,8 +46,8 @@ func (r *Runtime) readback(ctx context.Context, revision int64) (agent.TaskResul
 	return result, nil
 }
 
-func (r *Runtime) status(ctx context.Context) (agent.TaskResult, error) {
-	result := agent.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
+func (r *Runtime) status(ctx context.Context) (protocol.TaskResult, error) {
+	result := protocol.TaskResult{OperationID: currentOperation(ctx), Status: "failed"}
 	readback, err := ReadbackLocal(ctx, r.cfg, r.root, r.runner)
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
@@ -433,16 +433,16 @@ func decodeNftDropRule(expressions []json.RawMessage, port int) (string, bool) {
 	if json.Unmarshal(left["payload"], &payload) != nil || len(payload) != 2 {
 		return "", false
 	}
-	protocol, _ := payload["protocol"].(string)
+	proto, _ := payload["protocol"].(string)
 	field, _ := payload["field"].(string)
-	if protocol != "tcp" && protocol != "udp" || field != "dport" {
+	if proto != "tcp" && proto != "udp" || field != "dport" {
 		return "", false
 	}
 	var value int
 	if json.Unmarshal(match["right"], &value) != nil || value != port {
 		return "", false
 	}
-	return protocol, true
+	return proto, true
 }
 
 func validateReadbackEvidence(readback Readback, role Role) error {

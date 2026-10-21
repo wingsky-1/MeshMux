@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // testStateKey builds a deterministic 32-hex cache key for one cache entry.
@@ -49,7 +49,7 @@ func TestRuntimeStateTooLargeKeepsPreviousStateReadable(t *testing.T) {
 			PayloadDigest: strings.Repeat("b", 64),
 			TaskRevision:  int64(i + 1),
 			OperationID:   key,
-			Result:        agent.TaskResult{OperationID: key, Status: "failed", ErrorCode: "TEST_FAILURE", Detail: filler},
+			Result:        protocol.TaskResult{OperationID: key, Status: "failed", ErrorCode: "TEST_FAILURE", Detail: filler},
 		}
 	}
 	if err := runtime.persistState(&state); err != nil {
@@ -159,12 +159,12 @@ func TestRuntimeStateSizeBoundFitsFullCaches(t *testing.T) {
 			PayloadDigest: strings.Repeat("b", 64),
 			TaskRevision:  int64(i + 1),
 			OperationID:   key,
-			Result: agent.TaskResult{
+			Result: protocol.TaskResult{
 				OperationID: key, Status: "failed", ErrorCode: "TEST_FAILURE",
 				Detail: strings.Repeat("c", 512),
 			},
 		}
-		state.FinalResults[key] = agent.TaskResult{
+		state.FinalResults[key] = protocol.TaskResult{
 			OperationID: key, Status: "failed", ErrorCode: "TEST_FAILURE",
 			Detail: strings.Repeat("c", 512),
 		}

@@ -22,7 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 const (
@@ -138,14 +138,14 @@ func (c *Client) Pair(ctx context.Context, pairingCode string) (Identity, error)
 	if !validVersionString(c.config.AgentVersion) {
 		return Identity{}, &ClientError{Code: "VERSION_INVALID"}
 	}
-	reqBody := agent.PairingRequest{
+	reqBody := protocol.PairingRequest{
 		NodeID:        c.config.NodeID,
 		Role:          string(c.config.Role),
 		PairingCode:   pairingCode,
 		AgentVersion:  c.config.AgentVersion,
-		KernelVersion: agent.SingBoxVersion,
+		KernelVersion: protocol.SingBoxVersion,
 	}
-	if err := agent.ValidatePairingRequest(reqBody); err != nil {
+	if err := protocol.ValidatePairingRequest(reqBody); err != nil {
 		if strings.HasPrefix(err.Error(), "VERSION_") {
 			return Identity{}, &ClientError{Code: "VERSION_INVALID"}
 		}
@@ -244,7 +244,7 @@ func (c *Client) Candidate(ctx context.Context, revision int64) (CandidateDocume
 
 // Heartbeat reports only the fixed Agent and kernel versions. The node
 // identity is carried exclusively in the Authorization header.
-func (c *Client) Heartbeat(ctx context.Context, req agent.HeartbeatRequest) error {
+func (c *Client) Heartbeat(ctx context.Context, req protocol.HeartbeatRequest) error {
 	if err := req.Validate(); err != nil {
 		return &ClientError{Code: "HEARTBEAT_INVALID"}
 	}
@@ -269,7 +269,7 @@ func (c *Client) Heartbeat(ctx context.Context, req agent.HeartbeatRequest) erro
 
 // Tasks returns the reconnect-safe pending task set, validating every task
 // against the frozen protocol and this node's identity.
-func (c *Client) Tasks(ctx context.Context) ([]agent.Task, error) {
+func (c *Client) Tasks(ctx context.Context) ([]protocol.Task, error) {
 	identity, err := c.authenticatedIdentity()
 	if err != nil {
 		return nil, err
@@ -286,13 +286,13 @@ func (c *Client) Tasks(ctx context.Context) ([]agent.Task, error) {
 		body.Tasks == nil || len(body.Tasks) > maxTasks || body.OperationID == "" {
 		return nil, &ClientError{Code: "SERVER_RESPONSE_INVALID", StatusCode: response.status}
 	}
-	tasks := make([]agent.Task, 0, len(body.Tasks))
+	tasks := make([]protocol.Task, 0, len(body.Tasks))
 	for _, raw := range body.Tasks {
-		var task agent.Task
+		var task protocol.Task
 		if err := decodeSingleJSON(raw, &task); err != nil {
 			return nil, &ClientError{Code: "TASK_INVALID", StatusCode: response.status}
 		}
-		if err := agent.ValidateTask(task); err != nil {
+		if err := protocol.ValidateTask(task); err != nil {
 			return nil, &ClientError{Code: "TASK_INVALID", StatusCode: response.status}
 		}
 		if task.NodeID != identity.NodeID {
@@ -305,8 +305,8 @@ func (c *Client) Tasks(ctx context.Context) ([]agent.Task, error) {
 
 // Report submits one explicit task result. Pairing, token material and free
 // text response bodies never enter errors or logs.
-func (c *Client) Report(ctx context.Context, res agent.TaskResult) error {
-	if err := agent.ValidateTaskResult(res); err != nil {
+func (c *Client) Report(ctx context.Context, res protocol.TaskResult) error {
+	if err := protocol.ValidateTaskResult(res); err != nil {
 		return &ClientError{Code: "RESULT_INVALID"}
 	}
 	identity, err := c.authenticatedIdentity()

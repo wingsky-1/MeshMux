@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
-func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision int64) []agent.Task {
+func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision int64) []protocol.Task {
 	t.Helper()
 	rows, err := app.store.db.Query(`SELECT operation_id, revision, idempotency_key, kind, params
  FROM agent_tasks WHERE node_id=? AND status='pending' ORDER BY revision`, nodeID)
@@ -24,9 +24,9 @@ func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision in
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var tasks []agent.Task
+	var tasks []protocol.Task
 	for rows.Next() {
-		task := agent.Task{Schema: agent.Schema, Version: agent.Version, NodeID: nodeID}
+		task := protocol.Task{Schema: protocol.Schema, Version: protocol.Version, NodeID: nodeID}
 		var params string
 		if err := rows.Scan(&task.OperationID, &task.Revision, &task.IdempotencyKey, &task.Kind, &params); err != nil {
 			t.Fatal(err)
@@ -77,7 +77,7 @@ func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	if len(tasks) != 4 {
 		t.Fatalf("new identity seeded %d fixed tasks, want 4", len(tasks))
 	}
-	for i, kind := range []string{agent.KindConfigCheck, agent.KindConfigStage, agent.KindConfigApply, agent.KindConfigReadback} {
+	for i, kind := range []string{protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply, protocol.KindConfigReadback} {
 		if tasks[i].Kind != kind {
 			t.Fatalf("task %d kind=%s, want %s", i, tasks[i].Kind, kind)
 		}
@@ -108,8 +108,8 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 		ConfigSHA256: latest.ConfigSHA256, LocalActive: true, OutDefaultDeny: true,
 	}
 	detail, _ := json.Marshal(evidence)
-	for _, task := range []agent.Task{apply, readback} {
-		w = reportJSON(t, app, token, agent.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
+	for _, task := range []protocol.Task{apply, readback} {
+		w = reportJSON(t, app, token, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
 		requireStatus(t, w, 200)
 	}
 	firstObserved, err := app.store.getNodeAt(created.ID, app.now())
@@ -128,13 +128,13 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 		t.Fatalf("offline history was conflated with current readiness: %+v err=%v", offline, err)
 	}
 
-	olderID, _ := agent.NewID()
+	olderID, _ := protocol.NewID()
 	if _, err = app.store.db.Exec(`INSERT INTO agent_tasks(operation_id,node_id,kind,revision,idempotency_key,status,params,created_at,updated_at)
- VALUES(?,?,?,?,?, 'pending', ?,?,?)`, olderID, created.ID, agent.KindConfigReadback, readback.Revision-10,
+ VALUES(?,?,?,?,?, 'pending', ?,?,?)`, olderID, created.ID, protocol.KindConfigReadback, readback.Revision-10,
 		olderID, `{"revision":1}`, time.Now().Unix(), time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
-	w = reportJSON(t, app, token, agent.TaskResult{OperationID: olderID, Status: "healthy", Detail: string(detail)})
+	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: olderID, Status: "healthy", Detail: string(detail)})
 	requireStatus(t, w, 200)
 	after, err := app.store.getNodeAt(created.ID, app.now())
 	if err != nil || after.ObservedRevision != firstObserved.ObservedRevision || after.ObservedTaskRevision != firstObserved.ObservedTaskRevision {
@@ -164,14 +164,14 @@ func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
 	}
 	body, _ := json.Marshal(evidence)
 	body = append(body[:len(body)-1], []byte(`,"extra":true}`)...)
-	w = reportJSON(t, app, token, agent.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body)})
+	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body)})
 	requireStatus(t, w, 400)
 	var status string
 	if err := app.store.db.QueryRow(`SELECT status FROM agent_tasks WHERE operation_id=?`, readback.OperationID).Scan(&status); err != nil || status != "pending" {
 		t.Fatalf("invalid readback changed task status=%q err=%v", status, err)
 	}
 
-	w = reportJSON(t, app, token, agent.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body[:len(body)-1])})
+	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body[:len(body)-1])})
 	requireStatus(t, w, 400)
 }
 
@@ -211,7 +211,7 @@ func TestStaleNodeDoesNotReceiveStateChangingTasks(t *testing.T) {
 	w = bearerReq(app, "GET", "/api/agent/tasks", paired["identity_token"], nil)
 	requireStatus(t, w, 200)
 	var body struct {
-		Tasks []agent.Task `json:"tasks"`
+		Tasks []protocol.Task `json:"tasks"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Tasks) != 0 {
 		t.Fatalf("offline node received tasks: %+v err=%v", body.Tasks, err)

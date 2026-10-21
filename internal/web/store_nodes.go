@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 const offlineAfter = 2 * time.Minute
@@ -125,14 +125,14 @@ func (n Node) LastTaskUpdatedString() string {
 // The plaintext code is returned once and never persisted; only its hash is
 // stored. Callers must not log the code.
 func (s *store) createNode(role, displayName string, vlessPort, sshPort int, now time.Time) (Node, string, error) {
-	if err := agent.ValidateNodeInputs(role, displayName, vlessPort, sshPort); err != nil {
+	if err := protocol.ValidateNodeInputs(role, displayName, vlessPort, sshPort); err != nil {
 		return Node{}, "", err
 	}
-	id, err := agent.NewID()
+	id, err := protocol.NewID()
 	if err != nil {
 		return Node{}, "", errors.New("NODE_ID_FAILED")
 	}
-	code, err := agent.NewSecret()
+	code, err := protocol.NewSecret()
 	if err != nil {
 		return Node{}, "", errors.New("PAIRING_CODE_FAILED")
 	}
@@ -258,7 +258,7 @@ func (s *store) getNodeAt(id string, now time.Time) (Node, error) {
 // identity. Replay, expiry and role mismatch are distinct rejections; an
 // unknown code is a generic rejection to avoid node enumeration.
 func (s *store) consumePairing(nodeID, role, code, agentVersion, kernelVersion string, now time.Time) (string, error) {
-	if err := agent.ValidatePairingRequest(agent.PairingRequest{NodeID: nodeID, Role: role, PairingCode: code, AgentVersion: agentVersion, KernelVersion: kernelVersion}); err != nil {
+	if err := protocol.ValidatePairingRequest(protocol.PairingRequest{NodeID: nodeID, Role: role, PairingCode: code, AgentVersion: agentVersion, KernelVersion: kernelVersion}); err != nil {
 		return "", err
 	}
 	tx, err := s.db.Begin()
@@ -285,7 +285,7 @@ func (s *store) consumePairing(nodeID, role, code, agentVersion, kernelVersion s
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 1 {
-		token, err := agent.NewSecret()
+		token, err := protocol.NewSecret()
 		if err != nil {
 			return "", errors.New("IDENTITY_ISSUE_FAILED")
 		}
@@ -358,7 +358,7 @@ func (s *store) heartbeat(nodeID, agentVersion, kernelVersion string, now time.T
 // terminated explicitly because the Agent that received it can no longer
 // authenticate. This does not stop services or remove candidate/config data.
 func (s *store) reissuePairing(nodeID string, now time.Time) (string, error) {
-	code, err := agent.NewSecret()
+	code, err := protocol.NewSecret()
 	if err != nil {
 		return "", errors.New("PAIRING_CODE_FAILED")
 	}
@@ -438,12 +438,12 @@ func normalizeParams(raw json.RawMessage) string {
 // per-node monotonic revision. An identical re-enqueue is a success (nil); the
 // same operation_id or idempotency_key with different content is a conflict;
 // a revision that would rewind the node chain is stale. Reserved
-// upgrade/rollback kinds never reach storage because agent.ValidateTask
+// upgrade/rollback kinds never reach storage because protocol.ValidateTask
 // rejects them first.
 //
 // Every request path threads the handler clock through enqueueTaskAt, so one
 // request has one timestamp.
-func (s *store) enqueueTaskAt(task agent.Task, now time.Time) error {
+func (s *store) enqueueTaskAt(task protocol.Task, now time.Time) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
@@ -463,8 +463,8 @@ func (s *store) enqueueTaskAt(task agent.Task, now time.Time) error {
 // nesting transactions on the MaxOpenConns(1) SQLite pool. The caller-supplied
 // clock is shared with the candidate inserted in the same transaction, so one
 // publication has one consistent timestamp.
-func enqueueTaskTx(tx *sql.Tx, task agent.Task, now time.Time) error {
-	if err := agent.ValidateTask(task); err != nil {
+func enqueueTaskTx(tx *sql.Tx, task protocol.Task, now time.Time) error {
+	if err := protocol.ValidateTask(task); err != nil {
 		return err
 	}
 	params := normalizeParams(task.Params)
@@ -513,7 +513,7 @@ const (
 // lookupTask classifies an existing row matched by whereArg against the
 // incoming envelope. The full stored envelope is compared so an idempotent
 // replay is only accepted when every field matches exactly.
-func lookupTask(tx *sql.Tx, where string, arg any, task agent.Task, params string) (taskLookup, error) {
+func lookupTask(tx *sql.Tx, where string, arg any, task protocol.Task, params string) (taskLookup, error) {
 	var (
 		opID, nodeID, kind, idem, storedParams string
 		revision                               int64
@@ -534,7 +534,7 @@ func lookupTask(tx *sql.Tx, where string, arg any, task agent.Task, params strin
 // pendingTasksAt returns every unfinished task for one node: pending, applying
 // and verifying all need to be redelivered after an Agent reconnect. Revision
 // ascending preserves the original enqueue order.
-func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent.Task, error) {
+func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]protocol.Task, error) {
 	if limit < 1 || limit > 32 {
 		limit = 8
 	}
@@ -550,10 +550,10 @@ func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
 	defer rows.Close()
-	var out []agent.Task
+	var out []protocol.Task
 	for rows.Next() {
-		var t agent.Task
-		t.Schema, t.Version = agent.Schema, agent.Version
+		var t protocol.Task
+		t.Schema, t.Version = protocol.Schema, protocol.Version
 		t.NodeID = nodeID
 		var kind string
 		var params string
@@ -577,8 +577,8 @@ func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]agent
 // regresses. All timestamps of the request (task update, node success,
 // observation and the follow-up drain) use one caller-supplied clock, so a
 // fixed-clock request cannot be split across two wall-clock readings.
-func (s *store) reportResultAudited(nodeID string, res agent.TaskResult, now time.Time) (bool, error) {
-	if err := agent.ValidateTaskResult(res); err != nil {
+func (s *store) reportResultAudited(nodeID string, res protocol.TaskResult, now time.Time) (bool, error) {
+	if err := protocol.ValidateTaskResult(res); err != nil {
 		return false, err
 	}
 	tx, err := s.db.Begin()
@@ -602,7 +602,7 @@ func (s *store) reportResultAudited(nodeID string, res agent.TaskResult, now tim
 	}
 	detailToStore := res.Detail
 	var readback nodedomain.Readback
-	if res.Status == "healthy" && (taskKind == agent.KindConfigApply || taskKind == agent.KindConfigReadback) {
+	if res.Status == "healthy" && (taskKind == protocol.KindConfigApply || taskKind == protocol.KindConfigReadback) {
 		var configParams struct {
 			Revision *int64 `json:"revision"`
 		}
@@ -643,7 +643,7 @@ func (s *store) reportResultAudited(nodeID string, res agent.TaskResult, now tim
 		if _, err = tx.Exec(`UPDATE nodes SET last_success=?, last_success_at=?, updated_at=? WHERE id=?`, lastSuccess, stamp, stamp, nodeID); err != nil {
 			return false, errors.New("DATABASE_UNAVAILABLE")
 		}
-		if taskKind == agent.KindConfigReadback {
+		if taskKind == protocol.KindConfigReadback {
 			if _, err = tx.Exec(`UPDATE nodes SET observed_revision=?, observed_config_sha256=?,
  observed_architecture=?, observed_agent_version=?, observed_agent_sha256=?,
  observed_kernel_version=?, observed_kernel_sha256=?, observed_out_default_deny=?,

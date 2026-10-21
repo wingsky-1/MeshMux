@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -769,7 +769,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 
 	// Seed real schema-3 rows that must survive the upgrade: an agent task
 	// and a session. The task is enqueued through the validated path.
-	task, err := newFixedTask(edge, agent.KindHealthStatus, json.RawMessage(`{}`), 1)
+	task, err := newFixedTask(edge, protocol.KindHealthStatus, json.RawMessage(`{}`), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -74,7 +74,7 @@ jobs:
           fi
           while IFS= read -r file; do
             case "$file" in
-              internal/install/*|internal/node/*|internal/agent/*|cmd/meshmux/*|\
+              internal/install/*|internal/node/*|internal/protocol/*|cmd/meshmux/*|\
               scripts/ci-hub-vm.sh|scripts/ci-node-vm.sh|scripts/ci-node-reality.sh|\
               .github/workflows/hub-vm.yml|docs/CI_HUB_VALIDATION.zh-CN.md|\
               docs/ACCEPTANCE.zh-CN.md|docs/INSTALL_HUB.zh-CN.md)

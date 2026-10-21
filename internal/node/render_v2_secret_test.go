@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/agent"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // The synthetic secret set one v2 candidate carries. The values never leave
@@ -103,7 +103,7 @@ func TestApplyKeepsSecretsInsideThePrivateBoundary(t *testing.T) {
 	controller := &runtimeTestController{candidate: v2SecretCandidate(9)}
 	runtime := newTestRuntime(t, root, cfg, identity, runner, controller)
 	result := runtime.Execute(context.Background(),
-		task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9))
+		task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9))
 	if result.Status != "healthy" {
 		t.Fatalf("apply status = %q, error = %q", result.Status, result.ErrorCode)
 	}
@@ -167,7 +167,7 @@ func TestRuntimeLogsCarryNoSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := runtime.Execute(context.Background(),
-		task(agent.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9))
+		task(protocol.KindConfigApply, strings.Repeat("1", 32), strings.Repeat("2", 32), 11, 9))
 	if result.Status != "healthy" {
 		t.Fatalf("apply status = %q, error = %q", result.Status, result.ErrorCode)
 	}
