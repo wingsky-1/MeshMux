@@ -35,14 +35,13 @@
 | OUT_NOT_FOUND | Out 绑定 | Hub 内不存在该 Out 节点 |
 | OUT_ROLE_INVALID | Out 绑定 | 所选节点不是 Out 角色 |
 | OUT_BINDING_FAILED | Out 绑定 | 绑定操作未分类失败（需凭 operation_id 查日志） |
-| OUT_DELETED | Out 绑定 | 删除路由并清 ACL 已完成（成功审计事件） |
 | LINE_ID_INVALID | Out 授权 | Line id 不是 32 位小写 hex |
 | LINE_NOT_FOUND | Out 授权 | Hub 内不存在该 Line 节点 |
 | LINE_ROLE_INVALID | Out 授权 | 所选节点不是 Line（edge）角色 |
 | LINE_NOT_CONFIGURED | Out 授权 | Line 尚无存储的传输参数，不能作为出口锚点 |
 | LINE_EGRESS_UNVERIFIED | Out 授权 | Line 传输地址是 DNS 名，Hub 无法证明 Out 将看到的源地址 |
 | LINE_NOT_AUTHORIZED | Out 授权 | 绑定 Line 没有当前未撤销的配对身份 |
-| LINE_NOT_RETIRED | Out 授权 | 试图回收仍可验证的 Line；须先撤销身份 |
+| LINE_NOT_RETIRED | Out 授权（T3 既有码，此处仅补登记） | 试图回收仍可验证的 Line；须先撤销身份 |
 | OUT_SYNC_IN_PROGRESS | Out 同步 | 存在在途链，等待其结算 |
 | OUT_SYNC_PENDING | Out 同步 | 授权变更尚未发布（Offline/在途/删除清理未下发） |
 | OUT_SYNC_FAILED | Out 同步 | 双 readback 未收敛且无更具体子码 |
@@ -54,7 +53,15 @@
 | OUT_OFFLINE_FAIL_CLOSED | AI 出口 | 已配置 Out 不可用且未显式允许回退 Line |
 | OUT_FALLBACK_UNAUDITED | AI 出口 | 请求显式回退 Line 但缺 operation_id，无法审计 |
 
-说明：`BOOTSTRAP_ACL_UNAVAILABLE` / `BOOTSTRAP_ACL_INVALID` 只在 #8-B 的中间提交存在过，同一 PR 内随「bootstrap 只做形状断言、不以受管文件自证」修正被删除，从未进入 `main`；排查时应使用 `OUT_ACL_READBACK_FAILED` 与 `ACL_*` 系列。`OUT_ACL_UNATTESTED` 仍保留，用于「远端 ACL 无法 attest」这一独立事实。
+### 成功审计事件（不是错误码）
+
+| 审计事件 | 触发 | 记录内容 |
+| --- | --- | --- |
+| OUT_BOUND | Out 绑定保存成功 | operation_id + 稳定码 |
+| OUT_UNBOUND | 解绑（含从未绑定的 no-op） | operation_id + 稳定码 |
+| OUT_DELETED | Out 路由删除且 ACL 清空已发布 | operation_id + 稳定码；未下发时改记 OUT_SYNC_PENDING |
+
+说明：`LINE_NOT_RETIRED` 由 #8-C 引入，此处只补登记、不改归属；`BOOTSTRAP_ACL_UNAVAILABLE` / `BOOTSTRAP_ACL_INVALID` 只在 #8-B 的中间提交存在过，同一 PR 内随「bootstrap 只做形状断言、不以受管文件自证」修正被删除，从未进入 `main`。**本表不声称覆盖全部稳定码**：`internal/install` 与 `internal/node` 的阶段码（`ACL_*`、`OUT_ACL_READBACK_FAILED`、`LKG_*`、`BOOTSTRAP_*` 等）以对应包的返回值与任务结果为准；`OUT_ACL_UNATTESTED` 仍保留在基础表，用于「远端 ACL 无法 attest」这一独立事实。
 
 ## UI 交互
 
