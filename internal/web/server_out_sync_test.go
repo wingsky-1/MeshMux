@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -17,15 +18,25 @@ import (
 // heartbeat and result path is exercised end to end.
 type pairedWebOutSyncApp struct {
 	app       *Server
+	logs      *bytes.Buffer
 	outToken  string
 	lineToken string
 	outID     string
 	lineID    string
 }
 
+// logsForTest returns the audit log buffer of the fixture app, so a test can
+// assert which fields an event emitted.
+func (f pairedWebOutSyncApp) logsForTest() string {
+	if f.logs == nil {
+		return ""
+	}
+	return f.logs.String()
+}
+
 func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	t.Helper()
-	app, _ := testApp(t)
+	app, logs := testApp(t)
 	now := time.Now()
 	out := createPairedWebNode(t, app, "out", "out-sync", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-sync", 8443, 2222)
@@ -43,7 +54,7 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	// seeded chains are settled, which lets the test attribute every later chain
 	// to its own action.
 	result := pairedWebOutSyncApp{
-		app: app, outID: out.ID, lineID: line.ID,
+		app: app, logs: logs, outID: out.ID, lineID: line.ID,
 		outToken: agentToken(t, app, out.ID), lineToken: agentToken(t, app, line.ID),
 	}
 	for _, nodeID := range []string{out.ID, line.ID} {

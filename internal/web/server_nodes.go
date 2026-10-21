@@ -413,8 +413,15 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 }
 
 // logCoordinationReadback writes the per-fact readback of one node as an audit
-// event. Only stable codes and the node's own operation are logged: never an
-// address, an allowlist entry, a subscriber identity or a credential.
+// event. Only stable codes, the node's own operation and the non-secret
+// confirmed revision/digest are logged: never an address, an allowlist entry, a
+// subscriber identity or a credential.
+//
+// retry_pending is the operator-facing retry pointer. It is true only for a
+// terminal failure; the affordance is the existing node retry route
+// (POST /nodes/{nodeID}/retry), which republishes the node's authorization. A
+// transition in progress is never retry-pending, because its own chain still has
+// to finish.
 //
 // A readback failure never fails the request that triggered it: the evidence is
 // informational, and the next heartbeat, poll or result recomputes it.
@@ -429,7 +436,9 @@ func (s *Server) logCoordinationReadback(r *http.Request, nodeID string) {
 		"allowlist", readback.Allowlist, "allowlist_code", readback.AllowlistCode,
 		"inbound", readback.Inbound, "inbound_code", readback.InboundCode,
 		"reality", readback.Reality,
-		"final_egress", readback.FinalEgress, "final_egress_code", readback.FinalEgressCode)
+		"final_egress", readback.FinalEgress, "final_egress_code", readback.FinalEgressCode,
+		"confirmed_revision", readback.ConfirmedRevision, "confirmed_digest", readback.ConfirmedDigest,
+		"retry_pending", readback.RetryPending)
 }
 
 func (s *Server) agentAuth(w http.ResponseWriter, r *http.Request) (Node, bool) {

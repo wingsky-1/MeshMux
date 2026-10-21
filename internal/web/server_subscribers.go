@@ -380,12 +380,23 @@ func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	app.event(r, "LINE_SETTINGS_SAVED")
-	// The transport is durable. Every subscriber that ever held a credential
-	// on this Line now has a stale snapshot and has to republish it, so each
-	// one is queued here. setLine already committed its own transaction, and
-	// the subscriber IDs are collected and the rows closed BEFORE the first
-	// prepareSubscriberSync call: the store runs on a single connection
-	// (SetMaxOpenConns(1)), so a nested read inside a tx would deadlock.
+	// The transport is durable and it is also the Out authorization source: a
+	// bound Out authorizes the Line by the address stored here, so a changed
+	// address has to be republished at every Out that serves this Line. Without
+	// this step the Out would keep accepting the old source while denying the
+	// new one, which is exactly the stale-accept case the allowlist must never
+	// leave behind.
+	//
+	// This runs before the subscriber fan-out: the Line's own publication is
+	// gated on the Out confirming the new authorization, so the Out has to be
+	// given its chance first.
+	app.store.drainOutsForLine(nodeID, app.now())
+	// Every subscriber that ever held a credential on this Line now has a stale
+	// snapshot and has to republish it, so each one is queued here. setLine
+	// already committed its own transaction, and the subscriber IDs are
+	// collected and the rows closed BEFORE the first prepareSubscriberSync call:
+	// the store runs on a single connection (SetMaxOpenConns(1)), so a nested
+	// read inside a tx would deadlock.
 	// A failed fan-out never fails the save; the page renders the pending
 	// state instead of claiming a convergence that did not happen.
 	app.fanOutLineChange(r, nodeID)

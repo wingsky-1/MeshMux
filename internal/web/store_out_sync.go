@@ -145,9 +145,15 @@ type OutEgressReadback struct {
 	// means nothing was ever confirmed, so a rollback has no target yet.
 	ConfirmedRevision int64  `json:"confirmed_revision"`
 	ConfirmedDigest   string `json:"confirmed_digest,omitempty"`
-	// RetryPending is the retry pointer: true when the next step is the
-	// explicit retry (retryOutSync / subscriber retry), never an automatic
-	// republish of an unchanged snapshot.
+	// RetryPending is the retry pointer: true only when the pair is in a
+	// terminal failure that an explicit retry can resolve. The retry affordance
+	// is the existing node retry route (POST /nodes/{nodeID}/retry, which
+	// republishes the node's authorization) or retryOutSync from the store.
+	//
+	// A transition in progress (verifying) is deliberately NOT retry-pending:
+	// a chain is still applying, and republishing on top of it would race two
+	// apply steps on one host. An automatic poll never retries either; only the
+	// explicit action does.
 	RetryPending bool `json:"retry_pending"`
 }
 
@@ -611,10 +617,10 @@ func outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressRea
 		readback.FinalEgress = lineEgressPartial
 		readback.FinalEgressCode = firstStableCode(readback.AllowlistCode, inboundCode, "OUT_SYNC_FAILED")
 	}
-	// A transition that needs an explicit republish is a retry pointer, not an
-	// automatic one. It is derived from the same evidence the states above used.
-	readback.RetryPending = readback.FinalEgress != lineEgressHealthy && readback.FinalEgress != lineEgressDirect &&
-		readback.FinalEgress != lineEgressVerifying
+	// The retry pointer is derived from the same evidence as the state above:
+	// only a terminal failure is retryable. A direct Line has no Out path to
+	// retry, and a transition is still applying its own chain.
+	readback.RetryPending = readback.FinalEgress == lineEgressPartial
 	return readback, nil
 }
 
@@ -978,6 +984,10 @@ func (s *store) drainNodeCoordination(nodeID string, now time.Time) {
 // log: a Line reports its egress pair, an Out reports its authorization. It is a
 // read-only projection and never mutates or publishes; the returned codes are
 // stable identifiers only.
+//
+// An Out reports the same retry semantics as a Line: only a terminal failure is
+// retry-pending. A transition is still applying its own chain, and a healthy
+// authorization has nothing left to retry.
 func (s *store) nodeCoordinationReadback(nodeID string, now time.Time) (OutEgressReadback, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -993,7 +1003,13 @@ func (s *store) nodeCoordinationReadback(nodeID string, now time.Time) (OutEgres
 		if err != nil {
 			return OutEgressReadback{}, errors.New("DATABASE_UNAVAILABLE")
 		}
-		return OutEgressReadback{OutID: nodeID, Allowlist: state, AllowlistCode: code}, nil
+		return OutEgressReadback{
+			OutID:         nodeID,
+			Allowlist:     state,
+			AllowlistCode: code,
+			FinalEgress:   state,
+			RetryPending:  state == outSyncPartial,
+		}, nil
 	}
 	return outEgressReadbackTx(tx, nodeID, now)
 }
