@@ -40,7 +40,7 @@ func componentNodeCandidate(role node.Role) node.Candidate {
 func TestWriteNodeComponentFixtures(t *testing.T) {
 	dir := os.Getenv("MESHMUX_NODE_FIXTURE_DIR")
 	if dir == "" {
-		t.Skip("only used by Debian 13 Node component integration CI")
+		t.Skip("MESHMUX_NODE_FIXTURE_DIR is not set: only used by the Debian 13 Node component integration CI")
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)

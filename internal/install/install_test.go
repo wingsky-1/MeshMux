@@ -98,7 +98,7 @@ func TestSSHListeningPorts(t *testing.T) {
 func TestReadOnlyPortProbeDetectsConflict(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Skipf("network namespace unavailable: %v", err)
+		t.Skipf("cannot listen on a loopback port, network namespace or sandbox restriction: %v", err)
 	}
 	defer listener.Close()
 	if CanBind("tcp", listener.Addr().String()) == nil {

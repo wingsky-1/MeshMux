@@ -46,7 +46,7 @@ type nodeFixtureMetadata struct {
 func TestNodeHubFixture(t *testing.T) {
 	dir := os.Getenv("MESHMUX_NODE_HUB_FIXTURE_DIR")
 	if dir == "" {
-		t.Skip("only runs as the isolated Node VM Hub fixture")
+		t.Skip("MESHMUX_NODE_HUB_FIXTURE_DIR is not set: set it (with MESHMUX_NODE_HUB_FIXTURE_ROLE=edge or out) to run the isolated Node VM Hub fixture")
 	}
 	role := node.Role(os.Getenv("MESHMUX_NODE_HUB_FIXTURE_ROLE"))
 	if role != node.RoleEdge && role != node.RoleOut {

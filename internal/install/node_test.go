@@ -1003,7 +1003,7 @@ func (r *probeRunner) Run(_ context.Context, _ string, args ...string) ([]byte, 
 func TestVerifyAgentBinaryRequiresExactVersionProbe(t *testing.T) {
 	selfHash, err := sha256File("/proc/self/exe")
 	if err != nil {
-		t.Skip("probe requires /proc/self/exe")
+		t.Skipf("probe requires /proc/self/exe, unavailable on this platform: %v", err)
 	}
 	newOpts := func(runner CommandRunner) NodeApplyOptions {
 		return NodeApplyOptions{Root: "/", Runner: runner}

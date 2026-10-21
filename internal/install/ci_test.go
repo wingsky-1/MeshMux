@@ -56,7 +56,7 @@ func TestPortProbeIPv6Conflict(t *testing.T) {
 func TestWriteComponentFixtures(t *testing.T) {
 	dir := os.Getenv("MESHMUX_HUB_FIXTURE_DIR")
 	if dir == "" {
-		t.Skip("only used by Debian 13 component integration CI")
+		t.Skip("MESHMUX_HUB_FIXTURE_DIR is not set: only used by the Debian 13 component integration CI")
 	}
 	files, err := CandidateFiles(Config{
 		ManagementDomain:   "admin.example.org",

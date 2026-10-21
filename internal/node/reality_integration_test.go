@@ -589,7 +589,7 @@ func (f *realityFixture) clientConfig(socksPort, vlessPort int, uuid string) map
 func TestWriteRealityReleasePin(t *testing.T) {
 	dir := strings.TrimSpace(os.Getenv("MESHMUX_REALITY_PIN_DIR"))
 	if dir == "" {
-		t.Skip("only used by the Debian 13 native REALITY CI script")
+		t.Skip("MESHMUX_REALITY_PIN_DIR is not set: only used by the Debian 13 native REALITY CI script")
 	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
