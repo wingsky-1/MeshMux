@@ -455,7 +455,7 @@ type userJSON struct {
 }
 
 func (u userJSON) toUser() User {
-	return User{ID: u.ID, Name: u.Name, DisplayName: u.DisplayName, Email: u.Email}
+	return User(u)
 }
 
 // nodeJSON is the narrow view of one Headscale node. There is no field for

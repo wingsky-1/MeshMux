@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,13 +58,6 @@ func newTestRunner(t *testing.T, replies ...fakeReply) (*CLIRunner, *fakeExec) {
 
 func versionJSON(version string) string {
 	return `{"version":"` + version + `","commit":"0000000","buildTime":"2026-10-01T00:00:00Z","go":{"version":"go1.27.2","os":"linux","arch":"amd64"},"dirty":false}`
-}
-
-// stamp renders one protobuf Timestamp the way the Headscale 0.29.5 CLI prints
-// it under -o json. The CLI marshals the gRPC messages with encoding/json, so a
-// timestamp is an object of seconds and nanos, not an RFC3339 string.
-func stamp(t time.Time) string {
-	return `{"seconds":` + strconv.FormatInt(t.Unix(), 10) + `,"nanos":` + strconv.FormatInt(int64(t.Nanosecond()), 10) + `}`
 }
 
 // TestCommandTableMatchesPinnedRelease locks the exact argv of every operation.
