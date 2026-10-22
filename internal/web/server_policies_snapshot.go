@@ -179,16 +179,6 @@ func (app *Server) renderPolicies(w http.ResponseWriter, r *http.Request, sess s
 	app.render(w, r, http.StatusOK, PoliciesPage(pageData{Title: "路由策略", Path: "/policies", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP, DirectProxy: app.cfg.DirectProxy}, view))
 }
 
-// policyFailure splits a stable compiler code from its detail.
-func policyFailure(err error) (string, string) {
-	for _, code := range []string{compiler.CodePolicyConflict, compiler.CodePolicyInvalid, compiler.CodePolicyNodeUnknown} {
-		if prefix := code + ": "; strings.HasPrefix(err.Error(), prefix) {
-			return code, strings.TrimPrefix(err.Error(), prefix)
-		}
-	}
-	return compiler.CodePolicyInvalid, err.Error()
-}
-
 func policyErrorDetail(err error) string {
 	code, detail := policyFailure(err)
 	return code + " · " + detail

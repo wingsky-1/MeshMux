@@ -40,9 +40,10 @@ type policyHitStep struct {
 	Value string
 }
 
-// policyHitView is one fixed hit-explanation example.
+// policyHitView is one hit-explanation result.
 type policyHitView struct {
 	Title string
+	Note  string
 	Steps []policyHitStep
 }
 
@@ -53,6 +54,8 @@ type policyPageView struct {
 	Server    []policyRuleView
 	Conflicts []policyConflictView
 	Hits      []policyHitView
+	// Target is the explain query echoed back into the form.
+	Target string
 	// Draft marks the no-data fallback: the page then says so instead of
 	// presenting design sample rows as live policy.
 	Draft bool

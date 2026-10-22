@@ -131,8 +131,11 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	app.registerSubscriberRoutes(r)
 	// The mesh device routes own "/mesh" for the same reason.
 	app.registerMeshRoutes(r)
-	// /policies is a read-only snapshot.
+	// /policies is a read-only snapshot plus two read-only helpers: the validate
+	// dry run and the explain query. Neither stores nor publishes a policy.
 	r.Get("/policies", app.authenticated(app.policiesPage))
+	r.Get("/policies/explain", app.authenticated(app.policiesExplain))
+	r.Post("/policies/validate", jsonAPI(app.mutation(app.policiesValidate, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
