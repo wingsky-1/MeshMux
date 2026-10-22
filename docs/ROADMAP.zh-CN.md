@@ -17,9 +17,9 @@
 
 后续阶段的详细范围与依赖以 [v1.0.0 总控 Issue #4](https://github.com/wingsky-1/MeshMux/issues/4) 和 #5～#12 为准，允许拆为更小且独立可测试的 PR。**#11 统一升级是 v1.0.0 P0；完整通用运维面板仍非首版目标。** 本阶段 #2 不提前实现升级器或通用任务引擎。
 
-## 当前阶段：Issue #5 PR A / PR B
+## 当前阶段：#5～#7 已关闭，#8 源码已合入待隔离 VM 证据，#9 未开工
 
-PR A 的只读安装计划与自带校验清单见 [INSTALL_HUB](INSTALL_HUB.zh-CN.md)；PR B 负责宿主机写操作和 Debian 13 实装。两者都归属 Issue #5，Issue #6 不提前依赖尚未合并的服务接口。
+PR A 的只读安装计划与自带校验清单见 [INSTALL_HUB](INSTALL_HUB.zh-CN.md)；PR B 负责宿主机写操作和 Debian 13 实装，两者已随 Issue #5 关闭并保留为历史交付记录。#6 的 Node 首装/repair 与 #7 Phase 3A（PR #19/#21/#22）均已合入；#8 的四项 PR 只交付源码与隔离自动化证据，真实 nft readback、AI 双跳流量与客户端可用仍待隔离 VM 实测；#9 未开工，#11 仍是 v1.0.0 P0。
 
 ## 近期：PR1 的明确边界
 

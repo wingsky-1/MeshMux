@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/headscale"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
@@ -25,16 +26,22 @@ type Artifact struct {
 	Format    string `json:"format"`
 }
 
+// HeadscaleVersion re-exports the adapter's pinned release so the Hub has one
+// definition. The artifact manifest, the version handshake in internal/headscale
+// and the generated configuration all read this value; a drift test in this
+// package fails if they ever disagree.
+const HeadscaleVersion = headscale.HeadscaleVersion
+
 // Digests copied from the upstream GitHub release asset SHA-256 metadata.
 // No "latest" or user-supplied release URL is permitted in a host operation.
 var artifacts = map[string][]Artifact{
 	"amd64": {
 		{Component: "caddy", Version: "2.11.7", Source: "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz", SHA256: "727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b", Format: "tar.gz"},
-		{Component: "headscale", Version: "0.29.5", Source: "https://github.com/juanfont/headscale/releases/download/v0.29.5/headscale_0.29.5_linux_amd64", SHA256: "e979d27fe17d924d33bb6ab7504f6338d0635989a0cfdcfbc0ceb637dbcbe980", Format: "elf"},
+		{Component: "headscale", Version: HeadscaleVersion, Source: "https://github.com/juanfont/headscale/releases/download/v" + HeadscaleVersion + "/headscale_" + HeadscaleVersion + "_linux_amd64", SHA256: "e979d27fe17d924d33bb6ab7504f6338d0635989a0cfdcfbc0ceb637dbcbe980", Format: "elf"},
 	},
 	"arm64": {
 		{Component: "caddy", Version: "2.11.7", Source: "https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_arm64.tar.gz", SHA256: "d8fc6d179a5d283028a472a5618564f6ad8a86fed513e64f032b3b0b7cc45e42", Format: "tar.gz"},
-		{Component: "headscale", Version: "0.29.5", Source: "https://github.com/juanfont/headscale/releases/download/v0.29.5/headscale_0.29.5_linux_arm64", SHA256: "3afddd207b89ac22cfad4235cc163c6e538cc59ada139e7c0bf47640c5d9e945", Format: "elf"},
+		{Component: "headscale", Version: HeadscaleVersion, Source: "https://github.com/juanfont/headscale/releases/download/v" + HeadscaleVersion + "/headscale_" + HeadscaleVersion + "_linux_arm64", SHA256: "3afddd207b89ac22cfad4235cc163c6e538cc59ada139e7c0bf47640c5d9e945", Format: "elf"},
 	},
 }
 

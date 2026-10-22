@@ -381,6 +381,18 @@ func TestCandidateBoundaries(t *testing.T) {
 		!strings.Contains(jail, "port = 60794") || strings.Contains(jail, "port = 22") {
 		t.Fatal("unsafe service or SSH jail candidate")
 	}
+	// The Web service reaches the 0770 Headscale socket through supplementary
+	// group membership; the Headscale data directory itself stays 0700 and is
+	// not exposed by that membership.
+	if !strings.Contains(web, "SupplementaryGroups=meshmux-headscale") {
+		t.Fatalf("web unit lacks the Headscale socket group:\n%s", web)
+	}
+	if !strings.Contains(headscale, "unix_socket_permission: \"0770\"") {
+		t.Fatal("headscale config lost the 0770 socket permission the web group depends on")
+	}
+	if strings.Contains(web, "Group=meshmux-headscale") || strings.Contains(web, "ReadWritePaths=/var/lib/meshmux-headscale") {
+		t.Fatal("web unit gained direct access to the Headscale data directory")
+	}
 	if files["/etc/fail2ban/jail.d/meshmux-web.local"] == "" || files["/etc/fail2ban/filter.d/meshmux-web.conf"] == "" {
 		t.Fatal("Web Fail2ban candidates missing")
 	}

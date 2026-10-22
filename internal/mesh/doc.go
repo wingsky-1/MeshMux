@@ -1,16 +1,38 @@
-// Package mesh is a placeholder for the post-v1.0.0 Headscale mesh device and
-// subnet-router domain: device registration state, one-time enrollment keys,
-// route approvals and mesh-only client configuration.
+// Package mesh defines the pure domain model for Headscale mesh devices and
+// one-time mesh enrollment keys. It is the first implemented slice of ADR-0004
+// (device purpose versus platform) and ADR-0007 (the post-v1 boundary).
 //
-// 占位：post-v1.0.0 演进方向，当前无实现、无外部引用。
+// The package performs no I/O against any subsystem: it does not call
+// Headscale (API or CLI), HTTP, SQLite or the file system, and it imports
+// neither internal/web nor internal/install. The only external capability it
+// uses is crypto/rand for identity and secret generation. Persistence, request
+// handling and the Headscale adapter stay outside: they keep the stable
+// Headscale node id reference and apply the state machines defined here.
 //
-// 职责：表达 MeshDevice（用途、平台、Headscale Node ID、路由批准与在线证据）
-// 的领域模型与生命周期规则。
+// Scope of this slice (PR-9a-1):
+//   - MeshDevice identity, mutable display label and unique node name;
+//   - purpose (proxy_mesh / mesh_only / subnet_router) and the subscriber
+//     binding rule: proxy_mesh requires a Subscriber, mesh_only forbids one,
+//     subnet_router may stay unbound;
+//   - platform (ios / android / linux / nas / other) as a display-only hint,
+//     never a device kind, Headscale identity or behavior switch;
+//   - the device lifecycle pending → registered → revoking → revoked, with
+//     expired and failed as explicit non-happy states;
+//   - the enrollment key lifecycle issued → consumed / expired / revoked, a
+//     fixed 15-minute lifetime, hash-only storage and irreversible consumption.
 //
-// 边界：与 node 包不同——node 是 Line 主机上的 sing-box 运行时、固定目录布局
-// 与 Agent 数据契约；mesh 描述的是 Headscale 侧的设备身份与入网状态，不定义
-// 第二个 Line 或 Agent 模型，也不执行 Agent 动作。
+// The mesh/node boundary is unchanged: internal/node is the sing-box runtime,
+// fixed host layout and Agent data contract on a Line host; mesh is the
+// Headscale-side device identity and enrollment state. mesh defines no second
+// Node or Agent model and executes no Agent action.
 //
-// This package must stay free of I/O and of imports from internal/web so the
-// domain remains testable without Hub state. See ADR-0007 for the boundary.
+// D2: the shared default Headscale user "meshmux" is idempotent. This package
+// only records the user-name snapshot (MeshDevice.HeadscaleUser) taken when the
+// device was created; it never creates or mutates a Headscale user and runs no
+// CLI command.
+//
+// Subnet route advertisement, approval and online evidence are not modeled in
+// this slice: PurposeSubnetRouter only records the device intent, and the
+// revocation intent records why a device is being removed. See ADR-0004 and
+// ADR-0007 for the decisions and their revision records.
 package mesh

@@ -581,9 +581,9 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Rebuild the database in its schema-4 shape: the Out binding table does
-	// not exist yet and the version is 4.
-	if _, err = s.db.Exec(`DROP TABLE out_bindings; PRAGMA user_version=4;`); err != nil {
+	// Rebuild the database in its schema-4 shape: the Out binding and mesh
+	// tables do not exist yet and the version is 4.
+	if _, err = s.db.Exec(`DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; PRAGMA user_version=4;`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -593,8 +593,8 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	if err = s.migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 5 {
-		t.Fatalf("user_version=%d err=%v, want 5", version, err)
+	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 6 {
+		t.Fatalf("user_version=%d err=%v, want 6", version, err)
 	}
 	var tables int
 	if err = s.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='out_bindings'`).Scan(&tables); err != nil || tables != 1 {
@@ -610,7 +610,7 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	}
 
 	// The schema guard moved with the migration.
-	if _, err = s.db.Exec(`PRAGMA user_version=6`); err != nil {
+	if _, err = s.db.Exec(`PRAGMA user_version=7`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

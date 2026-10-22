@@ -62,7 +62,7 @@ func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, e
 }
 `, c.ManagementDomain, tlsLine, c.SubscriptionDomain, tlsLine, c.HeadscaleDomain, tlsLine)
 
-	headscale := fmt.Sprintf(`# Headscale 0.29.5, aligned to the tagged official config-example.yaml.
+	headscale := fmt.Sprintf(`# Headscale %s, aligned to the tagged official config-example.yaml.
 server_url: https://%s
 listen_addr: 127.0.0.1:8080
 metrics_listen_addr: ""
@@ -115,7 +115,7 @@ logtail:
   enabled: false
 auto_update:
   enabled: false
-`, c.HeadscaleDomain, c.HeadscaleDomain)
+`, HeadscaleVersion, c.HeadscaleDomain, c.HeadscaleDomain)
 
 	webUnit := fmt.Sprintf(`[Unit]
 Description=MeshMux Hub Web
@@ -126,6 +126,11 @@ Wants=network-online.target
 Type=simple
 User=meshmux
 Group=meshmux
+# Supplementary membership of the Headscale service group lets the Web process
+# connect to the 0770 local unix socket (unix_socket_permission "0770"). It
+# grants no filesystem access to /var/lib/meshmux-headscale, which stays 0700 and
+# owned by meshmux-headscale: the group only covers the socket directory.
+SupplementaryGroups=meshmux-headscale
 StateDirectory=meshmux
 StateDirectoryMode=0700
 ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --subscription-origin https://%s --data-dir /var/lib/meshmux%s

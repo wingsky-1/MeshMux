@@ -1,9 +1,10 @@
 # ADR-0007：post-v1.0.0 领域占位包（mesh / route / jobs / compiler）
 
-状态：Accepted（原占位决策）；`internal/route` 已按 #8-D 首次破壳，范围仅限 AI 出口决定与规则集版本锁，其余三包仍为占位。
+状态：Accepted（原占位决策）；`internal/route` 已按 #8-D、`internal/mesh` 已按 PR-9a-1 首次破壳，二者仍无 I/O；`internal/jobs` / `internal/compiler` 仍为占位。
 
 ## 修订记录
 
+- 2026-10-22（PR-9a-1）：`internal/mesh` 不再是空包。MeshDevice 与一次性入网 Key 的纯领域模型在 `internal/mesh/device.go` / `enrollment.go` 实现：用途（`proxy_mesh` / `mesh_only` / `subnet_router`）与仅展示用平台（`ios` / `android` / `linux` / `nas` / `other`）分离、`proxy_mesh` 必须绑定 Subscriber 而 `mesh_only` 禁止绑定、同一 Headscale 用户内处于 `pending` / `registered` / `revoking` 的 NodeName 唯一、设备状态迁移表（`revoked` 终态）与固定 15 分钟、仅存 SHA-256、`consumed` 不可逆且每设备单活的入网 Key 状态机。该包**仍不**调用 Headscale API/CLI、不建表、不写 HTTP、不读写订阅 Token、不渲染配置、不执行主机动作，也不 import `internal/web` / `internal/install`；installer 与 Web 接线属后续 PR（9a-4 起）。下文“空包/无导出标识符”以及后果中“其余三包保持占位”的表述，从此只对 `jobs` / `compiler` 继续成立。
 - 2026-10-22（Issue #8-D）：`internal/route` 不再是空包。`route.RulesetPin` / `route.ResolveAIRuleset` 与 AI 出口决定（无 Out = 直出、Out 故障 = `OUT_OFFLINE_FAIL_CLOSED`、显式 opt-in 回退需 `operation_id`）在 `internal/route/out_ruleset.go` 实现，由 `internal/web` 的 `planAIEgress` 消费。该包**仍不**渲染配置、不读写订阅 Token、不做通用规则引擎、规则市场、测速或多 Out 负载均衡，也不执行主机动作。下文“空包/无导出标识符”的表述只对其余三包继续成立。
 
 ## 背景

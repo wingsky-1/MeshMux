@@ -88,6 +88,8 @@ go build -o ./bin/meshmux ./cmd/meshmux
 
 Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建，非从 my-sub 复制。Hub Web 使用 Issue #2 已实现的 Argon2id/SQLite/CSRF/限速、`/healthz` 和本机初始化令牌。Web 的公网证书由 Caddy 默认 HTTP-01/TLS-ALPN-01 管理，不需要 Cloudflare DNS 插件或 Zero Trust。Web Fail2ban jail 默认禁用，仅在 Caddy 直接面向客户端且显式传入 `--direct-caddy` 时启用；使用 CDN/Cloudflare 或多层代理时**不能**启用依赖真实客户端 IP 的 Web Fail2ban jail，应用限速始终启用。
 
+**Web 与 Headscale 的 socket 边界（PR-9a-4）：** `meshmux-web.service` 增加 `SupplementaryGroups=meshmux-headscale`，只用于穿过 0770 的 `/run/meshmux-headscale/headscale.sock`（`unix_socket_permission: "0770"`）。该组成员身份**不**给予 `/var/lib/meshmux-headscale` 的任何访问：数据目录仍是 `meshmux-headscale:meshmux-headscale` 0700，Web 单元也没有 `Group=meshmux-headscale` 或对应的 `ReadWritePaths`。Headscale 自己的 CLI 是唯一写数据库的进程，Web 只经固定 CLI 适配器调用本机 socket；这条组权限链需要在隔离 Debian 13 上由 `systemd-analyze verify` 与真实 `nodes list` 一起验证，不能以模板字符串断言替代。
+
 **已知边界：** 只有一个自建 DERP 时具备单点故障；公网不可达另须检查云安全组。模板语法和 Headscale 0.29.5 运行时验证、Fail2ban action、systemd 实际账户权限及 Caddy ACME 证书签发均属于 PR B 的隔离 Debian 13 验收，不能以字符串测试替代。
 
 ## PR B 阻断清单与回退约束

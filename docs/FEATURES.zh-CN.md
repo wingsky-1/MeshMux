@@ -8,8 +8,8 @@
 - **Hub 安装**：Issue #5 的 Hub `--plan`、确认后 apply、`--repair`、受管文件台账与有限恢复已合并，并有 L1/L2/L3 amd64 自动化证据；仍不是正式发行包。
 - **Line / Out（Issue #6 已关闭）**：`meshmux install edge|out`、真实 preflight、固定制品、stdin 配对码、systemd Agent/sing-box、state/owned paths、structured partial/failed、有限 LKG 恢复与 Web 固定 recheck/reissue 已随 PR #18 合并进 `main`（merge `17c4e4c`）。证据：L2 [39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)、L3 [39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（head `78e259b`、tree `e35fc88`）与 PR CI [39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962)（head `0149581`）全 success。
 - **Node baseline 与 Issue #7（已合入）**：PR-A 交付独立订阅域模型（SQLite schema 4、仅存哈希的 ≥288 bit Token、per-Line 安全 UUIDv4）、严格 v2 REALITY 编译器（legacy v1 逐字节不变）与合法空用户；PR-B 交付 Web 订阅用户增停删/选线/改名排序/Token 轮换撤销与精确同步证据、sing-box JSON 与 Mihomo YAML 双格式鉴权下载（双架构客户端真实导入全绿）、跨 Line 全链收敛与注入时钟；PR-C 交付 Hub 共存有效台账及修复/预检（隔离 VM 共存生命周期 PASS）。三者 CI（go/components/客户端导入/hub-vm）对应 head 全绿；尚无公网可达、真实公网握手或客户端可用证据。
-- **Out**：安装产物可选。ACL 已由 #8-B 改为**空授权默认全拒绝**：`inet meshmux_out` 基线 `policy accept` 仅保留给主机 SSH/回环/回程，VLESS 目标端口在 `input` chain 内的两条 `tcp/udp dport drop` 默认丢弃，仅 Hub 授权的 Line 源地址（`/32`/`/128` 或已对齐 CIDR）在 drop 之前获得 `accept`；`nft -j` 回读逐条比对已应用集合，`OUT_ACL_SOURCE_MISMATCH` 不伪装健康。#8-C 完成 Hub↔Line↔Out 白名单协调与四事实双向 readback（白名单 / 入站 / REALITY / 最终出口），#8-D 完成 AI 规则集版本锁（`RulesetPin{Source,Version,SHA256}`，下载/摘要/大小失败 `RULESET_FETCH_FAILED` 拒绝发布）、Out 不可用默认 `OUT_OFFLINE_FAIL_CLOSED`（回退 Line 需显式 opt-in + `operation_id`）与 `DeleteOut` 删路由+清 ACL。源码与隔离单元/竞态证据已具备；**真实 nft readback 与双跳流量仍待在隔离 Debian 13 VM 实测**，不属本轮已有证据。
-- **独立阶段**：#7 交付订阅模型、原生 REALITY 编译器、Web 订阅生命周期/下载与 Hub 共存，PR-A/PR-B/PR-C 均已合入（各 CI 全绿）。#8 的四项 PR 已交付源码与隔离自动化证据（真实 nft readback 与 AI 双跳流量仍待隔离 VM 实测），#9 不在其实现范围；#11 Web 全节点统一升级仍是 v1.0.0 P0，但不属于本轮实现或验收。
+- **Out**：安装产物可选。ACL 已由 #8-B 改为**空授权默认全拒绝**：`inet meshmux_out` 基线 `policy accept` 仅保留给主机 SSH/回环/回程，VLESS 目标端口在 `input` chain 内的两条 `tcp/udp dport drop` 默认丢弃，仅 Hub 授权的 Line 源地址（`/32`/`/128` 或已对齐 CIDR）在 drop 之前获得 `accept`；`nft -j` 回读逐条比对已应用集合，`OUT_ACL_SOURCE_MISMATCH` 不伪装健康。#8-C 完成 Hub↔Line↔Out 白名单协调与四事实双向 readback（白名单 / 入站 / REALITY / 最终出口），#8-D 完成 AI 规则集版本锁（`RulesetPin{Source,Version,SHA256}`，下载/摘要/大小失败 `RULESET_FETCH_FAILED` 拒绝发布）、Out 不可用默认 `OUT_OFFLINE_FAIL_CLOSED`（回退 Line 需显式 opt-in + `operation_id`）与 `DeleteOut` 删路由+清 ACL。**仿真证据**：隔离单元/竞态测试覆盖 ACL 有序 accept-before-drop、`nft -j` 精确集合、注入 accept 与 state 缺失断言、规则集 pin 与 fail-closed；**真实证据**：L2 privileged Debian 13 容器 `nft -f` apply + `nft -j list table inet meshmux_out` 至少 2 条 rule 断言与 `nft list` 日志（[hub-components 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)，head `9495730`、tree `5720b86`，amd64 实得 PASS 非 SKIP；无 `CAP_NET_ADMIN` 显式 SKIP，不计为通过）；L3 [hub-vm 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)（同 head/tree）hub/edge/out 全 success，含真实 `nft list` 回读。**仍缺**：AI 双跳实际流量（已移交 #10）与客户端可用，不属本轮已有证据。
+- **独立阶段**：#7 交付订阅模型、原生 REALITY 编译器、Web 订阅生命周期/下载与 Hub 共存，PR-A/PR-B/PR-C 均已合入（各 CI 全绿）。#8 的四项 PR 已交付源码与隔离自动化证据：仿真证据为 Go 单测/竞态，真实证据为 L2 privileged 容器 `nft -f` apply + `nft -j` readback 与 L3 VM readback（[hub-components 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)、[hub-vm 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)，head `9495730`、tree `5720b86`），AI 双跳流量仍缺（双跳已移交 #10）；#9 不在其实现范围；#11 Web 全节点统一升级仍是 v1.0.0 P0，但不属于本轮实现或验收。
 
 详见 [Web 开发说明](WEB_DEVELOPMENT.zh-CN.md)、[Hub 安装](INSTALL_HUB.zh-CN.md) 与 [Line / Out 安装](INSTALL_NODE.zh-CN.md)。下表仍是发行目标，不是任何单个 PR 的验收结论。
 
@@ -23,8 +23,8 @@
 | 代理 | 固定 sing-box 1.14.3，VLESS/REALITY 入站，自定义监听端口，Line 生命周期 | PR-A 已交付模型与 v2 编译器，PR-B 已交付 Web 生命周期与订阅（双架构导入绿），PR-C 共存 VM 绿；真实公网握手与客户端可用仍缺证据 |
 | 聚合 | 多 Line 线路选择、命名、标准订阅导出 sing-box / Mihomo | 客户端导入成功，新增 Line 按选择更新配置 |
 | 订阅 | 用户创建、禁用、删除，Token 撤销与 per-Line VLESS UUID 删除分离，精确跨节点凭据撤销 | 旧 URL 不可下载；删除先门禁公开下载，远端部分失败不假完成 |
-| Mesh | Headscale 注册/注销、Mesh-only、独立子网路由及路由批准 | 无代理订阅的 NAS 可以入网并实际路由 |
-| 单 VPN | 设备专属 sing-box 代理 + Mesh 配置，SSID 与远程家庭网段 | 经过 iOS/Android 真机以及两种网络验证 |
+| Mesh | Headscale 注册/注销、Mesh-only、独立子网路由及路由批准（9a 已交付设备生命周期：Web 页面 + `mesh_devices`/`mesh_enrollment_keys` + 本地 Headscale CLI 适配器；**子网路由与路由批准属 9b**） | 无代理订阅的 NAS 可以入网并实际路由 |
+| 单 VPN | 设备专属 sing-box 代理 + Mesh 配置，SSID 与远程家庭网段（**属 9c**；9a 只到设备记录与入网 Key，不渲染客户端配置） | 经过 iOS/Android 真机以及两种网络验证 |
 | 分流 | Web 配置客户端 CN/国际/Tailnet/DNS 与服务端域名/IP/规则集；AI Line→Out 或 Line 直出 | 不存在 Out 不生成无效配置；Out 出错默认不泄漏回退出口 |
 | 基本诊断 | 节点/任务日志、固定错误码、必要的公网端口与协议健康检查 | 出错能辨别主机监听、云安全组、代理握手与 Mesh 问题 |
 | 安全 | 单管理员认证/CSRF/限速；SSH + Web Fail2ban；端口与防火墙一致 | 匿名拒绝；暴力登录和异常来源安全处理 |
@@ -45,6 +45,6 @@
 ## 不变量与质量底线
 
 - **Subscriber ≠ Mesh Device ≠ VLESS Credential**，订阅用户和 Mesh 设备可分别创建/删除。
-- Out 可选，且 AI 规则可明确选择 Line 直出；配置了 Out 时该 Out 故障默认 fail-closed（`OUT_OFFLINE_FAIL_CLOSED`），不会静默直出；回退 Line 必须是管理员显式 opt-in 并带 `operation_id` 审计。#8 已把 Out ACL 的 `policy accept` 边界修正为空授权默认拒绝 + 仅授权源可用（`internal/node/render.go`、`internal/node/runtime_readback.go`、`internal/install/node_acl_test.go` 等隔离测试），真实 nft readback 与双跳流量仍待隔离 VM 实测。
+- Out 可选，且 AI 规则可明确选择 Line 直出；配置了 Out 时该 Out 故障默认 fail-closed（`OUT_OFFLINE_FAIL_CLOSED`），不会静默直出；回退 Line 必须是管理员显式 opt-in 并带 `operation_id` 审计。#8 已把 Out ACL 的 `policy accept` 边界修正为空授权默认拒绝 + 仅授权源可用（`internal/node/render.go`、`internal/node/runtime_readback.go`、`internal/install/node_acl_test.go` 等隔离测试）。仿真证据为隔离单测；真实证据为 L2 privileged 容器 `nft -f` apply 与 `nft -j` readback（[hub-components 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)，head `9495730`、tree `5720b86`，amd64 实得 PASS；无 `CAP_NET_ADMIN` 显式 SKIP）与 L3 VM readback（[hub-vm 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)）。AI 双跳实际流量（已移交 #10）与客户端可用仍缺。
 - 编辑路由或删除用户前生成可审阅配置，失败不能报告完成。
 - “安全优先”意味着保留必要测试和失败回滚，不引入不必要的架构、审批链或不相关功能。

@@ -15,8 +15,9 @@
 //     explicit administrator opt-in carrying the request operation id may fall
 //     back.
 //
-// 状态：占位包已按 ADR-0007 的约定首次破壳，范围**仅限 Out 的 AI 出口与规则集
-// 版本锁**；仍无通用规则引擎、规则市场、测速或多 Out 负载均衡。
+// 状态：#8-D 已在 out_ruleset.go 实现 Out 的 AI 出口与规则集版本锁；Line
+// 入站选择、通用分流等其余 route 决策仍是 ADR-0007 下的占位，未实现通用规则
+// 引擎、规则市场、测速或多 Out 负载均衡。
 //
 // 职责：把"Line / Out / 规则集"的组合解析为一个可审计的出口决定，供发布链与
 // 渲染层消费。

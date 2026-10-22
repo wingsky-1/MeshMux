@@ -20,7 +20,8 @@ MeshMux 按 SemVer 2.0.0，**v1.0.0 是首个公开稳定版本**。开发里程
 - docs/：产品、架构、运维、安全与验收；docs/adr 仅在真实架构取舍时补充。
 - .github/workflows/ci.yml：gofmt、vet、test、race、build。
 - cmd/meshmux-web、internal/web：非 root Web 服务、安全认证/会话、SQLite 和嵌入式 templ/HTMX 页面。
-- **Agent、安装器、订阅生成器及 proxy/Mesh 逻辑仍未实现。**
+- **#7 Phase 3A 已合入（PR #19/#21/#22）**：安装器（`internal/install`）与订阅生成器（严格 v2 REALITY 编译器、Web 订阅生命周期、双格式下载）已实现；Agent 协议仍未实现。
+- **#9 PR-9a 已交付 Mesh 设备生命周期**：`internal/mesh`（纯领域模型）、`internal/headscale`（固定 argv 的本地 CLI 适配器）、Web `/mesh` 设备页与 `store_mesh.go`（schema 6 的 `mesh_devices`/`mesh_enrollment_keys`），以及 Hub 安装的 Web↔Headscale socket 组边界。**未交付**：子网路由与路由批准（9b）、单 VPN 客户端配置渲染（9c）、真实 tailnet 设备注册证据。
 - 隔离运行、模板再生成、安全验收与恢复见 [WEB_DEVELOPMENT](WEB_DEVELOPMENT.zh-CN.md)，依赖见 [DEPENDENCIES](DEPENDENCIES.zh-CN.md)。
 
 本地运行：

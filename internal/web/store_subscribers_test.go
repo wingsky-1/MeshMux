@@ -797,7 +797,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 
 	// Rebuild the database in its schema-3 shape: the subscription tables do
 	// not exist yet and the version is 3.
-	if _, err = s.db.Exec(`DROP TABLE out_bindings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
+	if _, err = s.db.Exec(`DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -808,15 +808,15 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 		t.Fatalf("user_version = %d, want 3", version)
 	}
 
-	// The migration to v5 must succeed and keep the schema-3 data.
+	// The migration to v6 must succeed and keep the schema-3 data.
 	if err = s.migrate(); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 5 {
-		t.Fatalf("user_version = %d, want 5", version)
+	if version != 6 {
+		t.Fatalf("user_version = %d, want 6", version)
 	}
 	after, err := s.getNodeAt(edge, now)
 	if err != nil {
@@ -878,7 +878,7 @@ func TestSchemaV4MigrationRollsBackOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(`DROP TABLE out_bindings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
+	if _, err = tx.Exec(`DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
