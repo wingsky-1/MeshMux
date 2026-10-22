@@ -3,16 +3,100 @@ package compiler
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/route"
+	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
 func digest(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func testModel() subscription.MeshConfigModel {
+	return subscription.MeshConfigModel{
+		DeviceID:        "0123456789abcdef0123456789abcdef",
+		DisplayName:     "alice-iphone",
+		Hostname:        "mesh-alice-iphone",
+		ControlURL:      "https://headscale.example.invalid",
+		TailnetPrefixes: []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"},
+		LineLabels:      []string{"tokyo-1", "osaka-1"},
+	}
+}
+
+// TestGeneratorsFollowPolicyDataNotHardcodedLists proves both generators are
+// pure functions of the policy: an empty policy has no rules, a custom policy
+// is rendered in priority order, and the same input yields the same bytes and
+// hash.
+func TestGeneratorsFollowPolicyDataNotHardcodedLists(t *testing.T) {
+	policy := ClientPolicy{
+		Default: ActionProxy,
+		Rules: []Rule{
+			{Priority: 10, Match: Match{Domains: []string{"ai.example.invalid"}}, Action: ActionDirect},
+			{Priority: 20, Match: Match{DomainSuffixes: []string{"example.invalid"}}, Action: ActionProxy},
+			{Priority: 30, Match: Match{IPCIDRs: []string{"203.0.113.0/24"}}, Action: ActionDirect},
+		},
+	}
+	first, err := RenderSingBox(policy, RuleSetPins{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := RenderSingBox(policy, RuleSetPins{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) || Hash(first) != Hash(second) {
+		t.Fatal("sing-box generation is not deterministic")
+	}
+	var document struct {
+		Route struct {
+			Rules []map[string]any `json:"rules"`
+			Final string           `json:"final"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(first, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Route.Rules) != 3 || document.Route.Final != singBoxProxyTag {
+		t.Fatalf("sing-box route = %#v, want three rules and the proxy final", document.Route)
+	}
+	if got := document.Route.Rules[0]["domain"].([]any)[0]; got != "ai.example.invalid" {
+		t.Fatalf("first rule = %#v, want the priority-10 domain rule", document.Route.Rules[0])
+	}
+	if document.Route.Rules[0]["outbound"] != singBoxDirectTag {
+		t.Fatalf("first rule outbound = %#v, want direct", document.Route.Rules[0]["outbound"])
+	}
+	if got := document.Route.Rules[2]["ip_cidr"].([]any)[0]; got != "203.0.113.0/24" {
+		t.Fatalf("last rule = %#v, want the priority-30 CIDR rule", document.Route.Rules[2])
+	}
+
+	mihomo, err := RenderMihomo(policy, RuleSetPins{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "rules:\n" +
+		"  - \"DOMAIN,ai.example.invalid,DIRECT\"\n" +
+		"  - \"DOMAIN-SUFFIX,example.invalid,PROXY\"\n" +
+		"  - \"IP-CIDR,203.0.113.0/24,DIRECT,no-resolve\"\n" +
+		"  - \"MATCH,PROXY\"\n"
+	if string(mihomo) != want {
+		t.Fatalf("mihomo fragment = %q, want %q", mihomo, want)
+	}
+
+	empty, err := RenderSingBox(ClientPolicy{Default: ActionDirect}, RuleSetPins{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(empty), `"outbound"`) != 0 || !strings.Contains(string(empty), `"final": "direct"`) {
+		t.Fatalf("empty policy rendered hardcoded rules: %s", empty)
+	}
+	if Hash(first) == Hash(empty) {
+		t.Fatal("different policies hashed to the same document")
+	}
 }
 
 // TestRulesetVersionLockAndChecksum covers the Geo/remote pin contract: a
@@ -35,14 +119,18 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 			Action:   ActionDirect,
 		}},
 	}
-	if err := pins.Validate(policy.Rules); err != nil {
+	if _, err := RenderSingBox(policy, pins); err != nil {
 		t.Fatalf("pinned geosite rejected: %v", err)
+	}
+	mihomo, err := RenderMihomo(policy, pins)
+	if err != nil || !strings.Contains(string(mihomo), "RULE-SET,geosite-cn,DIRECT") {
+		t.Fatalf("mihomo pinned geosite = %s err=%v", mihomo, err)
 	}
 
 	mutable := pin
 	for _, version := range []string{"latest", "head", "main", "master", "stable", "dev", "nightly"} {
 		mutable.Version = version
-		if err := (RuleSetPins{GeoSite: map[string]RulesetPin{"cn": mutable}}).Validate(policy.Rules); err == nil ||
+		if _, err := RenderSingBox(policy, RuleSetPins{GeoSite: map[string]RulesetPin{"cn": mutable}}); err == nil ||
 			!strings.HasPrefix(err.Error(), route.CodeRulesetPinInvalid) {
 			t.Fatalf("mutable version %q error = %v, want %s", version, err, route.CodeRulesetPinInvalid)
 		}
@@ -54,14 +142,14 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 	} {
 		unsafe := pin
 		unsafe.Source = source
-		if err := (RuleSetPins{GeoSite: map[string]RulesetPin{"cn": unsafe}}).Validate(policy.Rules); err == nil ||
+		if _, err := RenderSingBox(policy, RuleSetPins{GeoSite: map[string]RulesetPin{"cn": unsafe}}); err == nil ||
 			!strings.HasPrefix(err.Error(), route.CodeRulesetPinInvalid) {
 			t.Fatalf("%s source error = %v, want %s", name, err, route.CodeRulesetPinInvalid)
 		}
 	}
 
 	policy.Rules[0].Match.GeoSite = []string{"us"}
-	if err := pins.Validate(policy.Rules); err == nil || !strings.HasPrefix(err.Error(), CodeRulesetUnpinned) {
+	if _, err := RenderSingBox(policy, pins); err == nil || !strings.HasPrefix(err.Error(), CodeRulesetUnpinned) {
 		t.Fatalf("unpinned geosite error = %v, want %s", err, CodeRulesetUnpinned)
 	}
 
@@ -139,6 +227,44 @@ func TestServerPolicyFailsClosedOnOutOffline(t *testing.T) {
 	}
 }
 
+// TestMeshModelIsConsumedReadOnly proves the compiler copies the non-secret view
+// model and never guesses a missing node: an unknown or empty Line label is
+// refused, while the tailnet prefixes become the Tailscale rule.
+func TestMeshModelIsConsumedReadOnly(t *testing.T) {
+	model := testModel()
+	policy, err := MeshClientPolicy(model, "tokyo-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Mesh.DeviceID != model.DeviceID || policy.Mesh.DisplayName != model.DisplayName ||
+		policy.Mesh.Hostname != model.Hostname || policy.Mesh.ControlURL != model.ControlURL {
+		t.Fatalf("mesh identity was not consumed read-only: %#v", policy.Mesh)
+	}
+	if len(policy.Rules) != 1 || policy.Rules[0].Action != ActionTailscale ||
+		policy.Rules[0].Match.IPCIDRs[0] != "100.64.0.0/10" {
+		t.Fatalf("mesh policy = %#v, want tailnet-first rules", policy)
+	}
+	for _, label := range []string{"", "missing-1"} {
+		if _, err := MeshClientPolicy(model, label); err == nil ||
+			!strings.HasPrefix(err.Error(), CodePolicyNodeUnknown) {
+			t.Fatalf("label %q error = %v, want %s", label, err, CodePolicyNodeUnknown)
+		}
+	}
+	model.TailnetPrefixes[0] = "198.51.100.0/24"
+	model.LineLabels[0] = "changed"
+	if policy.Mesh.TailnetPrefixes[0] != "100.64.0.0/10" || policy.Mesh.LineLabels[0] != "tokyo-1" {
+		t.Fatal("the compiler retained caller-owned mesh slices")
+	}
+	body, err := RenderSingBox(policy, RuleSetPins{})
+	if err != nil || !strings.Contains(string(body), singBoxTailscaleTag) {
+		t.Fatalf("mesh render = %s err=%v", body, err)
+	}
+	if _, err := RenderMihomo(policy, RuleSetPins{}); err == nil ||
+		!strings.HasPrefix(err.Error(), CodeRenderUnsupported) {
+		t.Fatalf("Mihomo accepted a Tailscale action: %v", err)
+	}
+}
+
 // TestPolicyRejectsConflictsAndCrossRoleActions covers the validation the Web
 // layer needs before a candidate can be compiled.
 func TestPolicyRejectsConflictsAndCrossRoleActions(t *testing.T) {
@@ -175,6 +301,6 @@ func TestPolicyRejectsConflictsAndCrossRoleActions(t *testing.T) {
 	}
 	if err := (ServerPolicy{Default: ActionProxy}).Validate(); err == nil ||
 		!strings.HasPrefix(err.Error(), CodePolicyInvalid) {
-		t.Fatalf("server proxy error = %v, want %s", err, CodePolicyInvalid)
+		t.Fatalf("server proxy default error = %v, want %s", err, CodePolicyInvalid)
 	}
 }

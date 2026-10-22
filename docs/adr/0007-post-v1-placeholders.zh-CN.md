@@ -1,12 +1,12 @@
 # ADR-0007：post-v1.0.0 领域占位包（mesh / route / jobs / compiler）
 
-状态：Accepted（原占位决策）；`internal/route` 已按 #8-D、`internal/mesh` 已按 PR-9a-1、`internal/compiler` 已按 PR-10a-1 首次破壳；`internal/jobs` 仍为占位。
+状态：Accepted（原占位决策）；`internal/route` 已按 #8-D、`internal/mesh` 已按 PR-9a-1、`internal/compiler` 已按 PR-10a 首次破壳；`internal/jobs` 仍为占位。
 
 ## 修订记录
 
 - 2026-10-22（PR-9a-1）：`internal/mesh` 不再是空包。MeshDevice 与一次性入网 Key 的纯领域模型在 `internal/mesh/device.go` / `enrollment.go` 实现：用途（`proxy_mesh` / `mesh_only` / `subnet_router`）与仅展示用平台（`ios` / `android` / `linux` / `nas` / `other`）分离、`proxy_mesh` 必须绑定 Subscriber 而 `mesh_only` 禁止绑定、同一 Headscale 用户内处于 `pending` / `registered` / `revoking` 的 NodeName 唯一、设备状态迁移表（`revoked` 终态）与固定 15 分钟、仅存 SHA-256、`consumed` 不可逆且每设备单活的入网 Key 状态机。该包**仍不**调用 Headscale API/CLI、不建表、不写 HTTP、不读写订阅 Token、不渲染配置、不执行主机动作，也不 import `internal/web` / `internal/install`；installer 与 Web 接线属后续 PR（9a-4 起）。下文“空包/无导出标识符”以及后果中“其余三包保持占位”的表述，从此只对 `jobs` / `compiler` 继续成立。
 - 2026-10-22（Issue #8-D）：`internal/route` 不再是空包。`route.RulesetPin` / `route.ResolveAIRuleset` 与 AI 出口决定（无 Out = 直出、Out 故障 = `OUT_OFFLINE_FAIL_CLOSED`、显式 opt-in 回退需 `operation_id`）在 `internal/route/out_ruleset.go` 实现，由 `internal/web` 的 `planAIEgress` 消费。该包**仍不**渲染配置、不读写订阅 Token、不做通用规则引擎、规则市场、测速或多 Out 负载均衡，也不执行主机动作。下文“空包/无导出标识符”的表述只对其余三包继续成立。
-- 2026-10-22（PR-10a-1）：`internal/compiler` 不再是空包。策略意图（客户端 `ClientPolicy` / 服务端 `ServerPolicy`）与格式无关；Geo/远端规则集复用 `route.RulesetPin` 的 HTTPS + 不可变版本 + SHA-256 版本锁，未 pin 的 geosite/geoip/remote 规则一律拒绝，下载/摘要/大小失败沿用 `RULESET_FETCH_FAILED`，Out 不可用沿用 `OUT_OFFLINE_FAIL_CLOSED`。`MeshConfigModel` 只读消费并复制切片，未知 Line 标签返回 `POLICY_NODE_UNKNOWN` 而非猜测节点。该包**仍不**写 `mesh_*` / `subscribers` / `proxy_credentials` / Token、不改冻结协议、不执行传输/落盘/apply，也不替 `node.CompileCandidate` 渲染候选；sing-box/Mihomo 生成器属 10a-2，Web 接线与完整文档发布属 10b-10d。下文“空包/无导出标识符”以及后果中“其余三包保持占位”的表述，从此只对 `jobs` 继续成立。
+- 2026-10-22（PR-10a）：`internal/compiler` 不再是空包。策略意图（客户端 `ClientPolicy` / 服务端 `ServerPolicy`）与 sing-box 1.14.3 JSON / Mihomo YAML 生成器分离；Geo/远端规则集复用 `route.RulesetPin` 的 HTTPS + 不可变版本 + SHA-256 版本锁，未 pin 的 geosite/geoip/remote 规则在生成前拒绝，下载/摘要/大小失败沿用 `RULESET_FETCH_FAILED`，Out 不可用沿用 `OUT_OFFLINE_FAIL_CLOSED`。`MeshConfigModel` 只读消费并复制切片，未知 Line 标签返回 `POLICY_NODE_UNKNOWN` 而非猜测节点。该包**仍不**写 `mesh_*` / `subscribers` / `proxy_credentials` / Token、不改冻结协议、不执行传输/落盘/apply，也不替 `node.CompileCandidate` 渲染候选；Web 接线与完整文档发布属 10b-10d。下文“空包/无导出标识符”以及后果中“其余三包保持占位”的表述，从此只对 `jobs` 继续成立。
 
 ## 背景
 
@@ -28,11 +28,11 @@
 - **mesh vs node 运行时**：`node` 描述 Line 主机上的 sing-box 目录、配置与 Agent 数据契约；`mesh` 只描述 Headscale 侧设备身份与入网状态。二者不互相定义实体，`mesh` 不执行 Agent 动作。
 - **route vs 订阅渲染 vs compiler**：`route` 只做连通性与准入决定（Line 直出、可选 Out、fail-closed），不渲染文档，也不接触订阅 Token；`subscription` 把同一用户集合渲染为客户端文档（现有 `ExportSingBox` / `ExportMihomo` / `ExportMeshDevice`），是渲染层的表达选择；`compiler` 在 Hub 侧把已确认的策略意图按优先级组装为确定性片段并计算哈希，生成器只消费策略与 `RulesetPin`，不复刻 `node.CompileCandidate`，不承担传输、落盘或 apply。
 - **jobs vs 现有轮询**：当前 Web 仅登记任务、由 Agent 轮询拉取，Hub 侧没有执行器、队列或新进程。`jobs` 若被采纳，只是把既有阶段与稳定错误码固化为持久记录；不扩展 Agent allowlist，不支持任意 shell、路径或外部 URL。
-- **compiler vs 候选渲染**：`node.CompileCandidate` 已负责把 `meshmux-node/v2` 候选规范化为节点本地配置。`compiler` 面向 Hub 侧完整文档组装，不复刻候选 schema，也不承担传输、落盘或 apply；10a-1 只交付意图模型与版本锁。
+- **compiler vs 候选渲染**：`node.CompileCandidate` 已负责把 `meshmux-node/v2` 候选规范化为节点本地配置。`compiler` 面向 Hub 侧完整文档组装，不复刻候选 schema，也不承担传输、落盘或 apply；10a 只交付意图模型、版本锁与格式生成器。
 
 ## 后果
 
-- 占位包不得被 `cmd` 或其他 `internal` 包导入，避免以空壳提前固化 API；出现第一个真实调用方才提升为正式包并补充测试。`internal/route` 已因 #8-D、`internal/mesh` 已因 PR-9a-1、`internal/compiler` 已因 PR-10a-1 提升为正式包（见修订记录），只有 `internal/jobs` 保持占位。
+- 占位包不得被 `cmd` 或其他 `internal` 包导入，避免以空壳提前固化 API；出现第一个真实调用方才提升为正式包并补充测试。`internal/route` 已因 #8-D、`internal/mesh` 已因 PR-9a-1、`internal/compiler` 已因 PR-10a 提升为正式包（见修订记录），只有 `internal/jobs` 保持占位。
 - 空包对构建、链接、二进制体积无影响，`go build ./...` 与 `gofmt` 必须保持通过。
 - 任一能力进入实现前，须先以新 ADR 或本 ADR 的修订确认职责与失败路径；本 ADR 初版不引入实现，后续破壳以修订记录为准，也不改变 v1.0.0 范围。
 
