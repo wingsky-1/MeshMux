@@ -1,14 +1,12 @@
 package web
 
-// PoliciesPage renders the /policies route as a presentation draft for
-// issue #10. It shows the two-layer policy view (docs/UX.zh-CN.md 路由策略
-// 视图): the client layer on the device and the server layer on the Line.
+// PoliciesPage renders the /policies route for issue #10. It shows the
+// two-layer policy view (docs/UX.zh-CN.md 路由策略视图): the client layer on
+// the device and the server layer on the Line.
 //
-// The page is deliberately read-only: until the visual draft is approved it
-// renders states, copy and structure only, with no business buttons — the
-// console never leaves a control that clicks without action. Wiring the route
-// (skipping "/policies" in the generic navigation loop and calling this page
-// with the snapshot from the policy store) belongs to the backend branch.
+// The server fills the snapshot from read-only mesh data; saving, persistence
+// and publication are 10d, so the page never renders a control that clicks
+// without action.
 templ PoliciesPage(p pageData, v policyPageView) {
 	@Document(p.Title) {
 		<a class="skip" href="#main">跳到内容</a>
@@ -36,7 +34,9 @@ templ PoliciesPage(p pageData, v policyPageView) {
 					}
 					<link rel="stylesheet" href="/assets/policies.css"/>
 					<p class="subtitle">路由策略分两层：客户端层决定设备上的流量走向，服务端层决定 Line 上的转发走向。每层从上到下匹配，先命中先生效。</p>
-					<div class="notice">视觉草图：以下为设计示例，尚未接入真实策略配置；业务按钮将在视觉草图审核通过后接入，页面不保留点击无动作的控件。</div>
+					if v.Draft {
+						<div class="notice">当前没有可用的真实策略数据（需要已纳管 Line 与已收敛的 Mesh 订阅）；以下为设计示例，不写入配置，也不发布策略。</div>
+					}
 
 					<section class={ "panel", "out-state", templ.KV("out-degraded", v.Out == policyOutDegraded), templ.KV("out-active", v.Out == policyOutActive) }>
 						<div class="panel-heading"><h2>Out 出口状态</h2>
@@ -59,8 +59,8 @@ templ PoliciesPage(p pageData, v policyPageView) {
 
 					<div class="policy-split">
 						<section class="panel">
-							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">示例 · 7 条</span></div>
-							<p class="muted">客户端层规则随设备配置下发。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。</p>
+							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ len(v.Client) } 条</span></div>
+							<p class="muted">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页只展示当前默认策略意图，保存与发布在后续版本接入。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Client {
 									<li>
@@ -71,8 +71,8 @@ templ PoliciesPage(p pageData, v policyPageView) {
 							</ul>
 						</section>
 						<section class="panel">
-							<div class="panel-heading"><h2>服务端层 · Line 出口分流</h2><span class="badge">示例 · 4 条</span></div>
-							<p class="muted">服务端层规则由 Hub 下发到 Line，在 Line 上直接分流，设备不需要任何额外配置。</p>
+							<div class="panel-heading"><h2>服务端层 · Line 出口分流</h2><span class="badge">{ len(v.Server) } 条</span></div>
+							<p class="muted">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页按当前默认意图与 Out 三态展示；保存与发布在后续版本接入。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Server {
 									<li>
@@ -92,9 +92,9 @@ templ PoliciesPage(p pageData, v policyPageView) {
 								for _,c:=range v.Conflicts {
 									<li>
 										if c.Blocked {
-											<span class="badge failure">示例 · 会拦截</span>
+											<span class="badge failure">会拦截</span>
 										} else {
-											<span class="badge accent">示例 · 通过</span>
+											<span class="badge accent">通过</span>
 										}
 										<span class="conflict-text">{ c.Detail }</span>
 									</li>
@@ -103,8 +103,8 @@ templ PoliciesPage(p pageData, v policyPageView) {
 							<p class="hint">调整顺序或合并条件后重新校验；已启用的规则停用后，命中它的流量回到该层兜底。</p>
 						</section>
 						<section class="panel">
-							<div class="panel-heading"><h2>命中说明</h2><span class="badge">完整模拟器后续开放</span></div>
-							<p class="muted">完整模拟器（输入任意目标、输出命中链）在后续版本开放。本页先提供固定示例，说明每条规则的判定路径。</p>
+							<div class="panel-heading"><h2>命中说明</h2><span class="badge">后续接入</span></div>
+							<p class="muted">快照只展示当前生效的策略意图；命中查询在后续分支接入，本页不猜测任何结果。</p>
 							<div class="policy-hits">
 								for _,h:=range v.Hits {
 									<div class="hit-card">

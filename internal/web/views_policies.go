@@ -1,10 +1,10 @@
 package web
 
 // views_policies.go holds the display-only view model for the /policies page.
-// It is a presentation draft for issue #10: the backend branch owns filling
-// this snapshot from the routing policy store later. Nothing here validates
-// priority conflicts, mutates configuration or talks to the store — the page
-// only renders states and copy, and it never renders a control without an
+// The server fills the snapshot from the read-only mesh model and the default
+// client policy; policiesDraftView remains the no-data fallback. Nothing here
+// writes configuration or publishes a policy — saving, revisions and the
+// publication pipeline are 10d. The page never renders a control without an
 // action (see docs/UX.zh-CN.md 交互安全性).
 
 // policyOutState is the tri-state display of the optional Out egress.
@@ -53,6 +53,9 @@ type policyPageView struct {
 	Server    []policyRuleView
 	Conflicts []policyConflictView
 	Hits      []policyHitView
+	// Draft marks the no-data fallback: the page then says so instead of
+	// presenting design sample rows as live policy.
+	Draft bool
 }
 
 // policiesDraftView returns the static design sample the page renders until
@@ -102,7 +105,3 @@ func policiesDraftView() policyPageView {
 		},
 	}
 }
-
-// policiesDraftView is referenced by the stacked snapshot branch; this branch
-// only lands the draft so the page stays unreachable.
-var _ = policiesDraftView
