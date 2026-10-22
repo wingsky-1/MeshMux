@@ -92,8 +92,11 @@ if ! systemd-analyze verify "${units[@]}" 2>&1 | tee /tmp/node-l2-verify.log; th
 fi
 echo "verified units: ${units[*]}"
 
-echo '--- nft -c -f Out ACL dry-run ---'
-# Dry-run check only; no kernel transactions are applied.
+echo '--- nft -c -f Out ACL dry-run + apply/readback ---'
+# The -c pass never touches the kernel. The apply/readback below is a real
+# nft transaction and therefore runs only when this container has
+# CAP_NET_ADMIN (the CI container is started with --privileged). Without it
+# the step reports an explicit SKIP and is not counted as applied evidence.
 # Only acl.nft carries the rendered table: out.nft is the empty dynamic
 # placeholder that installNodeDynamic fills from the validated candidate
 # (nodeManagedFiles marks it Static:false with no Body), so it is expected
@@ -107,6 +110,12 @@ if (( ${#acls[@]} == 0 )); then
   echo 'no ACL fixtures produced' >&2
   exit 1
 fi
+can_apply=0
+if nft list tables >/dev/null 2>&1; then
+  can_apply=1
+else
+  echo 'SKIP nft apply/readback: nft list tables denied (no CAP_NET_ADMIN); dry-run only, not counted as applied evidence'
+fi
 for acl in "${acls[@]}"; do
   if ! grep -q 'tcp dport 8443 drop' "$acl" || ! grep -q 'udp dport 8443 drop' "$acl"; then
     echo "ACL missing VLESS drop rules in $acl" >&2
@@ -116,6 +125,24 @@ for acl in "${acls[@]}"; do
   echo "ACL: $acl"
   cat "$acl"
   nft -c -f "$acl"
+  if (( can_apply )); then
+    nft -f "$acl"
+    nft_log=/tmp/node-l2-nft-out-apply.log
+    nft list table inet meshmux_out | tee "$nft_log"
+    rules="$(nft -j list table inet meshmux_out | jq '[.nftables[] | select(has("rule"))] | length')"
+    echo "nft readback: ${rules} rule(s) in inet meshmux_out (log: $nft_log)"
+    if (( rules < 2 )); then
+      echo "expected at least 2 Out ACL rules after nft -f, got ${rules}" >&2
+      exit 1
+    fi
+    if ! grep -q 'tcp dport 8443 drop' "$nft_log" || ! grep -q 'udp dport 8443 drop' "$nft_log"; then
+      echo 'live nft readback is missing the VLESS tcp/udp drop rules' >&2
+      cat "$nft_log" >&2
+      exit 1
+    fi
+    nft delete table inet meshmux_out
+    echo 'nft apply/readback PASS; removed inet meshmux_out after readback'
+  fi
 done
 
 echo '--- fail2ban client -t (with MeshMux-only jail) ---'

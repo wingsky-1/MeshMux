@@ -75,8 +75,8 @@ Node 工作流在当前工作树中扩展到 `edge` 与 `out` profile，目标�
 | L2 amd64 Debian 13 | 固定制品 hash、sing-box check、unit 语法、Fail2ban/nft 配置自检及明确 run 链接 | 通过（[hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)，head `78e259b`；unit 语法用空可执行 stub，binary 内容同 run 内 SHA 校验） |
 | L2 arm64 Debian 13 | 同上，使用原生 arm64 runner 与固定 binary hash | 通过（同上 run，原生 arm64 runner 同矩阵全绿） |
 | L3 edge | 隔离 VM 首装、plan/确认、stdin code、repair 身份复用、重启与故障恢复 | 通过（[hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)，head `78e259b`；一次 TCG 时钟抖动重跑即过） |
-| L3 out | 同上，加真实 nft readback | 通过（同上 run，head `78e259b`，早于 #8-B）；`policy accept` 与默认拒绝语义差已由 #8-B 修正（源码 + 隔离测试），真实 nft readback 待隔离 VM 实测，见 ACCEPTANCE |
+| L3 out | 同上，加真实 nft readback | 历史 L3 通过（同上 run，head `78e259b`，早于 #8-B，不复用为 #8 证据）。#8-B 已修正 `policy accept` 与默认拒绝语义；仿真证据为隔离单测，真实证据新增 L2 privileged 容器 `nft -f` apply + `nft -j list table inet meshmux_out` 至少 2 条 rule 断言（占位 head `e456f2b`、tree `a2a9233`，run 链接待 CI 回填；无 `CAP_NET_ADMIN` 时显式 SKIP，不计为通过）。L3 VM readback 待后续触发，AI 双跳已移交 #10，见 ACCEPTANCE |
 
 Node 测试必须使用受控 runner、临时 root 或一次性 VM。没有 root/DeBIan 13 时只验证早期拒绝与命令组装，不执行宿主安装。SSH 与 VLESS 端口必须不同；Fail2ban jail/action 应覆盖实际 SSH listener、排除 VLESS，nft 只能替换 MeshMux 自有表。
 
-当前 Node baseline 的 VLESS `users` 为空，没有 TLS/REALITY、代理用户、客户端凭据或订阅，#7 未实现；#8、#9、#11 不在本轮验证范围。#11 仍是 v1.0.0 P0。不得从本地 listener 或 plan 成功推导公网可达、真实协议握手或客户端可用。
+当前 Node v1 baseline 的 VLESS `users` 为空；#7 Phase 3A 已合入（PR #19/#21/#22），v2 REALITY 候选与订阅已交付；#8、#9、#11 不在本轮验证范围。#11 仍是 v1.0.0 P0。不得从本地 listener 或 plan 成功推导公网可达、真实协议握手或客户端可用。
