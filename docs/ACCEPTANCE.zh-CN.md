@@ -108,6 +108,23 @@ PR-9b 只交付按前缀的子网路由声明、批准、撤销批准与观测�
 
 NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机的授权、旧身份处置、路由接管与回退设计见 [Mesh 身份迁移](MESH_MIGRATION.zh-CN.md)；9a/9b 的验收结论不变。
 
+## Issue #10 Web 路由与分流（B 级）
+
+#10 按 10a（策略模型 + 生成器 + 版本锁）→ 10b（客户端策略 + `/policies` 读/校验/写）→ 10c（服务端渲染 + 预览）→ 10d（持久化 + 发布管线）交付，PR #66–#79（10a-1/10a-2、10b-1、10b-2a/2b/2c、10c-1a/1b、10c-2、10d-1a/1b、10d-2a、10d-2b-1/2b-2），每支均过 `gofmt -s` / `go vet` / staticcheck / `go test` / `go generate` 无 drift / `go build` 与 PR CI（含 #73 触发的 QEMU hub/edge/out 整机全绿，[run 39777409228](https://github.com/wingsky-1/MeshMux/actions/runs/39777409228)）。本节只登记源码与隔离自动化证据，不构成发行或 C 级验收。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | 策略模型：客户端/服务端意图与 sing-box 1.14.3 JSON / Mihomo YAML 生成器分离；Geo/远端规则集复用 `RulesetPin`（HTTPS + 不可变版本 + SHA-256 + 8 MiB），未 pin 拒绝；确定性字节 + 哈希 | [x] `internal/compiler/*_test.go`（`TestGeneratorsFollowPolicyDataNotHardcodedLists`、`TestRulesetVersionLockAndChecksum`） |
+| B | 客户端策略：SSID（sing-box `wifi_ssid` 实测可用，Mihomo 无表达走 `RENDER_UNSUPPORTED`）、Tailnet/远端 LAN、CN 直连/国际走 Line、DNS 与出口一致；SSID 首条 direct 豁免、跨动作遮蔽 `POLICY_CONFLICT`；`ExplainHit` 四段链 | [x] `internal/compiler/client_policy_test.go`（正/反例 + 兜底 + 命中链） |
+| B | 服务端渲染：`RenderServerRoute`（AI 100/域名 200/CIDR 300 → `out`）+ `CompileCandidateWithRoute` + `meshmux-node/v3`（v1/v2 字节不变，route 白名单 `rules/rule_set/final`）；`final: out` 与无 Out 引 `out` 拒绝 | [x] `internal/node/config_v3_test.go`、`render_route_test.go`（含真实 `sing-box check -c`） |
+| B | 发布管线：active 装配 → fail-closed（无 opt-in 即 `OUT_OFFLINE_FAIL_CLOSED`，匿名回退 `OUT_FALLBACK_UNAUDITED`）→ 双内核门禁（缺件/版本错为显式拒绝）→ 同一事务写候选 + 四任务链（revision/快照/在途三守卫，整笔回滚）→ 回执 `queued` 永不谎报已应用 | [x] `store_policy_publish_test.go`（三态/门禁/v3/manifest）、`server_policies_publish_test.go`、`publish_check_test.go`（固定 argv/版本锁） |
+| B | Web：`/policies` 读 active 快照（失效回草案 + 冲突行）、validate 干跑、explain 查询、create/revise/activate/revoke（`operation_id` 强制）、publish（`policy_schema=8` + `route_policy_revisions` 供 #11 manifest 衔接）；schema 8 修订链 + append-only 审计 | [x] `server_policies_*_test.go`、`store_policies*_test.go`（状态机/触发器/迁移重放） |
+| C | 真实双出口 AI 双跳 / 无 Out 直出 / Out 故障 fail-closed 实际流量 | [ ] 未含：只有 fail-closed 语义与门禁单测；归 #12（`必须完成的真实用户闭环`第 3 项） |
+| C | 真机 sing-box / Mihomo 导入、iOS/Android 单 VPN、SSID 现场行为、客户端实际可用 | [ ] 未含：只有渲染与 `check -c`/`-t` 门禁；归 #12（同第 5 项） |
+| C | 真实 Line 上的路由发布/readback/回退（含 Web 发布真实策略） | [ ] 未含：只有候选事务与 Agent recover/LKG 复用；归 #12（同第 2/7 项） |
+
+- [ ] **未含 C 级结论**：本节不证明任何真实流量、真机导入或现网发布成功；`queued` 回执不是已应用。#10 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 第 3/5/7 项）由 #12 采集。
+
 ## v1.0.0 必须完成的真实用户闭环
 
 - [ ] Debian 13 新环境可执行 install hub|edge|out，单机 Hub+Line、Hub+Line、Hub+Line+Out 三种拓扑正常，Out 可选。
