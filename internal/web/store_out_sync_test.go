@@ -800,14 +800,14 @@ func TestOutAllowlist_ReadbackUsesOnlyStableCodes(t *testing.T) {
 
 // TestOutAllowlist_SchemaIsUnchanged keeps the coordination layer free of new
 // tables and kinds: the authorization lives in the frozen chain params. The
-// schema version itself is 7 only because the mesh device and route tables
+// schema version itself is 8 only because the mesh device, route and policy tables
 // exist; this slice adds nothing to it.
 func TestOutAllowlist_SchemaIsUnchanged(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s := f.store
 	var version int
-	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 7 {
-		t.Fatalf("user_version = %d err=%v, want 7", version, err)
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 8 {
+		t.Fatalf("user_version = %d err=%v, want 8", version, err)
 	}
 	// The four kinds are still exactly the frozen publication chain.
 	if len(protocol.PublicationKinds) != 4 {
