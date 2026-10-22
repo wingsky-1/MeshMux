@@ -14,7 +14,9 @@ import templruntime "github.com/a-h/templ/runtime"
 //
 // The server fills the snapshot from the active stored revisions, falling
 // back to the read-only mesh model and built-in defaults. Saving is the write
-// API; publication is 10d-2b, so the page renders no publish control.
+// API and publication is POST /policies/publish. The page still renders no
+// publish control: a button is added only after the visual draft is approved
+// (docs/UX.zh-CN.md 交互安全性), so there is no clickable no-op here.
 func PoliciesPage(p pageData, v policyPageView) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -69,7 +71,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var3 templ.SafeURL
 					templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 20, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 22, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 					if templ_7745c5c3_Err != nil {
@@ -82,7 +84,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var4 string
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 20, Col: 115}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 22, Col: 115}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -95,7 +97,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 20, Col: 136}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 22, Col: 136}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -113,7 +115,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var6 templ.SafeURL
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 22, Col: 41}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 24, Col: 41}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {
@@ -126,7 +128,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var7 string
 					templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 22, Col: 80}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 24, Col: 80}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 					if templ_7745c5c3_Err != nil {
@@ -139,7 +141,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var8 string
 					templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 22, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 24, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 					if templ_7745c5c3_Err != nil {
@@ -158,7 +160,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 			var templ_7745c5c3_Var9 string
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 29, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 31, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
@@ -171,7 +173,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 29, Col: 246}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 31, Col: 246}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 			if templ_7745c5c3_Err != nil {
@@ -184,7 +186,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 			var templ_7745c5c3_Var11 string
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 31, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 33, Col: 87}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -275,13 +277,13 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 			var templ_7745c5c3_Var14 string
 			templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(policyCountLabel(len(v.Client), v.ClientDefault))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 62, Col: 144}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 64, Col: 144}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "</span></div><p class=\"muted\">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布在后续版本接入。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "</span></div><p class=\"muted\">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布走 `POST /policies/publish`：先渲染并交 sing-box / Mihomo 门禁，再下发；客户端层只做门禁，订阅下载时按同一 active 版本渲染。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -293,7 +295,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(rule.Match)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 67, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 69, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
@@ -306,7 +308,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(rule.Action)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 67, Col: 103}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 69, Col: 103}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -319,7 +321,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(rule.State)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 67, Col: 144}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 69, Col: 144}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
@@ -332,7 +334,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(rule.Note)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 68, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 70, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -350,13 +352,13 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 			var templ_7745c5c3_Var19 string
 			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(policyCountLabel(len(v.Server), v.ServerDefault))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 74, Col: 146}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 76, Col: 146}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</span></div><p class=\"muted\">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布在后续版本接入。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</span></div><p class=\"muted\">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布走 `POST /policies/publish`：装配出的路线先经 sing-box check，再与固定四任务链在同一事务写入候选；门禁或读取失败时不写入任何修订。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -368,7 +370,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var20 string
 				templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(rule.Match)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 79, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 81, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 				if templ_7745c5c3_Err != nil {
@@ -381,7 +383,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var21 string
 				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(rule.Action)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 79, Col: 103}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 81, Col: 103}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 				if templ_7745c5c3_Err != nil {
@@ -394,7 +396,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var22 string
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(rule.State)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 79, Col: 144}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 81, Col: 144}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 				if templ_7745c5c3_Err != nil {
@@ -407,7 +409,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var23 string
 				templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(rule.Note)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 80, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 82, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 				if templ_7745c5c3_Err != nil {
@@ -445,7 +447,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(c.Detail)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 99, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 101, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 				if templ_7745c5c3_Err != nil {
@@ -463,7 +465,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 			var templ_7745c5c3_Var25 string
 			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.Target)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 110, Col: 92}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 112, Col: 92}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 			if templ_7745c5c3_Err != nil {
@@ -491,7 +493,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 					var templ_7745c5c3_Var26 string
 					templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(h.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 119, Col: 24}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 121, Col: 24}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 					if templ_7745c5c3_Err != nil {
@@ -509,7 +511,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 						var templ_7745c5c3_Var27 string
 						templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(s.Stage)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 122, Col: 50}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 124, Col: 50}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 						if templ_7745c5c3_Err != nil {
@@ -522,7 +524,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 						var templ_7745c5c3_Var28 string
 						templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(s.Value)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 122, Col: 68}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 124, Col: 68}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 						if templ_7745c5c3_Err != nil {
@@ -545,7 +547,7 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 						var templ_7745c5c3_Var29 string
 						templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(h.Note)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 126, Col: 36}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 128, Col: 36}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 						if templ_7745c5c3_Err != nil {

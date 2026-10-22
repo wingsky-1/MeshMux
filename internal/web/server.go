@@ -21,6 +21,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/headscale"
+	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
 //go:embed assets/*
@@ -37,6 +38,14 @@ type Server struct {
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.
 	mesh headscale.Client
+	// publishRunner is the fixed process boundary of the publish gate. It is
+	// nil in production (node.ExecRunner) and replaced by a fixture runner in
+	// tests so no kernel binary is required to exercise the gate.
+	publishRunner node.CommandRunner
+	// publishGate replaces the whole gate in tests. Production leaves it nil
+	// so the real kernel verifier is always built from the deployment
+	// configuration; it exists so a unit test never needs a kernel install.
+	publishGate func() (publishVerifier, error)
 }
 
 type requestKey int
@@ -131,9 +140,9 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	app.registerSubscriberRoutes(r)
 	// The mesh device routes own "/mesh" for the same reason.
 	app.registerMeshRoutes(r)
-	// /policies is a snapshot plus two read-only helpers and the four policy
-	// write endpoints. Writes persist intent through the 10d-1 store only;
-	// publication to a Line/Out is 10d-2b.
+	// /policies is a snapshot, two read-only helpers, four intent writes and
+	// the publication gate. Writes persist intent through the 10d-1 store;
+	// /policies/publish assembles, gates and stores a candidate revision.
 	r.Get("/policies", app.authenticated(app.policiesPage))
 	r.Get("/policies/explain", app.authenticated(app.policiesExplain))
 	r.Post("/policies/validate", jsonAPI(app.mutation(app.policiesValidate, true)))
@@ -142,6 +151,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/policies/revise", jsonAPI(app.mutation(app.policiesRevise, true)))
 	r.Post("/policies/activate", jsonAPI(app.mutation(app.policiesActivate, true)))
 	r.Post("/policies/revoke", jsonAPI(app.mutation(app.policiesRevoke, true)))
+	// Publication is the gated pipeline: assemble the active revisions, check
+	// them with the pinned kernels and store one immutable candidate revision
+	// per Line. It is never a bare render-to-response.
+	r.Post("/policies/publish", jsonAPI(app.mutation(app.policiesPublish, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))

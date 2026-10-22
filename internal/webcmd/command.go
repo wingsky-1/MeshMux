@@ -103,6 +103,8 @@ func parseConfig(args []string, output io.Writer) (web.Config, error) {
 	flags.StringVar(&c.DataDir, "data-dir", "", "private directory owned by service user")
 	flags.BoolVar(&c.DevHTTP, "dev-http", false, "isolated loopback HTTP only; never publish this mode")
 	flags.BoolVar(&c.DirectProxy, "direct-caddy", false, "trust the dedicated client IP header from a directly exposed local Caddy")
+	flags.StringVar(&c.SingBoxPath, "sing-box", "", "absolute path of the pinned sing-box kernel used by the publish gate; empty refuses publication when that kernel is missing")
+	flags.StringVar(&c.MihomoPath, "mihomo", "", "absolute path of the pinned mihomo client used by the publish gate; empty refuses a client-layer publication instead of skipping the check")
 	if err := flags.Parse(args); err != nil {
 		return web.Config{}, err
 	}

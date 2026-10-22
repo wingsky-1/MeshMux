@@ -104,8 +104,18 @@ const vlessFlow = "xtls-rprx-vision"
 // private key). They only ever travel to the node's private file boundary;
 // they are never written to a public response, a subscription artifact or a
 // generic log line.
+//
+// A candidate that carries a route (a meshmux-node/v3 Line document) renders
+// that route too: the Hub resolved the Out contract before it stored the
+// fragment, and the Agent must apply exactly the published route instead of
+// silently compiling a route-free kernel config.
+//
+// The Out binding is deliberately not re-derived here: resolving "is an Out
+// configured and healthy" needs Hub state the node does not have. A route that
+// still names "out" only reaches this function through the Hub's own
+// ResolveServerPolicy gate; the Agent proves the rest with sing-box check.
 func CompileCandidate(c Candidate) ([]byte, error) {
-	return compileCandidate(c, nil, false)
+	return compileCandidate(c, c.Route, len(c.Route) > 0)
 }
 
 // CompileCandidateWithRoute renders a Line candidate with the route fragment

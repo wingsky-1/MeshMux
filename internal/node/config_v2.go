@@ -188,14 +188,19 @@ func numericDottedHost(value string) bool {
 // baseline (no users and no REALITY block) stays valid, users require a
 // REALITY block, and both blocks belong to edge nodes only.
 func (c Candidate) validateV2Fields() error {
-	if c.Reality == nil && len(c.Users) == 0 {
+	if c.Reality == nil && len(c.Users) == 0 && len(c.Route) == 0 {
 		return nil
 	}
 	if c.Role != RoleEdge {
-		return errors.New("CANDIDATE_INVALID: users and reality are only valid for edge nodes")
+		return errors.New("CANDIDATE_INVALID: users, reality and a route are only valid for edge nodes")
 	}
 	if c.Reality == nil {
-		return errors.New("REALITY_REQUIRED: reality is required when users are present")
+		return errors.New("REALITY_REQUIRED: reality is required when users or a route are present")
+	}
+	if len(c.Route) > 0 {
+		if err := validateCandidateRoute(c.Route); err != nil {
+			return err
+		}
 	}
 	if err := c.Reality.Validate(); err != nil {
 		return err

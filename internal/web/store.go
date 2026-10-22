@@ -101,6 +101,15 @@ func openStore(dir string) (*store, error) {
 	return s, nil
 }
 
+// scratchDir returns the private data directory of this Hub. The publish gate
+// writes its check documents there, so they never leave the private boundary.
+func (s *store) scratchDir() (string, error) {
+	if s.dir == "" || !filepath.IsAbs(s.dir) {
+		return "", errors.New("PUBLISH_GATE_FAILED: the hub data directory is unavailable")
+	}
+	return s.dir, nil
+}
+
 func (s *store) Close() error {
 	var err error
 	if s.db != nil {
