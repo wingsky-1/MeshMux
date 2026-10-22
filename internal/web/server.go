@@ -136,6 +136,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Get("/policies", app.authenticated(app.policiesPage))
 	r.Get("/policies/explain", app.authenticated(app.policiesExplain))
 	r.Post("/policies/validate", jsonAPI(app.mutation(app.policiesValidate, true)))
+	r.Post("/policies/server/preview", jsonAPI(app.mutation(app.policiesServerPreview, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))

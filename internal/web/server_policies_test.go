@@ -42,6 +42,9 @@ func TestPoliciesPageUsesLiveSnapshot(t *testing.T) {
 	if !strings.Contains(body, "Out 未配置") {
 		t.Fatal("out-free deployment was not reported as the optional absent state")
 	}
+	if !strings.Contains(body, "Line 直出") || strings.Contains(body, "Out 直出（可选）") {
+		t.Fatalf("out-free server section promised an Out: %.500s", body)
+	}
 }
 
 func TestPoliciesPageWithoutMeshDataFallsBackToDraft(t *testing.T) {
@@ -103,7 +106,7 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 	confirmChain(t, f.store, f.line, f.now)
 	w = b.req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
-	if !strings.Contains(w.Body.String(), "Out 已接入") {
+	if !strings.Contains(w.Body.String(), "Out 已接入") || !strings.Contains(w.Body.String(), "Out 直出（可选）") {
 		t.Fatalf("active state missing: %.400s", w.Body.String())
 	}
 

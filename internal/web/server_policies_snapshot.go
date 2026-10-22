@@ -14,6 +14,9 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
+// defaultServerAIRulesetTag is the canonical AI ruleset tag; its pin is 10d.
+const defaultServerAIRulesetTag = "ai"
+
 // policySnapshot builds the page from the first active proxy_mesh device whose
 // subscriber serves a converged mesh model; the design draft is the no-data fallback.
 func (app *Server) policySnapshot(now time.Time) (policyPageView, compiler.ClientPolicy, bool) {
@@ -29,11 +32,17 @@ func (app *Server) policySnapshot(now time.Time) (policyPageView, compiler.Clien
 		view.Draft = true
 		return view, compiler.ClientPolicy{}, false
 	}
+	server, err := compiler.DefaultServerPolicy(defaultServerAIRulesetTag, nil, nil)
+	if err != nil {
+		view := policiesDraftView()
+		view.Draft = true
+		return view, compiler.ClientPolicy{}, false
+	}
 	out := app.policyOutState(now)
 	return policyPageView{
 		Out:       out,
 		Client:    policyClientRows(policy),
-		Server:    policyServerRows(out),
+		Server:    policyServerRows(server, out),
 		Conflicts: policyConflictRows(policy),
 	}, policy, true
 }
@@ -148,18 +157,25 @@ func policyRuleNote(rule compiler.Rule) string {
 	}
 }
 
-func policyServerRows(out policyOutState) []policyRuleView {
-	note := "未配置 Out 不是错误：AI 与指定分流按 Line 直出，不生成指向 Out 的规则。"
-	switch out {
-	case policyOutActive:
-		note = "经 Out 直出；Out 不可用时按 fail-closed 处理，不会自动改走 Line。"
-	case policyOutDegraded:
-		note = "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
+// policyServerRows renders the default server intent; an absent Out never
+// promises one.
+func policyServerRows(policy compiler.ServerPolicy, out policyOutState) []policyRuleView {
+	action, note := "Line 直出", "未配置 Out 不是错误：AI 与指定分流按 Line 直出，不生成指向 Out 的规则。"
+	if out == policyOutActive {
+		action, note = "Out 直出（可选）", "经 Out 直出；Out 不可用时按 fail-closed 处理，不会自动改走 Line。"
 	}
-	return []policyRuleView{
-		{Match: "AI 域名与服务（按域名规则集）", Action: "Out 直出（可选）", Note: note, State: "启用"},
-		{Match: "兜底（默认出口）", Action: "Line 直出", Note: "服务端层兜底固定为 Line；Out 故障只影响指定到 Out 的流量。", State: "启用"},
+	if out == policyOutDegraded {
+		action, note = "Out 故障 · fail-closed", "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
 	}
+	rows := make([]policyRuleView, 0, len(policy.Rules)+1)
+	for _, rule := range policy.Rules {
+		row := policyRuleView{Match: policyMatcherLabel(rule.Match), Action: "Line 直出", Note: note, State: "启用"}
+		if rule.Action == compiler.ActionOut {
+			row.Action = action
+		}
+		rows = append(rows, row)
+	}
+	return append(rows, policyRuleView{Match: "兜底（默认出口）", Action: "Line 直出", Note: "服务端层兜底固定为 Line；Out 故障只影响指定到 Out 的流量。", State: "启用"})
 }
 
 func policyConflictRows(policy compiler.ClientPolicy) []policyConflictView {
