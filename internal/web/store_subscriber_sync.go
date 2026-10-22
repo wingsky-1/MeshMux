@@ -105,7 +105,40 @@ func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candid
 	if candidate.Role != node.RoleEdge || candidate.Reality == nil {
 		return node.Candidate{}, errors.New("LINE_NOT_CONFIGURED: line transport is not configured")
 	}
+	// A credential change never drops the published server policy: the route of
+	// the newest candidate is carried into the desired snapshot, so the next
+	// subscriber-driven revision still serves the same routes. A Line without a
+	// published policy carries none, which keeps the previous behavior exactly.
+	if route, err := latestLineRouteTx(tx, nodeID); err != nil {
+		return node.Candidate{}, err
+	} else if len(route) > 0 {
+		candidate.Route = route
+	}
 	return candidate, nil
+}
+
+// latestLineRouteTx returns the route fragment of the newest candidate of one
+// Line, or nil when that candidate has none. The fragment is re-validated by the
+// candidate decoder, so a corrupted row is reported instead of being carried
+// into a new revision.
+func latestLineRouteTx(tx *sql.Tx, nodeID string) (json.RawMessage, error) {
+	var document []byte
+	err := tx.QueryRow(`SELECT candidate_json FROM node_candidates
+ WHERE node_id=? ORDER BY revision DESC LIMIT 1`, nodeID).Scan(&document)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	var parsed node.CandidateDocument
+	if err := json.Unmarshal(document, &parsed); err != nil {
+		return nil, errors.New("CANDIDATE_CORRUPT")
+	}
+	if len(parsed.Route) == 0 {
+		return nil, nil
+	}
+	return parsed.Route, nil
 }
 
 // compiledCandidateHash returns the SHA-256 of the compiled sing-box bytes.

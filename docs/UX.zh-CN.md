@@ -23,6 +23,8 @@ Out 标记为 optional，不存在时 Web 和订阅均不报缺省错误。修�
 
 客户端层：家庭 Wi-Fi SSID / Tailnet / 中国地区 / 国际目标 / DNS；服务端层：默认直出、AI 指定 Out、规则匹配和异常兜底。模拟器输出“命中规则→第一跳→最终出口→DNS 选择”。
 
+发布是单独一步，不是保存的同义词：`POST /policies/publish` 先把 active 意图装配成完整文档并交 sing-box 与 Mihomo 门禁；门禁失败、规则集未锁版本、Out 故障未显式回退时不写入任何修订，页面继续展示上一份生效配置。回执给出 `egress_state`、门禁摘要与 `operation_id`。
+
 ## 明确交互安全性
 
 删除/重置/Token 轮换需要二次确认并展示影响对象；网页不会用操作结果静默遮盖 partial。首次登录不要求 Cloudflare Zero Trust。默认不将订阅 Token 存入浏览器持久化 storage。视觉草图审核通过后再实施业务按钮，禁止留下点击无动作的控件。

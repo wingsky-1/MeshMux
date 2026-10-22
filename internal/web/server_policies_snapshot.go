@@ -65,7 +65,14 @@ func (app *Server) policySnapshot(now time.Time) (policyPageView, compiler.Clien
 
 // activePolicyIntent reads one layer's active revision and decodes its payload.
 func (app *Server) activePolicyIntent(layer PolicyLayer) (RoutePolicy, routePolicyPayload, error) {
-	record, err := app.store.activeRoutePolicy(layer)
+	return app.store.activePolicyIntent(layer)
+}
+
+// activePolicyIntent reads one layer's active revision and decodes its payload.
+// It is the single reader of the active intent, so the page and the publish
+// pipeline can never disagree about which revision is live.
+func (s *store) activePolicyIntent(layer PolicyLayer) (RoutePolicy, routePolicyPayload, error) {
+	record, err := s.activeRoutePolicy(layer)
 	if err != nil {
 		return RoutePolicy{}, routePolicyPayload{}, err
 	}

@@ -98,26 +98,32 @@ type Candidate struct {
 	KernelVersion string         `json:"kernel_version"`
 	Users         []VLESSUser    `json:"users,omitempty"`
 	Reality       *RealityConfig `json:"reality,omitempty"`
+	// Route is the resolved server route fragment of a Line. It is
+	// non-secret policy output, present only in a meshmux-node/v3 document.
+	Route json.RawMessage `json:"route,omitempty"`
 }
 
 // CandidateDocument is the exact JSON document used for the mutable active
 // candidate and immutable candidate transport. Schema is meshmux-node/v1 for
-// the frozen six-field non-secret baseline and meshmux-node/v2 for the
-// baseline plus the users and reality blocks.
+// the frozen six-field non-secret baseline, meshmux-node/v2 for the baseline
+// plus the users and reality blocks, and meshmux-node/v3 for v2 plus the
+// resolved server route fragment of a Line.
 type CandidateDocument struct {
-	Schema        string         `json:"schema"`
-	NodeID        string         `json:"node_id"`
-	Role          Role           `json:"role"`
-	Revision      int64          `json:"revision"`
-	VLESSPort     int            `json:"vless_port"`
-	KernelVersion string         `json:"kernel_version"`
-	Users         []VLESSUser    `json:"users,omitempty"`
-	Reality       *RealityConfig `json:"reality,omitempty"`
+	Schema        string          `json:"schema"`
+	NodeID        string          `json:"node_id"`
+	Role          Role            `json:"role"`
+	Revision      int64           `json:"revision"`
+	VLESSPort     int             `json:"vless_port"`
+	KernelVersion string          `json:"kernel_version"`
+	Users         []VLESSUser     `json:"users,omitempty"`
+	Reality       *RealityConfig  `json:"reality,omitempty"`
+	Route         json.RawMessage `json:"route,omitempty"`
 }
 
 // NewCandidateDocument binds a candidate to a schema identifier. A candidate
-// without users and without a reality block stays on the frozen v1 document;
-// anything else is written as a v2 document.
+// without users, without a reality block and without a route stays on the
+// frozen v1 document; a route makes it v3 and users or reality make it v2.
+// The route is compacted, so an equal route always yields equal bytes.
 func NewCandidateDocument(candidate Candidate) CandidateDocument {
 	document := CandidateDocument{
 		Schema:        CandidateSchema,
@@ -127,10 +133,15 @@ func NewCandidateDocument(candidate Candidate) CandidateDocument {
 		VLESSPort:     candidate.VLESSPort,
 		KernelVersion: candidate.KernelVersion,
 	}
-	if candidate.Reality == nil && len(candidate.Users) == 0 {
+	if candidate.Reality == nil && len(candidate.Users) == 0 && len(candidate.Route) == 0 {
 		return document
 	}
-	document.Schema = CandidateSchemaV2
+	if len(candidate.Route) > 0 {
+		document.Schema = CandidateSchemaV3
+		document.Route = candidate.Route
+	} else {
+		document.Schema = CandidateSchemaV2
+	}
 	document.Users = candidate.Users
 	if document.Users == nil {
 		document.Users = []VLESSUser{}
@@ -150,6 +161,7 @@ func (d CandidateDocument) Candidate() Candidate {
 		KernelVersion: d.KernelVersion,
 		Users:         d.Users,
 		Reality:       d.Reality,
+		Route:         d.Route,
 	}
 }
 
@@ -163,6 +175,34 @@ func (d CandidateDocument) Candidate() Candidate {
 func (d CandidateDocument) MarshalJSON() ([]byte, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
+	}
+	if d.Schema == CandidateSchemaV3 {
+		type v3Document struct {
+			Schema        string          `json:"schema"`
+			NodeID        string          `json:"node_id"`
+			Role          Role            `json:"role"`
+			Revision      int64           `json:"revision"`
+			VLESSPort     int             `json:"vless_port"`
+			KernelVersion string          `json:"kernel_version"`
+			Users         []VLESSUser     `json:"users"`
+			Reality       *RealityConfig  `json:"reality"`
+			Route         json.RawMessage `json:"route"`
+		}
+		users := d.Users
+		if users == nil {
+			users = []VLESSUser{}
+		}
+		return json.Marshal(v3Document{
+			Schema:        d.Schema,
+			NodeID:        d.NodeID,
+			Role:          d.Role,
+			Revision:      d.Revision,
+			VLESSPort:     d.VLESSPort,
+			KernelVersion: d.KernelVersion,
+			Users:         users,
+			Reality:       d.Reality,
+			Route:         d.Route,
+		})
 	}
 	if d.Schema == CandidateSchemaV2 {
 		type v2Document struct {
@@ -219,7 +259,7 @@ func (d CandidateDocument) Equal(other CandidateDocument) bool {
 }
 
 // Equal reports whether two candidates carry exactly the same content,
-// including the optional v2 blocks.
+// including the optional v2 blocks and the v3 route.
 func (c Candidate) Equal(other Candidate) bool {
 	if c.NodeID != other.NodeID || c.Role != other.Role || c.Revision != other.Revision ||
 		c.VLESSPort != other.VLESSPort || c.KernelVersion != other.KernelVersion {
@@ -234,9 +274,13 @@ func (c Candidate) Equal(other Candidate) bool {
 		}
 	}
 	if c.Reality == nil || other.Reality == nil {
-		return c.Reality == nil && other.Reality == nil
+		if c.Reality != nil || other.Reality != nil {
+			return false
+		}
+	} else if *c.Reality != *other.Reality {
+		return false
 	}
-	return *c.Reality == *other.Reality
+	return bytes.Equal(bytes.TrimSpace(c.Route), bytes.TrimSpace(other.Route))
 }
 
 // Readback contains only local evidence. Its fields deliberately cannot claim
@@ -459,8 +503,8 @@ func (c Candidate) ValidateFor(config Config) error {
 func (d CandidateDocument) Validate() error {
 	switch d.Schema {
 	case CandidateSchema:
-		if d.Reality != nil || len(d.Users) > 0 {
-			return errors.New("CANDIDATE_INVALID: users and reality are not allowed in meshmux-node/v1")
+		if d.Reality != nil || len(d.Users) > 0 || len(d.Route) > 0 {
+			return errors.New("CANDIDATE_INVALID: users, reality and route are not allowed in meshmux-node/v1")
 		}
 	case CandidateSchemaV2:
 		if d.Reality == nil {
@@ -469,8 +513,18 @@ func (d CandidateDocument) Validate() error {
 		if d.Users == nil {
 			return errors.New("CANDIDATE_INVALID: users must be an array in meshmux-node/v2")
 		}
+		if len(d.Route) > 0 {
+			return errors.New("CANDIDATE_ROUTE_INVALID: a route document must use meshmux-node/v3")
+		}
+	case CandidateSchemaV3:
+		if d.Reality == nil || d.Users == nil || len(d.Route) == 0 {
+			return errors.New("CANDIDATE_INVALID: v3 requires reality, users and a route")
+		}
+		if err := validateCandidateRoute(d.Route); err != nil {
+			return err
+		}
 	default:
-		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1 or meshmux-node/v2")
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1, meshmux-node/v2 or meshmux-node/v3")
 	}
 	return d.Candidate().Validate()
 }
@@ -500,8 +554,10 @@ func (d *CandidateDocument) UnmarshalJSON(data []byte) error {
 		return d.unmarshalV1(obj)
 	case CandidateSchemaV2:
 		return d.unmarshalV2(obj)
+	case CandidateSchemaV3:
+		return d.unmarshalV3(obj)
 	default:
-		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1 or meshmux-node/v2")
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1, meshmux-node/v2 or meshmux-node/v3")
 	}
 }
 

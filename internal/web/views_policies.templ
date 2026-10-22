@@ -6,7 +6,9 @@ package web
 //
 // The server fills the snapshot from the active stored revisions, falling
 // back to the read-only mesh model and built-in defaults. Saving is the write
-// API; publication is 10d-2b, so the page renders no publish control.
+// API and publication is POST /policies/publish. The page still renders no
+// publish control: a button is added only after the visual draft is approved
+// (docs/UX.zh-CN.md 交互安全性), so there is no clickable no-op here.
 templ PoliciesPage(p pageData, v policyPageView) {
 	@Document(p.Title) {
 		<a class="skip" href="#main">跳到内容</a>
@@ -60,7 +62,7 @@ templ PoliciesPage(p pageData, v policyPageView) {
 					<div class="policy-split">
 						<section class="panel">
 							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ policyCountLabel(len(v.Client), v.ClientDefault) }</span></div>
-							<p class="muted">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布在后续版本接入。</p>
+							<p class="muted">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布走 `POST /policies/publish`：先渲染并交 sing-box / Mihomo 门禁，再下发；客户端层只做门禁，订阅下载时按同一 active 版本渲染。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Client {
 									<li>
@@ -72,7 +74,7 @@ templ PoliciesPage(p pageData, v policyPageView) {
 						</section>
 						<section class="panel">
 							<div class="panel-heading"><h2>服务端层 · Line 出口分流</h2><span class="badge">{ policyCountLabel(len(v.Server), v.ServerDefault) }</span></div>
-							<p class="muted">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布在后续版本接入。</p>
+							<p class="muted">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布走 `POST /policies/publish`：装配出的路线先经 sing-box check，再与固定四任务链在同一事务写入候选；门禁或读取失败时不写入任何修订。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Server {
 									<li>

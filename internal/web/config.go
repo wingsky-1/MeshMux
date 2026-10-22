@@ -66,6 +66,15 @@ type Config struct {
 	// DirectProxy enables ban candidates only for a directly exposed local Caddy.
 	// Leave false behind ANY additional proxy (including Cloudflare).
 	DirectProxy bool
+	// SingBoxPath is the kernel the publish gate uses to validate an assembled
+	// Line candidate. Empty selects the installer-owned kernel path of a
+	// co-located Line; a host without that binary refuses publication instead
+	// of skipping the check.
+	SingBoxPath string
+	// MihomoPath is the pinned Mihomo binary the publish gate uses to validate
+	// an assembled client document. Empty means "not installed", which is an
+	// explicit refusal for a client-layer publication, never a silent skip.
+	MihomoPath string
 }
 
 func (c Config) Validate(uid int) error {
@@ -98,6 +107,12 @@ func (c Config) Validate(uid int) error {
 	if err := c.validateHeadscaleOrigin(); err != nil {
 		return err
 	}
+	if err := validateGatePath(c.SingBoxPath); err != nil {
+		return err
+	}
+	if err := validateGatePath(c.MihomoPath); err != nil {
+		return err
+	}
 	if c.InstallArtifact != nil {
 		if c.DevHTTP || u.Scheme != "https" {
 			return errors.New("INSTALL_ARTIFACT_INVALID: CLI download and install commands require an HTTPS Hub")
@@ -121,6 +136,20 @@ func (c Config) Validate(uid int) error {
 }
 
 func (c Config) validate() error { return c.Validate(os.Geteuid()) }
+
+// validateGatePath accepts one absolute, cleaned executable path or the empty
+// value. The value comes from deployment configuration only, never from a
+// request, and a relative or unclean path would let the gate run an unintended
+// binary.
+func validateGatePath(path string) error {
+	if path == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return errors.New("PUBLISH_GATE_PATH_INVALID: configure one absolute executable path")
+	}
+	return nil
+}
 
 // validateHeadscaleOrigin checks the optional Mesh control URL. Empty is valid
 // at startup and makes a Mesh config generation fail with its own stable code;
