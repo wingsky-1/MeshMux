@@ -1,10 +1,12 @@
 package web
 
-// /policies snapshot for issue #10: read-only rows rendered from the mesh model
-// and the default client policy. Nothing here stores a policy, creates a
-// revision or publishes to a Line/Out; that pipeline is 10d.
+// /policies snapshot for issue #10: rows rendered from each layer's active
+// revision, falling back to the mesh-derived and built-in defaults. Nothing
+// here stores or publishes a policy; writes are 10d-2a and publication 10d-2b.
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -17,34 +19,78 @@ import (
 // defaultServerAIRulesetTag is the canonical AI ruleset tag; its pin is 10d.
 const defaultServerAIRulesetTag = "ai"
 
-// policySnapshot builds the page from the first active proxy_mesh device whose
-// subscriber serves a converged mesh model; the design draft is the no-data fallback.
+// policySnapshot builds the page from the active stored revisions; a layer
+// without one falls back to the read-only mesh model (client) and
+// DefaultServerPolicy (server). An active payload that no longer validates is
+// never presented as live: the page shows the design draft and the conflict.
 func (app *Server) policySnapshot(now time.Time) (policyPageView, compiler.ClientPolicy, bool) {
-	model, ok := app.policyMeshModel(now)
-	if !ok {
-		view := policiesDraftView()
-		view.Draft = true
-		return view, compiler.ClientPolicy{}, false
-	}
-	policy, err := compiler.DefaultClientPolicy(model, model.LineLabels[0], compiler.ClientDefaults{})
-	if err != nil {
-		view := policiesDraftView()
-		view.Draft = true
-		return view, compiler.ClientPolicy{}, false
-	}
-	server, err := compiler.DefaultServerPolicy(defaultServerAIRulesetTag, nil, nil)
-	if err != nil {
-		view := policiesDraftView()
-		view.Draft = true
-		return view, compiler.ClientPolicy{}, false
-	}
 	out := app.policyOutState(now)
+	_, clientIntent, clientErr := app.activePolicyIntent(PolicyLayerClient)
+	_, serverIntent, serverErr := app.activePolicyIntent(PolicyLayerServer)
+	for _, err := range []error{clientErr, serverErr} {
+		if err != nil && !strings.HasPrefix(err.Error(), "POLICY_NOT_FOUND") {
+			return policyBrokenView(err), compiler.ClientPolicy{}, false
+		}
+	}
+	var policy compiler.ClientPolicy
+	if clientErr == nil {
+		policy = compiler.ClientPolicy{Default: clientIntent.Default, Rules: clientIntent.Rules}
+		if err := policy.Validate(); err != nil {
+			return policyBrokenView(err), compiler.ClientPolicy{}, false
+		}
+	} else {
+		model, ok := app.policyMeshModel(now)
+		if !ok {
+			return policyFallbackView(), compiler.ClientPolicy{}, false
+		}
+		var err error
+		if policy, err = compiler.DefaultClientPolicy(model, model.LineLabels[0], compiler.ClientDefaults{}); err != nil {
+			return policyFallbackView(), compiler.ClientPolicy{}, false
+		}
+	}
+	var server compiler.ServerPolicy
+	if serverErr == nil {
+		server = compiler.ServerPolicy{Default: serverIntent.Default, Rules: serverIntent.Rules}
+		if err := server.Validate(); err != nil {
+			return policyBrokenView(err), compiler.ClientPolicy{}, false
+		}
+	} else if server, serverErr = compiler.DefaultServerPolicy(defaultServerAIRulesetTag, nil, nil); serverErr != nil {
+		return policyFallbackView(), compiler.ClientPolicy{}, false
+	}
 	return policyPageView{
-		Out:       out,
-		Client:    policyClientRows(policy),
-		Server:    policyServerRows(server, out),
-		Conflicts: policyConflictRows(policy),
+		Out: out, Client: policyClientRows(policy), Server: policyServerRows(server, out),
+		Conflicts: policyConflictRows(policy), ClientDefault: clientErr != nil, ServerDefault: serverErr != nil,
 	}, policy, true
+}
+
+// activePolicyIntent reads one layer's active revision and decodes its payload.
+func (app *Server) activePolicyIntent(layer PolicyLayer) (RoutePolicy, routePolicyPayload, error) {
+	record, err := app.store.activeRoutePolicy(layer)
+	if err != nil {
+		return RoutePolicy{}, routePolicyPayload{}, err
+	}
+	var intent routePolicyPayload
+	if err := json.Unmarshal(record.Payload, &intent); err != nil {
+		return record, routePolicyPayload{}, errors.New("POLICY_CORRUPT: the active payload is not valid intent JSON")
+	}
+	return record, intent, nil
+}
+
+// policyFallbackView is the draft fallback before any active revision or mesh
+// data exists; it says so on the page.
+func policyFallbackView() policyPageView {
+	view := policiesDraftView()
+	view.Draft, view.ClientDefault, view.ServerDefault = true, true, true
+	return view
+}
+
+// policyBrokenView never renders an active payload that failed re-validation
+// as live policy; it shows the draft plus the blocking conflict.
+func policyBrokenView(err error) policyPageView {
+	view := policiesDraftView()
+	view.Draft = true
+	view.Conflicts = []policyConflictView{{Detail: "当前 active 策略未通过复核：" + policyErrorDetail(err), Blocked: true}}
+	return view
 }
 
 // policyMeshModel reuses the read-only mesh preflight; it mints no key.

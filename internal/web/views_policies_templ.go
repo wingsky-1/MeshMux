@@ -12,9 +12,9 @@ import templruntime "github.com/a-h/templ/runtime"
 // two-layer policy view (docs/UX.zh-CN.md 路由策略视图): the client layer on
 // the device and the server layer on the Line.
 //
-// The server fills the snapshot from read-only mesh data; only the explain
-// query is actionable here. Saving, persistence and publication are 10d, so
-// the page never renders a control that clicks without action.
+// The server fills the snapshot from the active stored revisions, falling
+// back to the read-only mesh model and built-in defaults. Saving is the write
+// API; publication is 10d-2b, so the page renders no publish control.
 func PoliciesPage(p pageData, v policyPageView) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -273,15 +273,15 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var14 string
-			templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(len(v.Client))
+			templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(policyCountLabel(len(v.Client), v.ClientDefault))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 62, Col: 109}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 62, Col: 144}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, " 条</span></div><p class=\"muted\">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页只展示当前默认策略意图，保存与发布在后续版本接入。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "</span></div><p class=\"muted\">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布在后续版本接入。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -348,15 +348,15 @@ func PoliciesPage(p pageData, v policyPageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var19 string
-			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(len(v.Server))
+			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(policyCountLabel(len(v.Server), v.ServerDefault))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 74, Col: 111}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_policies.templ`, Line: 74, Col: 146}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, " 条</span></div><p class=\"muted\">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页按当前默认意图与 Out 三态展示；保存与发布在后续版本接入。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "</span></div><p class=\"muted\">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布在后续版本接入。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
