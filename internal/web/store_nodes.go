@@ -348,8 +348,11 @@ func (s *store) heartbeat(nodeID, agentVersion, kernelVersion string, now time.T
 		return errors.New("NODE_NOT_FOUND")
 	}
 	// A reconnecting Line picks up the persisted subscriber intent even if
-	// the Hub crashed before the tasks of a change were enqueued.
-	s.drainSubscriberNode(nodeID, now)
+	// the Hub crashed before the tasks of a change were enqueued. The
+	// coordination is bidirectional: the Line event also lets every Out that
+	// serves it authorize the Line, and an Out event republishes its allowlist
+	// before the Lines it serves are drained.
+	s.drainNodeCoordination(nodeID, now)
 	return nil
 }
 
@@ -390,6 +393,12 @@ func (s *store) reissuePairing(nodeID string, now time.Time) (string, error) {
 	if err = tx.Commit(); err != nil {
 		return "", errors.New("DATABASE_UNAVAILABLE")
 	}
+	// A reissued identity is deliberately not a retirement: the Line is coming
+	// back, and the derivation already excludes a non-current identity from
+	// every allowlist on its own. Forcing a reclaim here would republish an
+	// empty allowlist on every re-pair and interrupt a Line that is only
+	// rotating its credential. Once the Line re-pairs, its own heartbeat or
+	// poll restores the authorization at the Out (drainOutsForLine).
 	return code, nil
 }
 
@@ -423,6 +432,19 @@ func (s *store) revokeIdentity(nodeID string, now time.Time) error {
 	}
 	if err = tx.Commit(); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	// Revoking a Line identity retires its egress authorization: the Hub can no
+	// longer vouch for the source address, so every Out that serves the Line has
+	// to be republished with the remaining sources. Revoking an Out has no such
+	// consequence, so only an edge node triggers the reclaim.
+	//
+	// A failure here does not undo the revocation (which is already recorded and
+	// is itself the security boundary): the derivation excludes a revoked Line
+	// from every allowlist, so the state stays honest and the next Out or Line
+	// event retries the republish.
+	var role string
+	if err := s.db.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role); err == nil && role == "edge" {
+		s.reclaimRetiredLine(nodeID, now)
 	}
 	return nil
 }
@@ -540,8 +562,10 @@ func (s *store) pendingTasksAt(nodeID string, limit int, now time.Time) ([]proto
 	}
 	// Reconcile the persisted subscriber intent before handing out tasks, so
 	// a change that happened after the last publication is not missed by this
-	// poll. The drain uses its own transaction and never fails the poll.
-	s.drainSubscriberNode(nodeID, now)
+	// poll. The drain uses its own transaction and never fails the poll. An Out
+	// poll republishes its own authorization first and then releases the Lines
+	// it serves; a Line poll authorizes itself at its Out first.
+	s.drainNodeCoordination(nodeID, now)
 	rows, err := s.db.Query(`SELECT t.operation_id, t.revision, t.idempotency_key, t.kind, t.params
  FROM agent_tasks t JOIN nodes n ON n.id=t.node_id
  WHERE t.node_id=? AND n.last_heartbeat>=? AND t.status IN ('pending','applying','verifying')
@@ -669,8 +693,11 @@ func (s *store) reportResultAudited(nodeID string, res protocol.TaskResult, now 
 	}
 	// A finished chain may make the persisted subscriber intent publishable
 	// (removal of a deleted subscriber, follow-up after a changed snapshot).
-	// The drain owns its transaction and never fails the recorded result.
-	s.drainSubscriberNode(nodeID, now)
+	// It is also the Out-side readback event: a confirmed Out allowlist
+	// releases the Lines it serves, and a confirmed Line egress is what lets
+	// the pair report healthy. The drain owns its transaction and never fails
+	// the recorded result.
+	s.drainNodeCoordination(nodeID, now)
 	return true, nil
 }
 

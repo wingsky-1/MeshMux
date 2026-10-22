@@ -75,7 +75,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// login rate limit.
 	r.Use(app.route)
 	r.Use(app.boundary)
-	r.Get("/healthz", app.health)
+	r.Get("/healthz", jsonAPI(app.health))
 	static, _ := fs.Sub(assets, "assets")
 	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
 	r.Get("/login", app.loginPage)
@@ -84,7 +84,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/setup", app.mutation(app.setup, false))
 	r.Post("/logout", app.mutation(app.logout, true))
 	r.Post("/password", app.mutation(app.password, true))
-	r.Get("/api/status", app.authenticated(app.status))
+	r.Get("/api/status", jsonAPI(app.authenticated(app.status)))
 	r.Get("/status", app.authenticated(app.statusFragment))
 	r.Get("/nodes", app.authenticated(func(w http.ResponseWriter, r *http.Request, sess session) {
 		app.nodesPage(w, r, sess, nil, "")
@@ -100,15 +100,27 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/nodes/{nodeID}/reissue-pairing", app.mutation(app.nodesReissue, true))
 	r.Post("/nodes/{nodeID}/revoke", app.mutation(app.nodesRevoke, true))
 	r.Post("/nodes/{nodeID}/revoke-identity", app.mutation(app.nodesRevoke, true))
-	r.Get("/api/nodes", app.authenticated(app.nodesList))
-	r.Get("/api/nodes/cli", app.authenticated(app.installArtifactDownload))
+	// Out binding management. Preview is read-only but keeps the same
+	// session + CSRF boundary because it is a management POST.
+	// The Out binding endpoints are a JSON management API whose paths live under
+	// /nodes. They are marked as JSON here, at registration, so the error writer
+	// never has to recognise their path.
+	r.Post("/nodes/out/bind", jsonAPI(app.mutation(app.outBind, true)))
+	r.Post("/nodes/out/unbind", jsonAPI(app.mutation(app.outUnbind, true)))
+	r.Post("/nodes/out/delete", jsonAPI(app.mutation(app.outDelete, true)))
+	r.Post("/nodes/out/preview", jsonAPI(app.mutation(app.outPreview, true)))
+	// The JSON management routes declare their failure representation here, next
+	// to the route. The error writer never infers it from the URL, so moving an
+	// endpoint cannot silently change its failure body.
+	r.Get("/api/nodes", jsonAPI(app.authenticated(app.nodesList)))
+	r.Get("/api/nodes/cli", jsonAPI(app.authenticated(app.installArtifactDownload)))
 	// Agent endpoints use Bearer identity, not admin session + browser Origin.
-	r.Post("/api/agent/pair", app.pairAgent)
-	r.Get("/api/agent/node", app.agentMetadata)
-	r.Get("/api/agent/config/{revision}", app.agentCandidate)
-	r.Get("/api/agent/tasks", app.agentTasks)
-	r.Post("/api/agent/heartbeat", app.agentHeartbeat)
-	r.Post("/api/agent/result", app.agentResult)
+	r.Post("/api/agent/pair", jsonAPI(app.pairAgent))
+	r.Get("/api/agent/node", jsonAPI(app.agentMetadata))
+	r.Get("/api/agent/config/{revision}", jsonAPI(app.agentCandidate))
+	r.Get("/api/agent/tasks", jsonAPI(app.agentTasks))
+	r.Post("/api/agent/heartbeat", jsonAPI(app.agentHeartbeat))
+	r.Post("/api/agent/result", jsonAPI(app.agentResult))
 	// The subscriber and Line routes are registered before the generic
 	// navigation loop, so the real subscriber page owns its path.
 	app.registerSubscriberRoutes(r)
@@ -121,11 +133,14 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 			app.render(w, r, 200, Dashboard(pageData{Title: p.Title, Path: p.Path, CSRF: sess.CSRF, Dev: app.cfg.DevHTTP, DirectProxy: app.cfg.DirectProxy}))
 		}))
 	}
+	// The fallbacks cover requests that matched no route, so no handler exists to
+	// declare a representation. Only here does the router consult the declared
+	// JSON namespaces; every matched route declares its own shape.
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		app.fail(w, r, 404, "NOT_FOUND", "页面不存在。", "请使用控制台导航。")
+		app.failAs(w, r, 404, "NOT_FOUND", "页面不存在。", "请使用控制台导航。", jsonNamespace(r.URL.Path))
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		app.fail(w, r, 405, "METHOD_NOT_ALLOWED", "此操作不支持该请求方式。", "请重新打开页面。")
+		app.failAs(w, r, 405, "METHOD_NOT_ALLOWED", "此操作不支持该请求方式。", "请重新打开页面。", jsonNamespace(r.URL.Path))
 	})
 	app.handler = r
 	return app, nil
@@ -149,21 +164,25 @@ func (s *Server) boundary(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		h.Set("X-Robots-Tag", "noindex, nofollow")
+		// The boundary runs before any route handler, so no handler has declared
+		// a representation yet. It consults the same declared JSON namespaces the
+		// router fallbacks use; the failure writer itself never inspects a path.
+		jsonBody := jsonNamespace(r.URL.Path)
 		defer func() {
 			if recover() != nil {
-				s.fail(w, r, 500, "INTERNAL_ERROR", "请求未完成。", "请凭操作编号检查服务日志。")
+				s.failAs(w, r, 500, "INTERNAL_ERROR", "请求未完成。", "请凭操作编号检查服务日志。", jsonBody)
 			}
 		}()
 		u, _ := url.Parse(s.cfg.Origin)
 		if r.Host != u.Host || r.URL.IsAbs() {
-			s.fail(w, r, 403, "HOST_REJECTED", "请求主机不匹配。", "请使用配置的管理地址。")
+			s.failAs(w, r, 403, "HOST_REJECTED", "请求主机不匹配。", "请使用配置的管理地址。", jsonBody)
 			return
 		}
 		// Outbound Agents authenticate with Bearer identity, not browser Origin.
 		if r.Method != "GET" && r.Method != "HEAD" && !agentAPI(r.URL.Path) {
 			origins := r.Header.Values("Origin")
 			if len(origins) != 1 || origins[0] != s.cfg.Origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-				s.fail(w, r, 403, "ORIGIN_REJECTED", "请求来源不可信。", "请从管理页面重新提交。")
+				s.failAs(w, r, 403, "ORIGIN_REJECTED", "请求来源不可信。", "请从管理页面重新提交。", jsonBody)
 				return
 			}
 		}
@@ -176,9 +195,51 @@ func (s *Server) event(r *http.Request, code string) {
 	// Allowlisted fields only: never log URLs, headers, forms, usernames or raw errors.
 	s.log.Info("web_event", "operation_id", operation(r), "stage", "web", "error_code", code)
 }
+
+// jsonResponseKey marks a request whose failure body must be the management JSON
+// envelope. The router sets it when it registers a JSON route (see jsonAPI), so
+// the representation is declared once next to the route instead of being guessed
+// from the path inside the error writer. A renamed or relocated endpoint
+// therefore cannot silently change its failure body.
+type jsonResponseKeyType struct{}
+
+var jsonResponseKey jsonResponseKeyType
+
+// jsonAPI marks every request that reaches the wrapped route as a JSON API. It
+// is applied per route at registration; nothing infers the representation from a
+// URL prefix.
+func jsonAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(w, r.WithContext(context.WithValue(r.Context(), jsonResponseKey, true)))
+	}
+}
+
+// jsonNamespace reports whether an unmatched request belongs to a JSON
+// namespace. It exists only for the router's NotFound and MethodNotAllowed
+// fallbacks: those run when no handler matched, so no handler could declare a
+// representation. Every matched route declares its own shape with jsonAPI, and
+// the failure writer itself never inspects a path.
+func jsonNamespace(path string) bool {
+	return path == "/healthz" || strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/nodes/out/")
+}
+
+// wantsJSON reports whether the route declared a JSON failure body.
+func wantsJSON(r *http.Request) bool {
+	marked, _ := r.Context().Value(jsonResponseKey).(bool)
+	return marked
+}
+
+// fail writes one failure in the representation the route declared at
+// registration (see jsonAPI). It never inspects the path, so a renamed or
+// relocated endpoint cannot silently change its failure body.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
+	s.failAs(w, r, status, code, message, next, wantsJSON(r))
+}
+
+// failAs is the single failure writer. The caller decides the representation.
+func (s *Server) failAs(w http.ResponseWriter, r *http.Request, status int, code, message, next string, jsonBody bool) {
 	s.event(r, code)
-	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
+	if jsonBody {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "operation_id": operation(r), "stage": "web", "message": message, "next_action": next})

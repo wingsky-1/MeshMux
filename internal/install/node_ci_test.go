@@ -76,7 +76,7 @@ func TestWriteNodeComponentFixtures(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		acl, err := node.CompileACL(candidate)
+		acl, err := node.CompileACL(candidate, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,7 +136,7 @@ func TestNodeComponentFixturesStayRoleAndPortBound(t *testing.T) {
 		if hasACL != (role == node.RoleOut) {
 			t.Fatalf("%s ACL presence = %v", role, hasACL)
 		}
-		acl, err := node.CompileACL(componentNodeCandidate(role))
+		acl, err := node.CompileACL(componentNodeCandidate(role), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -29,6 +29,10 @@
 - https://github.com/juanfont/headscale/releases/tag/v0.29.5
 - https://github.com/caddyserver/caddy/releases
 
+## AI 规则集固定策略（#8-D）
+
+AI 规则集是外部制品，但同样受“不追 latest”约束：`internal/route.RulesetPin{Source,Version,SHA256}` 要求 HTTPS 单一地址、不可变版本标签（`latest`/`main`/`master` 等可变通道与 URL 中的同名路径段一律 `RULESET_PIN_INVALID`）和 64 位小写十六进制摘要。下载体为空、超过 8 MiB 或摘要不匹配统一 `RULESET_FETCH_FAILED`，发布链必须拒绝而不是降级。规则集当前不入安装包、不提供在线市场、测速或多 Out 负载选择。
+
 ## 限制
 
 不追 latest；未固定校验值或未证实能在 Debian 13 运行的制品不进入安装器。sing-box 的用户更新行为、流量统计和 API 能力必须以固定版本实测为准。Debian 11/12、Ubuntu、IPv6-only 等需要独立兼容性证据。

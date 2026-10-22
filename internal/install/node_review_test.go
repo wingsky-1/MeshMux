@@ -162,8 +162,10 @@ func TestOutFirstInstallStartsACLAfterDynamicFiles(t *testing.T) {
 }
 
 // TestNodeLKGRejectsStaleOutACL pins the repair fast path: a last-known-good
-// data plane for Out must include an exact ACL match, otherwise repair
-// rewrites the dynamic files instead of trusting stale ones.
+// data plane for Out must include an ACL that is both a canonical MeshMux
+// render and exactly the allowlist the Agent recorded as applied. Without a
+// recorded authorization there is no trusted anchor, so an unverifiable ACL is
+// never LKG.
 func TestNodeLKGRejectsStaleOutACL(t *testing.T) {
 	f := makeNodeFixture(t, node.RoleOut)
 	dir := rooted(f.root, nodeKernelDataDir)
@@ -190,7 +192,7 @@ func TestNodeLKGRejectsStaleOutACL(t *testing.T) {
 	if err := writeBytesAtomic(rooted(f.root, node.ActiveConfigPath), compiled, 0640); err != nil {
 		t.Fatal(err)
 	}
-	acl, err := node.CompileACL(document.Candidate())
+	acl, err := node.CompileACL(document.Candidate(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +200,13 @@ func TestNodeLKGRejectsStaleOutACL(t *testing.T) {
 	if err := os.WriteFile(aclPath, acl, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// No state.json yet: nothing records what was authorized, so the ACL cannot
+	// be proven and is not LKG.
+	if _, ok := nodeValidLKG(f.root, f.cfg); ok {
+		t.Fatal("ACL without a recorded allowlist was accepted as LKG")
+	}
+	// With the empty applied allowlist recorded, the default-deny render is LKG.
+	writeNodeAppliedState(t, f.root, f.cfg, nil)
 	if _, ok := nodeValidLKG(f.root, f.cfg); !ok {
 		t.Fatal("exact Out data plane was not accepted as LKG")
 	}

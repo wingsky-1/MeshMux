@@ -311,6 +311,11 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 503, "DATABASE_UNAVAILABLE", "无法记录心跳。", "请稍后重试。")
 		return
 	}
+	// A heartbeat is also a readback event: the node is reachable, so the Hub
+	// can reconcile the authorization direction that starts here. The state is
+	// logged with stable codes only and never echoes an address, an allowlist
+	// entry or a node identifier.
+	s.logCoordinationReadback(r, node.ID)
 	s.event(r, "AGENT_HEARTBEAT")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "paired", "operation_id": operation(r)})
@@ -397,9 +402,43 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("agent_task_result", "operation_id", res.OperationID,
 			"request_operation_id", operation(r), "stage", "agent",
 			"status", res.Status, "error_code", res.ErrorCode)
+		// A recorded result is the readback event of the node: the Out side
+		// proves its allowlist and releases the Lines it serves, while the Line
+		// side reports its own inbound evidence. Each fact is logged with its
+		// stable code so a partially converged pair is visible per fact.
+		s.logCoordinationReadback(r, node.ID)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded", "operation_id": operation(r)})
+}
+
+// logCoordinationReadback writes the per-fact readback of one node as an audit
+// event. Only stable codes, the node's own operation and the non-secret
+// confirmed revision/digest are logged: never an address, an allowlist entry, a
+// subscriber identity or a credential.
+//
+// retry_pending is the operator-facing retry pointer. It is true only for a
+// terminal failure; the affordance is the existing node retry route
+// (POST /nodes/{nodeID}/retry), which republishes the node's authorization. A
+// transition in progress is never retry-pending, because its own chain still has
+// to finish.
+//
+// A readback failure never fails the request that triggered it: the evidence is
+// informational, and the next heartbeat, poll or result recomputes it.
+func (s *Server) logCoordinationReadback(r *http.Request, nodeID string) {
+	readback, err := s.store.nodeCoordinationReadback(nodeID, s.now())
+	if err != nil {
+		s.log.Warn("out_readback_unavailable", "request_operation_id", operation(r),
+			"stage", "web", "error_code", "DATABASE_UNAVAILABLE")
+		return
+	}
+	s.log.Info("out_readback", "request_operation_id", operation(r), "stage", "web",
+		"allowlist", readback.Allowlist, "allowlist_code", readback.AllowlistCode,
+		"inbound", readback.Inbound, "inbound_code", readback.InboundCode,
+		"reality", readback.Reality,
+		"final_egress", readback.FinalEgress, "final_egress_code", readback.FinalEgressCode,
+		"confirmed_revision", readback.ConfirmedRevision, "confirmed_digest", readback.ConfirmedDigest,
+		"retry_pending", readback.RetryPending)
 }
 
 func (s *Server) agentAuth(w http.ResponseWriter, r *http.Request) (Node, bool) {

@@ -62,17 +62,36 @@ type Runtime struct {
 }
 
 type runtimeState struct {
-	Schema           string                         `json:"schema"`
-	NodeID           string                         `json:"node_id"`
-	Role             Role                           `json:"role"`
-	Revision         int64                          `json:"revision,omitempty"`
-	LastTaskRevision int64                          `json:"last_task_revision,omitempty"`
-	Digest           string                         `json:"digest,omitempty"`
-	LKG              []byte                         `json:"lkg,omitempty"`
-	LKGDigest        string                         `json:"lkg_digest,omitempty"`
-	Journal          *applyJournal                  `json:"journal,omitempty"`
-	Idempotency      map[string]idempotencyItem     `json:"idempotency,omitempty"`
-	FinalResults     map[string]protocol.TaskResult `json:"final_results,omitempty"`
+	Schema           string   `json:"schema"`
+	NodeID           string   `json:"node_id"`
+	Role             Role     `json:"role"`
+	Revision         int64    `json:"revision,omitempty"`
+	LastTaskRevision int64    `json:"last_task_revision,omitempty"`
+	Digest           string   `json:"digest,omitempty"`
+	LKG              []byte   `json:"lkg,omitempty"`
+	LKGDigest        string   `json:"lkg_digest,omitempty"`
+	AllowedSources   []string `json:"allowed_sources,omitempty"`
+	// AllowedSourcesRecorded distinguishes an applied empty allowlist (the
+	// fail-closed default-deny data plane, which must be asserted exactly) from
+	// no recorded authorization at all (a fresh bootstrap or a lost state file,
+	// where only the guard shape can be proven).
+	AllowedSourcesRecorded bool                           `json:"allowed_sources_recorded,omitempty"`
+	Journal                *applyJournal                  `json:"journal,omitempty"`
+	Idempotency            map[string]idempotencyItem     `json:"idempotency,omitempty"`
+	FinalResults           map[string]protocol.TaskResult `json:"final_results,omitempty"`
+}
+
+// aclExpectation returns the readback expectation for this state: the recorded
+// applied allowlist when one exists, otherwise a shape-only expectation.
+//
+// A state written before AllowedSourcesRecorded existed may still carry a
+// non-empty list; that list is a real applied record, so it counts as recorded.
+// An empty list without the flag is "nothing recorded", never "authorize
+// nobody", because treating it as the latter would permanently fail an Out
+// whose state file was lost until the Hub re-applied.
+func (s runtimeState) aclExpectation() aclExpectation {
+	recorded := s.AllowedSourcesRecorded || len(s.AllowedSources) > 0
+	return aclExpectation{sources: s.AllowedSources, assertSet: recorded}
 }
 
 type idempotencyItem struct {
@@ -83,18 +102,19 @@ type idempotencyItem struct {
 }
 
 type applyJournal struct {
-	Schema       string `json:"schema"`
-	OperationID  string `json:"operation_id"`
-	Idempotency  string `json:"idempotency_key"`
-	Payload      string `json:"payload_digest"`
-	TaskRevision int64  `json:"task_revision"`
-	Revision     int64  `json:"revision"`
-	Digest       string `json:"digest"`
-	Candidate    []byte `json:"candidate"`
-	Config       []byte `json:"config"`
-	Reported     bool   `json:"reported"`
-	ExpectedPID  int    `json:"expected_pid,omitempty"`
-	PreviousPID  int    `json:"previous_pid,omitempty"`
+	Schema         string   `json:"schema"`
+	OperationID    string   `json:"operation_id"`
+	Idempotency    string   `json:"idempotency_key"`
+	Payload        string   `json:"payload_digest"`
+	TaskRevision   int64    `json:"task_revision"`
+	Revision       int64    `json:"revision"`
+	Digest         string   `json:"digest"`
+	Candidate      []byte   `json:"candidate"`
+	Config         []byte   `json:"config"`
+	Reported       bool     `json:"reported"`
+	ExpectedPID    int      `json:"expected_pid,omitempty"`
+	PreviousPID    int      `json:"previous_pid,omitempty"`
+	AllowedSources []string `json:"allowed_sources,omitempty"`
 }
 
 func emptyRuntimeState(cfg Config) runtimeState {
@@ -266,13 +286,18 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	if err = writeStageAtomic(r.root, stagedConfigPath(r.root, document.Revision), configData); err != nil {
 		return err
 	}
+	// No runtime state exists yet, so there is no trusted record of an applied
+	// allowlist. The managed ACL file is deliberately not read here: a file
+	// edited out of band would then authorize itself. The bootstrap readback
+	// proves only the guard shape and both drops; the real authorization
+	// arrives with the next Hub task and is recorded in state.json there.
 	// The kernel may still be starting (systemd runs Agent and kernel
 	// concurrently with no ordering between them). Poll a bounded number of
 	// times for startup-transient signals; anything deterministic fails fast
 	// so a broken data plane is never mistaken for a slow one.
 	var readback Readback
 	for i := 0; ; i++ {
-		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData))
+		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData), aclExpectation{})
 		if err == nil || !TransientReadback(err) || i >= 29 {
 			break
 		}
@@ -393,6 +418,10 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 		return failedResult(result, "FINAL_OUTBOX_FULL")
 	}
 	taskContext := withOperation(ctx, task.OperationID)
+	allowed, hasAllowed, err := taskAllowedSources(task)
+	if err != nil {
+		return failedResult(result, errorCode(err))
+	}
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "validate", "error_code", "")
 	var executeErr error
@@ -402,21 +431,21 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
-		result, executeErr = r.check(taskContext, revision)
+		result, executeErr = r.check(taskContext, revision, allowed)
 	case protocol.KindConfigStage:
 		if state.Journal != nil {
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
-		result, executeErr = r.stage(taskContext, revision)
+		result, executeErr = r.stage(taskContext, revision, allowed)
 	case protocol.KindConfigApply:
 		if state.Journal != nil {
 			return failedResult(result, "RECOVERY_REQUIRED")
 		}
-		applyResult := r.apply(taskContext, task, digest, revision, state)
+		applyResult := r.apply(taskContext, task, digest, revision, state, allowed)
 		return applyResult
 	case protocol.KindConfigReadback:
-		result, executeErr = r.readback(taskContext, revision)
+		result, executeErr = r.readback(taskContext, revision, allowed, hasAllowed)
 	case protocol.KindHealthStatus, protocol.KindNodeStatus:
 		result, executeErr = r.status(taskContext)
 	default:
@@ -677,6 +706,30 @@ func taskRevision(task protocol.Task) (int64, error) {
 		return 0, errors.New("REVISION_INVALID")
 	}
 	return revision, nil
+}
+
+// taskAllowedSources extracts the optional per-Line source allowlist the Hub
+// attaches to a config task. The boolean reports whether the task carried the
+// key at all, so an explicit empty array ("authorize nobody") is distinct from
+// an absent key ("no expectation"). An unknown or malformed value fails the
+// task instead of silently applying a different authorization.
+func taskAllowedSources(task protocol.Task) ([]string, bool, error) {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(task.Params, &values); err != nil {
+		return nil, false, errors.New("PARAMS_INVALID")
+	}
+	raw, ok := values["allowed_sources"]
+	if !ok {
+		return nil, false, nil
+	}
+	var allowed []string
+	if err := json.Unmarshal(raw, &allowed); err != nil || allowed == nil {
+		return nil, false, errors.New("ACL_SOURCE_INVALID: allowed_sources must be an array of strings")
+	}
+	if _, err := normalizeACLSources(allowed); err != nil {
+		return nil, false, err
+	}
+	return allowed, true, nil
 }
 
 func currentOperation(ctx context.Context) string {

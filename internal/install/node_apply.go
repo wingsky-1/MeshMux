@@ -761,15 +761,37 @@ func activateNodeUnit(ctx context.Context, runner CommandRunner, unit string, re
 	return err
 }
 
-func verifyNodeACLReadback(ctx context.Context, runner CommandRunner, vlessPort int) error {
-	out, err := runner.Run(ctx, "nft", "list", "table", "inet", node.ACLTable)
-	if err != nil {
-		return err
+// verifyNodeACLReadback proves the live Out guard matches the authorization the
+// Agent actually recorded as applied. The managed ACL file is never used as the
+// expectation: it is the very artifact under suspicion, so a file edited out of
+// band would otherwise authorize itself (an accept appended after the sorted
+// sources re-renders to the same bytes it was parsed from).
+//
+// When state.json is absent or does not yet record an allowlist (first install,
+// or a lost state file), no trusted expectation exists. The readback then
+// degrades to a shape-only assertion — MeshMux table, input chain at priority
+// -10, both VLESS drops — and deliberately does not assert the accept set.
+func verifyNodeACLReadback(ctx context.Context, runner CommandRunner, root string, cfg node.Config, candidate node.Candidate, vlessPort int) error {
+	aclPath := rooted(root, node.ACLPath)
+	info, err := os.Lstat(aclPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
+		return errors.New("OUT_ACL_READBACK_FAILED")
 	}
-	text := string(out)
-	if !strings.Contains(text, "table inet "+node.ACLTable) || !strings.Contains(text, "policy accept") ||
-		!strings.Contains(text, fmt.Sprintf("tcp dport %d drop", vlessPort)) ||
-		!strings.Contains(text, fmt.Sprintf("udp dport %d drop", vlessPort)) {
+	applied, recorded, err := node.AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+	if err != nil {
+		return errors.New("OUT_ACL_READBACK_FAILED")
+	}
+	out, err := runner.Run(ctx, "nft", "-j", "list", "table", "inet", node.ACLTable)
+	if err != nil {
+		return errors.New("OUT_ACL_READBACK_FAILED")
+	}
+	if !recorded {
+		if err := node.VerifyOutACLShapeDocument(out, vlessPort); err != nil {
+			return errors.New("OUT_ACL_READBACK_FAILED")
+		}
+		return nil
+	}
+	if err := node.VerifyOutACLDocument(out, vlessPort, applied); err != nil {
 		return errors.New("OUT_ACL_READBACK_FAILED")
 	}
 	return nil
@@ -998,8 +1020,16 @@ func nodeValidLKG(root string, cfg node.Config) (string, bool) {
 	}
 	if cfg.Role == node.RoleOut {
 		// The Out ACL unit applies this file before the kernel starts.
-		// A last-known-good data plane must include an exact ACL match,
-		// otherwise repair would restart the kernel with a stale table.
+		// A last-known-good data plane must include an ACL that is both a
+		// canonical MeshMux render for this candidate and exactly the
+		// allowlist the Agent recorded as applied in state.json.
+		//
+		// The render check alone is not an authorization proof: an accept
+		// appended after the sorted sources re-renders to the same bytes it was
+		// parsed from. And with no state.json there is no trusted record of what
+		// the Hub authorized, so an unverifiable ACL is never treated as LKG;
+		// repair then rewrites the default-deny guard, which denies traffic
+		// rather than persisting an unknown authorization.
 		aclPath := rooted(root, node.ACLPath)
 		aclInfo, err := os.Lstat(aclPath)
 		if err != nil || !aclInfo.Mode().IsRegular() || aclInfo.Mode()&os.ModeSymlink != 0 || aclInfo.Mode().Perm() != 0600 {
@@ -1009,8 +1039,12 @@ func nodeValidLKG(root string, cfg node.Config) (string, bool) {
 		if err != nil {
 			return "", false
 		}
-		aclExpected, err := node.CompileACL(active.Candidate())
-		if err != nil || !bytes.Equal(aclActual, aclExpected) {
+		fileAllowed, err := node.ParseACLAllowed(active.Candidate(), aclActual)
+		if err != nil {
+			return "", false
+		}
+		applied, recorded, err := node.AppliedAllowedSources(root, cfg.NodeID, cfg.Role)
+		if err != nil || !recorded || !node.SameACLSourceSet(applied, fileAllowed) {
 			return "", false
 		}
 	}
@@ -1079,7 +1113,7 @@ func nodeFileOwnedBy(path string, uid uint32, group string) bool {
 	return stat.Gid == uint32(gid)
 }
 
-func installNodeDynamic(ctx context.Context, opts NodeApplyOptions, candidate node.CandidateDocument, compiled []byte, role node.Role) error {
+func installNodeDynamic(ctx context.Context, opts NodeApplyOptions, candidate node.CandidateDocument, compiled []byte, role node.Role, preserveAuthorizedACL bool) error {
 	dir := rooted(opts.Root, nodeKernelDataDir)
 	if err := ensureDirectory(dir, 0750); err != nil {
 		return err
@@ -1103,11 +1137,35 @@ func installNodeDynamic(ctx context.Context, opts NodeApplyOptions, candidate no
 		return err
 	}
 	if role == node.RoleOut {
-		acl, err := node.CompileACL(candidate.Candidate())
+		// A first install always starts from the default-deny guard: nothing is
+		// authorized before the Hub has bound a Line.
+		//
+		// A repair preserves the existing MeshMux ACL only when it is a
+		// canonical render for this candidate AND it agrees with the allowlist
+		// the Agent recorded as applied in state.json. The render check alone is
+		// not an authorization proof: an accept appended after the sorted
+		// sources re-renders to the same bytes it was parsed from, so a tampered
+		// file would otherwise be preserved (and re-applied) as if the Hub had
+		// authorized it. Without a recorded allowlist there is nothing to
+		// compare, and the safe default-deny script is written instead.
+		aclPath := rooted(opts.Root, node.ACLPath)
+		acl, err := node.CompileACL(candidate.Candidate(), nil)
 		if err != nil {
 			return err
 		}
-		if err := writeBytesAtomic(rooted(opts.Root, node.ACLPath), acl, 0600); err != nil {
+		if preserveAuthorizedACL {
+			applied, recorded, stateErr := node.AppliedAllowedSources(opts.Root, candidate.NodeID, candidate.Role)
+			if stateErr != nil {
+				return stateErr
+			}
+			if existing, readErr := os.ReadFile(aclPath); readErr == nil && recorded {
+				if fileAllowed, parseErr := node.ParseACLAllowed(candidate.Candidate(), existing); parseErr == nil &&
+					node.SameACLSourceSet(applied, fileAllowed) {
+					return nil
+				}
+			}
+		}
+		if err := writeBytesAtomic(aclPath, acl, 0600); err != nil {
 			return err
 		}
 	}
@@ -1152,6 +1210,12 @@ func verifyAgentBinary(ctx context.Context, opts NodeApplyOptions, stagedPath, s
 	return nil
 }
 
+// verifyNodeInstall asserts the installer-visible evidence of an installed
+// Node. For an Out, OutDefaultDeny is the observed_out_default_deny the Hub
+// stores: it is true only when the live inet meshmux_out table was proven to
+// be the exact VLESS guard (both drops present, accept set exactly the
+// applied allowlist). A bare `policy accept` table is not evidence and never
+// sets it, so a host with no guard fails install instead of looking healthy.
 func verifyNodeInstall(ctx context.Context, cfg node.Config, runner CommandRunner, rb node.Readback) error {
 	if rb.AgentSHA256 == "" || rb.KernelSHA256 == "" || !rb.LocalActive {
 		return errors.New("NODE_READBACK_INCOMPLETE")

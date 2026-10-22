@@ -72,8 +72,10 @@ func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identit
 		}
 	}
 	if cfg.Role == node.RoleOut {
-		// The path is owned by the installer but the bytes are dynamic and are
-		// written only by installNodeDynamic from the validated candidate.
+		// The path is owned by the installer but the bytes are dynamic: the
+		// installer writes the default-deny guard and the Agent later
+		// replaces it with the same guard plus the Hub-authorized source
+		// allowlist, so the installer must never rewrite a live ACL blindly.
 		files[node.ACLPath] = nodeManagedFile{
 			Path: node.ACLPath, Mode: 0600, Owner: "root:root", Static: false,
 		}
@@ -164,7 +166,7 @@ WantedBy=multi-user.target
 
 func nodeACLUnit() string {
 	return `[Unit]
-Description=MeshMux Out default-deny ACL
+Description=MeshMux Out VLESS guard (default deny, per-Line allowlist)
 Before=meshmux-sing-box.service
 
 [Service]

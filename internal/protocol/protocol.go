@@ -422,7 +422,12 @@ func validateParams(kind string, raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	for _, v := range obj {
+	for key, v := range obj {
+		if key == allowedSourcesParam && configTaskKind(kind) {
+			// Validated as an array below; every other config param stays a
+			// scalar.
+			continue
+		}
 		var s string
 		var n float64
 		var b bool
@@ -447,17 +452,66 @@ func validateParams(kind string, raw json.RawMessage) error {
 			return errors.New("PARAMS_INVALID: status queries take no parameters")
 		}
 	case KindConfigCheck, KindConfigStage, KindConfigApply, KindConfigReadback:
-		if len(obj) > 1 {
-			return errors.New("PARAMS_INVALID: config tasks accept only revision")
-		}
-		if len(obj) == 1 {
-			revRaw, ok := obj["revision"]
-			if !ok {
-				return errors.New("PARAMS_INVALID: config tasks accept only revision")
+		for key := range obj {
+			if key != "revision" && key != allowedSourcesParam {
+				return errors.New("PARAMS_INVALID: config tasks accept only revision and allowed_sources")
 			}
+		}
+		if revRaw, ok := obj["revision"]; ok {
 			if _, ok := parsePositiveInt64(revRaw); !ok {
 				return errors.New("REVISION_INVALID: revision must be a positive integer")
 			}
+		}
+		if sourcesRaw, ok := obj[allowedSourcesParam]; ok {
+			if err := validateAllowedSources(sourcesRaw); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// allowedSourcesParam is the one list-valued config parameter: the per-Line
+// source allowlist the Hub authorizes for an Out revision. It is deliberately
+// a bounded list of plain strings with no path, URL or shell meaning; the
+// Agent re-validates every entry as an IP or CIDR before rendering a rule.
+const allowedSourcesParam = "allowed_sources"
+
+// maxAllowedSources bounds one allowlist envelope. The Agent renders at most
+// one rule per entry, so the bound keeps params inside the frozen 4KiB body
+// and the rendered table inside a single nft -f transaction.
+const maxAllowedSources = 256
+
+func configTaskKind(kind string) bool {
+	switch kind {
+	case KindConfigCheck, KindConfigStage, KindConfigApply, KindConfigReadback:
+		return true
+	}
+	return false
+}
+
+// validateAllowedSources accepts one JSON array of source strings. Address
+// semantics are checked where the ACL is rendered (ACL_SOURCE_INVALID); here
+// only the envelope shape, count and length are bounded.
+func validateAllowedSources(raw json.RawMessage) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("PARAMS_INVALID: allowed_sources must be an array of strings")
+	}
+	var values []string
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(&values); err != nil {
+		return errors.New("PARAMS_INVALID: allowed_sources must be an array of strings")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("PARAMS_INVALID: allowed_sources must be an array of strings")
+	}
+	if len(values) > maxAllowedSources {
+		return errors.New("PARAMS_INVALID: allowed_sources is too long")
+	}
+	for _, value := range values {
+		if value == "" || len(value) > 64 || strings.ContainsRune(value, 0) {
+			return errors.New("PARAMS_INVALID: allowed_sources entries must be 1-64 characters")
 		}
 	}
 	return nil
@@ -465,33 +519,14 @@ func validateParams(kind string, raw json.RawMessage) error {
 
 // decodeParamsObject rejects invalid JSON, null/non-object values and duplicate
 // keys. json.Unmarshal into a map would otherwise silently keep the last value
-// for duplicate keys, including keys made equal through JSON escapes.
+// for duplicate keys, including keys made equal through JSON escapes. Value
+// shapes are checked by validateParams, which knows each kind's allowlist.
 func decodeParamsObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	obj, err := decodeJSONObject(raw, true)
 	if err != nil {
 		return nil, errors.New("PARAMS_INVALID: params must be a JSON object")
 	}
-	for _, value := range obj {
-		if !validParamScalar(value) {
-			return nil, errors.New("PARAMS_INVALID: only string, number or boolean values allowed")
-		}
-	}
 	return obj, nil
-}
-
-func validParamScalar(raw json.RawMessage) bool {
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return false
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return true
-	}
-	var b bool
-	if json.Unmarshal(raw, &b) == nil {
-		return true
-	}
-	return isJSONNumber(raw)
 }
 
 func isJSONNumber(raw json.RawMessage) bool {

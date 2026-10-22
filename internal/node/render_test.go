@@ -62,7 +62,7 @@ func TestCompileCandidateProducesFixedNativeShape(t *testing.T) {
 func TestCompileACLIsOutOnlyDefaultDeny(t *testing.T) {
 	edge := validCandidate()
 	edge.Role = RoleEdge
-	acl, err := CompileACL(edge)
+	acl, err := CompileACL(edge, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestCompileACLIsOutOnlyDefaultDeny(t *testing.T) {
 		t.Fatalf("edge node rendered an Out table: %q", acl)
 	}
 
-	acl, err = CompileACL(validCandidate())
+	acl, err = CompileACL(validCandidate(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

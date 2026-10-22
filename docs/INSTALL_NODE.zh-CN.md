@@ -180,7 +180,7 @@ Node 页面只暴露固定操作，管理员不能提交任意 task kind、命�
 
 因此当前 baseline **没有 TLS/REALITY、没有代理用户、没有客户端凭据、没有订阅**，Issue #7 未实现。不得从本地 listener、plan 或 readback 推导公网端口可达、真实 VLESS/REALITY 握手成功或客户端可连接。
 
-Out 是可选组件。设计目标要求 Out 空授权默认全拒绝且仅目标端口可用；当前源码实际生成 `policy accept`，同时 drop 目标 VLESS 的 TCP/UDP 端口，这与目标语义相反，是上线前必须修正的验收阻塞。#8、#9 和 #11 不在本轮实现范围内；#11 仍是 v1.0.0 P0，需要独立实现和验收。
+Out 是可选组件。设计目标要求 Out 空授权默认全拒绝且仅目标端口可用；#8-B 已据此重写受管 ACL：`inet meshmux_out` 的 `input` chain 保留 `policy accept` 仅覆盖主机 SSH/回环/回程，VLESS 目标端口的 TCP/UDP drop 默认丢弃，只有 Hub 授权的 Line 源地址在 drop 之前 `accept`；`nft -j` 回读按已应用集合精确比对，任何差异为 `OUT_ACL_SOURCE_MISMATCH`。#8-D 的 `internal/route` 交付 AI 规则集版本锁与 Out 不可用 fail-closed，`DeleteOut` 单事务删路由并清 ACL。这些是源码与隔离测试证据；真实 nft readback 与 AI 双跳流量仍待隔离 Debian 13 VM 实测。`#9` 和 `#11` 不在本轮实现范围内；#11 仍是 v1.0.0 P0，需要独立实现和验收。
 
 ## 验收状态
 

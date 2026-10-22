@@ -55,10 +55,11 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 - [x] **全仓自动化**：本地 `gofmt` 干净、`go vet ./...` 通过、`go build ./...` 通过；`go test` 分包全过（product/agent 52、node 46、install 85、web 56、cmd 三包 68），`go test -race` 全过（install/web/node/cmd 及 product/agent/webcmd 五包 120，无 DATA RACE）。
 - [x] **PR-B CI**：L2 [hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)（head `78e259b`，tree `e35fc88`）amd64/arm64 全绿；L3 [hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（同 head/tree）edge/out/hub 全 success。后续链接必须指向对应 head，并说明该 head 的 Git tree。
 - [ ] **#6 L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；#6 baseline 无 TLS/REALITY、无用户、无订阅。#7 新实现及证据见下节。
-- [ ] **Out ACL 语义**：当前源码为 `policy accept` 加目标 VLESS TCP/UDP drop，和“空授权默认拒绝、仅目标端口可用”的验收要求不一致；必须先修正并有真实 nft readback/流量证据。
+- [x] **Out ACL 语义（#8 已修复源码，待 VM 实测）**：ACL 已由 #8-B 改为空授权默认全拒绝（`inet meshmux_out` 只保留一条 `input` chain，`policy accept` 仅覆盖主机 SSH/回环/回程；VLESS 端口两条 `tcp/udp dport drop` 默认丢弃，仅 Hub 授权的 Line 源在 drop 之前 `accept`）。证据：`internal/node/render_acl_test.go`、`internal/node/runtime_readback_acl_test.go`、`internal/install/node_acl_test.go` 的隔离单元测试（含有序 accept-before-drop、未对齐 CIDR 拒绝、`nft -j` 精确集合比对、注入 accept 拒绝、state 缺失退化为形状断言、repair 保留已授权 ACL）；`go test -race ./...` 全绿。**未完成**：真实 Debian 13 VM 上的 `nft list table inet meshmux_out` 回读与 AI 双跳实际流量证据，仍需 L2/L3 补测，因此本条保持“源码已修复、运行证据待补”。
+- [x] **Out 缺失/故障语义与清理（#8-D）**：`internal/route/out_ruleset.go` 提供 `RulesetPin{Source,Version,SHA256}` 与 `ResolveAIRuleset`（下载/大小/摘要失败统一 `RULESET_FETCH_FAILED`，可变通道 `RULESET_PIN_INVALID`，均拒绝发布）；`internal/web/store_out_ai_egress.go` 分离“无 Out = 直出配置态”与“Out 故障 = `OUT_OFFLINE_FAIL_CLOSED`”，回退 Line 需 `FallbackToLine` + `operation_id` 否则 `OUT_FALLBACK_UNAUDITED`；`DeleteOut` 单事务删路由→复用 T3 回收 drain 清 ACL→同事务 readback（缺键或非空则回滚），未下发时返回 `OUT_SYNC_PENDING`（HTTP 202）而非假成功。证据：`internal/route/out_ruleset_test.go`、`internal/web/store_out_ai_egress_test.go`、`internal/web/store_out_bindings_test.go`、`internal/web/server_out_bindings_test.go`。
 - [x] **#6 自定义端口**：SSH 与 VLESS 端口不同；Fail2ban jail/action 与实际 SSH listener 匹配，nft 只替换 MeshMux 自有表。证据限于上述隔离 L2/L3 场景，不代表任意现网端口均已验证。
 
-实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#8、#9 与 #11 不在本轮验收范围，#11 仍是 v1.0.0 P0。
+实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#9 与 #11 不在本轮验收范围，#8 的四项 PR 只交付源码与隔离自动化证据（真实 nft readback、AI 双跳流量与客户端可用仍缺），#11 仍是 v1.0.0 P0。
 
 ## Issue #7 Phase 3A 分 PR 验收（进行中）
 
