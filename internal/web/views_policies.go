@@ -1,11 +1,12 @@
 package web
 
+import "fmt"
+
 // views_policies.go holds the display-only view model for the /policies page.
-// The server fills the snapshot from the read-only mesh model and the default
-// client policy; policiesDraftView remains the no-data fallback. Nothing here
-// writes configuration or publishes a policy — saving, revisions and the
-// publication pipeline are 10d. The page never renders a control without an
-// action (see docs/UX.zh-CN.md 交互安全性).
+// The server fills the snapshot from each layer's active revision, falling back
+// to the mesh-derived and built-in defaults; policiesDraftView remains the
+// no-data fallback. The page renders no publication control: publishing is
+// 10d-2b (see docs/UX.zh-CN.md 交互安全性).
 
 // policyOutState is the tri-state display of the optional Out egress.
 type policyOutState string
@@ -59,6 +60,18 @@ type policyPageView struct {
 	// Draft marks the no-data fallback: the page then says so instead of
 	// presenting design sample rows as live policy.
 	Draft bool
+	// ClientDefault and ServerDefault mark a layer rendered from the built-in
+	// defaults because that layer has no active revision yet.
+	ClientDefault bool
+	ServerDefault bool
+}
+
+// policyCountLabel marks a layer without an active revision as default preview.
+func policyCountLabel(count int, fallback bool) string {
+	if fallback {
+		return fmt.Sprintf("默认预览 · %d 条", count)
+	}
+	return fmt.Sprintf("%d 条", count)
 }
 
 // policiesDraftView returns the static design sample the page renders until

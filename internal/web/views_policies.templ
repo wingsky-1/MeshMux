@@ -4,9 +4,9 @@ package web
 // two-layer policy view (docs/UX.zh-CN.md 路由策略视图): the client layer on
 // the device and the server layer on the Line.
 //
-// The server fills the snapshot from read-only mesh data; only the explain
-// query is actionable here. Saving, persistence and publication are 10d, so
-// the page never renders a control that clicks without action.
+// The server fills the snapshot from the active stored revisions, falling
+// back to the read-only mesh model and built-in defaults. Saving is the write
+// API; publication is 10d-2b, so the page renders no publish control.
 templ PoliciesPage(p pageData, v policyPageView) {
 	@Document(p.Title) {
 		<a class="skip" href="#main">跳到内容</a>
@@ -59,8 +59,8 @@ templ PoliciesPage(p pageData, v policyPageView) {
 
 					<div class="policy-split">
 						<section class="panel">
-							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ len(v.Client) } 条</span></div>
-							<p class="muted">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页只展示当前默认策略意图，保存与发布在后续版本接入。</p>
+							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ policyCountLabel(len(v.Client), v.ClientDefault) }</span></div>
+							<p class="muted">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布在后续版本接入。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Client {
 									<li>
@@ -71,8 +71,8 @@ templ PoliciesPage(p pageData, v policyPageView) {
 							</ul>
 						</section>
 						<section class="panel">
-							<div class="panel-heading"><h2>服务端层 · Line 出口分流</h2><span class="badge">{ len(v.Server) } 条</span></div>
-							<p class="muted">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页按当前默认意图与 Out 三态展示；保存与发布在后续版本接入。</p>
+							<div class="panel-heading"><h2>服务端层 · Line 出口分流</h2><span class="badge">{ policyCountLabel(len(v.Server), v.ServerDefault) }</span></div>
+							<p class="muted">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布在后续版本接入。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Server {
 									<li>
