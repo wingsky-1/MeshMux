@@ -31,7 +31,7 @@ Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本�
 
 ## 3. Data Architecture — 数据
 
-- Hub SQLite（WAL）保存：nodes、node_identities、subscribers、proxy_credentials、mesh_devices、mesh_routes、route_policies、config_revisions、publications、jobs、audit_events；版本化迁移和定期一致性备份。
+- Hub SQLite（WAL）保存：nodes、node_identities、subscribers、proxy_credentials、subscription_tokens、line_settings、node_candidates、out_bindings、mesh_devices、mesh_enrollment_keys、config_revisions、route_policies、publications、jobs、audit_events；版本化迁移和定期一致性备份。其中 `mesh_devices`（设备身份、用途、绑定订阅用户、NodeName、Headscale Node ID、生命周期与注销意图）与 `mesh_enrollment_keys`（仅存 SHA-256、每设备单活、`consumed` 终态）属 PR-9a 的 schema 6；`config_revisions`、`route_policies`、`publications`、`jobs`、`audit_events` 仍是目标表，当前实现用 `node_candidates` 不可变修订与 `agent_tasks` 拉取式任务承载，审计经结构化日志事件而非独立表。
 - Headscale 自带数据库保存：Tailnet 用户、节点身份、PreAuthKey、路由等组网事实；MeshMux 只保存稳定引用（Headscale Node ID）及期望策略，不直接改其数据库。
 - Agent 私有目录保存：独立身份凭据、最后已知好配置、候选配置、回退记录和版本信息。节点配置不从外部任意 URL 直接执行。当前 layout 使用 `/var/lib/meshmux-agent/identity.json`、`state.json`、`active-candidate.json`、`out.nft`，kernel 配置为 `/var/lib/meshmux-singbox/config.json`。
 - Installer 的 `/var/lib/meshmux-installer/state.json` 记录 Node 的 immutable Hub URL、Node ID、role 和端口绑定，以及 MeshMux 静态受管文件 SHA-256 ledger；operation journal 位于 `/var/lib/meshmux-installer/operations/<operation_id>/events.jsonl`。
@@ -54,7 +54,7 @@ flowchart LR
     Agent["Line/Out Agent"] -->|"outbound HTTPS"| Hub
 ~~~
 
-上图包含目标态的 VLESS/REALITY、用户、订阅和 Mesh 路径。`main` 上的 Node baseline 仍只生成空 `users` 的 v1 VLESS candidate，没有 TLS/REALITY、用户、凭据或订阅；本地 listener/readback 不代表公网可达、真实协议握手或客户端可用。Issue #7 PR-A 已合入独立订阅域模型与严格 v2 REALITY 编译器（v1 保持不变）；Web 生命周期、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含隔离 VM 证据），真实公网握手需后续证据。#8 的四项 PR 已交付源码与隔离自动化证据（真实 nft readback、AI 双跳流量与客户端可用仍待隔离 VM 实测），#9 与 #11 不在本轮实现范围，#11 仍是 v1.0.0 P0。
+上图包含目标态的 VLESS/REALITY、用户、订阅和 Mesh 路径。`main` 上的 Node baseline 仍只生成空 `users` 的 v1 VLESS candidate，没有 TLS/REALITY、用户、凭据或订阅；本地 listener/readback 不代表公网可达、真实协议握手或客户端可用。Issue #7 PR-A 已合入独立订阅域模型与严格 v2 REALITY 编译器（v1 保持不变）；Web 生命周期、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含隔离 VM 证据），真实公网握手需后续证据。#8 的四项 PR 已交付源码与隔离自动化证据（真实 nft readback、AI 双跳流量与客户端可用仍待隔离 VM 实测）。#9 PR-9a 已交付 Mesh 设备生命周期（`internal/mesh` 领域模型、`internal/headscale` 固定 argv 适配器、Web `/mesh` 页面、schema 6 的 `mesh_devices`/`mesh_enrollment_keys`、Hub 的 Web↔Headscale socket 组边界）；子网路由与路由批准属 9b、单 VPN 客户端配置属 9c，真实 tailnet 设备注册与在线证据仍缺。#11 仍是 v1.0.0 P0。
 
 ## 5. 关键不变量
 

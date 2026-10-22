@@ -20,6 +20,7 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
+	"github.com/wingsky-1/MeshMux/internal/headscale"
 )
 
 //go:embed assets/*
@@ -32,6 +33,10 @@ type Server struct {
 	handler  http.Handler
 	now      func() time.Time
 	authSlot chan struct{}
+	// mesh is the narrow Headscale control-plane adapter behind the mesh
+	// pages. The production value is the fixed local CLI runner; HTTP tests
+	// replace it with a fake so no Headscale binary or socket is required.
+	mesh headscale.Client
 }
 
 type requestKey int
@@ -68,7 +73,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 		s.Close()
 		return nil, err
 	}
-	app := &Server{cfg: c, store: s, log: logger, now: time.Now, authSlot: make(chan struct{}, 1)}
+	app := &Server{cfg: c, store: s, log: logger, now: time.Now, authSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner()}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -124,8 +129,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// The subscriber and Line routes are registered before the generic
 	// navigation loop, so the real subscriber page owns its path.
 	app.registerSubscriberRoutes(r)
+	// The mesh device routes own "/mesh" for the same reason.
+	app.registerMeshRoutes(r)
 	for _, page := range navigation {
-		if page.Path == "/nodes" || page.Path == "/subscribers" {
+		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" {
 			continue
 		}
 		p := page

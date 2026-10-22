@@ -123,7 +123,7 @@ func (s *store) migrate() error {
 	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 5 {
+	if version > 6 {
 		return errors.New("SCHEMA_TOO_NEW: restore matching binary and database; do not downgrade in place")
 	}
 	if version == 0 {
@@ -177,6 +177,12 @@ func (s *store) migrate() error {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 5
+	}
+	if version == 5 {
+		if err = migrateSchema6(tx); err != nil {
+			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+		}
+		version = 6
 	}
 	return tx.Commit()
 }
