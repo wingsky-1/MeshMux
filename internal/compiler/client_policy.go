@@ -18,9 +18,7 @@ type ClientDefaults struct {
 	RemoteLANPrefixes []string
 }
 
-// DefaultClientPolicy is the issue #10 default: tailnet and remote home LAN via
-// the Tailscale endpoint, CN direct, exceptions direct, else the selected Line.
-// The Line is final, so disabling a rule can only widen it.
+// DefaultClientPolicy is the issue #10 default; the selected Line is final.
 func DefaultClientPolicy(model subscription.MeshConfigModel, proxyLine string, defaults ClientDefaults) (ClientPolicy, error) {
 	policy, err := MeshClientPolicy(model, proxyLine)
 	if err != nil {
@@ -30,9 +28,7 @@ func DefaultClientPolicy(model subscription.MeshConfigModel, proxyLine string, d
 	if prefixes := append(append([]string{}, model.TailnetPrefixes...), defaults.RemoteLANPrefixes...); len(prefixes) > 0 {
 		rules = append(rules, Rule{100, Match{IPCIDRs: prefixes, DNS: DNSEncrypted}, ActionTailscale})
 	}
-	if len(model.TailnetPrefixes) > 0 {
-		rules = append(rules, Rule{200, Match{GeoSite: []string{"cn"}, DNS: DNSDomestic}, ActionDirect})
-	}
+	rules = append(rules, Rule{200, Match{GeoSite: []string{"cn"}, DNS: DNSDomestic}, ActionDirect})
 	if len(defaults.Exceptions) > 0 {
 		rules = append(rules, Rule{300, Match{Domains: defaults.Exceptions, DNS: DNSDomestic}, ActionDirect})
 	}
@@ -49,11 +45,11 @@ func checkClientConflicts(rules []Rule) error {
 		}
 	}
 	for index, rule := range rules {
-		if tailnet != 0 && rule.Action != ActionTailscale && rule.Priority < tailnet {
-			return conflict(rule.Priority, "precedes the tailnet rule at priority %d", tailnet)
+		if tailnet != 0 && rule.Action != ActionTailscale && rule.Priority < tailnet && len(rule.Match.SSIDs) == 0 {
+			return fmt.Errorf("%s: priority %d precedes the tailnet rule at priority %d", CodePolicyConflict, rule.Priority, tailnet)
 		}
-		if len(rule.Match.SSIDs) > 0 && (index > 0 || rule.Action != ActionDirect || tailnet != 0) {
-			return conflict(rule.Priority, "an SSID rule must be first, direct, and never combined with the tailnet rule")
+		if len(rule.Match.SSIDs) > 0 && (index > 0 || rule.Action != ActionDirect) {
+			return fmt.Errorf("%s: priority %d: an SSID rule must be first and direct", CodePolicyConflict, rule.Priority)
 		}
 	}
 	for index, later := range rules {
@@ -63,7 +59,7 @@ func checkClientConflicts(rules []Rule) error {
 			}
 			for _, sample := range later.Match.samples() {
 				if matched, value := matchTarget(earlier.Match, sample); matched {
-					return conflict(earlier.Priority, "shadows %s at priority %d", value, later.Priority)
+					return fmt.Errorf("%s: priority %d shadows %s at priority %d", CodePolicyConflict, earlier.Priority, value, later.Priority)
 				}
 			}
 		}
@@ -71,13 +67,9 @@ func checkClientConflicts(rules []Rule) error {
 	return nil
 }
 
-func conflict(priority int, format string, args ...any) error {
-	return fmt.Errorf("%s: priority %d: %s", CodePolicyConflict, priority, fmt.Sprintf(format, args...))
-}
-
 // samples are concrete targets the matcher matches.
 func (m Match) samples() []string {
-	samples := slices.Clone(append(m.Domains, m.SSIDs...))
+	samples := slices.Clone(m.Domains)
 	for _, suffix := range m.DomainSuffixes {
 		samples = append(samples, "x."+suffix)
 	}

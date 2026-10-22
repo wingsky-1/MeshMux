@@ -50,6 +50,11 @@ func TestDefaultClientPolicy(t *testing.T) {
 	if _, err := DefaultClientPolicy(testModel(), "tokyo-1", ClientDefaults{RemoteLANPrefixes: []string{"192.168.50.7/24"}}); err == nil {
 		t.Fatal("non-canonical remote LAN accepted")
 	}
+	// SSID direct first, then the derived tailnet and CN rules.
+	withSSID := ClientPolicy{Default: ActionProxy, Rules: append([]Rule{{50, Match{SSIDs: []string{"home-wifi"}}, ActionDirect}}, policy.Rules...)}
+	if err := withSSID.Validate(); err != nil {
+		t.Fatalf("SSID + tailnet + CN refused: %v", err)
+	}
 	policy.Rules = append(policy.Rules, Rule{400, Match{IPCIDRs: []string{"203.0.113.0/24"}, DNS: DNSEncrypted}, ActionProxy})
 	for target, want := range map[string]HitExplanation{
 		"100.64.0.5":         {100, "ip_cidr 100.64.0.0/10", ActionTailscale, "meshmux-ts (Tailscale endpoint)", DNSEncrypted},
@@ -72,9 +77,9 @@ func TestDefaultClientPolicy(t *testing.T) {
 // refused with POLICY_CONFLICT, never silently merged.
 func TestClientPolicyRefusesConflicts(t *testing.T) {
 	conflicts := map[string][]Rule{
-		"ssid with tailnet":  {{1, Match{SSIDs: []string{"home-wifi"}}, ActionDirect}, {2, Match{IPCIDRs: []string{"100.64.0.0/10"}}, ActionTailscale}},
 		"ssid after proxy":   {{1, Match{IPCIDRs: []string{"100.64.0.0/10"}}, ActionTailscale}, {2, Match{SSIDs: []string{"home-wifi"}}, ActionDirect}},
 		"duplicate ssid":     {{1, Match{SSIDs: []string{"home-wifi"}}, ActionDirect}, {2, Match{SSIDs: []string{"home-wifi"}}, ActionDirect}},
+		"ssid via proxy":     {{1, Match{SSIDs: []string{"home-wifi"}}, ActionProxy}},
 		"cn overlap":         {{1, Match{GeoSite: []string{"cn"}}, ActionDirect}, {2, Match{GeoSite: []string{"cn"}}, ActionProxy}},
 		"exception shadowed": {{1, Match{DomainSuffixes: []string{"example.invalid"}}, ActionProxy}, {2, Match{Domains: []string{"dl.example.invalid"}}, ActionDirect}},
 		"tailnet shadowed":   {{1, Match{IPCIDRs: []string{"100.64.0.0/10"}}, ActionDirect}, {2, Match{IPCIDRs: []string{"100.64.1.0/24"}}, ActionTailscale}},
