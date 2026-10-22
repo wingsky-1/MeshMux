@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/netip"
 	"regexp"
+	"strings"
+	"unicode"
 
 	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
@@ -36,12 +38,41 @@ func (a Action) validClient() bool {
 }
 func (a Action) validServer() bool { return a == ActionDirect || a == ActionOut }
 
+// DNSResolver is the resolver class a matched flow must use: domestic traffic
+// resolves domestically, every other egress through an encrypted resolver on
+// that same egress, so resolution never splits from access.
+type DNSResolver string
+
+const (
+	DNSDomestic  DNSResolver = "domestic"
+	DNSEncrypted DNSResolver = "encrypted"
+)
+
+func resolverFor(action Action) DNSResolver {
+	if action == ActionDirect {
+		return DNSDomestic
+	}
+	return DNSEncrypted
+}
+
 var (
 	domainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 	tagPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	ssidPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._+-]{0,30}[a-z0-9])?$`)
 )
 
-// Match is one matcher kind; Geo and remote identifiers need a pin.
+// NormalizeSSID lowercases a Wi-Fi name and removes whitespace.
+func NormalizeSSID(raw string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, raw)
+}
+
+// Match is one matcher kind; Geo and remote identifiers need a pin. DNS is an
+// annotation, not a matcher kind: it names the resolver the rule's egress uses.
 type Match struct {
 	Domains        []string
 	DomainSuffixes []string
@@ -49,13 +80,15 @@ type Match struct {
 	GeoSite        []string
 	GeoIP          []string
 	RuleSets       []string
+	SSIDs          []string
+	DNS            DNSResolver
 }
 
 // Validate accepts exactly one matcher kind and canonical values, so an invalid
 // domain or CIDR is refused before a generator sees it.
 func (m Match) Validate() error {
 	kinds := 0
-	for _, values := range [][]string{m.Domains, m.DomainSuffixes, m.IPCIDRs, m.GeoSite, m.GeoIP, m.RuleSets} {
+	for _, values := range [][]string{m.Domains, m.DomainSuffixes, m.IPCIDRs, m.GeoSite, m.GeoIP, m.RuleSets, m.SSIDs} {
 		if len(values) > 0 {
 			kinds++
 		}
@@ -78,6 +111,14 @@ func (m Match) Validate() error {
 			return errors.New(CodePolicyInvalid + ": geo and ruleset identifiers must be lowercase")
 		}
 	}
+	for _, raw := range m.SSIDs {
+		if raw != NormalizeSSID(raw) || !ssidPattern.MatchString(raw) {
+			return errors.New(CodePolicyInvalid + ": an SSID must be lowercase, without whitespace, and use letters, digits, dot, underscore, plus or hyphen")
+		}
+	}
+	if m.DNS != "" && m.DNS != DNSDomestic && m.DNS != DNSEncrypted {
+		return errors.New(CodePolicyInvalid + ": the DNS annotation must be domestic or encrypted")
+	}
 	return nil
 }
 
@@ -97,12 +138,15 @@ type ClientPolicy struct {
 	Mesh    subscription.MeshConfigModel
 }
 
-// Validate checks the intent without touching a document format.
+// Validate checks the intent and refuses overlaps the save path must not merge.
 func (p ClientPolicy) Validate() error {
 	if !p.Default.validClient() {
 		return errors.New(CodePolicyInvalid + ": the client default must be direct, proxy or tailscale")
 	}
-	return validateRules(p.Rules, Action.validClient)
+	if err := validateRules(p.Rules, Action.validClient); err != nil {
+		return err
+	}
+	return checkClientConflicts(p.Rules)
 }
 
 // MeshClientPolicy derives the 10a mesh intent: tailnet prefixes to Tailscale,
@@ -205,6 +249,9 @@ func validateRules(rules []Rule, allowed func(Action) bool) error {
 		}
 		if !allowed(rule.Action) {
 			return errors.New(CodePolicyInvalid + ": the rule action is not valid for this policy")
+		}
+		if rule.Match.DNS != "" && rule.Match.DNS != resolverFor(rule.Action) {
+			return errors.New(CodePolicyConflict + ": the DNS annotation disagrees with the rule egress; resolution must use the same path as access")
 		}
 		if err := rule.Match.Validate(); err != nil {
 			return err
