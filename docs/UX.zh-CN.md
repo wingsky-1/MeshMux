@@ -23,7 +23,7 @@ Out 标记为 optional，不存在时 Web 和订阅均不报缺省错误。修�
 
 客户端层：家庭 Wi-Fi SSID / Tailnet / 中国地区 / 国际目标 / DNS；服务端层：默认直出、AI 指定 Out、规则匹配和异常兜底。模拟器输出“命中规则→第一跳→最终出口→DNS 选择”。
 
-发布是单独一步，不是保存的同义词：`POST /policies/publish` 先把 active 意图装配成完整文档并交 sing-box 与 Mihomo 门禁；门禁失败、规则集未锁版本、Out 故障未显式回退时不写入任何修订，页面继续展示上一份生效配置。回执给出 `egress_state`、门禁摘要与 `operation_id`。
+发布是单独一步，不是保存的同义词：`POST /policies/publish` 先把 active 意图装配成完整文档并交 sing-box 与 Mihomo 门禁，再把候选与固定四任务链写在同一事务；门禁失败、规则集未锁版本、Out 故障未显式回退或链仍在途时不写入任何修订，页面继续展示上一份生效配置。回执给出 `egress_state`、门禁摘要、候选引用与 `operation_id`，并明示链失败时回退上一份 LKG；`queued` 不等于已应用。
 
 ## 明确交互安全性
 
