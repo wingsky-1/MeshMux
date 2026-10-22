@@ -56,7 +56,7 @@ func routeEventKinds(t *testing.T, s *store, deviceID, prefix string) []string {
 
 // TestSchemaV7MigrationAddsRouteTablesAndPreservesV6 upgrades a schema-6
 // database and checks that the route tables appear, the pre-existing device and
-// key rows survive and the future-schema guard moved to 8. The migration must
+// key rows survive and the future-schema guard moved to 9. The migration must
 // stay additive: dropping the two new tables returns the file to the schema-6
 // shape.
 func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
@@ -72,7 +72,7 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 
 	// Rebuild the database in its schema-6 shape: the route tables do not exist
 	// and the version is 6. The device and key rows stay exactly as they were.
-	if _, err = s.db.Exec(`DROP TABLE mesh_route_events; DROP TABLE mesh_routes; PRAGMA user_version=6;`); err != nil {
+	if _, err = s.db.Exec(`DROP TABLE route_policy_events; DROP TABLE route_policies; DROP TABLE mesh_route_events; DROP TABLE mesh_routes; PRAGMA user_version=6;`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -82,8 +82,8 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 	if err = s.migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 7 {
-		t.Fatalf("user_version=%d err=%v, want 7", version, err)
+	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 8 {
+		t.Fatalf("user_version=%d err=%v, want 8", version, err)
 	}
 	for _, table := range []string{"mesh_routes", "mesh_route_events"} {
 		var count int
@@ -109,7 +109,7 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 	}
 
 	// The guard moved with the migration.
-	if _, err = s.db.Exec(`PRAGMA user_version=8`); err != nil {
+	if _, err = s.db.Exec(`PRAGMA user_version=9`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

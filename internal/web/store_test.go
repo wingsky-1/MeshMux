@@ -59,7 +59,7 @@ func TestPrivateStateAndSchema(t *testing.T) {
 		other.Close()
 		t.Fatal("concurrent process accepted")
 	}
-	if _, err = s.db.Exec("PRAGMA user_version=8"); err != nil {
+	if _, err = s.db.Exec("PRAGMA user_version=9"); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
