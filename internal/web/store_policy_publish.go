@@ -15,7 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -399,34 +398,6 @@ func decodePolicyPins(raw json.RawMessage) (compiler.RuleSetPins, error) {
 	return pins, nil
 }
 
-// assemblyReceipt is the receipt of a gated assembly that has not been stored
-// yet. It is the evidence a caller needs to decide whether to publish.
-func assemblyReceipt(assembly policyAssembly) policyPublishReceipt {
-	receipt := policyPublishReceipt{
-		OK:                   true,
-		Status:               "validated",
-		Revision:             assembly.ServerRevision,
-		EgressState:          assembly.EgressState,
-		EgressCode:           assembly.EgressCode,
-		PolicySchema:         assembly.PolicySchema,
-		RoutePolicyRevisions: assembly.RoutePolicyRevisions,
-		Checks:               assembly.Checks,
-		NextAction:           "装配与门禁已通过；节点候选下发在下一阶段接入。",
-	}
-	if receipt.Revision == 0 {
-		receipt.Revision = assembly.ClientRevision
-	}
-	return receipt
-}
-
-// writePublicationReceipt writes one receipt with its operation id.
-func writePublicationReceipt(w http.ResponseWriter, status int, receipt policyPublishReceipt, operationID string) {
-	receipt.OperationID = operationID
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(receipt)
-}
-
 // publishRefusalCodes are every stable code a publication can report. The list
 // is explicit so an unknown message never leaks and never becomes a 500.
 var publishRefusalCodes = []string{
@@ -439,6 +410,7 @@ var publishRefusalCodes = []string{
 	codePublishNoLines, codePublishGate,
 	node.CodePublishSingBoxMissing, node.CodePublishCheckSingBox,
 	node.CodePublishMihomoMissing, node.CodePublishMihomoVersion, node.CodePublishCheckMihomo,
+	codePublishRevisionChanged, codePublishTasksInProgress, codePublishCandidateChanged,
 }
 
 // policyPublishFailure maps one refusal onto the HTTP contract: the stable code,
@@ -467,7 +439,8 @@ func policyPublishFailure(err error) (int, string, string) {
 	case "POLICY_NOT_FOUND":
 		status = 404
 	case compiler.CodePolicyConflict, route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
-		"OUT_BINDING_INVALID", codeOutNotAuthorized:
+		"OUT_BINDING_INVALID", codeOutNotAuthorized, codePublishTasksInProgress,
+		codePublishRevisionChanged, codePublishCandidateChanged:
 		status = 409
 	case codePublishGate, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
 		status = 503

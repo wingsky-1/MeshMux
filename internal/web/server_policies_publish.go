@@ -45,8 +45,13 @@ func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ ses
 		app.failPublish(w, r, err)
 		return
 	}
-	receipt := assemblyReceipt(assembly)
-	app.event(r, "POLICY_ASSEMBLED")
+	publication, err := app.store.publishPolicyAssembly(assembly, app.now())
+	if err != nil {
+		app.failPublish(w, r, err)
+		return
+	}
+	receipt := publicationReceipt(assembly, publication)
+	app.event(r, "POLICY_PUBLISHED")
 	writePublicationReceipt(w, http.StatusOK, receipt, operation(r))
 }
 
@@ -83,8 +88,7 @@ func (app *Server) publishVerifier() (publishVerifier, error) {
 // the stable code and the operation id.
 func (app *Server) failPublish(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, detail := policyPublishFailure(err)
-	app.writePublishFailure(w, r, status, code, detail,
-		"请凭操作编号检查服务日志后重试；已应用配置保持不变。", operation(r))
+	app.writePublishFailure(w, r, status, code, detail, publishRetryHint(err), operation(r))
 }
 
 func (app *Server) writePublishFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next, operationID string) {

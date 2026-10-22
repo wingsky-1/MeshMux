@@ -12,6 +12,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
@@ -366,3 +367,97 @@ func TestPublishAssemblyCarriesManifestFields(t *testing.T) {
 		t.Fatalf("route_policy_revisions = %v", got)
 	}
 }
+
+// TestPublishCandidateRouteIsInCandidateDocument proves the route reaches the
+// candidate document the Agent pulls, instead of only reaching the gate.
+func TestPublishCandidateRouteIsInCandidateDocument(t *testing.T) {
+	f := newPublishFixture(t)
+	f.activatePolicy(t, PolicyLayerServer,
+		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"direct"}]}`, "")
+	request, err := parsePolicyPublishRequest(json.RawMessage(`{"layer":"server","operation_id":"op-publish"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := f.store.assemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := f.store.publishPolicyAssembly(assembly, f.now)
+	if err != nil {
+		t.Fatalf("store publication: %v", err)
+	}
+	if len(publication.Lines) != 1 || publication.Lines[0].Status != "queued" {
+		t.Fatalf("publication = %+v", publication)
+	}
+	stored, err := f.store.latestCandidate(f.line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Document.Schema != node.CandidateSchemaV3 {
+		t.Fatalf("candidate schema = %s, want v3", stored.Document.Schema)
+	}
+	if !strings.Contains(string(stored.Document.Route), "ai.example.invalid") {
+		t.Fatalf("stored candidate route = %s", stored.Document.Route)
+	}
+	// The stored digest is the digest of the compiled document, and the
+	// compiled document carries the route.
+	compiled, err := node.CompileCandidate(stored.Document.Candidate())
+	if err != nil {
+		t.Fatalf("compile stored candidate: %v", err)
+	}
+	if !strings.Contains(string(compiled), "ai.example.invalid") {
+		t.Fatalf("compiled candidate lost the route: %s", compiled)
+	}
+	if compiler.Hash(compiled) != stored.ConfigSHA256 {
+		t.Fatalf("stored digest %s does not match the compiled document", stored.ConfigSHA256)
+	}
+	// The four fixed task kinds are queued for the publication.
+	tasks := chainRevisionParams(t, f.store, f.line, stored.Revision)
+	if len(tasks) != len(protocolKinds()) {
+		t.Fatalf("chain length = %d, want %d", len(tasks), len(protocolKinds()))
+	}
+	for index, kind := range protocolKinds() {
+		if tasks[index].Kind != kind {
+			t.Fatalf("chain[%d] = %s, want %s", index, tasks[index].Kind, kind)
+		}
+	}
+}
+
+func TestPublishRefusesChangedSnapshotAndUnfinishedChain(t *testing.T) {
+	f := newPublishFixture(t)
+	f.activatePolicy(t, PolicyLayerServer, publishServerDirect, "")
+	request, err := parsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-publish"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := f.store.assemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A chain in flight must not be replaced by a publication.
+	if _, err := f.store.db.Exec(`UPDATE agent_tasks SET status='pending' WHERE node_id=?`, f.line); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.publishPolicyAssembly(assembly, f.now); err == nil ||
+		!strings.HasPrefix(err.Error(), codePublishTasksInProgress) {
+		t.Fatalf("unfinished chain = %v, want %s", err, codePublishTasksInProgress)
+	}
+	settleTasks(t, f.store, f.line)
+
+	// A candidate revision that advanced after the gate makes the gated bytes
+	// stale, so the publication is refused rather than storing them.
+	assembly, err = f.store.assemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.store.reconcileNode(f.line, f.now); err != nil {
+		t.Fatalf("advance the line: %v", err)
+	}
+	settleTasks(t, f.store, f.line)
+	if _, err := f.store.publishPolicyAssembly(assembly, f.now); err == nil ||
+		!strings.HasPrefix(err.Error(), codePublishRevisionChanged) {
+		t.Fatalf("stale assembly = %v, want %s", err, codePublishRevisionChanged)
+	}
+}
+
+func protocolKinds() []string { return protocol.PublicationKinds }
