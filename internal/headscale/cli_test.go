@@ -114,6 +114,18 @@ func TestCommandTableMatchesPinnedRelease(t *testing.T) {
 			want:   []string{"--config", ConfigPath, "nodes", "delete", "--identifier", "7", "--force", "-o", "json"},
 		},
 		{
+			name:   "nodes approve-routes takes the identifier and one csv list",
+			op:     opNodesApproveRoutes,
+			values: []string{"7", "10.0.0.0/8,192.168.0.0/24"},
+			want:   []string{"--config", ConfigPath, "nodes", "approve-routes", "--identifier", "7", "--routes", "10.0.0.0/8,192.168.0.0/24", "-o", "json"},
+		},
+		{
+			name:   "nodes clear routes is the literal empty --routes suffix",
+			op:     opNodesClearRoutes,
+			values: []string{"7"},
+			want:   []string{"--config", ConfigPath, "nodes", "approve-routes", "--identifier", "7", "--routes=", "-o", "json"},
+		},
+		{
 			name:   "preauthkeys create pins user and a whole-minute expiration",
 			op:     opPreAuthKeysCreate,
 			values: []string{"3", "15m"},
@@ -150,11 +162,15 @@ func TestNoPreAuthKeyListingOperation(t *testing.T) {
 			t.Fatalf("operation %q exposes a preauthkeys listing", op)
 		}
 	}
-	for _, op := range []operation{"preauthkeys list", "preauthkeys", "authkeys list", "nodes list-routes"} {
+	for _, op := range []operation{"preauthkeys list", "authkeys list"} {
 		if _, ok := commandTable[op]; ok {
 			t.Fatalf("operation %q must not exist", op)
 		}
 	}
+	// There is deliberately no "nodes list-routes" operation. It would duplicate
+	// `nodes list`, which already returns approved_routes, available_routes and
+	// subnet_routes, and a per-node route listing would drop the node context the
+	// caller needs to interpret the routes it just read.
 }
 
 // TestListNodesDropsPreAuthKeyMaterial feeds a node document that carries the
@@ -283,6 +299,180 @@ func TestCreatePreAuthKeyReturnsSecretOnce(t *testing.T) {
 		"--config", ConfigPath, "preauthkeys", "create", "--user", "3", "--expiration", "15m", "-o", "json",
 	}) {
 		t.Fatalf("argv = %q", last.args)
+	}
+}
+
+// TestSetApprovedRoutesUsesTheNodeResponse asserts the approve path sends one
+// identifier plus one CSV list and returns the node document Headscale prints
+// afterwards, decoded through the same narrow node DTO as a listing. The fixture
+// is the proto snake_case shape of 0.29.5 (`SetApprovedRoutesResponse.Node`
+// marshalled by encoding/json), including the fields this adapter drops.
+func TestSetApprovedRoutesUsesTheNodeResponse(t *testing.T) {
+	const secret = "hskey-auth-ROUTESECRETROUTESECRET"
+	doc := `{
+		"id": 42,
+		"name": "nas-1.tail.example.invalid",
+		"given_name": "nas-1",
+		"user": {"id": 3, "name": "meshmux"},
+		"ip_addresses": ["100.64.0.7"],
+		"approved_routes": ["10.0.0.0/8", "192.168.0.0/24"],
+		"available_routes": ["10.0.0.0/8", "192.168.0.0/24", "172.16.0.0/12"],
+		"subnet_routes": ["10.0.0.0/8", "192.168.0.0/24"],
+		"online": true,
+		"pre_auth_key": {"id": 9, "key": "` + secret + `"},
+		"machine_key": "mkey:aaaa",
+		"node_key": "nodekey:bbbb"
+	}`
+	runner, fake := newTestRunner(t, fakeReply{stdout: doc})
+	node, err := runner.SetApprovedRoutes(context.Background(), 42, []string{"10.0.0.0/8", "192.168.0.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.ID != 42 || node.GivenName != "nas-1" || node.UserID != 3 || !node.Online {
+		t.Fatalf("node = %+v", node)
+	}
+	if want := []string{"10.0.0.0/8", "192.168.0.0/24"}; !reflect.DeepEqual(node.ApprovedRoutes, want) {
+		t.Fatalf("approved routes = %q, want %q", node.ApprovedRoutes, want)
+	}
+	if len(node.AvailableRoutes) != 3 || len(node.SubnetRoutes) != 2 {
+		t.Fatalf("route fields = %+v", node)
+	}
+	if rendered := strings.Join(node.ApprovedRoutes, " "); strings.Contains(rendered, "hskey") || strings.Contains(rendered, "SECRET") {
+		t.Fatalf("node output retained key material: %q", rendered)
+	}
+	last := fake.calls[len(fake.calls)-1]
+	if want := []string{
+		"--config", ConfigPath, "nodes", "approve-routes", "--identifier", "42",
+		"--routes", "10.0.0.0/8,192.168.0.0/24", "-o", "json",
+	}; !reflect.DeepEqual(last.args, want) {
+		t.Fatalf("argv = %q", last.args)
+	}
+}
+
+// TestClearApprovedRoutesSendsTheEmptySuffix asserts clearing is the documented
+// `--routes=` form rather than an empty value in the ordinary flag-plus-value
+// shape, and that the resulting node reports no approved route.
+func TestClearApprovedRoutesSendsTheEmptySuffix(t *testing.T) {
+	doc := `{"id":42,"given_name":"nas-1","approved_routes":[],"available_routes":["10.0.0.0/8"],"subnet_routes":[]}`
+	runner, fake := newTestRunner(t, fakeReply{stdout: doc})
+	node, err := runner.ClearApprovedRoutes(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.ID != 42 || len(node.ApprovedRoutes) != 0 {
+		t.Fatalf("node = %+v", node)
+	}
+	// The advertised route survives the clear: only approval is withdrawn.
+	if want := []string{"10.0.0.0/8"}; !reflect.DeepEqual(node.AvailableRoutes, want) {
+		t.Fatalf("available routes = %q, want %q", node.AvailableRoutes, want)
+	}
+	last := fake.calls[len(fake.calls)-1]
+	if want := []string{
+		"--config", ConfigPath, "nodes", "approve-routes", "--identifier", "42", "--routes=", "-o", "json",
+	}; !reflect.DeepEqual(last.args, want) {
+		t.Fatalf("argv = %q", last.args)
+	}
+}
+
+// TestRouteApprovalRefusesUnsafePrefixes is the adapter half of the route
+// contract. An exit route, a /0 of either family and a prefix with host bits set
+// are refused before any process runs; canonicalisation of the accepted values
+// is the mesh domain's job, not this package's.
+func TestRouteApprovalRefusesUnsafePrefixes(t *testing.T) {
+	cases := []struct {
+		name     string
+		prefixes []string
+		code     string
+	}{
+		{name: "ipv4 exit route", prefixes: []string{"0.0.0.0/0"}, code: CodeRouteInvalid},
+		{name: "ipv6 exit route", prefixes: []string{"::/0"}, code: CodeRouteInvalid},
+		{name: "exit route among subnets", prefixes: []string{"10.0.0.0/8", "0.0.0.0/0"}, code: CodeRouteInvalid},
+		{name: "host bits set", prefixes: []string{"10.0.0.1/8"}, code: CodeRouteInvalid},
+		{name: "ipv6 host bits set", prefixes: []string{"fd00::1/8"}, code: CodeRouteInvalid},
+		{name: "bare address", prefixes: []string{"10.0.0.1"}, code: CodeRouteInvalid},
+		{name: "not a prefix", prefixes: []string{"lan"}, code: CodeRouteInvalid},
+		{name: "two prefixes in one value", prefixes: []string{"10.0.0.0/8,192.168.0.0/24"}, code: CodeRouteInvalid},
+		{name: "empty entry", prefixes: []string{""}, code: CodeRouteInvalid},
+		{name: "flag injection", prefixes: []string{"--identifier"}, code: CodeRouteInvalid},
+		// An empty approval is not a route change: clearing has its own method,
+		// so the caller is told its input is wrong instead of quietly clearing.
+		{name: "empty list", prefixes: nil, code: CodeArgumentInvalid},
+		{name: "empty slice", prefixes: []string{}, code: CodeArgumentInvalid},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeExec{}
+			runner := &CLIRunner{binary: BinaryPath, config: ConfigPath, timeout: commandTimeout, execute: fake.exec}
+			_, err := runner.SetApprovedRoutes(context.Background(), 42, tc.prefixes)
+			if CodeOf(err) != tc.code {
+				t.Fatalf("err = %v, want %s", err, tc.code)
+			}
+			if len(fake.calls) != 0 {
+				t.Fatalf("refused routes still executed %d commands: %+v", len(fake.calls), fake.calls)
+			}
+		})
+	}
+
+	// A zero identifier is refused whatever the route list says.
+	fake := &fakeExec{}
+	runner := &CLIRunner{binary: BinaryPath, config: ConfigPath, timeout: commandTimeout, execute: fake.exec}
+	if _, err := runner.SetApprovedRoutes(context.Background(), 0, []string{"10.0.0.0/8"}); CodeOf(err) != CodeArgumentInvalid {
+		t.Fatalf("zero node id: %v", err)
+	}
+	if _, err := runner.ClearApprovedRoutes(context.Background(), 0); CodeOf(err) != CodeArgumentInvalid {
+		t.Fatalf("zero node id on clear: %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("refused arguments executed %d commands", len(fake.calls))
+	}
+}
+
+// TestSetApprovedRoutesKeepsCallerOrderAndDuplicates asserts the adapter does not
+// rewrite the approved set. Headscale compacts duplicates server-side; doing it
+// here too would hide a caller that built its list wrongly, and the domain is the
+// layer that decides what the desired set is.
+func TestSetApprovedRoutesKeepsCallerOrderAndDuplicates(t *testing.T) {
+	doc := `{"id":42,"approved_routes":["192.168.0.0/24","10.0.0.0/8"]}`
+	runner, fake := newTestRunner(t, fakeReply{stdout: doc})
+	if _, err := runner.SetApprovedRoutes(context.Background(), 42, []string{"192.168.0.0/24", "10.0.0.0/8", "10.0.0.0/8"}); err != nil {
+		t.Fatal(err)
+	}
+	last := fake.calls[len(fake.calls)-1]
+	if want := "192.168.0.0/24,10.0.0.0/8,10.0.0.0/8"; last.args[len(last.args)-3] != want {
+		t.Fatalf("routes value = %q, want %q", last.args[len(last.args)-3], want)
+	}
+}
+
+// TestRouteParseFailureMapping asserts Headscale's own parse refusal becomes
+// HEADSCALE_ROUTE_INVALID rather than a generic command failure, and that the
+// route marker wins over the not-found marker even when the offending value
+// contains the word "not found".
+func TestRouteParseFailureMapping(t *testing.T) {
+	cases := []string{
+		`{"error": "setting approved routes: rpc error: code = Unknown desc = parsing route: parsing prefix(\"not found\"): no '/' in prefix"}`,
+		`{"error": "setting approved routes: rpc error: code = Unknown desc = parsing route: parsing prefix(\"10.0.0.1/8\"): prefix is not masked"}`,
+	}
+	for _, stderr := range cases {
+		fake := &fakeExec{replies: []fakeReply{
+			{stdout: versionJSON(HeadscaleVersion)},
+			{stderr: stderr, err: errors.New("exit status 1")},
+		}}
+		runner := &CLIRunner{binary: BinaryPath, config: ConfigPath, timeout: commandTimeout, execute: fake.exec}
+		_, err := runner.SetApprovedRoutes(context.Background(), 42, []string{"10.0.0.0/8"})
+		if CodeOf(err) != CodeRouteInvalid {
+			t.Fatalf("stderr %q mapped to %q, want %q", stderr, CodeOf(err), CodeRouteInvalid)
+		}
+	}
+}
+
+// TestRouteChangeRefusesUnusableNodeDocument asserts a route change that
+// Headscale answered without a usable node is not reported as a new state.
+func TestRouteChangeRefusesUnusableNodeDocument(t *testing.T) {
+	for _, doc := range []string{`{}`, `{"given_name":"nas-1"}`, `null`, `{"id":42,"expiry":"2026-11-01T00:00:00Z"}`} {
+		runner, _ := newTestRunner(t, fakeReply{stdout: doc})
+		if _, err := runner.ClearApprovedRoutes(context.Background(), 42); CodeOf(err) != CodeOutputInvalid {
+			t.Fatalf("document %q: %v, want %s", doc, err, CodeOutputInvalid)
+		}
 	}
 }
 

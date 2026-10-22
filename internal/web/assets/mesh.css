@@ -64,7 +64,8 @@
   margin: 14px 0 0;
 }
 
-.sub-secret {
+.sub-secret,
+.config-disclosure {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   background: #f3f6f4;
@@ -73,6 +74,14 @@
   padding: 10px 12px;
   overflow-wrap: anywhere;
   word-break: break-all;
+}
+
+.config-disclosure {
+  margin: 14px 0 4px;
+  max-height: 28rem;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
 }
 
 .sub-actions {
@@ -118,6 +127,60 @@
   line-height: 1.8;
   color: #71817b;
   margin: 10px 0 0;
+}
+
+/* Subnet route evidence: three remote columns plus the Hub intent. The wrapper
+   scrolls on narrow screens instead of making the device card overflow. */
+.route-block {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.route-block .panel-heading h4 {
+  font-size: 13px;
+  margin: 0;
+}
+
+.route-table-wrap {
+  overflow-x: auto;
+}
+
+.route-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.route-table th,
+.route-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.route-table th {
+  color: #71817b;
+  font-weight: 600;
+}
+
+.route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.route-actions form {
+  margin: 0;
+}
+
+.route-actions button {
+  margin-top: 0;
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
 }
 
 @media (max-width: 900px) {

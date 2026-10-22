@@ -36,7 +36,7 @@ func meshSubscriberFixture(t *testing.T, s *store, now time.Time) string {
 
 // TestSchemaV6MigrationAddsMeshTablesAndPreservesV5 upgrades a v5 database and
 // checks that the mesh tables appear, the pre-existing rows survive and the
-// future-schema guard moved to 7. The migration must stay additive: a rollback
+// future-schema guard moved to 8. The migration must stay additive: a rollback
 // to the previous binary still reads every schema-5 table.
 func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
@@ -51,7 +51,7 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 
 	// Rebuild the database in its schema-5 shape: the mesh tables do not exist
 	// and the version is 5. All earlier data stays exactly as it was.
-	if _, err = s.db.Exec(`DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; PRAGMA user_version=5;`); err != nil {
+	if _, err = s.db.Exec(`DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; PRAGMA user_version=5;`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -61,8 +61,8 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	if err = s.migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 6 {
-		t.Fatalf("user_version=%d err=%v, want 6", version, err)
+	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 7 {
+		t.Fatalf("user_version=%d err=%v, want 7", version, err)
 	}
 	for _, table := range []string{"mesh_devices", "mesh_enrollment_keys"} {
 		var count int
@@ -85,7 +85,7 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	}
 
 	// The guard moved with the migration.
-	if _, err = s.db.Exec(`PRAGMA user_version=7`); err != nil {
+	if _, err = s.db.Exec(`PRAGMA user_version=8`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {
@@ -106,7 +106,7 @@ func TestSchemaV6MigrationRollsBackWithoutDestroyingV5(t *testing.T) {
 
 	// Simulate a v5 database with a leftover table that collides with the new
 	// schema, so migrateSchema6 must fail after dropping nothing.
-	if _, err = s.db.Exec(`DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; PRAGMA user_version=5;`); err != nil {
+	if _, err = s.db.Exec(`DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; PRAGMA user_version=5;`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.db.Exec(`CREATE TABLE mesh_devices (stale TEXT)`); err != nil {

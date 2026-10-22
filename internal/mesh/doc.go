@@ -31,8 +31,30 @@
 // device was created; it never creates or mutates a Headscale user and runs no
 // CLI command.
 //
-// Subnet route advertisement, approval and online evidence are not modeled in
-// this slice: PurposeSubnetRouter only records the device intent, and the
-// revocation intent records why a device is being removed. See ADR-0004 and
+// Subnet routes (PR-9b-2) are modeled as declarations, not as remote state:
+//   - ParseRoutePrefix / NormalizeRoutePrefix accept one aligned CIDR prefix and
+//     refuse host bits, and ValidateRoutablePrefix refuses exit routes (/0), the
+//     tailnet's own ranges (TailnetIPv4Prefix, TailnetIPv6Prefix — the same
+//     values the installer renders into Headscale), loopback, link-local,
+//     multicast, unspecified, reserved and documentation ranges;
+//   - RouteDesired is MeshMux's intent (advertised → approved, both revocable,
+//     revoked terminal) while RouteObserved is the last reported Headscale
+//     evidence (empty, advertised, approved, served); neither is derived from
+//     the other, so no observation approves a prefix and no approval claims a
+//     prefix is served;
+//   - NormalizeDeclaredPrefixes allows only a subnet_router to pre-declare its
+//     LAN prefixes, canonically and once each.
+//
+// The remote approval call, the Headscale route readback and the Web approval
+// surface stay outside this package: they keep the stable prefix declaration
+// this package validates and apply the state machine defined here.
+//
+// Revision (2026-10-22, PR-9b-2): route modeling landed in route.go. Before
+// this revision the package explicitly did not model subnet route advertisement;
+// it now owns the pure prefix rules and the declared/observed vocabulary, while
+// persistence (schema 7), the approval argv and the Web surface remain outside.
+// The device and enrollment conclusions above are unchanged.
+//
+// Revocation intent records why a device is being removed. See ADR-0004 and
 // ADR-0007 for the decisions and their revision records.
 package mesh

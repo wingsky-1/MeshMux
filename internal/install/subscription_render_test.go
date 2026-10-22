@@ -159,7 +159,7 @@ func TestWebUnitCarriesSubscriptionOrigin(t *testing.T) {
 	unit := files["/etc/systemd/system/meshmux-web.service"]
 	want := "ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080" +
 		" --origin https://console.example.org --subscription-origin https://sub.example.org" +
-		" --data-dir /var/lib/meshmux"
+		" --headscale-origin https://mesh.example.org --data-dir /var/lib/meshmux"
 	if !strings.Contains(unit, want) {
 		t.Fatalf("web unit does not carry the subscription origin:\n%s", unit)
 	}

@@ -4,8 +4,9 @@
 // of the Hub layout. It adds no Go dependency: Headscale's gRPC/protobuf client
 // is not imported, so the Hub keeps its small, auditable dependency set.
 //
-// Scope of this slice (PR-9a-2):
-//   - one narrow Client interface (users, nodes, one-time pre-auth keys);
+// Scope of this package (PR-9a-2, extended by PR-9b-1):
+//   - one narrow Client interface (users, nodes, one-time pre-auth keys, route
+//     approval);
 //   - narrow DTOs that carry only what the mesh domain needs. A node's nested
 //     pre_auth_key block, including its key field, is dropped while decoding,
 //     and the one plaintext pre-auth key returned by CreatePreAuthKey is a
@@ -23,8 +24,15 @@
 //
 // Deliberately absent: preauthkeys list. Headscale prints pre-auth key
 // material in that listing, and MeshMux only needs the key it just minted for
-// one device. Route approval, node rename and user deletion are out of this
-// slice (route approval belongs to a later PR).
+// one device. Also absent: nodes list-routes, because `nodes list` already
+// reports approved, available and subnet routes together with the node they
+// belong to, and node rename and user deletion, which this Hub does not offer.
+//
+// Route approval (PR-9b-1) is a set operation on one node: SetApprovedRoutes
+// replaces the approved list, ClearApprovedRoutes empties it, and both return
+// the node Headscale reports afterwards. The adapter refuses an exit route and a
+// prefix with host bits set before the CLI runs; canonicalising accepted
+// prefixes belongs to the mesh domain, not here.
 //
 // This package performs no Web, SQLite, subscription or installer work. It
 // executes no arbitrary command: the executable path and the argv shapes are
@@ -78,6 +86,12 @@ const (
 	// CodeAlreadyExists: the requested name is taken. Creating the shared user
 	// again is the ordinary case, so the caller resolves it by listing.
 	CodeAlreadyExists = "HEADSCALE_ALREADY_EXISTS"
+	// CodeRouteInvalid: a route prefix is not a usable LAN subnet. The adapter
+	// refuses an unparseable prefix, an exit route (/0) and a prefix with host
+	// bits set before the CLI runs, and Headscale reports its own parse failure
+	// with the same code. Approving an exit route would make one node the
+	// default gateway of the whole tailnet, which is not a MeshMux capability.
+	CodeRouteInvalid = "HEADSCALE_ROUTE_INVALID"
 )
 
 // Error is a stable, log-safe refusal. Code is one of the constants above and
@@ -162,4 +176,13 @@ type Client interface {
 	ExpirePreAuthKey(ctx context.Context, id uint64) error
 	ExpireNode(ctx context.Context, id uint64) error
 	DeleteNode(ctx context.Context, id uint64) error
+	// SetApprovedRoutes replaces the approved route list of one node and
+	// returns the node Headscale reports afterwards. The input is the complete
+	// desired set, not an addition; at least one prefix is required and clearing
+	// has its own method.
+	SetApprovedRoutes(ctx context.Context, id uint64, prefixes []string) (Node, error)
+	// ClearApprovedRoutes removes every approved route of one node and returns
+	// the node Headscale reports afterwards. The node stays registered and keeps
+	// its advertised routes; only approval is withdrawn.
+	ClearApprovedRoutes(ctx context.Context, id uint64) (Node, error)
 }

@@ -252,14 +252,17 @@ type MeshDevice struct {
 }
 
 // DeviceSpec is the creation input. HeadscaleUser is optional and defaults to
-// DefaultHeadscaleUser.
+// DefaultHeadscaleUser. DeclaredRoutes are subnet prefixes pre-declared while a
+// subnet_router device is created; the store writes them as advertised routes
+// with source=device, so the operator does not have to declare them twice.
 type DeviceSpec struct {
-	DisplayName   string
-	Purpose       Purpose
-	Platform      Platform
-	NodeName      string
-	SubscriberID  string
-	HeadscaleUser string
+	DisplayName    string
+	Purpose        Purpose
+	Platform       Platform
+	NodeName       string
+	SubscriberID   string
+	HeadscaleUser  string
+	DeclaredRoutes []string
 }
 
 // NewMeshDevice creates a pending device with a fresh random identity. It
@@ -279,6 +282,12 @@ func NewMeshDevice(spec DeviceSpec) (MeshDevice, error) {
 		return MeshDevice{}, err
 	}
 	if err := ValidateSubscriberBinding(spec.Purpose, spec.SubscriberID); err != nil {
+		return MeshDevice{}, err
+	}
+	// Pre-declared subnet routes are checked here so a malformed prefix refuses
+	// the creation before any row is written. Only a subnet_router may declare
+	// them, and the store persists the canonical form.
+	if _, err := NormalizeDeclaredPrefixes(spec.Purpose, spec.DeclaredRoutes); err != nil {
 		return MeshDevice{}, err
 	}
 	nodeName, err := NormalizeNodeName(spec.NodeName)

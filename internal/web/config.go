@@ -54,6 +54,12 @@ type Config struct {
 	// value moves downloads to their own host; that host then exposes nothing
 	// except the two download routes.
 	SubscriptionOrigin string
+	// HeadscaleOrigin is the exact HTTPS origin of the local Headscale control
+	// plane that a generated Mesh client config uses as control_url. Empty is
+	// allowed so an existing Hub keeps running, but a Mesh configuration is
+	// then refused: the exporter never falls back to the public Tailscale SaaS
+	// control plane. The installer passes the configured Headscale domain.
+	HeadscaleOrigin string
 	// InstallArtifact is populated by the installed CLI runtime. The
 	// development-only meshmux-web binary deliberately leaves it nil.
 	InstallArtifact *InstallArtifact
@@ -89,6 +95,9 @@ func (c Config) Validate(uid int) error {
 	if err := c.validateSubscriptionOrigin(u); err != nil {
 		return err
 	}
+	if err := c.validateHeadscaleOrigin(); err != nil {
+		return err
+	}
 	if c.InstallArtifact != nil {
 		if c.DevHTTP || u.Scheme != "https" {
 			return errors.New("INSTALL_ARTIFACT_INVALID: CLI download and install commands require an HTTPS Hub")
@@ -112,6 +121,23 @@ func (c Config) Validate(uid int) error {
 }
 
 func (c Config) validate() error { return c.Validate(os.Geteuid()) }
+
+// validateHeadscaleOrigin checks the optional Mesh control URL. Empty is valid
+// at startup and makes a Mesh config generation fail with its own stable code;
+// a non-empty value must be one exact HTTPS origin without a path, query,
+// fragment or credentials. The public Tailscale SaaS control plane is never a
+// default and never inferred from this field.
+func (c Config) validateHeadscaleOrigin() error {
+	if c.HeadscaleOrigin == "" {
+		return nil
+	}
+	u, err := url.Parse(c.HeadscaleOrigin)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil ||
+		u.Path != "" || u.RawPath != "" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.ForceQuery {
+		return errors.New("HEADSCALE_ORIGIN_INVALID: provide one exact HTTPS origin without a path")
+	}
+	return nil
+}
 
 // validateSubscriptionOrigin checks the optional dedicated download origin.
 //

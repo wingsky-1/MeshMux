@@ -92,13 +92,14 @@ func (f *fakeHeadscale) ListNodes(context.Context, string) ([]headscale.Node, er
 	return append([]headscale.Node(nil), f.nodes...), nil
 }
 
-func (f *fakeHeadscale) CreatePreAuthKey(context.Context, headscale.PreAuthKeyRequest) (headscale.PreAuthKey, string, error) {
+func (f *fakeHeadscale) CreatePreAuthKey(_ context.Context, req headscale.PreAuthKeyRequest) (headscale.PreAuthKey, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("preauthkeys.create"); err != nil {
 		return headscale.PreAuthKey{}, "", err
 	}
-	return headscale.PreAuthKey{}, "unused-in-web-tests", nil
+	f.nextID++
+	return headscale.PreAuthKey{ID: f.nextID, UserID: req.UserID}, "headscale-preauth-example-once", nil
 }
 
 func (f *fakeHeadscale) ExpirePreAuthKey(_ context.Context, id uint64) error {
@@ -127,6 +128,36 @@ func (f *fakeHeadscale) DeleteNode(_ context.Context, id uint64) error {
 	}
 	f.nodes = kept
 	return nil
+}
+
+func (f *fakeHeadscale) SetApprovedRoutes(_ context.Context, id uint64, prefixes []string) (headscale.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("nodes.approve-routes"); err != nil {
+		return headscale.Node{}, err
+	}
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].ApprovedRoutes = append([]string(nil), prefixes...)
+			return f.nodes[i], nil
+		}
+	}
+	return headscale.Node{}, &headscale.Error{Code: headscale.CodeNotFound}
+}
+
+func (f *fakeHeadscale) ClearApprovedRoutes(_ context.Context, id uint64) (headscale.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("nodes.clear-routes"); err != nil {
+		return headscale.Node{}, err
+	}
+	for i, node := range f.nodes {
+		if node.ID == id {
+			f.nodes[i].ApprovedRoutes = nil
+			return f.nodes[i], nil
+		}
+	}
+	return headscale.Node{}, &headscale.Error{Code: headscale.CodeNotFound}
 }
 
 // meshTestApp returns an initialized, logged-in console with a fake control
@@ -671,11 +702,11 @@ func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
 	// Creating the user again because Headscale raced the list is still success.
 	fake.users = nil
 	fake.failWith["users.create"] = headscale.CodeAlreadyExists
-	if err := b.app.ensureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
+	if _, err := b.app.ensureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
 		t.Fatalf("already-exists user creation failed: %v", err)
 	}
 	// A name other than the shared default is never minted from a form field.
-	if err := b.app.ensureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), codeMeshHeadscaleUserUnknown) {
+	if _, err := b.app.ensureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), codeMeshHeadscaleUserUnknown) {
 		t.Fatalf("an arbitrary headscale user was created: %v", err)
 	}
 	if fake.callsOf("users.create") != 1 {

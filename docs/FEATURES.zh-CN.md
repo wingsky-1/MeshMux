@@ -24,7 +24,7 @@
 | 聚合 | 多 Line 线路选择、命名、标准订阅导出 sing-box / Mihomo | 客户端导入成功，新增 Line 按选择更新配置 |
 | 订阅 | 用户创建、禁用、删除，Token 撤销与 per-Line VLESS UUID 删除分离，精确跨节点凭据撤销 | 旧 URL 不可下载；删除先门禁公开下载，远端部分失败不假完成 |
 | Mesh | Headscale 注册/注销、Mesh-only、独立子网路由及路由批准（9a 已交付设备生命周期：Web 页面 + `mesh_devices`/`mesh_enrollment_keys` + 本地 Headscale CLI 适配器；**子网路由与路由批准属 9b**） | 无代理订阅的 NAS 可以入网并实际路由 |
-| 单 VPN | 设备专属 sing-box 代理 + Mesh 配置，SSID 与远程家庭网段（**属 9c**；9a 只到设备记录与入网 Key，不渲染客户端配置） | 经过 iOS/Android 真机以及两种网络验证 |
+| 单 VPN | 设备专属 sing-box 代理 + Mesh 配置（9c 只覆盖待注册的 proxy_mesh 设备：一次性 Tailscale Endpoint + 代理 selector，无 TUN；标准订阅仍不含 Mesh）；SSID 与远程家庭网段属 #10 | 经过 iOS/Android 真机、家庭 Wi-Fi 与外部网络验证 |
 | 分流 | Web 配置客户端 CN/国际/Tailnet/DNS 与服务端域名/IP/规则集；AI Line→Out 或 Line 直出 | 不存在 Out 不生成无效配置；Out 出错默认不泄漏回退出口 |
 | 基本诊断 | 节点/任务日志、固定错误码、必要的公网端口与协议健康检查 | 出错能辨别主机监听、云安全组、代理握手与 Mesh 问题 |
 | 安全 | 单管理员认证/CSRF/限速；SSH + Web Fail2ban；端口与防火墙一致 | 匿名拒绝；暴力登录和异常来源安全处理 |

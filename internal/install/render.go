@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/mesh"
 )
 
 // CandidateFiles returns deterministic, UNAPPLIED configurations for Phase B.
@@ -72,8 +74,8 @@ trusted_proxies: []
 noise:
   private_key_path: /var/lib/meshmux-headscale/noise_private.key
 prefixes:
-  v4: 100.64.0.0/10
-  v6: fd7a:115c:a1e0::/48
+  v4: %s
+  v6: %s
   allocation: sequential
 database:
   type: sqlite
@@ -115,7 +117,7 @@ logtail:
   enabled: false
 auto_update:
   enabled: false
-`, HeadscaleVersion, c.HeadscaleDomain, c.HeadscaleDomain)
+`, HeadscaleVersion, c.HeadscaleDomain, mesh.TailnetIPv4Prefix, mesh.TailnetIPv6Prefix, c.HeadscaleDomain)
 
 	webUnit := fmt.Sprintf(`[Unit]
 Description=MeshMux Hub Web
@@ -133,7 +135,7 @@ Group=meshmux
 SupplementaryGroups=meshmux-headscale
 StateDirectory=meshmux
 StateDirectoryMode=0700
-ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --subscription-origin https://%s --data-dir /var/lib/meshmux%s
+ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --subscription-origin https://%s --headscale-origin https://%s --data-dir /var/lib/meshmux%s
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -153,7 +155,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, c.ManagementDomain, c.SubscriptionDomain, directCaddyArg(c))
+`, c.ManagementDomain, c.SubscriptionDomain, c.HeadscaleDomain, directCaddyArg(c))
 
 	headscaleUnit := `[Unit]
 Description=MeshMux Headscale coordination and embedded DERP/STUN

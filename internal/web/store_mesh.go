@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -104,9 +105,16 @@ func meshDeviceTx(tx *sql.Tx, deviceID string) (MeshDeviceRecord, error) {
 }
 
 // createMeshDevice persists one pending device. The pure domain constructor
-// validates the purpose×subscriber binding and the canonical node name; the
-// store adds the two facts the domain cannot check without I/O: the subscriber
-// row exists, and the occupied node name is unique.
+// validates the purpose×subscriber binding, the canonical node name and the
+// pre-declared prefixes; the store adds the facts the domain cannot check
+// without I/O: the subscriber row exists, the occupied node name is unique, and
+// no other device already holds a declared prefix.
+//
+// A subnet_router may pre-declare its LAN prefixes. Each one becomes an
+// advertised route with source=device in the same transaction, so a device never
+// exists with a half-written declaration and the operator does not have to
+// declare the same prefixes twice. Nothing is approved here: a pre-declaration is
+// an intent awaiting explicit approval, exactly like a later declaration.
 //
 // Node-name uniqueness is a partial unique index over the statuses that still
 // occupy the name, so revoked, expired and failed devices release it. A missing
@@ -114,6 +122,10 @@ func meshDeviceTx(tx *sql.Tx, deviceID string) (MeshDeviceRecord, error) {
 // foreign key and the purpose CHECK stay enforceable.
 func (s *store) createMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDeviceRecord, error) {
 	device, err := mesh.NewMeshDevice(spec)
+	if err != nil {
+		return MeshDeviceRecord{}, err
+	}
+	prefixes, err := mesh.NormalizeDeclaredPrefixes(device.Purpose, spec.DeclaredRoutes)
 	if err != nil {
 		return MeshDeviceRecord{}, err
 	}
@@ -146,6 +158,24 @@ func (s *store) createMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 			return MeshDeviceRecord{}, meshError(mesh.CodeNodeNameDuplicate, "the node name is already occupied for this headscale user")
 		}
 		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	// Pre-declared prefixes land with the device in one transaction. They are
+	// advertised intents only: approval stays an explicit, separately audited act.
+	for _, prefix := range prefixes {
+		if err = meshRouteConflictTx(tx, prefix, device.ID); err != nil {
+			return MeshDeviceRecord{}, err
+		}
+		if _, err = tx.Exec(`INSERT INTO mesh_routes(device_id, prefix, desired, observed, source, operation_id, created_at, updated_at)
+ VALUES(?,?,'advertised','','device','',?,?)`, device.ID, prefix, now.Unix(), now.Unix()); err != nil {
+			if meshRoutePrefixConflict(err) {
+				return MeshDeviceRecord{}, meshRouteError(codeMeshRouteConflict, "the prefix is already declared by another device")
+			}
+			return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		if err = recordMeshRouteEventTx(tx, device.ID, prefix, routeEventDeclared,
+			"", string(mesh.RouteDesiredAdvertised), "", "", "", now); err != nil {
+			return MeshDeviceRecord{}, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
@@ -466,6 +496,13 @@ func (s *store) requestMeshDeviceRevocation(deviceID, reason string, now time.Ti
 			return MeshDeviceRecord{}, "", meshError(mesh.CodeStatusTransitionInvalid, "the mesh device status changed concurrently")
 		}
 	}
+	// The device and every one of its live prefixes settle in one transaction:
+	// a revoked device must never keep an approved route, and a withdrawn route
+	// keeps its audit event. A repeat intent finds nothing live and changes
+	// nothing.
+	if err = revokeDeviceRoutesTx(tx, deviceID, "", now); err != nil {
+		return MeshDeviceRecord{}, "", err
+	}
 	if err = tx.Commit(); err != nil {
 		return MeshDeviceRecord{}, "", errors.New("DATABASE_UNAVAILABLE")
 	}
@@ -687,6 +724,704 @@ BEGIN
 END;
 PRAGMA user_version=6;
 `, int64(mesh.KeyTTL/time.Second))); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Store-level codes for the subnet route persistence boundary. Domain refusals
+// keep their mesh.Code* value; these describe the storage-only facts the pure
+// domain package does not model: a missing row, a prefix another device already
+// holds, a corrupt row and a prefix Headscale reports without a declaration.
+const (
+	codeMeshRouteConflict  = "MESH_ROUTE_CONFLICT"
+	codeMeshRouteNotFound  = "MESH_ROUTE_NOT_FOUND"
+	codeMeshRouteCorrupt   = "MESH_ROUTE_CORRUPT"
+	codeMeshRouteUntracked = "MESH_ROUTE_UNTRACKED"
+)
+
+// The event kinds of mesh_route_events. Each value is the stable code the audit
+// trail records; MESH_ROUTE_UNTRACKED is the one reconcile appends when
+// Headscale reports a prefix that no device declared. None of them is a state a
+// route row can hold: the row keeps desired and observed, the events keep how
+// they changed.
+const (
+	routeEventDeclared  = "MESH_ROUTE_DECLARED"
+	routeEventApproved  = "MESH_ROUTE_APPROVED"
+	routeEventWithdrawn = "MESH_ROUTE_WITHDRAWN"
+	routeEventRevoked   = "MESH_ROUTE_REVOKED"
+	routeEventObserved  = "MESH_ROUTE_OBSERVED"
+	routeEventUntracked = codeMeshRouteUntracked
+)
+
+// MeshRouteRecord is one stored subnet route declaration plus the last reported
+// evidence. Desired is MeshMux's intent and Observed is what Headscale last
+// reported; the two are stored apart so an observation can never approve a
+// prefix and an approval never claims the prefix is actually served.
+type MeshRouteRecord struct {
+	DeviceID    string             `json:"device_id"`
+	Prefix      string             `json:"prefix"`
+	Desired     mesh.RouteDesired  `json:"desired"`
+	Observed    mesh.RouteObserved `json:"observed,omitempty"`
+	Source      mesh.RouteSource   `json:"source"`
+	OperationID string             `json:"operation_id,omitempty"`
+	CreatedAt   int64              `json:"created_at"`
+	UpdatedAt   int64              `json:"updated_at"`
+}
+
+// meshRouteSelect is the single read projection of one route row. No column is
+// derived: the route state is what was stored.
+const meshRouteSelect = `SELECT device_id, prefix, desired, observed, source, operation_id, created_at, updated_at
+FROM mesh_routes`
+
+// errMeshRouteCorrupt marks a stored row that no longer satisfies the domain
+// rules, so a hand-edited database is never rendered as a valid declaration.
+var errMeshRouteCorrupt = errors.New(codeMeshRouteCorrupt)
+
+func meshRouteError(code, detail string) error {
+	return errors.New(code + ": " + detail)
+}
+
+// meshRouteReadError separates a corrupt stored row from an unavailable
+// database.
+func meshRouteReadError(err error) error {
+	if errors.Is(err, errMeshRouteCorrupt) {
+		return meshRouteError(codeMeshRouteCorrupt, "the stored subnet route record is invalid")
+	}
+	return errors.New("DATABASE_UNAVAILABLE")
+}
+
+func scanMeshRoute(row rowScanner) (MeshRouteRecord, error) {
+	var (
+		record   MeshRouteRecord
+		desired  string
+		observed string
+		source   string
+	)
+	if err := row.Scan(&record.DeviceID, &record.Prefix, &desired, &observed, &source,
+		&record.OperationID, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		return MeshRouteRecord{}, err
+	}
+	record.Desired = mesh.RouteDesired(desired)
+	record.Observed = mesh.RouteObserved(observed)
+	record.Source = mesh.RouteSource(source)
+	// A stored row has to satisfy the same rules the write path applied, so a
+	// hand-edited prefix or state is reported instead of rendered.
+	if err := (mesh.MeshRoute{
+		DeviceID: record.DeviceID,
+		Prefix:   record.Prefix,
+		Desired:  record.Desired,
+		Observed: record.Observed,
+		Source:   record.Source,
+	}).Validate(); err != nil {
+		return MeshRouteRecord{}, errMeshRouteCorrupt
+	}
+	return record, nil
+}
+
+// meshRouteTx loads one route inside the caller's transaction. A missing row is
+// returned as sql.ErrNoRows, because the declaration path treats "not declared
+// yet" as an ordinary case rather than a failure.
+func meshRouteTx(tx *sql.Tx, deviceID, prefix string) (MeshRouteRecord, error) {
+	return scanMeshRoute(tx.QueryRow(meshRouteSelect+` WHERE device_id=? AND prefix=?`, deviceID, prefix))
+}
+
+// getMeshRoute returns one stored declaration.
+func (s *store) getMeshRoute(deviceID, prefix string) (MeshRouteRecord, error) {
+	record, err := scanMeshRoute(s.db.QueryRow(meshRouteSelect+` WHERE device_id=? AND prefix=?`, deviceID, prefix))
+	if errors.Is(err, sql.ErrNoRows) {
+		return MeshRouteRecord{}, meshRouteError(codeMeshRouteNotFound, "the device does not declare this prefix")
+	}
+	if err != nil {
+		return MeshRouteRecord{}, meshRouteReadError(err)
+	}
+	return record, nil
+}
+
+// upsertMeshRoute declares one prefix for one device with desired=advertised.
+// It is the only path that creates a route row, and the only path that revives
+// a revoked one, because reviving a withdrawn prefix is a new declaration and
+// not an ordinary state transition.
+//
+// The declaration is idempotent: declaring an already advertised or approved
+// prefix changes nothing and appends no event. A revoked route is revived to
+// advertised and requires an audit operation id, which the database trigger
+// also enforces.
+//
+// A prefix belongs to one device at a time: another device holding the same
+// prefix in a non-revoked state is MESH_ROUTE_CONFLICT, and the partial unique
+// index refuses it even if the pre-check were bypassed. A revoked device is a
+// tombstone and cannot declare anything.
+func (s *store) upsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSource, operationID string, now time.Time) (MeshRouteRecord, error) {
+	if err := subscription.ValidateID(deviceID); err != nil {
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+	}
+	prefix, err := mesh.NormalizeRoutePrefix(rawPrefix)
+	if err != nil {
+		return MeshRouteRecord{}, err
+	}
+	if err = source.Validate(); err != nil {
+		return MeshRouteRecord{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer tx.Rollback()
+	if err = meshRouteDeviceWritableTx(tx, deviceID); err != nil {
+		return MeshRouteRecord{}, err
+	}
+	if err = meshRouteConflictTx(tx, prefix, deviceID); err != nil {
+		return MeshRouteRecord{}, err
+	}
+
+	existing, err := meshRouteTx(tx, deviceID, prefix)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if _, err = tx.Exec(`INSERT INTO mesh_routes(device_id, prefix, desired, observed, source, operation_id, created_at, updated_at)
+ VALUES(?,?,'advertised','',?,?,?,?)`,
+			deviceID, prefix, string(source), operationID, now.Unix(), now.Unix()); err != nil {
+			if meshRoutePrefixConflict(err) {
+				return MeshRouteRecord{}, meshRouteError(codeMeshRouteConflict, "the prefix is already declared by another device")
+			}
+			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		if err = recordMeshRouteEventTx(tx, deviceID, prefix, routeEventDeclared,
+			"", string(mesh.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
+			return MeshRouteRecord{}, err
+		}
+	case err != nil:
+		return MeshRouteRecord{}, meshRouteReadError(err)
+	case existing.Desired == mesh.RouteDesiredRevoked:
+		if operationID == "" {
+			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "reviving a revoked prefix needs an audit operation id")
+		}
+		if operationID == existing.OperationID {
+			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "reviving a revoked prefix needs a new audit operation id")
+		}
+		// The audit event is written first, because the revival trigger only
+		// accepts a DECLARED event carrying this exact operation id. A failed
+		// update rolls the event back with the transaction.
+		if err = recordMeshRouteEventTx(tx, deviceID, prefix, routeEventDeclared,
+			string(mesh.RouteDesiredRevoked), string(mesh.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
+			return MeshRouteRecord{}, err
+		}
+		res, execErr := tx.Exec(`UPDATE mesh_routes SET desired='advertised', operation_id=?, updated_at=?
+ WHERE device_id=? AND prefix=? AND desired='revoked'`, operationID, now.Unix(), deviceID, prefix)
+		if execErr != nil {
+			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		if affected, _ := res.RowsAffected(); affected != 1 {
+			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
+		}
+	default:
+		// advertised or approved: the declaration already stands. The first
+		// declaration owns the provenance, so source is not rewritten.
+		if err = tx.Commit(); err != nil {
+			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		return existing, nil
+	}
+	if err = tx.Commit(); err != nil {
+		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	return s.getMeshRoute(deviceID, prefix)
+}
+
+// setMeshRouteDesired applies one explicit desired-state change: approval, a
+// withdrawn approval, or a revocation. It is idempotent for a repeated state and
+// refuses to revive a revoked route, which upsertMeshRoute owns as a new
+// declaration.
+//
+// Every real change needs an audit operation id; the row's operation_id becomes
+// that key and one append-only event records the edge. An empty id is refused
+// here and by the database trigger, so no path can change intent unaudited.
+func (s *store) setMeshRouteDesired(deviceID, rawPrefix string, desired mesh.RouteDesired, operationID string, now time.Time) (MeshRouteRecord, error) {
+	if err := subscription.ValidateID(deviceID); err != nil {
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+	}
+	prefix, err := mesh.NormalizeRoutePrefix(rawPrefix)
+	if err != nil {
+		return MeshRouteRecord{}, err
+	}
+	if err = desired.Validate(); err != nil {
+		return MeshRouteRecord{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer tx.Rollback()
+	existing, err := meshRouteTx(tx, deviceID, prefix)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MeshRouteRecord{}, meshRouteError(codeMeshRouteNotFound, "the device does not declare this prefix")
+	}
+	if err != nil {
+		return MeshRouteRecord{}, meshRouteReadError(err)
+	}
+	if existing.Desired == desired {
+		// Idempotent repeat: the first transition owns the audit event.
+		if err = tx.Commit(); err != nil {
+			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		return existing, nil
+	}
+	if existing.Desired == mesh.RouteDesiredRevoked {
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "a revoked prefix is revived by declaring it again")
+	}
+	if !mesh.RouteTransitionAllowed(existing.Desired, desired) {
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the requested route desired-state transition is not allowed")
+	}
+	if operationID == "" {
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "changing the desired route state needs an audit operation id")
+	}
+	res, err := tx.Exec(`UPDATE mesh_routes SET desired=?, operation_id=?, updated_at=?
+ WHERE device_id=? AND prefix=? AND desired=?`,
+		string(desired), operationID, now.Unix(), deviceID, prefix, string(existing.Desired))
+	if err != nil {
+		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	if affected, _ := res.RowsAffected(); affected != 1 {
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
+	}
+	kind := routeEventWithdrawn
+	switch desired {
+	case mesh.RouteDesiredApproved:
+		kind = routeEventApproved
+	case mesh.RouteDesiredRevoked:
+		kind = routeEventRevoked
+	}
+	if err = recordMeshRouteEventTx(tx, deviceID, prefix, kind,
+		string(existing.Desired), string(desired), "", "", operationID, now); err != nil {
+		return MeshRouteRecord{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	return s.getMeshRoute(deviceID, prefix)
+}
+
+// recordMeshRouteObservation stores what one Headscale read reported for one
+// prefix. It never touches desired or the source: an observation is evidence,
+// and evidence never approves a prefix. The row's operation_id becomes the
+// observation's audit key (mesh_routes keeps the most recent audit key), while
+// the intent itself is untouched.
+//
+// A prefix Headscale reports for a device that never declared it is not stored
+// as a route at all. Only a MESH_ROUTE_UNTRACKED audit event is appended, so the
+// operator sees the advertisement without MeshMux silently adopting (or
+// approving) it. The boolean result reports whether the prefix was declared.
+// That path accepts any aligned prefix, including an exit route or the tailnet
+// range: refusing to *record* that a device advertises 0.0.0.0/0 would hide
+// exactly the advertisement an operator has to see. Nothing routable is created.
+//
+// An empty observed value means "Headscale reported nothing". It is stored as
+// such and never reverts desired: a prefix that stops being advertised stays
+// approved in MeshMux's intent until an operator revokes it.
+func (s *store) recordMeshRouteObservation(deviceID, rawPrefix string, observed mesh.RouteObserved, operationID string, now time.Time) (MeshRouteRecord, bool, error) {
+	if err := subscription.ValidateID(deviceID); err != nil {
+		return MeshRouteRecord{}, false, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+	}
+	parsed, err := mesh.ParseRoutePrefix(rawPrefix)
+	if err != nil {
+		return MeshRouteRecord{}, false, err
+	}
+	prefix := parsed.String()
+	if err = observed.Validate(); err != nil {
+		return MeshRouteRecord{}, false, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer tx.Rollback()
+	if err = meshRouteDeviceExists(tx, deviceID); err != nil {
+		return MeshRouteRecord{}, false, err
+	}
+	existing, err := meshRouteTx(tx, deviceID, prefix)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err = recordUntrackedObservationTx(tx, deviceID, prefix, observed, operationID, now); err != nil {
+			return MeshRouteRecord{}, false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+		}
+		return MeshRouteRecord{}, false, nil
+	}
+	if err != nil {
+		return MeshRouteRecord{}, false, meshRouteReadError(err)
+	}
+	if existing.Observed == observed {
+		// Nothing changed: a repeated read appends no event, so the audit trail
+		// stays a record of changes rather than of polls.
+		if err = tx.Commit(); err != nil {
+			return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+		}
+		return existing, true, nil
+	}
+	if _, err = tx.Exec(`UPDATE mesh_routes SET observed=?, operation_id=?, updated_at=? WHERE device_id=? AND prefix=?`,
+		string(observed), operationID, now.Unix(), deviceID, prefix); err != nil {
+		return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+	}
+	if err = recordMeshRouteEventTx(tx, deviceID, prefix, routeEventObserved,
+		string(existing.Desired), string(existing.Desired), string(existing.Observed), string(observed), operationID, now); err != nil {
+		return MeshRouteRecord{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+	}
+	record, err := s.getMeshRoute(deviceID, prefix)
+	if err != nil {
+		return MeshRouteRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+// MeshRouteObservation is one prefix as a Headscale read reported it. A caller
+// that reads a node's routes builds these from the advertised, approved and
+// served lists; the store never derives one list from another.
+type MeshRouteObservation struct {
+	Prefix   string
+	Observed mesh.RouteObserved
+}
+
+// MeshRouteReconcileResult summarises one reconcile pass over a device's
+// reported prefixes. It carries counts, never prefixes, so a log line built from
+// it stays free of network detail.
+type MeshRouteReconcileResult struct {
+	Tracked   int
+	Untracked int
+	Changed   int
+}
+
+// reconcileMeshRoutes records what one Headscale read reported for one device.
+// It is the store half of the reconcile chain: the caller supplies the prefixes
+// and their observed state, and this method decides nothing about intent.
+//
+// The rule it enforces is the one ADR-0004 states: a prefix the device
+// advertises but never declared is only recorded as MESH_ROUTE_UNTRACKED. It is
+// never inserted as a route, never approved, and never promoted to a pending
+// declaration, so a compromised or misconfigured client cannot widen the
+// approved LAN by advertising something new. Approval stays an explicit,
+// separately audited operator act.
+func (s *store) reconcileMeshRoutes(deviceID string, observations []MeshRouteObservation, operationID string, now time.Time) (MeshRouteReconcileResult, error) {
+	var result MeshRouteReconcileResult
+	if err := subscription.ValidateID(deviceID); err != nil {
+		return result, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+	}
+	if err := meshRouteDeviceExists(s.db, deviceID); err != nil {
+		return result, err
+	}
+	before, err := s.listMeshRoutes(deviceID)
+	if err != nil {
+		return result, err
+	}
+	previous := make(map[string]mesh.RouteObserved, len(before))
+	for _, route := range before {
+		previous[route.Prefix] = route.Observed
+	}
+	for _, observation := range observations {
+		record, declared, err := s.recordMeshRouteObservation(deviceID, observation.Prefix, observation.Observed, operationID, now)
+		if err != nil {
+			return result, err
+		}
+		if !declared {
+			result.Untracked++
+			continue
+		}
+		result.Tracked++
+		if was, ok := previous[record.Prefix]; !ok || was != record.Observed {
+			result.Changed++
+		}
+		previous[record.Prefix] = record.Observed
+	}
+	return result, nil
+}
+
+// listMeshRoutes returns every declaration of one device in prefix order,
+// revoked ones included: a withdrawn prefix is history, not a deleted row.
+func (s *store) listMeshRoutes(deviceID string) ([]MeshRouteRecord, error) {
+	if err := subscription.ValidateID(deviceID); err != nil {
+		return nil, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+	}
+	rows, err := s.db.Query(meshRouteSelect+` WHERE device_id=? ORDER BY prefix ASC`, deviceID)
+	if err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer rows.Close()
+	return collectMeshRoutes(rows)
+}
+
+// listMeshRoutesPending returns every declaration still awaiting an explicit
+// approval (desired=advertised) across all devices. It is the read model of the
+// approval queue and performs no Headscale call.
+func (s *store) listMeshRoutesPending() ([]MeshRouteRecord, error) {
+	rows, err := s.db.Query(meshRouteSelect + ` WHERE desired='advertised' ORDER BY device_id ASC, prefix ASC`)
+	if err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer rows.Close()
+	return collectMeshRoutes(rows)
+}
+
+func collectMeshRoutes(rows *sql.Rows) ([]MeshRouteRecord, error) {
+	out := []MeshRouteRecord{}
+	for rows.Next() {
+		record, err := scanMeshRoute(rows)
+		if err != nil {
+			return nil, meshRouteReadError(err)
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	return out, nil
+}
+
+// rowQueryer is the single-row read a store or a transaction both provide, so
+// one helper can run inside or outside an explicit transaction.
+type rowQueryer interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// meshRouteDeviceExists reports MESH_DEVICE_NOT_FOUND for an unknown device.
+func meshRouteDeviceExists(q rowQueryer, deviceID string) error {
+	var status string
+	err := q.QueryRow(`SELECT status FROM mesh_devices WHERE id=?`, deviceID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return meshRouteError(codeMeshDeviceNotFound, "unknown mesh device")
+	}
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	return nil
+}
+
+// meshRouteDeviceWritableTx refuses a device that is on its way out and any
+// purpose other than subnet_router. A revoking device already has every live
+// prefix withdrawn in the revocation transaction, so accepting a new
+// declaration would re-approve a LAN on a device Headscale is removing; a
+// revoked device is a tombstone. A proxy_mesh or mesh_only device is not the
+// router of a LAN, so it cannot declare either.
+func meshRouteDeviceWritableTx(tx *sql.Tx, deviceID string) error {
+	var status, purpose string
+	err := tx.QueryRow(`SELECT status, purpose FROM mesh_devices WHERE id=?`, deviceID).Scan(&status, &purpose)
+	if errors.Is(err, sql.ErrNoRows) {
+		return meshRouteError(codeMeshDeviceNotFound, "unknown mesh device")
+	}
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	switch mesh.Status(status) {
+	case mesh.StatusRevoking:
+		return meshRouteError(mesh.CodeRouteTransitionInvalid, "a device being revoked cannot declare subnet routes")
+	case mesh.StatusRevoked:
+		return meshRouteError(mesh.CodeRouteTransitionInvalid, "a revoked device cannot declare subnet routes")
+	}
+	if mesh.Purpose(purpose) != mesh.PurposeSubnetRouter {
+		return meshRouteError(mesh.CodeRouteDeclarationInvalid, "only a subnet_router device can declare subnet routes")
+	}
+	return nil
+}
+
+// meshRouteConflictTx reports a prefix another device still holds. Revoked rows
+// do not conflict: a withdrawn prefix is free for a new declaration.
+func meshRouteConflictTx(tx *sql.Tx, prefix, deviceID string) error {
+	var other string
+	err := tx.QueryRow(`SELECT device_id FROM mesh_routes
+ WHERE prefix=? AND desired<>'revoked' AND device_id<>?`, prefix, deviceID).Scan(&other)
+	if err == nil {
+		return meshRouteError(codeMeshRouteConflict, "the prefix is already declared by another device")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	return nil
+}
+
+// meshRoutePrefixConflict narrows a UNIQUE failure to the active-prefix index,
+// so a race between two declarations is reported as the domain conflict instead
+// of a generic storage failure.
+func meshRoutePrefixConflict(err error) bool {
+	return uniqueConstraint(err) && strings.Contains(err.Error(), "mesh_routes.prefix")
+}
+
+// recordUntrackedObservationTx appends one MESH_ROUTE_UNTRACKED event for a
+// prefix Headscale reports but no device declared. A repeated read of the same
+// evidence appends nothing, so the audit trail records changes rather than
+// polls. No route row is created: an untracked advertisement is evidence for the
+// operator, never an implicit declaration or approval.
+func recordUntrackedObservationTx(tx *sql.Tx, deviceID, prefix string, observed mesh.RouteObserved, operationID string, now time.Time) error {
+	var last string
+	err := tx.QueryRow(`SELECT to_observed FROM mesh_route_events
+ WHERE device_id=? AND prefix=? AND kind=? ORDER BY id DESC LIMIT 1`,
+		deviceID, prefix, routeEventUntracked).Scan(&last)
+	if err == nil && last == string(observed) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	return recordMeshRouteEventTx(tx, deviceID, prefix, routeEventUntracked,
+		"", "", "", string(observed), operationID, now)
+}
+
+// recordMeshRouteEventTx appends one audit row. The table is append-only at the
+// storage boundary (two triggers refuse UPDATE and DELETE), so this helper is
+// the only writer.
+func recordMeshRouteEventTx(tx *sql.Tx, deviceID, prefix, kind, fromDesired, toDesired, fromObserved, toObserved, operationID string, now time.Time) error {
+	if _, err := tx.Exec(`INSERT INTO mesh_route_events(device_id, prefix, kind, from_desired, to_desired, from_observed, to_observed, operation_id, created_at)
+ VALUES(?,?,?,?,?,?,?,?,?)`,
+		deviceID, prefix, kind, fromDesired, toDesired, fromObserved, toObserved, operationID, now.Unix()); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	return nil
+}
+
+// revokeDeviceRoutesTx withdraws every live route of one device in the caller's
+// transaction. It is the route half of device revocation: the device row, its
+// routes and one audit event per route settle together, so a device can never be
+// revoked while its prefixes stay approved.
+//
+// The operation id is the audit key of the revocation act. The caller passes the
+// one it already logged; when it has none, the store mints one, so the trigger's
+// "no desired change without an audit key" rule always holds.
+func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Time) error {
+	rows, err := tx.Query(`SELECT prefix, desired FROM mesh_routes
+ WHERE device_id=? AND desired<>'revoked' ORDER BY prefix`, deviceID)
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	type liveRoute struct {
+		prefix  string
+		desired string
+	}
+	var live []liveRoute
+	for rows.Next() {
+		var route liveRoute
+		if err := rows.Scan(&route.prefix, &route.desired); err != nil {
+			rows.Close()
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		live = append(live, route)
+	}
+	if err := rows.Close(); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	if err := rows.Err(); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	if operationID == "" {
+		// The revocation act still needs one stable audit key even when the
+		// caller only has a device id; the minted value is returned to the
+		// caller's log line by the handler's own operation id, not this one.
+		minted, err := protocol.NewID()
+		if err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		operationID = minted
+	}
+	for _, route := range live {
+		res, err := tx.Exec(`UPDATE mesh_routes SET desired='revoked', operation_id=?, updated_at=?
+ WHERE device_id=? AND prefix=? AND desired=?`, operationID, now.Unix(), deviceID, route.prefix, route.desired)
+		if err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		if affected, _ := res.RowsAffected(); affected != 1 {
+			return meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
+		}
+		if err := recordMeshRouteEventTx(tx, deviceID, route.prefix, routeEventRevoked,
+			route.desired, string(mesh.RouteDesiredRevoked), "", "", operationID, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateSchema7 adds the subnet route declaration and its append-only audit
+// trail. It is purely additive: no schema-6 table or row is rewritten, and
+// dropping the two new tables returns the file to the schema-6 shape without
+// losing a device or key.
+//
+// The database expresses the rules the store also checks:
+//   - one prefix belongs to at most one device while it is not revoked, via the
+//     partial unique index over prefix;
+//   - a desired-state change needs an audit operation id, and a revoked row can
+//     only come back with a different one, so no unaudited path can approve or
+//     revive a prefix;
+//   - a route is never born revoked: revocation is an audited transition, not an
+//     initial state;
+//   - the audit table is append-only, so the history of an approval cannot be
+//     rewritten after the fact.
+func migrateSchema7(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+CREATE TABLE mesh_routes (
+  device_id TEXT NOT NULL REFERENCES mesh_devices(id) ON DELETE CASCADE,
+  prefix TEXT NOT NULL,
+  desired TEXT NOT NULL CHECK(desired IN ('advertised','approved','revoked')),
+  observed TEXT NOT NULL DEFAULT '' CHECK(observed IN ('','advertised','approved','served')),
+  source TEXT NOT NULL CHECK(source IN ('device','operator')),
+  operation_id TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(device_id, prefix)
+);
+CREATE UNIQUE INDEX mesh_routes_prefix_active
+  ON mesh_routes(prefix)
+  WHERE desired<>'revoked';
+CREATE INDEX mesh_routes_desired ON mesh_routes(desired, device_id);
+CREATE TABLE mesh_route_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('MESH_ROUTE_DECLARED','MESH_ROUTE_APPROVED','MESH_ROUTE_WITHDRAWN','MESH_ROUTE_REVOKED','MESH_ROUTE_OBSERVED','MESH_ROUTE_UNTRACKED')),
+  from_desired TEXT NOT NULL DEFAULT '',
+  to_desired TEXT NOT NULL DEFAULT '',
+  from_observed TEXT NOT NULL DEFAULT '',
+  to_observed TEXT NOT NULL DEFAULT '',
+  operation_id TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX mesh_route_events_device ON mesh_route_events(device_id, id);
+CREATE TRIGGER mesh_route_events_append_only_update
+  BEFORE UPDATE ON mesh_route_events
+BEGIN
+  SELECT RAISE(ABORT, 'MESH_ROUTE_EVENT_IMMUTABLE');
+END;
+CREATE TRIGGER mesh_route_events_append_only_delete
+  BEFORE DELETE ON mesh_route_events
+BEGIN
+  SELECT RAISE(ABORT, 'MESH_ROUTE_EVENT_IMMUTABLE');
+END;
+CREATE TRIGGER mesh_route_insert_not_revoked
+  BEFORE INSERT ON mesh_routes
+  WHEN NEW.desired='revoked'
+BEGIN
+  SELECT RAISE(ABORT, 'MESH_ROUTE_TRANSITION_UNAUDITED');
+END;
+CREATE TRIGGER mesh_route_transition_audited
+  BEFORE UPDATE OF desired ON mesh_routes
+  WHEN NEW.desired<>OLD.desired
+   AND (NEW.operation_id='' OR (OLD.desired='revoked' AND NEW.operation_id=OLD.operation_id))
+BEGIN
+  SELECT RAISE(ABORT, 'MESH_ROUTE_TRANSITION_UNAUDITED');
+END;
+CREATE TRIGGER mesh_route_revoked_revival_audited
+  BEFORE UPDATE OF desired ON mesh_routes
+  WHEN OLD.desired='revoked' AND NEW.desired<>'revoked'
+   AND NOT EXISTS (
+     SELECT 1 FROM mesh_route_events
+     WHERE device_id=OLD.device_id AND prefix=OLD.prefix
+       AND kind='MESH_ROUTE_DECLARED' AND operation_id=NEW.operation_id)
+BEGIN
+  SELECT RAISE(ABORT, 'MESH_ROUTE_REVIVAL_UNTRACKED');
+END;
+PRAGMA user_version=7;
+`); err != nil {
 		return err
 	}
 	return nil

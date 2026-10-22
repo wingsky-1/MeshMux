@@ -89,6 +89,25 @@ PR-9a 分四个切片交付：9a-1 `internal/mesh` 纯领域模型、9a-2 `inter
 - [ ] **未含真机与真实注册**：本 PR 没有真实 tailnet 客户端入网，因此 `registered`、在线状态、Tailnet IP、真实 `nodes delete` 与 Key 消费均未被证明；`confirmMeshEnrollment` 目前只有 store 级单测，尚无 HTTP 消费端点。
 - [ ] **未含 C 级结论**：子网路由发布/批准/readback、路由策略与单 VPN 客户端配置分别属 9b/9c；Mesh 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 中的 Mesh-only 与 NAS 网段项）仍需真机与 #12 阶段验收。
 
+## Issue #9 PR-9b 子网路由批准流与证据归档（B 级）
+
+PR-9b 只交付按前缀的子网路由声明、批准、撤销批准与观测归档；Headscale 的 `nodes approve-routes` / `nodes clear-routes` 由固定本地 CLI 适配器调用，Web 不执行任意命令。本行只登记源码与隔离自动化证据，不构成发行或 C 级验收。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | 创建：`subnet_router` 表单强制至少一个规范 CIDR 前缀，前缀以 `advertised` 声明写入，批准前不产生 approved 意图；非子网路由用途不能声明前缀 | [x] `TestMeshCreateSubnetRouterRequiresPrefix`、`internal/web/store_mesh_routes_test.go` |
+| B | 批准：发送 Headscale 观测到的 approved 集合 ∪ 新前缀；未跟踪的已批准前缀保留并记录 `MESH_ROUTE_UNTRACKED` 审计事件，不静默清除；命令失败或 readback 未确认时行保持 `advertised` 且返回稳定码 `MESH_ROUTE_APPROVAL_UNCONFIRMED` | [x] `TestMeshRouteApproveSendsFullSetAndPreservesUntracked`、`TestMeshRouteApproveReadbackMismatchLeavesAdvertised` |
+| B | 撤销批准：发送差集，差集为空时调用 `ClearApprovedRoutes`；readback 仍含该前缀时不写回 `advertised` | [x] `TestMeshRouteRevokeSendsDifference`、`TestMeshRouteRevokeClearsWhenNothingRemains` |
+| B | 核对：同一 `nodes list` 循环按设备记录 `available`/`approved`/`served` 证据；未声明前缀只记事件，任何通过都不会自动批准；单设备失败报 partial，不隐藏其余设备 | [x] `TestMeshReconcileRecordsRouteEvidence`、`TestReconcileMeshRoutesNeverApprovesUntracked` |
+| B | 设备注销：先 `ClearApprovedRoutes` 再 expire/delete 节点；失败保持 `revoking` 可重试 | [x] `TestMeshRevokeClearsApprovedRoutesBeforeDelete` |
+| B | 页面：设备卡直接渲染 approved/available/served 三列、意图徽标、批准/撤销批准、`operation_id` 与最后观测；页面渲染仍只有 `users list` + `nodes list` 两次只读调用 | [x] `TestMeshPageRenderOnlyReadsControlPlane` 口径不变、`TestMeshRouteApproveSendsFullSetAndPreservesUntracked` |
+| C | 隔离 Debian 13 VM + 真实 NAS/远程客户端：真实 advertise/approve/readback、`served` 与跨网访问 | [ ] 未含：本切片没有真实 tailnet 客户端、NAS 或远程客户端流量；跨网可达必须由后续真机验收证明 |
+
+- [ ] **未含 C 级跨网可达**：三列只证明 Hub 与 Headscale 对路由集合的记录/readback，不证明 ACL、客户端实际接受路由、NAS 网段可达或公网链路；不得据此声称子网路由已端到端可用。
+- [ ] **客户端配置边界**：9c 已实现待注册 proxy_mesh 设备的一次性 sing-box 单 VPN 配置（Tailscale Endpoint + 代理 selector，无 TUN）；标准订阅仍不含 Mesh，SSID、远程家庭网段与真机导入属 #10/后续 C 级验收。本切片（9b）未做 exit-node 批准或批量批准。
+
+NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机的授权、旧身份处置、路由接管与回退设计见 [Mesh 身份迁移](MESH_MIGRATION.zh-CN.md)；9a/9b 的验收结论不变。
+
 ## v1.0.0 必须完成的真实用户闭环
 
 - [ ] Debian 13 新环境可执行 install hub|edge|out，单机 Hub+Line、Hub+Line、Hub+Line+Out 三种拓扑正常，Out 可选。

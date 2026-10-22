@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/mesh"
 )
 
 // jailValue parses a Fail2ban INI the way fail2ban does: "[name]" opens a
@@ -389,6 +391,13 @@ func TestCandidateBoundaries(t *testing.T) {
 	}
 	if !strings.Contains(headscale, "unix_socket_permission: \"0770\"") {
 		t.Fatal("headscale config lost the 0770 socket permission the web group depends on")
+	}
+	// The tailnet ranges come from the mesh domain constants, which also refuse
+	// them as subnet routes: one source of truth for both sides.
+	for _, want := range []string{"  v4: " + mesh.TailnetIPv4Prefix + "\n", "  v6: " + mesh.TailnetIPv6Prefix + "\n"} {
+		if !strings.Contains(headscale, want) {
+			t.Fatalf("headscale prefixes missing %q", strings.TrimSpace(want))
+		}
 	}
 	if strings.Contains(web, "Group=meshmux-headscale") || strings.Contains(web, "ReadWritePaths=/var/lib/meshmux-headscale") {
 		t.Fatal("web unit gained direct access to the Headscale data directory")
