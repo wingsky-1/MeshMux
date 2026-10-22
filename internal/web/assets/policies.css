@@ -1,0 +1,179 @@
+/* Scoped styles for the /policies presentation draft.
+   The palette, type scale and radii are the existing MeshMux console tokens
+   from app.css: green #12644e, muted #71817b, line #e1e8e4, surface #ffffff,
+   page #f5f7f6, panel radius 11px, badge radius 6px.
+   Only layout that app.css does not already provide is added here, following
+   the same conventions as mesh.css / subscribers.css. The draft renders no
+   business buttons, so no control styles are needed beyond what app.css has. */
+
+/* Two-column split of the client and server policy layers; stacks first on
+   mobile (mobile-first: single column is the default, desktop widens). */
+.policy-split {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 22px;
+  align-items: start;
+  margin: 22px 0;
+}
+
+@media (min-width: 901px) {
+  .policy-split {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Out tri-state banner: the panel leans warm when degraded, cool when fine. */
+.out-state {
+  margin-top: 22px;
+}
+
+.out-state.out-degraded {
+  border-color: #f0d5ca;
+  background: linear-gradient(180deg, #fff6f2 0%, #ffffff 46%);
+}
+
+.out-state.out-active {
+  border-color: #dbe9df;
+  background: linear-gradient(180deg, #f4faf5 0%, #ffffff 46%);
+}
+
+/* Policy layer rule list: one row per rule, match + action + state, then the
+   one-line hit note. Wraps on narrow screens instead of overflowing. */
+.policy-rules {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.policy-rules li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.policy-rules li:last-child {
+  border-bottom: 0;
+}
+
+.rule-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rule-line strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #203232;
+  overflow-wrap: anywhere;
+}
+
+.rule-action {
+  font-size: 12px;
+  font-weight: 600;
+  color: #12644e;
+}
+
+.rule-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #71817b;
+}
+
+/* Priority conflict rows. */
+.policy-conflicts {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.policy-conflicts li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conflict-text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #4a5b52;
+  overflow-wrap: anywhere;
+}
+
+/* Fixed hit-explanation chains: 规则 → 动作 → 实际出口 → DNS. */
+.policy-hits {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.hit-card {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.hit-card h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.hit-chain {
+  list-style: none;
+  counter-reset: hit;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.hit-chain li {
+  counter-increment: hit;
+  position: relative;
+  padding: 6px 0 6px 26px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #4a5b52;
+  overflow-wrap: anywhere;
+}
+
+.hit-chain li::before {
+  content: counter(hit);
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 17px;
+  height: 17px;
+  border-radius: 6px;
+  background: #e8f2eb;
+  color: #267253;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hit-stage {
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: 600;
+  color: #63776c;
+}
+
+.hit-stage::after {
+  content: "·";
+  margin-left: 6px;
+  color: #cdd9d2;
+}
+
+/* Mobile loop-prevention note: the same warning tone as app.css .notice but
+   kept inside a panel so it reads as guidance, not an error. */
+.mobile-loop {
+  border-color: #eedfb9;
+  background: #fffdf5;
+}
