@@ -51,7 +51,12 @@ templ MeshPage(p pageData, v meshPageView) {
 								<dt>有效期至</dt><dd>{ v.Disclosure.Expires }</dd>
 								<dt>绑定</dt><dd class="muted">Key 与这台设备记录绑定：一次性、不可复用，注册成功后立即作废。</dd>
 							</dl>
-							<p class="hint">客户端入网方式（Tailscale 客户端或 sing-box 配置生成）尚未实现；当前只完成 Hub 侧记录、Key 签发与取消。</p>
+							if v.Disclosure.Config != "" {
+								<h3>设备专属 sing-box 配置 · 仅显示一次</h3>
+								<p class="hint">这份配置把订阅的代理出站与这台设备的 Tailscale Endpoint 合并在一个文档中；Tailscale 网段由首条路由规则直连，其余流量走代理 selector。配置含一次性 Headscale 入网 Key，只在本次响应中出现，不会写入数据库、URL 或日志。</p>
+								<pre class="config-disclosure">{ v.Disclosure.Config }</pre>
+							}
+							<p class="hint">一次性 Key 与设备配置都只在本次响应中出现；刷新页面或再次打开设备列表不会重放。Mesh-only 与子网路由设备仍使用标准 Tailscale 客户端入网。</p>
 						</section>
 					}
 					<div class="mesh-split">
@@ -100,6 +105,9 @@ templ MeshPage(p pageData, v meshPageView) {
 									}
 								</select>
 								<p class="hint">代理 + Mesh 必须选择一个订阅用户；仅 Mesh 必须留空；子网路由可留空。删除一台设备不会停用整个订阅用户。</p>
+								<label for="mesh_routes">子网前缀（每行一个，子网路由用途必填）</label>
+								<textarea id="mesh_routes" name="declared_prefixes" rows="2" placeholder="192.168.1.0/24&#10;10.0.0.0/8"></textarea>
+								<p class="hint">只创建“已通告、待批准”的声明；批准必须在上方设备卡中单独执行。仅“子网路由”用途可声明，且至少需要一个规范 CIDR 前缀。</p>
 								<button type="submit">创建并签发 Key →</button>
 							</form>
 						</section>
@@ -114,7 +122,7 @@ templ MeshPage(p pageData, v meshPageView) {
 								<dt>注册证据</dt><dd>只来自观测到的 Headscale Node ID；主机名与在线状态不算注册证据。</dd>
 								<dt>在线列</dt><dd>本次页面渲染的 Headscale 快照，不持久化；读取失败显示“未核对”，不会显示成“离线”。</dd>
 								<dt>最后观察</dt><dd>最近一次成功核对写入的时间。</dd>
-								<dt>未实现</dt><dd class="muted">客户端配置/导入说明、子网路由批准（9b）、单 VPN Endpoint 渲染（9c）。</dd>
+								<dt>客户端配置</dt><dd class="muted">代理 + Mesh 设备可在设备卡中生成一次性 sing-box 单 VPN 配置；配置中的 Tailnet 路由走 Tailscale Endpoint，其余流量走代理。SSID、远程家庭网段与真机可用性属于 #10 及 C 级验收，本页不声称已完成。</dd>
 							</dl>
 							if v.UsersNotice != "" {
 								<p class="hint">Headscale 用户读取失败：<code>{ v.UsersNotice }</code></p>
@@ -175,7 +183,104 @@ templ MeshPage(p pageData, v meshPageView) {
 										<dt>注销原因码</dt><dd><code>{ d.RevokeReason }</code></dd>
 									}
 								</dl>
+								if len(d.Claims) > 0 {
+									<div class="route-block">
+										<div class="panel-heading"><h4>待认领的 Headscale 节点</h4><span class="badge">同名 · 未被其他设备占用</span></div>
+										<p class="hint">Headscale 已存在与这台设备同名的节点。认领会把观测到的 Node ID 写入本设备（与核对相同的证据路径）；不会创建新节点，也不会删除或迁移其他设备。</p>
+										<div class="route-table-wrap">
+											<table class="route-table">
+												<thead><tr><th>Node ID</th><th>名称</th><th>用户</th><th>操作</th></tr></thead>
+												<tbody>
+													for _,claim:=range d.Claims {
+														<tr>
+															<td><code>{ claim.NodeID }</code></td>
+															<td><code>{ claim.Name }</code></td>
+															<td>{ claim.UserName }</td>
+															<td>
+																<form method="post" action="/mesh/claim"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><input type="hidden" name="node_id" value={ claim.NodeID }/><button type="submit">认领此节点</button></form>
+															</td>
+														</tr>
+													}
+												</tbody>
+											</table>
+										</div>
+									</div>
+								}
+								<div class="route-block">
+									<div class="panel-heading"><h4>子网路由 · 批准与证据</h4><span class="badge">{ len(d.Routes) } 个前缀</span></div>
+									if len(d.Routes) == 0 {
+										<p class="hint">该设备尚未声明子网前缀。只有“子网路由”用途的设备可以在创建时声明前缀；没有声明就没有可批准的路由。</p>
+									} else {
+										<p class="hint">“已批准 / 已通告 / 已服务”来自本次页面渲染的同一次 <code>nodes list</code> 快照，不持久化；意图、最后观测与 operation_id 来自 Hub 记录。批准只改变 Headscale 的 approved 集合，不表示客户端已实际转发，也不证明跨网可达。</p>
+										<div class="route-table-wrap">
+											<table class="route-table">
+												<thead>
+													<tr><th>前缀</th><th>MeshMux 意图</th><th>已批准 <span class="muted">approved</span></th><th>已通告 <span class="muted">available</span></th><th>已服务 <span class="muted">served</span></th><th>最后观测 / 记录</th><th>operation_id</th><th>操作</th></tr>
+												</thead>
+												<tbody>
+													for _,rt:=range d.Routes {
+														<tr>
+															<td><code>{ rt.Prefix }</code></td>
+															<td><span class={ rt.DesiredClass }>{ rt.DesiredLabel }</span></td>
+															<td>
+																if !rt.RemoteKnown {
+																	<span class="badge">未核对</span>
+																} else if rt.Approved {
+																	<span class="badge accent">是</span>
+																} else {
+																	<span class="muted">—</span>
+																}
+															</td>
+															<td>
+																if !rt.RemoteKnown {
+																	<span class="badge">未核对</span>
+																} else if rt.Available {
+																	<span class="badge accent">是</span>
+																} else {
+																	<span class="muted">—</span>
+																}
+															</td>
+															<td>
+																if !rt.RemoteKnown {
+																	<span class="badge">未核对</span>
+																} else if rt.Served {
+																	<span class="badge accent">是</span>
+																} else {
+																	<span class="muted">—</span>
+																}
+															</td>
+															<td><span class="badge">{ rt.ObservedLabel }</span><br/><span class="muted">{ rt.ObservedAt }</span></td>
+															<td>
+																if rt.OperationID == "" {
+																	<span class="muted">—</span>
+																} else {
+																	<code>{ rt.OperationID }</code>
+																}
+															</td>
+															<td>
+																<div class="route-actions">
+																	if rt.CanApprove {
+																		<form method="post" action="/mesh/routes/approve"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><input type="hidden" name="prefix" value={ rt.Prefix }/><button type="submit">批准</button></form>
+																	}
+																	if rt.CanWithdraw {
+																		<form method="post" action="/mesh/routes/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><input type="hidden" name="prefix" value={ rt.Prefix }/><button class="secondary-button" type="submit">撤销批准</button></form>
+																	}
+																	if !rt.CanApprove && !rt.CanWithdraw {
+																		<span class="muted">—</span>
+																	}
+																</div>
+															</td>
+														</tr>
+													}
+												</tbody>
+											</table>
+										</div>
+									}
+								</div>
 								<div class="sub-actions">
+									if d.CanConfig {
+										<form method="post" action="/mesh/config"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><button type="submit">生成一次性设备配置</button></form>
+									}
 									if d.CanIssue {
 										<form method="post" action="/mesh/rekey"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><button type="submit">重新签发 Key</button></form>
 									}

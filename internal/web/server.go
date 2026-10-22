@@ -131,6 +131,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	app.registerSubscriberRoutes(r)
 	// The mesh device routes own "/mesh" for the same reason.
 	app.registerMeshRoutes(r)
+	// Route approval is a separate, explicit action: the page's read-only
+	// snapshot never moves a prefix to approved on its own.
+	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
+	r.Post("/mesh/routes/revoke", app.mutation(app.meshRouteRevoke, true))
 	for _, page := range navigation {
 		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" {
 			continue

@@ -54,32 +54,9 @@ func (s *store) subscriptionDownload(token string, now time.Time) ([]subscriptio
 	if err != nil {
 		return nil, nil, err
 	}
-	sub, err := getSubscriberTx(tx, subscriberID)
-	if err != nil {
-		return nil, nil, subscriptionStoreError(err)
-	}
-	if sub.State != subscription.StateActive {
-		return nil, nil, errSubscriptionRejected
-	}
-
-	credentials, err := activeCredentialsTx(tx, subscriberID)
+	lines, credentials, err := subscriptionForSubscriberTx(tx, subscriberID, now)
 	if err != nil {
 		return nil, nil, err
-	}
-	if len(credentials) == 0 || len(credentials) > maxSubscriberLines {
-		return nil, nil, errSubscriptionRejected
-	}
-
-	lines := make([]subscription.Line, 0, len(credentials))
-	for _, credential := range credentials {
-		line, err := downloadLineTx(tx, credential.NodeID)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err = lineConvergedTx(tx, line, credential, now); err != nil {
-			return nil, nil, err
-		}
-		lines = append(lines, publicLine(line))
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, nil, errSubscriptionStoreUnavailable

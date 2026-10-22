@@ -99,6 +99,7 @@ func parseConfig(args []string, output io.Writer) (web.Config, error) {
 	flags.StringVar(&c.Listen, "listen", "127.0.0.1:9080", "literal loopback address")
 	flags.StringVar(&c.Origin, "origin", "", "exact public HTTPS origin")
 	flags.StringVar(&c.SubscriptionOrigin, "subscription-origin", "", "exact public HTTPS origin serving only the two fixed subscription download routes; empty keeps the management origin")
+	flags.StringVar(&c.HeadscaleOrigin, "headscale-origin", "", "exact HTTPS origin of the local Headscale control plane used by device Mesh configs; empty refuses Mesh config generation")
 	flags.StringVar(&c.DataDir, "data-dir", "", "private directory owned by service user")
 	flags.BoolVar(&c.DevHTTP, "dev-http", false, "isolated loopback HTTP only; never publish this mode")
 	flags.BoolVar(&c.DirectProxy, "direct-caddy", false, "trust the dedicated client IP header from a directly exposed local Caddy")

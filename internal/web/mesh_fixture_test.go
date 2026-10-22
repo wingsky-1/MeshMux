@@ -29,6 +29,8 @@ type meshFixtureMetadata struct {
 	Users            int    `json:"users"`
 	Devices          int    `json:"devices"`
 	Revoked          int    `json:"revoked"`
+	Routes           int    `json:"routes"`
+	ApprovedRoutes   int    `json:"approved_routes"`
 }
 
 // TestMeshHubFixture is a disposable-Hub fixture, not a normal unit test: it
@@ -214,6 +216,19 @@ func TestMeshHubFixture(t *testing.T) {
 	if !strings.Contains(string(events), "MESH_DEVICE_ENROLLMENT_KEY_ISSUED") {
 		t.Fatal("the fixture event log lacks the key issue audit event")
 	}
+	// Route counts are part of the archived evidence even when this fixture
+	// creates no subnet_router: a zero must be a measured zero, not a missing
+	// field that hides a route the run actually wrote.
+	routes, routeErr := app.store.listMeshRoutes(device.ID)
+	if routeErr != nil {
+		t.Fatal(routeErr)
+	}
+	approvedRoutes := 0
+	for _, route := range routes {
+		if route.Desired == mesh.RouteDesiredApproved {
+			approvedRoutes++
+		}
+	}
 	if err = writePrivateJSON(metadataPath, meshFixtureMetadata{
 		HubOrigin:        testOrigin,
 		HeadscaleBinary:  headscale.BinaryPath,
@@ -222,6 +237,8 @@ func TestMeshHubFixture(t *testing.T) {
 		Users:            len(users),
 		Devices:          1,
 		Revoked:          1,
+		Routes:           len(routes),
+		ApprovedRoutes:   approvedRoutes,
 	}); err != nil {
 		t.Fatal(err)
 	}

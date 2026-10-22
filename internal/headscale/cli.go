@@ -11,7 +11,7 @@ package headscale
 // (HEADSCALE_ARGUMENT_INVALID) instead of probing whatever the installed binary
 // happens to support.
 //
-// Two argv facts of Headscale 0.29.5 that this file encodes:
+// Three argv facts of Headscale 0.29.5 that this file encodes:
 //   - `version` must be the first argument and must not carry --config. Any
 //     other first argument makes the CLI load the server configuration before
 //     the version command runs, so a broken config would hide the version and
@@ -19,12 +19,17 @@ package headscale
 //   - `nodes delete` prompts unless --force is set. A prompt would read the
 //     service's stdin and hang until the deadline, so the Hub passes --force and
 //     replaces the prompt with its own explicit, audited user action.
+//   - `nodes approve-routes --routes=` is the documented way to remove every
+//     approved route. The CLI has no separate clear subcommand, and an empty
+//     value would not survive the ordinary flag-plus-value shape, so clearing is
+//     a literal suffix of its own operation.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -65,15 +70,17 @@ const (
 type operation string
 
 const (
-	opVersion           operation = "version"
-	opUsersList         operation = "users list"
-	opUsersCreate       operation = "users create"
-	opNodesList         operation = "nodes list"
-	opNodesListByUser   operation = "nodes list --user"
-	opNodesExpire       operation = "nodes expire"
-	opNodesDelete       operation = "nodes delete"
-	opPreAuthKeysCreate operation = "preauthkeys create"
-	opPreAuthKeysExpire operation = "preauthkeys expire"
+	opVersion            operation = "version"
+	opUsersList          operation = "users list"
+	opUsersCreate        operation = "users create"
+	opNodesList          operation = "nodes list"
+	opNodesListByUser    operation = "nodes list --user"
+	opNodesExpire        operation = "nodes expire"
+	opNodesDelete        operation = "nodes delete"
+	opNodesApproveRoutes operation = "nodes approve-routes"
+	opNodesClearRoutes   operation = "nodes approve-routes --routes="
+	opPreAuthKeysCreate  operation = "preauthkeys create"
+	opPreAuthKeysExpire  operation = "preauthkeys expire"
 )
 
 // commandSpec is one fixed argv shape: prefix, then one flag per caller value
@@ -90,17 +97,22 @@ type commandSpec struct {
 
 // commandTable is the complete argv vocabulary. It deliberately has no
 // preauthkeys list entry: that listing prints key material, and the Hub only
-// needs the key it minted for one device.
+// needs the key it minted for one device. It also has no nodes list-routes
+// entry: `nodes list` already reports approved, available and subnet routes for
+// every node, and a per-node route listing would drop the node context the
+// caller needs anyway.
 var commandTable = map[operation]commandSpec{
-	opVersion:           {prefix: []string{"version"}},
-	opUsersList:         {prefix: []string{"users", "list"}},
-	opUsersCreate:       {prefix: []string{"users", "create"}, flagFor: []string{""}},
-	opNodesList:         {prefix: []string{"nodes", "list"}},
-	opNodesListByUser:   {prefix: []string{"nodes", "list"}, flagFor: []string{"--user"}},
-	opNodesExpire:       {prefix: []string{"nodes", "expire"}, flagFor: []string{"--identifier"}},
-	opNodesDelete:       {prefix: []string{"nodes", "delete"}, flagFor: []string{"--identifier"}, suffix: []string{"--force"}},
-	opPreAuthKeysCreate: {prefix: []string{"preauthkeys", "create"}, flagFor: []string{"--user", "--expiration"}},
-	opPreAuthKeysExpire: {prefix: []string{"preauthkeys", "expire"}, flagFor: []string{"--id"}},
+	opVersion:            {prefix: []string{"version"}},
+	opUsersList:          {prefix: []string{"users", "list"}},
+	opUsersCreate:        {prefix: []string{"users", "create"}, flagFor: []string{""}},
+	opNodesList:          {prefix: []string{"nodes", "list"}},
+	opNodesListByUser:    {prefix: []string{"nodes", "list"}, flagFor: []string{"--user"}},
+	opNodesExpire:        {prefix: []string{"nodes", "expire"}, flagFor: []string{"--identifier"}},
+	opNodesDelete:        {prefix: []string{"nodes", "delete"}, flagFor: []string{"--identifier"}, suffix: []string{"--force"}},
+	opNodesApproveRoutes: {prefix: []string{"nodes", "approve-routes"}, flagFor: []string{"--identifier", "--routes"}},
+	opNodesClearRoutes:   {prefix: []string{"nodes", "approve-routes"}, flagFor: []string{"--identifier"}, suffix: []string{"--routes="}},
+	opPreAuthKeysCreate:  {prefix: []string{"preauthkeys", "create"}, flagFor: []string{"--user", "--expiration"}},
+	opPreAuthKeysExpire:  {prefix: []string{"preauthkeys", "expire"}, flagFor: []string{"--id"}},
 }
 
 // commandEnv is the exact environment of the child. It is not inherited: an
@@ -299,6 +311,55 @@ func validateID(id uint64) error {
 	return nil
 }
 
+// validateRoutePrefix is the adapter's half of the route contract: three shapes
+// are refused here rather than sent to Headscale, because each one would change
+// what the whole tailnet routes.
+//   - an unparseable value is not a prefix at all;
+//   - a /0 prefix is an exit route (0.0.0.0/0 or ::/0), which would make this
+//     node the default gateway for every peer. MeshMux approves LAN subnets, not
+//     exit nodes;
+//   - a prefix with host bits set (10.0.0.1/8) is not the network it claims to
+//     be. Accepting it would approve a different range than the caller read.
+//
+// Canonicalisation of accepted prefixes is the domain's job (the mesh layer
+// compares advertised, approved and configured routes); this function only
+// refuses. A comma is refused implicitly: no prefix parses with one, and the
+// joined value is a CSV list for the CLI's StringSlice flag.
+func validateRoutePrefix(raw string) error {
+	prefix, err := netip.ParsePrefix(raw)
+	if err != nil {
+		return failure(CodeRouteInvalid)
+	}
+	if prefix.Bits() == 0 {
+		return failure(CodeRouteInvalid)
+	}
+	if prefix != prefix.Masked() {
+		return failure(CodeRouteInvalid)
+	}
+	return nil
+}
+
+// joinRoutePrefixes turns validated prefixes into the single comma-separated
+// argv value Headscale's --routes flag expects. Duplicates are preserved: the
+// domain decides whether the set it asked for is the set it wants, and silently
+// rewriting the list here would hide a caller bug.
+func joinRoutePrefixes(prefixes []string) (string, error) {
+	if len(prefixes) == 0 {
+		// An empty approval is not a route change. Clearing has its own
+		// operation, so a caller that meant "remove everything" is told so
+		// instead of silently sending an empty list.
+		return "", failure(CodeArgumentInvalid)
+	}
+	joined := make([]string, 0, len(prefixes))
+	for _, raw := range prefixes {
+		if err := validateRoutePrefix(raw); err != nil {
+			return "", err
+		}
+		joined = append(joined, raw)
+	}
+	return strings.Join(joined, ","), nil
+}
+
 // ListUsers returns every Headscale user. The result is unfiltered: the caller
 // resolves the shared default user by name and does not rely on the ordering.
 func (c *CLIRunner) ListUsers(ctx context.Context) ([]User, error) {
@@ -443,6 +504,52 @@ func (c *CLIRunner) DeleteNode(ctx context.Context, id uint64) error {
 		return failure(CodeOutputInvalid)
 	}
 	return nil
+}
+
+// SetApprovedRoutes replaces the approved route list of one node. Headscale's
+// SetApprovedRoutes is a set operation, so this is not additive: the caller
+// passes the complete list it wants approved. An empty list is refused because
+// clearing is ClearApprovedRoutes, and a caller that reached here with nothing
+// has a bug the adapter should not hide.
+func (c *CLIRunner) SetApprovedRoutes(ctx context.Context, id uint64, prefixes []string) (Node, error) {
+	if err := validateID(id); err != nil {
+		return Node{}, err
+	}
+	joined, err := joinRoutePrefixes(prefixes)
+	if err != nil {
+		return Node{}, err
+	}
+	out, err := c.run(ctx, opNodesApproveRoutes, strconv.FormatUint(id, 10), joined)
+	if err != nil {
+		return Node{}, err
+	}
+	return decodeNode(out)
+}
+
+// ClearApprovedRoutes withdraws every approved route of one node. The node stays
+// registered and keeps advertising its routes, so this is the reversible half of
+// a route change: nothing is deleted and re-approval restores routing.
+func (c *CLIRunner) ClearApprovedRoutes(ctx context.Context, id uint64) (Node, error) {
+	if err := validateID(id); err != nil {
+		return Node{}, err
+	}
+	out, err := c.run(ctx, opNodesClearRoutes, strconv.FormatUint(id, 10))
+	if err != nil {
+		return Node{}, err
+	}
+	return decodeNode(out)
+}
+
+// decodeNode reads the single-node document Headscale prints after a route
+// change. It reuses nodeJSON so the route fields have exactly one shape in this
+// package, and it requires an id: a document without one is not the node the
+// caller asked about, so it must not be reported as the new state.
+func decodeNode(out []byte) (Node, error) {
+	var decoded nodeJSON
+	if err := decodeOutput(out, &decoded); err != nil {
+		return Node{}, err
+	}
+	return decoded.toNode()
 }
 
 // userJSON is the narrow view of one Headscale user. Unknown fields, including
@@ -652,6 +759,12 @@ func classifyFailure(ctx, commandCtx context.Context, err error, stdout, stderr 
 		// The dial succeeded and the RPC itself ran out of time: the service is
 		// reachable but did not answer.
 		return failure(CodeTimeout)
+	case strings.Contains(diagnostic, "parsing route"):
+		// Headscale's own wording when a route is not a prefix: "parsing
+		// route: <value>: netip.ParsePrefix(...)". It is a caller mistake, not a
+		// command failure, and it is mapped before the not-found branch so a
+		// value that happens to contain "not found" still reports the route.
+		return failure(CodeRouteInvalid)
 	case strings.Contains(diagnostic, "notfound"),
 		strings.Contains(diagnostic, "not found"),
 		strings.Contains(diagnostic, "no longer exists"):

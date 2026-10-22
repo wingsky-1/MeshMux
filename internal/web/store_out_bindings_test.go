@@ -570,7 +570,7 @@ func TestOutBindingPreviewFanOutCountsOnce(t *testing.T) {
 
 // TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4 simulates a schema-4
 // database, upgrades it, checks the additive table and verifies that the
-// future-schema guard now rejects v6.
+// future-schema guard now rejects v8.
 func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	line := pairedStoreNode(t, s, "edge", now)
@@ -583,7 +583,7 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 
 	// Rebuild the database in its schema-4 shape: the Out binding and mesh
 	// tables do not exist yet and the version is 4.
-	if _, err = s.db.Exec(`DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; PRAGMA user_version=4;`); err != nil {
+	if _, err = s.db.Exec(`DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; PRAGMA user_version=4;`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -593,8 +593,8 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	if err = s.migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 6 {
-		t.Fatalf("user_version=%d err=%v, want 6", version, err)
+	if err = s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 7 {
+		t.Fatalf("user_version=%d err=%v, want 7", version, err)
 	}
 	var tables int
 	if err = s.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='out_bindings'`).Scan(&tables); err != nil || tables != 1 {
@@ -610,7 +610,7 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	}
 
 	// The schema guard moved with the migration.
-	if _, err = s.db.Exec(`PRAGMA user_version=7`); err != nil {
+	if _, err = s.db.Exec(`PRAGMA user_version=8`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {
