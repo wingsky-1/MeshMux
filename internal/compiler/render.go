@@ -55,6 +55,10 @@ func renderSingBox(defaultAction Action, rules []Rule, pins RuleSetPins) ([]byte
 		}
 		entry := map[string]any{"outbound": outbound}
 		switch {
+		case len(rule.Match.SSIDs) > 0:
+			// Verified against sing-box 1.14.3: route/rule/rule_item_wifi_ssid.go
+			// and `sing-box check` accept wifi_ssid.
+			entry["wifi_ssid"] = rule.Match.SSIDs
 		case len(rule.Match.Domains) > 0:
 			entry["domain"] = rule.Match.Domains
 		case len(rule.Match.DomainSuffixes) > 0:
@@ -98,6 +102,11 @@ func RenderMihomo(policy ClientPolicy, pins RuleSetPins) ([]byte, error) {
 		action, ok := mihomoTags[rule.Action]
 		if !ok {
 			return nil, errors.New(CodeRenderUnsupported + ": Mihomo cannot express the Tailscale endpoint action")
+		}
+		if len(rule.Match.SSIDs) > 0 {
+			// Mihomo 1.19.32 rules/parser.go has no SSID rule type; emitting a
+			// guess would silently change the policy.
+			return nil, errors.New(CodeRenderUnsupported + ": Mihomo cannot express an SSID matcher")
 		}
 		lines = append(lines, mihomoRuleLines(rule.Match, action)...)
 	}
