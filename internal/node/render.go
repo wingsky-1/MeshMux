@@ -15,6 +15,7 @@ type singBoxConfig struct {
 	Log       singBoxLog        `json:"log"`
 	Inbounds  []singBoxInbound  `json:"inbounds"`
 	Outbounds []singBoxOutbound `json:"outbounds"`
+	Route     json.RawMessage   `json:"route,omitempty"`
 }
 
 type singBoxLog struct {
@@ -42,6 +43,7 @@ type singBoxConfigV2 struct {
 	Log       singBoxLog         `json:"log"`
 	Inbounds  []singBoxInboundV2 `json:"inbounds"`
 	Outbounds []singBoxOutbound  `json:"outbounds"`
+	Route     json.RawMessage    `json:"route,omitempty"`
 }
 
 type singBoxInboundV2 struct {
@@ -103,11 +105,31 @@ const vlessFlow = "xtls-rprx-vision"
 // they are never written to a public response, a subscription artifact or a
 // generic log line.
 func CompileCandidate(c Candidate) ([]byte, error) {
+	return compileCandidate(c, nil, false)
+}
+
+// CompileCandidateWithRoute renders a Line candidate with the route fragment
+// already produced by compiler.RenderServerRoute and the resolved Out fact.
+// The fragment crosses as JSON because node must not import compiler: the
+// subscription acceptance test imports node, which would close a test cycle.
+// The caller must resolve the policy first; a fragment that references the
+// "out" tag while no Out is configured is refused with OUT_BINDING_INVALID,
+// never rendered as direct. The fragment references "out" but does not create
+// that outbound: the Out access path owns its endpoint and credential.
+func CompileCandidateWithRoute(c Candidate, route json.RawMessage, outConfigured bool) ([]byte, error) {
+	return compileCandidate(c, route, outConfigured)
+}
+
+func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
+	route, err := compileServerRoute(route, outConfigured)
+	if err != nil {
+		return nil, err
+	}
 	if c.Reality != nil {
-		return compileRealityCandidate(c)
+		return compileRealityCandidate(c, route)
 	}
 	config := singBoxConfig{
 		Log: singBoxLog{Disabled: true},
@@ -119,6 +141,7 @@ func CompileCandidate(c Candidate) ([]byte, error) {
 			Users:      []json.RawMessage{},
 		}},
 		Outbounds: []singBoxOutbound{{Type: "direct", Tag: "direct"}},
+		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -127,9 +150,34 @@ func CompileCandidate(c Candidate) ([]byte, error) {
 	return out, nil
 }
 
+// compileServerRoute embeds the route fragment; empty renders no route block.
+// A fragment that selects "out" is refused unless an Out is configured.
+func compileServerRoute(fragment json.RawMessage, outConfigured bool) (json.RawMessage, error) {
+	if len(fragment) == 0 {
+		return nil, nil
+	}
+	var route struct {
+		Rules []struct {
+			Outbound string `json:"outbound"`
+		} `json:"rules"`
+		Final string `json:"final"`
+	}
+	if err := json.Unmarshal(fragment, &route); err != nil {
+		return nil, errors.New("CANDIDATE_RENDER_FAILED")
+	}
+	needsOut := route.Final == "out"
+	for _, rule := range route.Rules {
+		needsOut = needsOut || rule.Outbound == "out"
+	}
+	if needsOut && !outConfigured {
+		return nil, errors.New("OUT_BINDING_INVALID: the route references an Out that is not configured")
+	}
+	return fragment, nil
+}
+
 // compileRealityCandidate renders the native edge inbound with the REALITY
 // listener and the real credential users.
-func compileRealityCandidate(c Candidate) ([]byte, error) {
+func compileRealityCandidate(c Candidate, route json.RawMessage) ([]byte, error) {
 	config := singBoxConfigV2{
 		Log: singBoxLog{Disabled: true},
 		Inbounds: []singBoxInboundV2{{
@@ -153,6 +201,7 @@ func compileRealityCandidate(c Candidate) ([]byte, error) {
 			Users: renderUsers(c.Users),
 		}},
 		Outbounds: []singBoxOutbound{{Type: "direct", Tag: "direct"}},
+		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
