@@ -55,6 +55,12 @@ templ MeshPage(p pageData, v meshPageView) {
 								<h3>设备专属 sing-box 配置 · 仅显示一次</h3>
 								<p class="hint">这份配置把订阅的代理出站与这台设备的 Tailscale Endpoint 合并在一个文档中；Tailscale 网段由首条路由规则直连，其余流量走代理 selector。配置含一次性 Headscale 入网 Key，只在本次响应中出现，不会写入数据库、URL 或日志。</p>
 								<pre class="config-disclosure">{ v.Disclosure.Config }</pre>
+							} else if v.Disclosure.JoinCommand != "" {
+								<h3>标准 Tailscale 入网命令</h3>
+								<p class="hint">Mesh-only 与子网路由设备使用现成 Tailscale 客户端入网：把上方 Key 填入对应位置后执行，15 分钟内有效。子网路由设备入网时需带上已声明的前缀，批准仍需在设备列表中单独确认。</p>
+								<pre class="sub-secret">{ v.Disclosure.JoinCommand }</pre>
+							} else {
+								<p class="hint">未配置 Headscale 控制面地址，无法给出标准入网命令；请管理员配置启动参数 --headscale-origin 后重新签发。</p>
 							}
 							<p class="hint">一次性 Key 与设备配置都只在本次响应中出现；刷新页面或再次打开设备列表不会重放。Mesh-only 与子网路由设备仍使用标准 Tailscale 客户端入网。</p>
 						</section>

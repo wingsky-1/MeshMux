@@ -76,6 +76,13 @@ type meshKeyDisclosure struct {
 	Secret  string
 	Expires string
 	Config  string
+	// JoinCommand is the standard Tailscale join command for devices without
+	// a generated sing-box config (mesh-only / subnet-router). It never
+	// embeds the secret: the key stays in its own single <pre> so the
+	// exactly-once assertion keeps holding. Empty when the control-plane
+	// origin is not configured; LoginConfigured tells the two cases apart.
+	JoinCommand     string
+	LoginConfigured bool
 }
 
 // meshDeviceView is the complete read projection of one device. It carries no
@@ -981,7 +988,25 @@ func (app *Server) renderMesh(w http.ResponseWriter, r *http.Request, sess sessi
 }
 
 func (app *Server) meshDisclosure(record MeshDeviceRecord, secret string, expires time.Time) *meshKeyDisclosure {
-	return &meshKeyDisclosure{Device: record.DisplayName, Secret: secret, Expires: expires.UTC().Format("2006-01-02 15:04:05 UTC")}
+	d := &meshKeyDisclosure{Device: record.DisplayName, Secret: secret, Expires: expires.UTC().Format("2006-01-02 15:04:05 UTC")}
+	d.LoginConfigured = app.cfg.HeadscaleOrigin != ""
+	if !d.LoginConfigured {
+		return d
+	}
+	cmd := "tailscale up --login-server=" + app.cfg.HeadscaleOrigin + " --auth-key=<上方 Key>"
+	if routes, err := app.store.listMeshRoutes(record.ID); err == nil {
+		var advertised []string
+		for _, rt := range routes {
+			if rt.Desired == mesh.RouteDesiredAdvertised || rt.Desired == mesh.RouteDesiredApproved {
+				advertised = append(advertised, rt.Prefix)
+			}
+		}
+		if len(advertised) > 0 {
+			cmd += " --advertise-routes=" + strings.Join(advertised, ",")
+		}
+	}
+	d.JoinCommand = cmd
+	return d
 }
 
 // meshViewModel builds the read projection. It writes nothing: the live

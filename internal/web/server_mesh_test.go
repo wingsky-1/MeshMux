@@ -343,6 +343,42 @@ func TestMeshCreateShowsKeyOnceAndNeverLeaksIt(t *testing.T) {
 	}
 }
 
+// TestMeshOnlyDisclosureShowsStandardJoinCommand proves a mesh-only device gets
+// a concrete Tailscale join command (login-server + auth-key placeholder +
+// no invented routes), while the secret itself still appears exactly once.
+func TestMeshOnlyDisclosureShowsStandardJoinCommand(t *testing.T) {
+	app, b, _, _ := meshTestApp(t)
+	app.cfg.HeadscaleOrigin = "https://headscale.example.invalid"
+
+	w := b.post("/mesh", url.Values{"display_name": {"carol-nas"}, "purpose": {"mesh_only"}, "platform": {"linux"}, "subscriber_id": {""}})
+	requireStatus(t, w, http.StatusOK)
+	body := w.Body.String()
+	if !strings.Contains(body, "tailscale up --login-server=https://headscale.example.invalid --auth-key=") {
+		t.Fatalf("standard join command missing: %.600s", body)
+	}
+	if strings.Contains(body, "--advertise-routes=") {
+		t.Fatal("mesh-only join command must not advertise routes")
+	}
+}
+
+// TestMeshDisclosureWithoutOriginAsksForConfiguration proves the page says plainly
+// that the join command needs --headscale-origin instead of inventing a control
+// plane (never the SaaS default).
+func TestMeshDisclosureWithoutOriginAsksForConfiguration(t *testing.T) {
+	app, b, _, _ := meshTestApp(t)
+	app.cfg.HeadscaleOrigin = ""
+
+	w := b.post("/mesh", url.Values{"display_name": {"dave-phone"}, "purpose": {"mesh_only"}, "platform": {"android"}, "subscriber_id": {""}})
+	requireStatus(t, w, http.StatusOK)
+	body := w.Body.String()
+	if !strings.Contains(body, "--headscale-origin") {
+		t.Fatalf("missing-origin hint absent: %.600s", body)
+	}
+	if strings.Contains(body, "controlplane.tailscale.com") {
+		t.Fatal("must never fall back to the SaaS control plane")
+	}
+}
+
 // TestMeshReconcilePersistsOnlyOnExplicitAction proves a page render is not a
 // reconciliation: the observation timestamp moves only when the operator asks.
 func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
