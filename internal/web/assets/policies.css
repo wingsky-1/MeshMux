@@ -1,10 +1,10 @@
-/* Scoped styles for the /policies presentation draft.
+/* Scoped styles for the /policies view.
    The palette, type scale and radii are the existing MeshMux console tokens
    from app.css: green #12644e, muted #71817b, line #e1e8e4, surface #ffffff,
    page #f5f7f6, panel radius 11px, badge radius 6px.
    Only layout that app.css does not already provide is added here, following
-   the same conventions as mesh.css / subscribers.css. The draft renders no
-   business buttons, so no control styles are needed beyond what app.css has. */
+   the same conventions as mesh.css / subscribers.css. The only control is the
+   read-only explain query, which reuses the app.css input and button styles. */
 
 /* Two-column split of the client and server policy layers; stacks first on
    mobile (mobile-first: single column is the default, desktop widens). */
@@ -105,7 +105,16 @@
   overflow-wrap: anywhere;
 }
 
-/* Fixed hit-explanation chains: 规则 → 动作 → 实际出口 → DNS. */
+/* Explain query: a plain GET form; the chain below is the only output. */
+.policy-explain {
+  margin: 6px 0 4px;
+}
+
+.policy-explain button {
+  margin-top: 12px;
+}
+
+/* Hit-explanation chains: 规则 → 动作 → 实际出口 → DNS. */
 .policy-hits {
   display: grid;
   gap: 14px;

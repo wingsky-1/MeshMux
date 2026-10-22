@@ -4,9 +4,9 @@ package web
 // two-layer policy view (docs/UX.zh-CN.md 路由策略视图): the client layer on
 // the device and the server layer on the Line.
 //
-// The server fills the snapshot from read-only mesh data; saving, persistence
-// and publication are 10d, so the page never renders a control that clicks
-// without action.
+// The server fills the snapshot from read-only mesh data; only the explain
+// query is actionable here. Saving, persistence and publication are 10d, so
+// the page never renders a control that clicks without action.
 templ PoliciesPage(p pageData, v policyPageView) {
 	@Document(p.Title) {
 		<a class="skip" href="#main">跳到内容</a>
@@ -103,20 +103,32 @@ templ PoliciesPage(p pageData, v policyPageView) {
 							<p class="hint">调整顺序或合并条件后重新校验；已启用的规则停用后，命中它的流量回到该层兜底。</p>
 						</section>
 						<section class="panel">
-							<div class="panel-heading"><h2>命中说明</h2><span class="badge">后续接入</span></div>
-							<p class="muted">快照只展示当前生效的策略意图；命中查询在后续分支接入，本页不猜测任何结果。</p>
-							<div class="policy-hits">
-								for _,h:=range v.Hits {
-									<div class="hit-card">
-										<h3>{ h.Title }</h3>
-										<ol class="hit-chain">
-											for _,s:=range h.Steps {
-												<li><span class="hit-stage">{ s.Stage }</span>{ s.Value }</li>
+							<div class="panel-heading"><h2>命中说明</h2><span class="badge">只读查询</span></div>
+							<p class="muted">输入域名或 IP，按“规则 → 动作 → 实际出口 → DNS”四段链展示第一条命中的客户端规则；未命中任何规则时展示兜底。geo 与远端 ruleset 需要已锁定的数据，本页不猜测结果。</p>
+							<form class="policy-explain" method="get" action="/policies/explain">
+								<label for="policy_target">目标域名或 IP</label>
+								<input id="policy_target" name="target" type="text" maxlength="253" value={ v.Target } placeholder="news.example.invalid"/>
+								<button type="submit">查询命中链</button>
+							</form>
+							if len(v.Hits) == 0 {
+								<p class="muted">尚未查询；这里不会展示编造的命中结果。</p>
+							} else {
+								<div class="policy-hits">
+									for _,h:=range v.Hits {
+										<div class="hit-card">
+											<h3>{ h.Title }</h3>
+											<ol class="hit-chain">
+												for _,s:=range h.Steps {
+													<li><span class="hit-stage">{ s.Stage }</span>{ s.Value }</li>
+												}
+											</ol>
+											if h.Note != "" {
+												<p class="hint">{ h.Note }</p>
 											}
-										</ol>
-									</div>
-								}
-							</div>
+										</div>
+									}
+								</div>
+							}
 						</section>
 					</div>
 
