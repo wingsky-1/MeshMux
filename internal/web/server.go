@@ -155,12 +155,16 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// them with the pinned kernels and store one immutable candidate revision
 	// per Line. It is never a bare render-to-response.
 	r.Post("/policies/publish", jsonAPI(app.mutation(app.policiesPublish, true)))
+	// /tasks is the read-only upgrade view of issue #11a: the release manifest
+	// plus each node's staged vs active readback. It has no mutation route;
+	// apply/rollback belong to #11b-11e.
+	r.Get("/tasks", app.authenticated(app.tasksPage))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
 	r.Post("/mesh/routes/revoke", app.mutation(app.meshRouteRevoke, true))
 	for _, page := range navigation {
-		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" {
+		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" || page.Path == "/tasks" {
 			continue
 		}
 		p := page
