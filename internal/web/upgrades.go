@@ -1,14 +1,12 @@
 package web
 
 // Read-only upgrade view for issue #11a (GET /tasks): the release manifest of
-// this Hub build and, per node, the observed active readback next to the newest
-// healthy staged revision. It has no apply, rollback, retry or enqueue path;
-// those belong to #11b-11e, so the page offers no control that cannot act.
-//
-// No staged column or table is added: the fixed four-task chain already persists
-// the evidence. A healthy config.stage task names its candidate revision in
-// params, and node_candidates holds that revision's compiled digest. #11b adds a
-// dedicated record when it starts persisting upgrade tasks.
+// this Hub build and, per node, the observed active readback next to the staged
+// target. #11b persists that target on the existing agent_tasks row (version,
+// manifest digest, policy schema and candidate revision); the pre-existing
+// derivation from a healthy config.stage task stays as the labelled fallback for
+// nodes without a record. There is still no apply, rollback, retry or enqueue
+// path; those belong to #11c-11e, so the page offers no control that cannot act.
 
 import (
 	"context"
@@ -22,22 +20,32 @@ import (
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/wingsky-1/MeshMux/internal/jobs"
 	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
-// StagedReadback is the newest healthy stage of one node: proof that the bytes
-// were staged and checked locally, not that they were applied.
+// StagedReadback is the newest staged evidence of one node. A formal upgrade
+// record (#11b) supplies the target release; without one the row is derived
+// from the newest healthy config.stage task and marked Derived. Neither proves
+// apply, public reachability or a live handshake.
 type StagedReadback struct {
-	Revision     int64
-	ConfigSHA256 string
-	OperationID  string
+	Revision       int64
+	ConfigSHA256   string
+	OperationID    string
+	TargetVersion  string
+	ManifestSHA256 string
+	PolicySchema   int
+	Derived        bool
 }
 
-// stagedReadbacks returns the newest healthy stage per node. An undecodable row
-// is an error, never a guessed revision.
+// stagedReadbacks returns the newest healthy stage per node. A row carrying a
+// persisted upgrade target is the formal record; an empty target falls back to
+// the #11a derivation and is labelled. An undecodable row is an error, never a
+// guessed revision.
 func (s *store) stagedReadbacks() (map[string]StagedReadback, error) {
-	rows, err := s.db.Query(`SELECT t.node_id, t.operation_id, t.params FROM agent_tasks t
+	rows, err := s.db.Query(`SELECT t.node_id, t.operation_id, t.params, t.target_version,
+ t.target_manifest_sha256, t.policy_schema, t.target_revision FROM agent_tasks t
 WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FROM agent_tasks x
  WHERE x.node_id=t.node_id AND x.kind=? AND x.status='healthy')`, protocol.KindConfigStage, protocol.KindConfigStage)
 	if err != nil {
@@ -50,8 +58,10 @@ WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FRO
 	var found []pending
 	for rows.Next() {
 		var row pending
-		var params string
-		if err := rows.Scan(&row.nodeID, &row.staged.OperationID, &params); err != nil {
+		var params, targetVersion, manifest string
+		var policySchema, targetRevision int64
+		if err := rows.Scan(&row.nodeID, &row.staged.OperationID, &params, &targetVersion,
+			&manifest, &policySchema, &targetRevision); err != nil {
 			rows.Close()
 			return nil, errors.New("DATABASE_UNAVAILABLE")
 		}
@@ -63,6 +73,24 @@ WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FRO
 			return nil, errors.New("STAGED_READBACK_CORRUPT: the stage task has no candidate revision")
 		}
 		row.staged.Revision = revision.Revision
+		if targetVersion == "" {
+			// No formal record: keep the pre-#11b derivation and label it.
+			if manifest != "" || policySchema != 0 || targetRevision != 0 {
+				rows.Close()
+				return nil, errors.New("UPGRADE_RECORD_CORRUPT: the upgrade target is incomplete")
+			}
+			row.staged.Derived = true
+		} else {
+			target := jobs.Target{Version: targetVersion, ManifestSHA256: manifest,
+				PolicySchema: int(policySchema), CandidateRevision: targetRevision}
+			if err := target.Validate(); err != nil || targetRevision != revision.Revision {
+				rows.Close()
+				return nil, errors.New("UPGRADE_RECORD_CORRUPT: the persisted upgrade target is not actionable")
+			}
+			row.staged.TargetVersion = targetVersion
+			row.staged.ManifestSHA256 = manifest
+			row.staged.PolicySchema = int(policySchema)
+		}
 		found = append(found, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -203,7 +231,7 @@ func upgradeManifestHTML(v upgradeSnapshot) string {
 
 func upgradeNodesHTML(v upgradeSnapshot) string {
 	out := `<section class="panel"><div class="panel-heading"><h2>节点 active vs staged</h2><span class="badge">只读回读</span></div>` +
-		`<p class="hint">active 来自最近一次严格 <code>config.readback</code>；staged 来自最近一次成功的 <code>config.stage</code> 任务及其候选修订。两者都不证明公网可达、协议握手或客户端可用。</p>`
+		`<p class="hint">active 来自最近一次严格 <code>config.readback</code>；staged 优先来自持久化的升级任务记录（#11b），只有没有记录的节点才回退到最近一次成功 <code>config.stage</code> 并标注“派生”。两者都不证明公网可达、协议握手或客户端可用。</p>`
 	if len(v.Nodes) == 0 {
 		return out + `<p class="muted">尚未纳管节点，没有可展示的版本回读。</p></section>`
 	}
@@ -222,13 +250,18 @@ func upgradeNodesHTML(v upgradeSnapshot) string {
 			`</code><br/>` + n.ObservedAtString() + `</td><td>`
 		if staged.Revision == 0 {
 			out += `<span class="muted">无成功 stage 回读</span>`
+		} else if staged.Derived {
+			out += `<span class="badge">派生</span> rev ` + strconv.FormatInt(staged.Revision, 10) + `<br/><code>` +
+				templ.EscapeString(staged.ConfigSHA256) + `</code><br/><code>` + templ.EscapeString(staged.OperationID) + `</code>`
 		} else {
-			out += `rev ` + strconv.FormatInt(staged.Revision, 10) + `<br/><code>` + templ.EscapeString(staged.ConfigSHA256) +
-				`</code><br/><code>` + templ.EscapeString(staged.OperationID) + `</code>`
+			out += `<span class="badge accent">` + templ.EscapeString(staged.TargetVersion) + `</span> · policy_schema ` +
+				strconv.Itoa(staged.PolicySchema) + `<br/>rev ` + strconv.FormatInt(staged.Revision, 10) +
+				`<br/><code>` + templ.EscapeString(staged.ConfigSHA256) + `</code><br/>manifest <code>` +
+				templ.EscapeString(staged.ManifestSHA256) + `</code><br/><code>` + templ.EscapeString(staged.OperationID) + `</code>`
 		}
 		out += `</td><td>` + verdict + `</td></tr>`
 	}
-	return out + `</tbody></table><p class="hint">升级执行、持久化任务、备份指针与兼容回退分别属于 #11b-11e；本页不提供任何可点击的升级控件。</p></section>`
+	return out + `</tbody></table><p class="hint">升级记录已持久化到既有 agent_tasks；执行、备份指针与兼容回退属 #11c-11e，本页不提供任何可点击的升级控件。</p></section>`
 }
 
 // valueOrUnknown marks an empty readback field as unknown instead of printing an

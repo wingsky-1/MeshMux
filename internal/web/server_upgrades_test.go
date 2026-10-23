@@ -68,7 +68,7 @@ func TestUpgradePageShowsManifestAndStagedVersusActive(t *testing.T) {
 	body := w.Body.String()
 	for _, want := range []string{"meshmux-release/v1", node.CurrentAgentVersion, "2.11.7", "0.29.5",
 		"1.14.3", "1.19.32", "policy_schema", "route_policy_revisions", "upgrade-line",
-		"staged 已回读为 active", "rev 1"} {
+		"staged 已回读为 active", "rev 1", `<span class="badge">派生</span>`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page is missing %q", want)
 		}

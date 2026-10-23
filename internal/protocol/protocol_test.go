@@ -379,7 +379,7 @@ func TestTaskResultStatusAndErrorCodeConsistency(t *testing.T) {
 }
 
 func TestUpgradeKindsStayReserved(t *testing.T) {
-	for _, kind := range []string{"upgrade.agent", "upgrade.config", "rollback.config"} {
+	for _, kind := range []string{"upgrade.agent", "upgrade.config", "upgrade.hub", "upgrade.run", "rollback.config"} {
 		task := validTask(t, KindHealthStatus)
 		task.Kind = kind
 		task.Params = json.RawMessage(`{}`)
