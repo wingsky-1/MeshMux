@@ -443,7 +443,6 @@ func (c *Client) doJSON(
 		path == agentManifestPath || path == agentHeartbeatPath || path == agentTasksPath ||
 		path == agentResultPath ||
 		strings.HasPrefix(path, agentConfigPrefix) && validRevisionPath(path) ||
-		strings.HasPrefix(path, agentUpgradeTargetPrefix) && validOperationIDPath(path) ||
 		strings.HasPrefix(path, agentUpgradeTargetPrefix) && validOperationIDPath(path)
 	if !fixedPath {
 		return jsonResponse{}, &ClientError{Code: "REQUEST_INVALID"}

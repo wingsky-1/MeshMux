@@ -13,6 +13,7 @@ package web
 // simply "no upgrade" (404).
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -47,5 +48,11 @@ func (s *Server) agentUpgradeTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "private, no-store")
-	_, _ = w.Write([]byte(`{"target_version":"` + target.Version + `","manifest_sha256":"` + target.ManifestSHA256 + `"}` + "\n"))
+	// Both values were validated by stampedStageTarget (SemVer + 64 lowercase
+	// hex), so encoding is a formality; it is still the encoder rather than
+	// string concatenation, so a future field can never break the document.
+	_ = json.NewEncoder(w).Encode(struct {
+		TargetVersion  string `json:"target_version"`
+		ManifestSHA256 string `json:"manifest_sha256"`
+	}{TargetVersion: target.Version, ManifestSHA256: target.ManifestSHA256})
 }

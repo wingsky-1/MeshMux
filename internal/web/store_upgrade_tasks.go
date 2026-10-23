@@ -41,28 +41,15 @@ func migrateSchema9(tx *sql.Tx) error {
 	return err
 }
 
-// stampUpgradeTarget attaches one release record to a pending config.stage row,
+// stampUpgradeTargetTx attaches one release record to a pending config.stage row,
 // the row /tasks reads as the formal staged evidence. The target is validated in
 // the jobs domain before storage; the caller supplies no shell, path or URL, and
 // re-stamping is allowed only before any result exists.
-func (s *store) stampUpgradeTarget(operationID string, target jobs.Target, now time.Time) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer tx.Rollback()
-	if err := stampUpgradeTargetTx(tx, operationID, target, now); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	return nil
-}
-
-// stampUpgradeTargetTx is the same write inside the caller's transaction. The
-// approval path enqueues the chain and stamps its stage row together, so the
-// first Agent poll can never see a pending row without its target.
+//
+// It runs inside the caller's transaction because the approval path enqueues the
+// chain and stamps its stage row together: the first Agent poll can never see a
+// pending row without its target. There is deliberately no non-transactional
+// twin, so no future caller can split the two writes.
 func stampUpgradeTargetTx(tx *sql.Tx, operationID string, target jobs.Target, now time.Time) error {
 	if err := jobs.ValidateOperationID(operationID); err != nil {
 		return err
@@ -126,35 +113,6 @@ func (s *store) approvedTargets() (map[string]ApprovedTarget, error) {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
 	return out, nil
-}
-
-// approvedReleaseChain returns the ordered approved target versions of one node,
-// ascending by first appearance. It is the release history of #11c-1: the 11b
-// task records are the only ordered evidence the Hub owns, so the manifest needs
-// no new field (ruling U5). The transaction-scoped twin
-// (approvedReleaseChainTx) is what an approval actually gates on; this read is
-// the same query for callers outside a transaction.
-func (s *store) approvedReleaseChain(nodeID string) ([]string, error) {
-	rows, err := s.db.Query(`SELECT target_version FROM agent_tasks
- WHERE node_id=? AND target_version<>'' ORDER BY revision ASC, updated_at ASC`, nodeID)
-	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer rows.Close()
-	var history []string
-	for rows.Next() {
-		var version string
-		if err := rows.Scan(&version); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
-		}
-		if len(history) == 0 || history[len(history)-1] != version {
-			history = append(history, version)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return history, nil
 }
 
 // stampedStageTarget reads the persisted target of one stage row regardless of

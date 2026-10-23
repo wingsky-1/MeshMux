@@ -189,7 +189,8 @@ func TestApproveEnqueuesStampedChain(t *testing.T) {
 	wantSHA := hex.EncodeToString(sum[:])
 	before := latestRevision(t, app, nodeID)
 
-	receipt := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusOK)
+	approval := approveUpgrade(t, b, nodeID, manifest.Version)
+	receipt := decodeApprove(t, approval, http.StatusOK)
 	if !receipt.OK || receipt.Status != "queued" {
 		t.Fatalf("approval = %+v, want queued", receipt)
 	}
@@ -205,9 +206,11 @@ func TestApproveEnqueuesStampedChain(t *testing.T) {
 	if receipt.Revision != before+1 || len(receipt.Tasks) != len(protocol.PublicationKinds) {
 		t.Fatalf("approval revision/tasks = %d/%v", receipt.Revision, receipt.Tasks)
 	}
-	// Hub-first ordering (U2): the Hub release is the first entry of the plan.
-	if len(receipt.Order) != 2 || receipt.Order[0] != "hub" || receipt.Order[1] != nodeID {
-		t.Fatalf("approval order = %v, want hub first", receipt.Order)
+	// The receipt advertises only what was actually enqueued. There is no
+	// "order"/"hub first" claim: the Hub upgrades itself in 11d, so promising a
+	// Hub step here would be a receipt that overstates.
+	if strings.Contains(approval.Body.String(), `"order"`) {
+		t.Fatalf("receipt advertises an order it did not create: %s", approval.Body.String())
 	}
 	if receipt.StageOperationID == "" {
 		t.Fatal("approval receipt does not name the stamped stage row")
@@ -359,7 +362,12 @@ func TestUpgradeApproveAllowsRetryAfterFailedChain(t *testing.T) {
 		t.Fatalf("stamped rows = %d, want both attempts recorded", got)
 	}
 	// The history collapses the duplicate, so a retry does not fake a release.
-	history, err := app.store.approvedReleaseChain(nodeID)
+	tx, err := app.store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	history, err := approvedReleaseChainTx(tx, nodeID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,6 +421,39 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 	}
 }
 
+// TestApproveRefusedUntilHubSelfUpgrade pins the documented boundary: until
+// 11d ships with real release pins, this Hub can only pin its own build, so an
+// approval can only be refused. The page says so, and the self-version case
+// returns the stable UPGRADE_ALREADY_CURRENT code without writing anything.
+func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
+	// A node that already reports this build: the only non-empty read-back a
+	// single-pin Hub can produce.
+	b, app, nodeID, _ := upgradeApproveFixture(t, node.CurrentAgentVersion)
+	manifest, err := upgrade.ForArch(runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := latestRevision(t, app, nodeID)
+	receipt := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusConflict)
+	if receipt.OK || receipt.ErrorCode != "UPGRADE_ALREADY_CURRENT" {
+		t.Fatalf("self-version approval = %+v, want UPGRADE_ALREADY_CURRENT", receipt)
+	}
+	if got := latestRevision(t, app, nodeID); got != before {
+		t.Fatalf("refused approval advanced the revision: %d -> %d", before, got)
+	}
+	if got := countStamped(t, app, nodeID); got != 0 {
+		t.Fatalf("refused approval wrote %d upgrade records", got)
+	}
+
+	// The page states the boundary instead of letting the operator discover it
+	// through a refusal.
+	app.releaseSource = func(context.Context) (string, error) { return manifest.Version, nil }
+	body := b.req("GET", "/tasks/check", nil, nil).Body.String()
+	if !strings.Contains(body, "11d") || !strings.Contains(body, "批准会被拒绝") {
+		t.Fatal("check page does not state that approvals stay refused until 11d")
+	}
+}
+
 // TestAgentUpgradeTargetReadsPersistedStamp pins the Agent read of the stamp:
 // the node reads its own stage row regardless of the row status (the stamp is
 // written while the row is pending), and another node or an unstamped row is
@@ -463,5 +504,19 @@ func TestAgentUpgradeTargetReadsPersistedStamp(t *testing.T) {
 	}
 	if got := bearerReq(app, "GET", "/api/agent/upgrade-target/"+receipt.StageOperationID, "", nil); got.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated read status=%d, want 401", got.Code)
+	}
+	// Another node's identity cannot read this row, so the channel never
+	// discloses that some other node is being upgraded.
+	other, otherCode := createPendingNode(t, app, "edge", "upgrade-other", 8444, 2223)
+	otherPairing := pairJSON(t, app, other.ID, "edge", otherCode)
+	requireStatus(t, otherPairing, http.StatusOK)
+	var otherPaired struct {
+		IdentityToken string `json:"identity_token"`
+	}
+	if err := json.Unmarshal(otherPairing.Body.Bytes(), &otherPaired); err != nil || otherPaired.IdentityToken == "" {
+		t.Fatalf("second pairing did not issue an identity: %.200s", otherPairing.Body.String())
+	}
+	if got := bearerReq(app, "GET", "/api/agent/upgrade-target/"+receipt.StageOperationID, otherPaired.IdentityToken, nil); got.Code != http.StatusNotFound {
+		t.Fatalf("foreign node read status=%d, want 404", got.Code)
 	}
 }

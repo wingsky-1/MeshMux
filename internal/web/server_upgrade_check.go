@@ -14,6 +14,16 @@ package web
 // stores a new candidate revision, the fixed four-task chain and the stamped
 // target on that chain's pending config.stage row. A refusal stores nothing and
 // leaves the previous revision live.
+//
+// Until 11d (Hub self-upgrade) ships with real release pins, every approval is
+// refused, by construction and on purpose. This Hub can only pin its own build,
+// so manifest.Version is always node.CurrentAgentVersion; a node's read-back
+// version can therefore only be empty (UPGRADE_AGENT_UNOBSERVED) or equal to
+// that same build (UPGRADE_ALREADY_CURRENT). Both paths fail closed and write
+// nothing. The mixed-version, retry and adjacency branches below are the
+// reachable behaviour only once a Hub can pin a release other than the one it
+// runs, which is exactly what 11d plus a published meshmuxd release provide.
+// This is a documented boundary, not a missing implementation.
 
 import (
 	"context"
@@ -90,14 +100,13 @@ type upgradeApproveReceipt struct {
 	Revision             int64            `json:"revision,omitempty"`
 	StageOperationID     string           `json:"stage_operation_id,omitempty"`
 	Tasks                []string         `json:"tasks,omitempty"`
-	// Order is the upgrade sequence this approval belongs to. The Hub is first
-	// (ruling U2): a new Hub is what lets a mixed-version fleet be decided per
-	// node, so a node chain is queued after it, never instead of it.
-	Order       []string `json:"order,omitempty"`
-	ErrorCode   string   `json:"error_code,omitempty"`
-	Detail      string   `json:"detail,omitempty"`
-	NextAction  string   `json:"next_action,omitempty"`
-	OperationID string   `json:"operation_id"`
+	// There is deliberately no "order"/"hub first" field: only the node's own
+	// four-task chain is enqueued. The Hub upgrades itself in 11d, and until
+	// then a receipt must not advertise an order it did not create.
+	ErrorCode   string `json:"error_code,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	NextAction  string `json:"next_action,omitempty"`
+	OperationID string `json:"operation_id"`
 }
 
 // tasksCheck is the explicit release check. It is a read-only GET: the response
@@ -183,6 +192,12 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 	}
 	// The pin is the manifest this Hub can hand the Agent; a tag alone never
 	// becomes a target.
+	//
+	// Consequence until 11d: this Hub can only pin its own build, so a requested
+	// release other than node.CurrentAgentVersion is refused here
+	// (MANIFEST_UNAVAILABLE) and the same build is refused below as
+	// UPGRADE_ALREADY_CURRENT. No approval can succeed yet; that is the intended
+	// fail-closed boundary, not an untested gap.
 	if manifest.Version != version {
 		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeManifestUnavailable,
 			"该版本尚未有可验证的 manifest pin。", "latest 只是建议；请等待该发行提供 manifest 后再批准。")
@@ -203,7 +218,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 		OK: true, Status: "queued", Target: target.Version, ManifestSHA256: target.ManifestSHA256,
 		PolicySchema: manifest.PolicySchema, RoutePolicyRevisions: routePolicySlots(manifest),
 		Revision: target.CandidateRevision, StageOperationID: target.StageOperationID,
-		Tasks: target.Tasks, Order: target.Order, OperationID: operation(r),
+		Tasks: target.Tasks, OperationID: operation(r),
 		NextAction: "已排队：候选与四任务链已同事务写入，stage 行带有固定目标；节点下次轮询才执行，queued 不等于已生效。",
 	})
 }
@@ -213,7 +228,6 @@ type approvedUpgrade struct {
 	jobs.Target
 	StageOperationID string
 	Tasks            []string
-	Order            []string
 }
 
 // approveUpgrade is the single write path of an approval. Everything happens in
@@ -259,6 +273,9 @@ func (s *store) approveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 		return approvedUpgrade{}, err
 	}
 	if manifest.Version == observed {
+		// Reachable today: the Hub pins only its own build, so a node that has
+		// read back that build lands here. 11d lifts this by making a newer
+		// release pinnable.
 		return approvedUpgrade{}, errors.New("UPGRADE_ALREADY_CURRENT: the node already runs the approved release")
 	}
 	if len(history) > 0 {
@@ -318,7 +335,7 @@ func (s *store) approveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 	if err := tx.Commit(); err != nil {
 		return approvedUpgrade{}, errors.New("DATABASE_UNAVAILABLE")
 	}
-	out := approvedUpgrade{Target: target, StageOperationID: stageOperation, Order: []string{"hub", nodeID}}
+	out := approvedUpgrade{Target: target, StageOperationID: stageOperation}
 	for _, task := range tasks {
 		out.Tasks = append(out.Tasks, task.Kind)
 	}

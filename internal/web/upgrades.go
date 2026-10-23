@@ -184,8 +184,12 @@ func (app *Server) tasksPage(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	app.render(w, r, 200, upgradePage(pageData{Title: "任务与升级", Path: "/tasks", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, view))
-} // upgradePage renders the read-only page. It reuses Document for the head and
-// assets and holds no form, so it cannot mutate anything.
+}
+
+// upgradePage renders the page. It reuses Document for the head and assets. It
+// is not read-only any more: the per-node approval form is the single mutation,
+// and the check link is a GET that stores nothing. The page never claims that a
+// queued chain is an applied release.
 func upgradePage(p pageData, v upgradeSnapshot) templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		var nav strings.Builder
@@ -222,6 +226,7 @@ func upgradePage(p pageData, v upgradeSnapshot) templ.Component {
 func upgradeCheckHTML(v upgradeSnapshot) string {
 	out := `<section class="panel"><div class="panel-heading"><h2>检查新版本</h2><span class="badge">显式触发</span></div>` +
 		`<p class="hint">新版本只在操作员点击时查询，没有后台定时任务。查到的标签只是<b>未验证</b>建议：只有带固定 manifest pin 的版本才能批准，latest 永远不会直接落地。</p>` +
+		`<p class="hint">在 Hub 自升级（11d）与真实发行 pin 就绪前，批准会被拒绝：本机构建只能 pin 自己，因此不会有可成功的升级。</p>` +
 		`<p><a class="refresh" href="/tasks/check">检查新版本 ↻</a></p>`
 	if v.Checked != "" {
 		out += `<div class="notice" role="status">发现 ` + templ.EscapeString(v.Checked) +
