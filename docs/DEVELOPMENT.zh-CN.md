@@ -15,13 +15,13 @@ MeshMux 按 SemVer 2.0.0，**v1.0.0 是首个公开稳定版本**。开发里程
 
 ## 当前 Go 实现
 
-- cmd/meshmux：CLI 的 install 占位入口，返回非零、无副作用。
+- cmd/meshmux：CLI 的 `install hub|edge|out` 入口（含 `--plan`/`--repair`），已随 #5/#6 交付并通过隔离 Debian 13 VM 自动化验收。
 - internal/node：节点契约、候选文档与角色模型（含 ParseRole 契约测试）。
 - docs/：产品、架构、运维、安全与验收；docs/adr 仅在真实架构取舍时补充。
 - .github/workflows/ci.yml：gofmt、vet、test、race、build。
 - cmd/meshmux-web、internal/web：非 root Web 服务、安全认证/会话、SQLite 和嵌入式 templ/HTMX 页面。
-- **#7 Phase 3A 已合入（PR #19/#21/#22）**：安装器（`internal/install`）与订阅生成器（严格 v2 REALITY 编译器、Web 订阅生命周期、双格式下载）已实现；Agent 协议仍未实现。
-- **#9 PR-9a 已交付 Mesh 设备生命周期**：`internal/mesh`（纯领域模型）、`internal/headscale`（固定 argv 的本地 CLI 适配器）、Web `/mesh` 设备页与 `store_mesh.go`（schema 6 的 `mesh_devices`/`mesh_enrollment_keys`），以及 Hub 安装的 Web↔Headscale socket 组边界。**未交付**：子网路由与路由批准（9b）、单 VPN 客户端配置渲染（9c）、真实 tailnet 设备注册证据。
+- **#7 Phase 3A 已合入（PR #19/#21/#22）**：安装器（`internal/install`）与订阅生成器（严格 v2 REALITY 编译器、Web 订阅生命周期、双格式下载）已实现；Agent 严格协议与一次性配对已随 #6（PR #18）合入。
+- **#9 已随 PR #62/#63 合入**：9a Mesh 设备生命周期（`internal/mesh` 纯领域模型、`internal/headscale` 固定 argv 适配器、Web `/mesh` 设备页、schema 6 的 `mesh_devices`/`mesh_enrollment_keys`、Hub 的 Web↔Headscale socket 组边界）、9b 子网路由声明/批准/撤销与观测归档、9c 单 VPN 客户端配置渲染、9d Mesh 身份迁移文档。**仍缺**：真实 tailnet 设备注册、真实 NAS 跨网可达与真机单 VPN 证据。
 - 隔离运行、模板再生成、安全验收与恢复见 [WEB_DEVELOPMENT](WEB_DEVELOPMENT.zh-CN.md)，依赖见 [DEPENDENCIES](DEPENDENCIES.zh-CN.md)。
 
 本地运行：
@@ -41,4 +41,4 @@ Go 当前使用 1.27.2；目标系统初始仅 Debian 13 amd64/arm64。使用 sq
 
 公开代码不得包含真实订阅 URL、IP、域名、密钥、Headscale 身份或私人备份。示例统一使用 example.invalid 和 RFC5737 文档地址。无需用户单独授权的 PR 不执行生产安装、清理、路由修改或发行。
 
-v1.0.0 前的 README 保留显著的 NOT READY TO INSTALL 标识；本项目的“下一阶段”并不意味着现在可以部署。
+README 已移除原先的“暂不可安装”标识：`install hub|edge|out` 已交付并通过隔离 Debian 13 VM 自动化验收，但仍不是正式安装发行包；v1.0.0 发布前不得把现有证据当作现网可用承诺。

@@ -30,3 +30,4 @@ artifacts/
 
 # Local agent tool state (never committed)
 .serena/
+docs/superpowers/

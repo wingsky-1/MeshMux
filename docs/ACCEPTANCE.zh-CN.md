@@ -11,7 +11,7 @@
 
 ## PR0：初始设计和骨架
 
-- [ ] README、AGENTS 及 PRODUCT/FEATURES/VERSIONS/ROADMAP 一致以 **v1.0.0** 为首发目标，当前不可安装。
+- [ ] README、AGENTS 及 PRODUCT/FEATURES/VERSIONS/ROADMAP 一致以 **v1.0.0** 为首发目标；`install hub|edge|out` 已交付并具隔离 VM 证据，但尚未发行，不得宣称 v1.0.0 可用。
 - [ ] 4A、部署、纳管时序、安全、日志与验收文件清楚且不含真实个人配置。
 - [ ] Go 骨架在未获确认时不修改宿主；未提供完整配置或预检未通过时，`install hub` 明确以非零结果退出且不留下宿主状态。
 - [ ] CI 实测通过；独立 PR 合并前人工审查。
@@ -62,7 +62,7 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 
 实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#9 与 #11 不在本轮验收范围。#8 本轮收尾已取 L2 真实 `nft -f` apply/readback（[hub-components 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)）与 L3 VM readback（[hub-vm 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)，head `9495730`、tree `5720b86`）；AI 双跳实际流量（已移交 #10）与客户端可用仍缺，#11 仍是 v1.0.0 P0。
 
-## Issue #7 Phase 3A 分 PR 验收（进行中）
+## Issue #7 Phase 3A 分 PR 验收（#7 已 CLOSED）
 
 #6 已由 PR #18 合入 `main`（`17c4e4c`，tree `40eed1f651cb19f47bbf69a96a6d3410e6e7d031`）并关闭。最终 head `0149581` 与该 merge tree 相同，PR [ci 39373760962](https://github.com/wingsky-1/MeshMux/actions/runs/39373760962) 与 [hub-vm 39373760970](https://github.com/wingsky-1/MeshMux/actions/runs/39373760970) 均 success；上文早期 PR-A/PR-B 的状态记录不代表当前待办。
 
@@ -74,7 +74,7 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 
 真实公网、云安全组与手机真机结果单独列出；没有实际执行则保持未验收。各 PR 证据只覆盖其 head。#8/#9/#11、Out 双跳与跨源 ACL 不在本轮。
 
-## Issue #9 PR-9a Mesh 设备生命周期验收（head 占位）
+## Issue #9 PR-9a Mesh 设备生命周期验收（#9 已 CLOSED；9b/9c/9d 已随 PR #63 合入）
 
 PR-9a 分四个切片交付：9a-1 `internal/mesh` 纯领域模型、9a-2 `internal/headscale` 固定 argv 本地 CLI 适配器、9a-3 Web `/mesh` 页面与 schema 6 持久化（`store_mesh.go`），9a-4 Hub 的 Web↔Headscale socket 组边界与隔离 fixture。本行**只登记源码与自动化证据**，不构成发行验收。
 

@@ -54,7 +54,7 @@ flowchart LR
     Agent["Line/Out Agent"] -->|"outbound HTTPS"| Hub
 ~~~
 
-上图包含目标态的 VLESS/REALITY、用户、订阅和 Mesh 路径。`main` 上的 Node baseline 仍只生成空 `users` 的 v1 VLESS candidate，没有 TLS/REALITY、用户、凭据或订阅；本地 listener/readback 不代表公网可达、真实协议握手或客户端可用。Issue #7 PR-A 已合入独立订阅域模型与严格 v2 REALITY 编译器（v1 保持不变）；Web 生命周期、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含隔离 VM 证据），真实公网握手需后续证据。#8 的四项 PR 已交付源码与隔离自动化证据（真实 nft readback、AI 双跳流量与客户端可用仍待隔离 VM 实测）。#9 PR-9a 已交付 Mesh 设备生命周期（`internal/mesh` 领域模型、`internal/headscale` 固定 argv 适配器、Web `/mesh` 页面、schema 6 的 `mesh_devices`/`mesh_enrollment_keys`、Hub 的 Web↔Headscale socket 组边界）；子网路由与路由批准属 9b、单 VPN 客户端配置属 9c，真实 tailnet 设备注册与在线证据仍缺。#11 仍是 v1.0.0 P0。
+上图包含目标态的 VLESS/REALITY、用户、订阅和 Mesh 路径。`main` 上的 Node baseline 仍只生成空 `users` 的 v1 VLESS candidate，没有 TLS/REALITY、用户、凭据或订阅；本地 listener/readback 不代表公网可达、真实协议握手或客户端可用。Issue #7 PR-A 已合入独立订阅域模型与严格 v2 REALITY 编译器（v1 保持不变）；Web 生命周期、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含隔离 VM 证据），真实公网握手需后续证据。#8 的四项 PR 已交付源码与隔离自动化证据，其中真实 `nft -f`/`nft -j` readback 已取得 L2/L3 证据（AI 双跳流量与客户端可用仍缺）。#9 已随 PR #62/#63 合入并关闭：PR-9a 交付 Mesh 设备生命周期（`internal/mesh` 领域模型、`internal/headscale` 固定 argv 适配器、Web `/mesh` 页面、schema 6 的 `mesh_devices`/`mesh_enrollment_keys`、Hub 的 Web↔Headscale socket 组边界），9b 交付子网路由声明/批准/撤销批准与观测归档，9c 交付单 VPN 客户端配置渲染，9d 交付 Mesh 身份迁移文档。真实 tailnet 设备注册、在线状态与 NAS 跨网可达仍缺证据。#11 统一升级仍是 v1.0.0 P0，尚未实现。
 
 ## 5. 关键不变量
 

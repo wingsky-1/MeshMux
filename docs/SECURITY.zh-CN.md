@@ -14,7 +14,7 @@
 
 Cloudflare 代理开启时不可把未经验证的转发头当作真实客户端地址，也不得封禁共享的 Cloudflare 出口 IP；不能建立可信 IP 源链时优先应用层登录限速。Web 下游 Caddy 仅信任明确配置的代理来源；同样不能直接信任用户伪造的 X-Forwarded-For。
 
-nftables 新建本项目专属 table/chain，不覆盖已有规则；Out 私有入站仅放行已认证纳管 Line 的真实公网来源，且在规则撤销/同步失败时默认拒绝。Out 渲染已由 #8-B 修正为空授权默认全拒绝、仅授权源可用（源码与隔离测试证据；真实 nft readback 与双跳流量待隔离 VM 实测）；安装器只接受不存在或已由 MeshMux ledger 拥有的 `inet meshmux_out`，不接管其他表。云安全组不是本机防火墙，必须做外部探测。
+nftables 新建本项目专属 table/chain，不覆盖已有规则；Out 私有入站仅放行已认证纳管 Line 的真实公网来源，且在规则撤销/同步失败时默认拒绝。Out 渲染已由 #8-B 修正为空授权默认全拒绝、仅授权源可用；真实 `nft -f` apply 与 `nft -j` readback 已有 L2/L3 证据（见 [ACCEPTANCE](ACCEPTANCE.zh-CN.md)），AI 双跳流量仍缺。安装器只接受不存在或已由 MeshMux ledger 拥有的 `inet meshmux_out`，不接管其他表。云安全组不是本机防火墙，必须做外部探测。
 
 SSH 保护必须绑定实际 listener：安装器从 `ssh.socket`、`ss` 和传统模式下的 `sshd -T` 读取端口集合，要求配置的 SSH 端口命中实际 listener，VLESS 不与任一 SSH listener 冲突，并回读 Fail2ban jail/action 端口集合与全部实际 SSH listener 完全一致。Fail2ban 使用 MeshMux 专属 `meshmux-node-sshd` jail 和 nftables action，不重配 sshd，不 flush 主机 ruleset。该行为需要 L2/L3 实测。
 
