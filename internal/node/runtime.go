@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -22,6 +24,11 @@ const (
 	maxIdempotency     = 1024
 	maxFinalCache      = 1024
 )
+
+// stageTargetVersion is the release shape the Agent accepts for a stamped
+// upgrade target. It mirrors the update CLI's own SemVer gate; a floating tag
+// never reaches the fixed argv.
+var stageTargetVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 
 // errRuntimeStateTooLarge refuses a runtime state that does not fit the
 // state size bound. The previous readable state stays untouched.
@@ -43,6 +50,10 @@ type RuntimeOptions struct {
 	HTTPClient   *http.Client
 	Logger       *slog.Logger
 	PollInterval time.Duration
+	// StageTargets reports the release the Hub stamped onto a pending
+	// config.stage row (#11b). It is optional: without it every stage row is an
+	// ordinary config stage, which is the pre-upgrade behaviour.
+	StageTargets StageTargetSource
 }
 
 // Runtime executes the frozen task set against one installed node.
@@ -55,10 +66,37 @@ type Runtime struct {
 	httpClient      *http.Client
 	logger          *slog.Logger
 	pollInterval    time.Duration
+	stageTargets    StageTargetSource
 	now             func() time.Time
 	procRoot        string
 	writeState      func(*runtimeState) error
 	enforceProcArgs bool
+}
+
+// StageTarget is the release record the Hub stamped onto one pending
+// config.stage row: the version and the pinned manifest digest the node should
+// converge to. It is deliberately not a task parameter — config.* params stay
+// frozen — so the Agent reads it over the outbound Hub boundary.
+type StageTarget struct {
+	Version        string
+	ManifestSHA256 string
+}
+
+// StageTargetSource reports the stamped upgrade target of one config.stage
+// task. A false ok means the row carries no target and is an ordinary config
+// stage.
+//
+// Wiring point (#11c-1 Task 6): the Hub exposes the read as
+// `GET /api/agent/upgrade-target/{operation_id}` on the authenticated agent
+// channel — the same shape as `GET /api/agent/config/{revision}` — returning the
+// stamped `target_version` + `manifest_sha256` for a pending stage row (404 when
+// the row is unstamped). `(*node.Client).StageTarget(ctx, operationID)` is the
+// client side, and `runInstalledAgent` (internal/node/command.go) must pass it as
+// `RuntimeOptions.StageTargets`. Until then the field stays nil, which keeps the
+// pre-upgrade behaviour: a stamped row is staged as ordinary config instead of
+// handing off. No upgrade can start, and nothing false is reported.
+type StageTargetSource interface {
+	StageTarget(context.Context, string) (StageTarget, bool, error)
 }
 
 type runtimeState struct {
@@ -172,6 +210,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		httpClient:      opts.HTTPClient,
 		logger:          opts.Logger,
 		pollInterval:    defaultPollInterval(opts.PollInterval),
+		stageTargets:    opts.StageTargets,
 		now:             time.Now,
 		procRoot:        rooted(root, "/proc"),
 		enforceProcArgs: root == "/",
@@ -424,38 +463,61 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 	}
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "validate", "error_code", "")
+	// The upgrade handoff keeps the chain open: while an install is in flight,
+	// apply and readback must not touch the data plane. They report a legal
+	// non-terminal state instead, so TASKS_IN_PROGRESS still sees an unfinished
+	// chain and no step claims work it did not do.
 	var executeErr error
-	switch task.Kind {
-	case protocol.KindConfigCheck:
-		if state.Journal != nil {
-			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
-			break
+	gated := false
+	if task.Kind == protocol.KindConfigReadback ||
+		task.Kind == protocol.KindConfigApply && state.Journal == nil {
+		gateResult, stop, gateErr := r.handoffGate(task.OperationID)
+		if stop {
+			result, executeErr, gated = gateResult, gateErr, true
 		}
-		result, executeErr = r.check(taskContext, revision, allowed)
-	case protocol.KindConfigStage:
-		if state.Journal != nil {
-			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
-			break
+	}
+	if !gated {
+		switch task.Kind {
+		case protocol.KindConfigCheck:
+			if state.Journal != nil {
+				result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
+				break
+			}
+			result, executeErr = r.check(taskContext, revision, allowed)
+		case protocol.KindConfigStage:
+			if state.Journal != nil {
+				result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
+				break
+			}
+			result, executeErr = r.stageOrHandOff(taskContext, task, revision, allowed)
+		case protocol.KindConfigApply:
+			if state.Journal != nil {
+				return failedResult(result, "RECOVERY_REQUIRED")
+			}
+			applyResult := r.apply(taskContext, task, digest, revision, state, allowed)
+			return applyResult
+		case protocol.KindConfigReadback:
+			result, executeErr = r.readback(taskContext, revision, allowed, hasAllowed)
+		case protocol.KindHealthStatus, protocol.KindNodeStatus:
+			result, executeErr = r.status(taskContext)
+		default:
+			executeErr = errors.New("TASK_KIND_REJECTED")
 		}
-		result, executeErr = r.stage(taskContext, revision, allowed)
-	case protocol.KindConfigApply:
-		if state.Journal != nil {
-			return failedResult(result, "RECOVERY_REQUIRED")
-		}
-		applyResult := r.apply(taskContext, task, digest, revision, state, allowed)
-		return applyResult
-	case protocol.KindConfigReadback:
-		result, executeErr = r.readback(taskContext, revision, allowed, hasAllowed)
-	case protocol.KindHealthStatus, protocol.KindNodeStatus:
-		result, executeErr = r.status(taskContext)
-	default:
-		executeErr = errors.New("TASK_KIND_REJECTED")
 	}
 	if executeErr != nil && result.ErrorCode == "" {
 		result = failedResult(result, errorCode(executeErr))
 	}
 	if result.Status == "partial" || result.Status == "failed" {
 		result.Status = "failed"
+	}
+	if !terminalTaskResult(result.Status) {
+		// A non-terminal receipt is not a final result: the step is redelivered
+		// on the next poll and replays it while the handoff runs. Nothing is
+		// cached and LastTaskRevision stays put, so the chain cannot be advanced
+		// past a step that has not completed.
+		r.logger.InfoContext(taskContext, "task stage",
+			"operation_id", task.OperationID, "stage", "handoff", "error_code", result.ErrorCode)
+		return result
 	}
 	final := result
 	state.Idempotency[task.IdempotencyKey] = idempotencyItem{
@@ -471,6 +533,141 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "final", "error_code", result.ErrorCode)
 	return final
+}
+
+// stageOrHandOff runs the config.stage step of one task chain. A row stamped
+// with an upgrade target that differs from the running version is not a local
+// stage at all: the Agent starts the local update with the fixed argv and
+// reports a non-terminal handoff receipt at once. Every other row keeps the
+// existing stage path.
+//
+// The child is never waited for. The poll interval is 30s, so blocking here
+// would stop the heartbeat and make a live node look offline for the length of
+// an install. The handoff is recorded in the persisted marker before the child
+// exists, and the stage row stays "applying" until the marker resolves, so the
+// Hub keeps the whole chain open: apply and readback are gated (see
+// handoffGate) and TASKS_IN_PROGRESS refuses a second approval.
+//
+// The update writes its own rollback pointer to WorkDir/backup-<target>.json
+// before it mutates anything (TestHandoffBacksUpBeforeMutating), so the pointer
+// exists regardless of how the handoff ends. The Agent never reads the child's
+// Result, so the receipt cannot carry it: 11c-3 must read that file.
+func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revision int64, allowed []string) (protocol.TaskResult, error) {
+	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
+	handoff, pending, err := r.pendingUpgradeHandoff()
+	if err != nil {
+		return failedResult(result, errorCode(err)), err
+	}
+	if pending && handoff.OperationID == task.OperationID {
+		if r.handoffInFlight(handoff) {
+			// Redelivery while the install still runs: replay the same
+			// non-terminal receipt and never start a second update.
+			return upgradeQueuedReceipt(task.OperationID, handoff.TargetVersion), nil
+		}
+		// The child is gone and the running release is still not the target:
+		// the update did not install. Record the failure so the remaining steps
+		// of this chain fail honestly, and fail this step.
+		if err = r.failUpgradeHandoff(handoff); err != nil {
+			return failedResult(result, errorCode(err)), err
+		}
+		return failedResult(result, "UPDATE_HANDOFF_INCOMPLETE"),
+			errors.New("UPDATE_HANDOFF_INCOMPLETE: the update child exited before installing the target")
+	}
+	if pending && handoff.State == handoffFailed {
+		// A previous chain's upgrade failed. This new chain owns the node now:
+		// drop the stale marker so its steps may run. The previous chain's own
+		// rows are already terminal.
+		if err = r.clearUpgradeHandoff(); err != nil {
+			return failedResult(result, errorCode(err)), err
+		}
+	} else if pending {
+		// A different chain is being installed. The Hub serializes chains, so
+		// this is a contract violation; staging this row would let two installs
+		// race. Refuse without touching anything.
+		return failedResult(result, "UPDATE_HANDOFF_IN_PROGRESS"),
+			errors.New("UPDATE_HANDOFF_IN_PROGRESS: another upgrade handoff owns this node")
+	}
+	target, stamped, err := r.stampedStageTarget(ctx, task)
+	if err != nil {
+		return failedResult(result, errorCode(err)), err
+	}
+	if !stamped {
+		return r.stage(ctx, revision, allowed)
+	}
+	spawner, ok := r.runner.(Spawner)
+	if !ok {
+		return failedResult(result, "UPDATE_SPAWN_UNAVAILABLE"), errors.New("UPDATE_SPAWN_UNAVAILABLE")
+	}
+	// The executable is the fixed installed Agent, never a caller-named path.
+	// On a real root its digest is the configured one, so a swapped binary is
+	// refused instead of started.
+	binary, err := fixedBinary(r.root, AgentBinaryPath, r.cfg)
+	if err != nil {
+		return failedResult(result, errorCodeOr(err, "UPDATE_SPAWN_FAILED")), err
+	}
+	// The marker is written before the child exists, so a crash between the two
+	// can never lose the gate that keeps apply off the data plane.
+	record := upgradeHandoff{
+		Schema:         upgradeHandoffSchema,
+		State:          handoffRunning,
+		OperationID:    task.OperationID,
+		TargetVersion:  target.Version,
+		ManifestSHA256: target.ManifestSHA256,
+		Revision:       revision,
+		StartedAt:      r.now().Unix(),
+	}
+	if err = r.writeUpgradeHandoff(record); err != nil {
+		return failedResult(result, errorCode(err)), err
+	}
+	// The child outlives this poll cycle: a cancelled cycle (Agent shutdown,
+	// task timeout) must not kill an update that is already installing. Its
+	// lifetime is the update's own, not the poll's.
+	pid, err := spawner.Spawn(context.WithoutCancel(ctx), binary,
+		"__internal-update",
+		"--target", target.Version,
+		"--manifest-sha256", target.ManifestSHA256,
+		"--operation-id", task.OperationID,
+		"--confirm-target")
+	if err != nil {
+		// The update never started, so no install can be in flight: drop the
+		// gate and fail the step. The node is not wedged.
+		_ = r.clearUpgradeHandoff()
+		return failedResult(result, "UPDATE_SPAWN_FAILED"), err
+	}
+	record.ChildPID = pid
+	if err = r.writeUpgradeHandoff(record); err != nil {
+		// The child is already running. The marker without its PID still gates
+		// (by age), so keep going and log; refusing here would let apply run
+		// against a version that is being replaced.
+		r.logger.ErrorContext(ctx, "handoff marker pid not recorded",
+			"operation_id", task.OperationID, "error_code", errorCode(err))
+	}
+	return upgradeQueuedReceipt(task.OperationID, target.Version), nil
+}
+
+// stampedStageTarget reports the upgrade target stamped onto this stage row and
+// whether it is an upgrade at all. No source means the pre-upgrade behaviour: a
+// plain config stage. A stamped target equal to the running version is the same
+// chain's redelivery after the update installed it, so it is a plain stage too;
+// treating it as a second upgrade would loop.
+func (r *Runtime) stampedStageTarget(ctx context.Context, task protocol.Task) (StageTarget, bool, error) {
+	if r.stageTargets == nil {
+		return StageTarget{}, false, nil
+	}
+	target, ok, err := r.stageTargets.StageTarget(ctx, task.OperationID)
+	if err != nil {
+		return StageTarget{}, false, fmt.Errorf("STAGE_TARGET_UNAVAILABLE: %w", err)
+	}
+	if !ok {
+		return StageTarget{}, false, nil
+	}
+	if !stageTargetVersion.MatchString(target.Version) || !sha256Pattern.MatchString(target.ManifestSHA256) {
+		return StageTarget{}, false, errors.New("STAGE_TARGET_INVALID: target must be a pinned SemVer release")
+	}
+	if target.Version == r.cfg.AgentVersion {
+		return StageTarget{}, false, nil
+	}
+	return target, true, nil
 }
 
 func (r *Runtime) loadStateForExecution() (runtimeState, error) {
@@ -544,15 +741,23 @@ func (r *Runtime) cycle(ctx context.Context) {
 				_ = r.removeOutbox(task.OperationID)
 				continue
 			}
-			if reportErr := r.controller.Report(ctx, protocol.TaskResult{
-				OperationID: task.OperationID, Status: "applying",
-			}); reportErr != nil {
-				if isAlreadyFinal(reportErr) {
-					_ = r.removeOutbox(task.OperationID)
+			// While an upgrade handoff is in flight the apply step must not even
+			// announce progress: the "applying" pre-report implies the data plane
+			// is being changed. Execute still runs because it owns the gate
+			// receipt and persists a terminal gate failure.
+			if _, stop, _ := r.handoffGate(task.OperationID); stop {
+				result = r.Execute(withApplyAcknowledged(ctx), task)
+			} else {
+				if reportErr := r.controller.Report(ctx, protocol.TaskResult{
+					OperationID: task.OperationID, Status: "applying",
+				}); reportErr != nil {
+					if isAlreadyFinal(reportErr) {
+						_ = r.removeOutbox(task.OperationID)
+					}
+					return
 				}
-				return
+				result = r.Execute(withApplyAcknowledged(ctx), task)
 			}
-			result = r.Execute(withApplyAcknowledged(ctx), task)
 		} else {
 			result = r.Execute(ctx, task)
 		}
