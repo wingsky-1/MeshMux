@@ -46,17 +46,14 @@ func fixtureManifest(t *testing.T, pkg []byte, componentSHA string) upgrade.Mani
 }
 
 // fixtureConfig pins one manifest body the way a Web approval pins its SHA-256.
-// The canonical table gate is relaxed: a fixture manifest carries only the one
-// component under test, while production Run uses upgrade.Manifest.Validate.
+// The fixture describes a target release, not the running build's table, so the
+// real target gate is exercised.
 func fixtureConfig(t *testing.T, m upgrade.Manifest) Config {
 	t.Helper()
 	body, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := validateManifest
-	validateManifest = func(upgrade.Manifest) error { return nil }
-	t.Cleanup(func() { validateManifest = previous })
 	return Config{Target: "1.0.1", ManifestSHA256: shaOf(body), OperationID: strings.Repeat("a", 32),
 		WorkDir: t.TempDir(), FetchManifest: func(context.Context) ([]byte, error) { return body, nil }}
 }

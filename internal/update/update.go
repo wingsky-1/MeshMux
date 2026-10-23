@@ -46,10 +46,6 @@ var (
 	targetRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 	digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opIDRE   = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	// validateManifest is the canonical manifest gate. Tests that build a
-	// single-component fixture manifest replace it; production always uses
-	// upgrade.Manifest.Validate.
-	validateManifest = func(m upgrade.Manifest) error { return m.Validate() }
 	// errHandoff is the Task 4 seam: until then a verified package is staged
 	// only, never applied, and no subprocess has run.
 	errHandoff = fail("UPDATE_HANDOFF_NOT_IMPLEMENTED", "verified package staged; the handoff segment is not installed")
@@ -79,21 +75,12 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if hexDigest(body) != cfg.ManifestSHA256 {
 		return Result{}, fail("UPDATE_DIGEST_MISMATCH", "the manifest does not match the approved SHA-256")
 	}
-	if json.Unmarshal(body, &m) != nil || m.Schema != upgrade.Schema {
-		return Result{}, fail("MANIFEST_INVALID", "the manifest is not this binary's contract")
+	if json.Unmarshal(body, &m) != nil {
+		return Result{}, fail("MANIFEST_INVALID", "the manifest is not valid JSON")
 	}
-	// Production runs the canonical gate of the manifest package, which also
-	// rejects a foreign policy schema, architecture or component table.
-	if err := validateManifest(m); err != nil {
-		code, _, _ := strings.Cut(err.Error(), ": ")
-		return Result{}, fail(code, "the manifest is not this binary's contract")
-	}
-	if m.Version != cfg.Target {
-		return Result{}, fail("UPDATE_TARGET_INVALID", "the manifest does not describe the approved target")
-	}
-	c, ok := packageComponent(m)
-	if !ok {
-		return Result{}, fail("MANIFEST_COMPONENT_INVALID", "the manifest has no pinned meshmuxd package")
+	c, err := validateTarget(m, cfg.Target)
+	if err != nil {
+		return Result{}, err
 	}
 	path, err := fetchPackage(ctx, cfg.WorkDir, cfg.Target, c)
 	if err != nil {
@@ -103,13 +90,43 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	return Result{VerifiedPath: path, Manifest: m}, errHandoff
 }
 
-func packageComponent(m upgrade.Manifest) (upgrade.Component, bool) {
+// validateTarget is the gate for a *target* release, which is by definition not
+// the table of the running build. It therefore checks what an upgrade must
+// honour rather than table equality: the target's own schema and policy
+// schema, its architecture, and a pinned meshmuxd component whose source class
+// matches its Dev flag. upgrade.Manifest.Validate stays the running-build
+// self-check and is not applied here.
+func validateTarget(m upgrade.Manifest, target string) (upgrade.Component, error) {
+	if m.Schema != upgrade.Schema {
+		return upgrade.Component{}, fail("MANIFEST_SCHEMA_INVALID", "the target names another manifest schema")
+	}
+	if m.PolicySchema != upgrade.PolicySchema {
+		return upgrade.Component{}, fail("MANIFEST_POLICY_SCHEMA_INVALID", "the target names another policy schema")
+	}
+	if m.Version != target || !targetRE.MatchString(m.Version) {
+		return upgrade.Component{}, fail("UPDATE_TARGET_INVALID", "the manifest does not describe the approved target")
+	}
+	if m.Architecture != runtime.GOARCH {
+		return upgrade.Component{}, fail("MANIFEST_ARCH_INVALID", "the manifest is for another architecture")
+	}
 	for _, c := range m.Components {
-		if c.Name == "meshmuxd" && c.Architecture == runtime.GOARCH && digestRE.MatchString(c.SHA256) {
-			return c, true
+		if c.Name == "meshmuxd" && c.Architecture == runtime.GOARCH && digestRE.MatchString(c.SHA256) && trustedSource(c) {
+			return c, nil
 		}
 	}
-	return upgrade.Component{}, false
+	return upgrade.Component{}, fail("MANIFEST_COMPONENT_INVALID", "the manifest has no pinned meshmuxd package")
+}
+
+// trustedSource restores the source-class rule the running-build table check
+// used to provide: a release comes from a GitHub release URL, a dev build from
+// a local or intranet source, and both must be a dev- build exactly when Dev is
+// set. A digest alone never makes an arbitrary URL executable.
+func trustedSource(c upgrade.Component) bool {
+	if c.Dev {
+		return strings.HasPrefix(c.Version, "dev-") &&
+			(strings.HasPrefix(c.Source, "file://") || strings.HasPrefix(c.Source, "https://"))
+	}
+	return strings.HasPrefix(c.Source, "https://github.com/")
 }
 
 func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) (string, error) {
