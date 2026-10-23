@@ -23,28 +23,40 @@ func (r *fixtureRunner) Run(_ context.Context, name string, args ...string) ([]b
 	return nil, nil
 }
 
+func codeOf(err error) string {
+	code, _, _ := strings.Cut(err.Error(), ": ")
+	return code
+}
+
 func shaOf(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-// fixtureConfig serves one dev meshmuxd manifest pointing at a local file, the
-// source rule the pre-release dev build allows. ManifestSHA256 is the pin a Web
-// approval would carry.
-func fixtureConfig(t *testing.T, pkg []byte, componentSHA string) Config {
+func fixtureManifest(t *testing.T, pkg []byte, componentSHA string) upgrade.Manifest {
 	t.Helper()
 	source := filepath.Join(t.TempDir(), "meshmuxd")
 	if err := os.WriteFile(source, pkg, 0600); err != nil {
 		t.Fatal(err)
 	}
-	m := upgrade.Manifest{Schema: upgrade.Schema, Version: "1.0.1", Architecture: runtime.GOARCH,
+	return upgrade.Manifest{Schema: upgrade.Schema, Version: "1.0.1", Architecture: runtime.GOARCH,
 		PolicySchema: upgrade.PolicySchema, Components: []upgrade.Component{{Name: "meshmuxd",
 			Version: "dev-20261023", Architecture: runtime.GOARCH, Source: "file://" + source,
 			SHA256: componentSHA, Format: "elf", Dev: true}}}
+}
+
+// fixtureConfig pins one manifest body the way a Web approval pins its SHA-256.
+// The canonical table gate is relaxed: a fixture manifest carries only the one
+// component under test, while production Run uses upgrade.Manifest.Validate.
+func fixtureConfig(t *testing.T, m upgrade.Manifest) Config {
+	t.Helper()
 	body, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
+	previous := validateManifest
+	validateManifest = func(upgrade.Manifest) error { return nil }
+	t.Cleanup(func() { validateManifest = previous })
 	return Config{Target: "1.0.1", ManifestSHA256: shaOf(body), OperationID: strings.Repeat("a", 32),
 		WorkDir: t.TempDir(), FetchManifest: func(context.Context) ([]byte, error) { return body, nil }}
 }
@@ -66,7 +78,7 @@ func TestRunRefusesInvalidArguments(t *testing.T) {
 			tc.mutate(&cfg)
 			runner := &fixtureRunner{}
 			_, err := Run(context.Background(), cfg, runner)
-			if code, _, _ := strings.Cut(err.Error(), ": "); code != tc.code {
+			if code := codeOf(err); code != tc.code {
 				t.Fatalf("code = %q, want %q", code, tc.code)
 			}
 			if len(runner.calls) != 0 {
@@ -75,11 +87,12 @@ func TestRunRefusesInvalidArguments(t *testing.T) {
 		})
 	}
 }
+
 func TestRunRefusesTamperedPackage(t *testing.T) {
-	cfg := fixtureConfig(t, []byte("fixture package\n"), strings.Repeat("0", 64))
+	cfg := fixtureConfig(t, fixtureManifest(t, []byte("fixture package\n"), strings.Repeat("0", 64)))
 	runner := &fixtureRunner{}
 	_, err := Run(context.Background(), cfg, runner)
-	if code, _, _ := strings.Cut(err.Error(), ": "); code != "UPDATE_DIGEST_MISMATCH" {
+	if code := codeOf(err); code != "UPDATE_DIGEST_MISMATCH" {
 		t.Fatalf("code = %q, want UPDATE_DIGEST_MISMATCH (err %v)", code, err)
 	}
 	if len(runner.calls) != 0 {
@@ -89,12 +102,50 @@ func TestRunRefusesTamperedPackage(t *testing.T) {
 		t.Fatalf("scratch files left behind: %v", entries)
 	}
 }
+
+// TestRunRefusesUnpinnedManifest is the manifest-pin property: the approved
+// SHA-256 is the only trust anchor, so a different valid manifest served by the
+// Hub is refused before it is parsed, and a manifest naming another version is
+// refused before any package is read.
+func TestRunRefusesUnpinnedManifest(t *testing.T) {
+	pkg := []byte("fixture package\n")
+	approved := fixtureManifest(t, pkg, shaOf(pkg))
+	cfg := fixtureConfig(t, approved)
+
+	other := approved
+	other.Version = "1.0.2"
+	otherBody, err := json.Marshal(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fixtureRunner{}
+	cfg.FetchManifest = func(context.Context) ([]byte, error) { return otherBody, nil }
+	if _, err := Run(context.Background(), cfg, runner); codeOf(err) != "UPDATE_DIGEST_MISMATCH" {
+		t.Fatalf("unpinned manifest: code = %q, want UPDATE_DIGEST_MISMATCH (err %v)", codeOf(err), err)
+	}
+
+	// A pin that matches a manifest naming another target is refused as well.
+	body, err := json.Marshal(approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.FetchManifest = func(context.Context) ([]byte, error) { return body, nil }
+	cfg.ManifestSHA256 = shaOf(body)
+	cfg.Target = "1.0.2"
+	if _, err := Run(context.Background(), cfg, runner); codeOf(err) != "UPDATE_TARGET_INVALID" {
+		t.Fatalf("wrong target: code = %q, want UPDATE_TARGET_INVALID (err %v)", codeOf(err), err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("refusals executed %v", runner.calls)
+	}
+}
+
 func TestRunStagesVerifiedPackage(t *testing.T) {
 	pkg := []byte("fixture package\n")
-	cfg := fixtureConfig(t, pkg, shaOf(pkg))
+	cfg := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
 	runner := &fixtureRunner{}
 	result, err := Run(context.Background(), cfg, runner)
-	if code, _, _ := strings.Cut(err.Error(), ": "); code != "UPDATE_HANDOFF_NOT_IMPLEMENTED" {
+	if code := codeOf(err); code != "UPDATE_HANDOFF_NOT_IMPLEMENTED" {
 		t.Fatalf("code = %q, want UPDATE_HANDOFF_NOT_IMPLEMENTED (err %v)", code, err)
 	}
 	staged, readErr := os.ReadFile(result.VerifiedPath)

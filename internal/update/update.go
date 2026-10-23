@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
@@ -31,6 +32,8 @@ type Config struct {
 }
 
 // Result reports what was staged; it never claims the target is installed.
+// A non-nil Result returned with an error is staged-only: VerifiedPath is set
+// only after the digest matched, and no handoff has run.
 type Result struct {
 	VerifiedPath string           `json:"verified_path"`
 	Manifest     upgrade.Manifest `json:"manifest"`
@@ -39,9 +42,14 @@ type Result struct {
 func fail(code, detail string) error { return errors.New(code + ": " + detail) }
 
 var (
+	// targetRE mirrors upgrade's unexported releaseVersion; keep the two in step.
 	targetRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 	digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opIDRE   = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	// validateManifest is the canonical manifest gate. Tests that build a
+	// single-component fixture manifest replace it; production always uses
+	// upgrade.Manifest.Validate.
+	validateManifest = func(m upgrade.Manifest) error { return m.Validate() }
 	// errHandoff is the Task 4 seam: until then a verified package is staged
 	// only, never applied, and no subprocess has run.
 	errHandoff = fail("UPDATE_HANDOFF_NOT_IMPLEMENTED", "verified package staged; the handoff segment is not installed")
@@ -74,6 +82,12 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if json.Unmarshal(body, &m) != nil || m.Schema != upgrade.Schema {
 		return Result{}, fail("MANIFEST_INVALID", "the manifest is not this binary's contract")
 	}
+	// Production runs the canonical gate of the manifest package, which also
+	// rejects a foreign policy schema, architecture or component table.
+	if err := validateManifest(m); err != nil {
+		code, _, _ := strings.Cut(err.Error(), ": ")
+		return Result{}, fail(code, "the manifest is not this binary's contract")
+	}
 	if m.Version != cfg.Target {
 		return Result{}, fail("UPDATE_TARGET_INVALID", "the manifest does not describe the approved target")
 	}
@@ -91,9 +105,7 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 
 func packageComponent(m upgrade.Manifest) (upgrade.Component, bool) {
 	for _, c := range m.Components {
-		dev := c.Dev && (strings.HasPrefix(c.Source, "file://") || strings.HasPrefix(c.Source, "https://"))
-		release := !c.Dev && strings.HasPrefix(c.Source, "https://github.com/")
-		if c.Name == "meshmuxd" && c.Architecture == runtime.GOARCH && digestRE.MatchString(c.SHA256) && (dev || release) {
+		if c.Name == "meshmuxd" && c.Architecture == runtime.GOARCH && digestRE.MatchString(c.SHA256) {
 			return c, true
 		}
 	}
@@ -141,10 +153,13 @@ func readSource(ctx context.Context, source string) ([]byte, error) {
 		return nil, fail("UPDATE_SOURCE_INVALID", "the manifest source is not a valid URL")
 	}
 	res, err := downloadClient.Do(req)
-	if err != nil || res.StatusCode != http.StatusOK {
+	if err != nil {
 		return nil, fail("UPDATE_DOWNLOAD_FAILED", "the package could not be downloaded")
 	}
 	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fail("UPDATE_DOWNLOAD_FAILED", "the package host refused the download")
+	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, 128<<20+1))
 	if err != nil || len(data) == 0 || len(data) > 128<<20 {
 		return nil, fail("UPDATE_DOWNLOAD_FAILED", "the package download was incomplete")
@@ -160,23 +175,23 @@ func hexDigest(data []byte) string {
 }
 
 // HubManifest reads the two root-owned Agent files and fetches the manifest
-// over the authenticated channel; no manifest body ever comes from argv.
+// over the authenticated channel; no manifest body ever comes from argv. Codes
+// name the failing file: AGENT_CONFIG_UNAVAILABLE for agent.json,
+// AGENT_IDENTITY_UNAVAILABLE for identity.json, and the validation codes below.
 func HubManifest(ctx context.Context) ([]byte, error) {
 	var cfg node.Config
 	var identity node.Identity
-	for _, f := range []struct {
-		path string
-		v    any
-	}{{node.AgentConfigPath, &cfg}, {node.IdentityPath, &identity}} {
-		if info, err := os.Lstat(f.path); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-			return nil, errors.New("AGENT_CONFIG_UNAVAILABLE")
-		}
-		if data, err := os.ReadFile(f.path); err != nil || json.Unmarshal(data, f.v) != nil {
-			return nil, errors.New("AGENT_CONFIG_UNAVAILABLE")
-		}
+	if err := readAgentFile(node.AgentConfigPath, &cfg, "AGENT_CONFIG_UNAVAILABLE"); err != nil {
+		return nil, err
 	}
-	if cfg.ValidateInstalled() != nil || identity.ValidateFor(cfg) != nil {
-		return nil, errors.New("AGENT_IDENTITY_UNAVAILABLE")
+	if err := readAgentFile(node.IdentityPath, &identity, "AGENT_IDENTITY_UNAVAILABLE"); err != nil {
+		return nil, err
+	}
+	if err := cfg.ValidateInstalled(); err != nil {
+		return nil, errors.New("AGENT_CONFIG_INVALID")
+	}
+	if err := identity.ValidateFor(cfg); err != nil {
+		return nil, errors.New("AGENT_IDENTITY_MISMATCH")
 	}
 	client, err := node.NewClient(cfg, identity, nil)
 	if err != nil {
@@ -187,4 +202,22 @@ func HubManifest(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("MANIFEST_UNAVAILABLE")
 	}
 	return body, nil
+}
+
+// readAgentFile opens one Agent-owned file: a regular 0600 file whose owner is
+// this process's effective uid, the same rule node.readPrivateFile enforces.
+func readAgentFile(path string, v any, code string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return errors.New(code)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return errors.New(code)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, v) != nil {
+		return errors.New(code)
+	}
+	return nil
 }

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/update"
@@ -87,7 +89,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 // because only the Agent may approve an upgrade on this host.
 func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("__internal-update", flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	// Never echo caller-supplied arguments: unknown flags print only the fixed
+	// usage line, as the other hidden commands do.
+	flags.SetOutput(io.Discard)
 	var cfg update.Config
 	confirm := flags.Bool("confirm-target", false, "confirm the Web-approved target")
 	flags.StringVar(&cfg.Target, "target", "", "approved target version")
@@ -122,13 +126,15 @@ func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	return 0
 }
 
+// isTerminal reports whether stdin is a terminal. ModeCharDevice alone is not
+// enough: /dev/null is also a character device, so the ioctl is the test.
 func isTerminal(stdin io.Reader) bool {
 	file, ok := stdin.(*os.File)
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	_, err := unix.IoctlGetTermios(int(file.Fd()), unix.TCGETS)
+	return err == nil
 }
 
 func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
