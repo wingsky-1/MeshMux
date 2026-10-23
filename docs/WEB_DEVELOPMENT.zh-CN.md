@@ -1,6 +1,6 @@
 # Web 安全基座：隔离运行与验收
 
-对应 Issue #2。当前仅实现 Web 认证、SQLite、只读控制台；**NOT READY TO INSTALL**。不连接 sing-box、Headscale、Agent 或真实服务器，不创建有效订阅。`meshmux install` 继续非零退出。首发目标仍是 v1.0.0，本阶段不创建 Tag/Release。
+对应 Issue #2，后续 #5～#10 已在此基座上合入：Web 现已覆盖 Hub/Line/Out 安装、订阅用户与双格式订阅下载、Mesh 设备与子网路由、分流策略校验/发布，`meshmux install hub|edge|out` 正常可用（不再是占位或非零退出）。**仍非正式安装发行包**：v1.0.0 发布前不创建 Tag/Release；#11 统一升级尚未实现。本文其余部分仍描述本地隔离运行 Web 的方式。
 
 ## 本机启动（Linux，普通用户）
 
