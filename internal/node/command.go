@@ -29,10 +29,12 @@ type CommandRunner interface {
 }
 
 // Spawner is the start-only half of the same boundary. Spawn returns once the
-// child exists; the Agent never waits for it, because the poll loop must keep
-// heartbeating while the child runs (30s poll interval).
+// child exists, with its PID, and the Agent never waits for it: the poll loop
+// must keep heartbeating while the child runs (30s poll interval). The PID is
+// how the next poll tells "the update is still running" from "the child died
+// without installing the target".
 type Spawner interface {
-	Spawn(context.Context, string, ...string) error
+	Spawn(context.Context, string, ...string) (int, error)
 }
 
 // ExecRunner invokes one executable with an explicit argv and no shell.
@@ -48,14 +50,15 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 // never wait on a terminal, and its stderr joins the Agent's own journal so a
 // failed update still leaves its stable code behind. A cgroup/transient-unit
 // boundary for the child is 11c-2.
-func (ExecRunner) Spawn(ctx context.Context, name string, args ...string) error {
+func (ExecRunner) Spawn(ctx context.Context, name string, args ...string) (int, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return err
+		return 0, err
 	}
+	pid := cmd.Process.Pid
 	go func() { _ = cmd.Wait() }()
-	return nil
+	return pid, nil
 }
 
 // The production runner must keep both halves of the boundary: a lost Spawn
@@ -298,6 +301,9 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
 		Runner:     ExecRunner{},
 		Controller: controller,
 		Logger:     newRunLogger(stderr),
+		// StageTargets is wired by #11c-1 Task 6: Client.StageTarget reads
+		// GET /api/agent/upgrade-target/{operation_id}. Until then the field is
+		// nil and every stage row takes the pre-upgrade config stage path.
 	})
 	if err != nil {
 		return err
