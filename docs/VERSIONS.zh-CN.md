@@ -11,6 +11,8 @@
 
 这份表是**待发行校验的设计基线**，不是已完成的制品锁。Issue #5 PR A 已固定 **Caddy 2.11.7 / Headscale 0.29.5** 官方 GitHub 的 amd64/arm64 下载来源及 release asset SHA-256（见 `internal/install/artifacts.go`）；MeshMux 自有程序与 Debian apt 包的制品/版本锁尚待 PR B 交付，所以 **禁止真正 apply**。任何真实 install 前仍必须有完整的来源、SHA-256、架构、目标路径和可用签名策略。
 
+**#11a 已交付只读发行 manifest**（`internal/upgrade/manifest.go`，`GET /tasks` 展示）：上表四个固定组件（Caddy / Headscale / sing-box / Mihomo）的版本、架构、官方 GitHub 来源与 SHA-256 由既有 pin 派生为统一结构，附带 `policy_schema=8` 与 `route_policy_revisions` 槽位，并在 `Validate` 中拒绝未知架构、未知 schema、`policy_schema≠8` 与任何被篡改的组件行。manifest 只描述发行，**不下载、不 apply、不回滚**；持久化升级任务（11b）、受限执行器（11c-1/2/3）、Hub 自升级（11d）与组件组合兼容闸门（11e）尚未实现，因此本条不构成“Web 统一升级已可用”。
+
 | 组件 | v1.0.0 候选基线 | 使用范围 |
 | --- | --- | --- |
 | 主机 OS | Debian 13 Trixie | Hub/Line/Out Linux amd64/arm64 |
