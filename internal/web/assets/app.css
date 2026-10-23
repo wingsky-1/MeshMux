@@ -557,6 +557,9 @@ nav a.active {
 }
 .details code {
   font-size: 12px;
+  /* Long digests wrap inside table cells instead of forcing the page wider;
+     dl .details dd already sets this, so only table.details cells change. */
+  overflow-wrap: anywhere;
 }
 .empty-page {
   text-align: center;
