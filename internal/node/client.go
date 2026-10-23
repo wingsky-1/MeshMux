@@ -28,6 +28,7 @@ import (
 const (
 	agentPairPath      = "/api/agent/pair"
 	agentMetadataPath  = "/api/agent/node"
+	agentManifestPath  = "/api/agent/manifest"
 	agentConfigPrefix  = "/api/agent/config/"
 	agentHeartbeatPath = "/api/agent/heartbeat"
 	agentTasksPath     = "/api/agent/tasks"
@@ -37,6 +38,7 @@ const (
 	maxErrorBody       = 4 << 10
 	maxPairBody        = 4 << 10
 	maxMetadataBody    = 4 << 10
+	maxManifestBody    = 64 << 10
 	// maxConfigBody bounds one candidate document. The v2 document carries
 	// the per-Line VLESS users and the REALITY block, so the bound is sized
 	// for the fixed maximum of 1024 users and stays bounded: a larger body
@@ -68,6 +70,11 @@ func (e *ClientError) Error() string {
 	}
 	return e.Code
 }
+
+// ManifestBytes is the release manifest document exactly as the Hub served it.
+// It stays opaque here: the update path owns the pin it verifies, so this
+// package never parses, rewrites or caches a manifest body.
+type ManifestBytes []byte
 
 // Client is the outbound Hub management client. One Client may be reused for
 // pairing, polling and reporting; a successful Pair updates its in-memory
@@ -204,6 +211,25 @@ func (c *Client) Metadata(ctx context.Context) (Metadata, error) {
 		return Metadata{}, &ClientError{Code: "METADATA_INVALID", StatusCode: response.status}
 	}
 	return metadata, nil
+}
+
+// Manifest fetches the read-only release manifest of this Hub build from the
+// fixed agent path. The bytes are returned untouched: the caller (the update
+// path) verifies them against its pinned manifest SHA-256 and never falls back
+// to a cached newer release.
+func (c *Client) Manifest(ctx context.Context) (ManifestBytes, error) {
+	identity, err := c.authenticatedIdentity()
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.doJSON(ctx, http.MethodGet, agentManifestPath, identity.IdentityToken, nil, maxManifestBody)
+	if err != nil {
+		return nil, err
+	}
+	if len(response.body) == 0 {
+		return nil, &ClientError{Code: "SERVER_RESPONSE_INVALID", StatusCode: response.status}
+	}
+	return ManifestBytes(response.body), nil
 }
 
 // Candidate fetches one exact immutable candidate from the fixed revision
@@ -367,7 +393,8 @@ func (c *Client) doJSON(
 		return jsonResponse{}, &ClientError{Code: "REQUEST_INVALID"}
 	}
 	fixedPath := path == agentPairPath || path == agentMetadataPath ||
-		path == agentHeartbeatPath || path == agentTasksPath || path == agentResultPath ||
+		path == agentManifestPath || path == agentHeartbeatPath || path == agentTasksPath ||
+		path == agentResultPath ||
 		strings.HasPrefix(path, agentConfigPrefix) && validRevisionPath(path)
 	if !fixedPath {
 		return jsonResponse{}, &ClientError{Code: "REQUEST_INVALID"}
