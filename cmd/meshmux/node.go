@@ -25,6 +25,10 @@ const (
 
 var pairingCodePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
+// operationIDPattern mirrors the installer's operation ID rule so a carried
+// chain ID is validated before it reaches any ledger or journal path.
+var operationIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
 // runInternalAgentVersion is the zero-argument service probe used by the Node
 // installer. It deliberately exposes neither a public version command nor any
 // caller-controlled paths or arguments.
@@ -87,6 +91,14 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	planOnly := flags.Bool("plan", false, "show a read-only installation plan")
 	yes := flags.Bool("yes", false, "confirm installation after displaying the plan")
 	repair := flags.Bool("repair", false, "repair an existing node without deleting identity or data")
+	// nonInteractive is set only by the Web-driven handoff, which has no
+	// operator at the terminal.
+	nonInteractive := flags.Bool("non-interactive", false, "refuse any prompt; used by the Web-driven handoff")
+	// operationID carries the upgrade chain's operation ID into the new
+	// package's own ledger, so the handoff and the install share one audit ID.
+	// It is validated with the installer's own 32-hex rule; an empty value
+	// generates a fresh local ID as before.
+	operationIDFlag := flags.String("operation-id", "", "operation ID of the upgrade chain")
 	flags.StringVar(&cfg.HubURL, "hub", "", "Hub HTTPS origin")
 	flags.StringVar(&cfg.NodeID, "node", "", "32-character lowercase node ID")
 	flags.IntVar(&cfg.VLESSPort, "vless-port", 0, "VLESS listening port")
@@ -99,8 +111,17 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		fmt.Fprintln(stderr, "CONFIG_INVALID: --plan cannot be combined with --yes or --repair")
 		return 2
 	}
+	if *nonInteractive && (!*yes || !*repair) {
+		fmt.Fprintln(stderr, "UPDATE_INTERACTIVE_REFUSED: --non-interactive requires --yes --repair")
+		return 3
+	}
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	operationID := *operationIDFlag
+	if operationID != "" && !operationIDPattern.MatchString(operationID) {
+		fmt.Fprintln(stderr, "OPERATION_ID_INVALID: need 32 lowercase hex characters")
 		return 2
 	}
 
@@ -123,10 +144,12 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		return 3
 	}
 
-	operationID, err := install.NewOperationID()
-	if err != nil {
-		fmt.Fprintln(stderr, "OPERATION_ID_FAILED")
-		return 1
+	if operationID == "" {
+		operationID, err = install.NewOperationID()
+		if err != nil {
+			fmt.Fprintln(stderr, "OPERATION_ID_FAILED")
+			return 1
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nodePlanTimeout)
 	checks, sshPorts := runner.PreflightNode(ctx, cfg, state.Node != nil)
@@ -156,14 +179,14 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	}
 
 	pairingCode := ""
-	if !*repair {
+	if !*repair && !*nonInteractive {
 		var ok bool
 		pairingCode, ok = readPairingCode(reader, stdout, stderr)
 		if !ok {
 			return 2
 		}
 	}
-	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, reader, stdout, stderr)
+	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, *nonInteractive, reader, stdout, stderr)
 	if applyErr != nil {
 		if ie, ok := errors.AsType[*install.InstallError](applyErr); ok {
 			result.ErrorCode, result.Stage, result.Recovery = ie.Code, ie.Stage, ie.Recovery
@@ -193,10 +216,11 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	return 0
 }
 
-func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bool, pairingCode string, reader *bufio.Reader, stdout, stderr io.Writer) (install.InstallResult, error) {
+func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bool, pairingCode string, nonInteractive bool, reader *bufio.Reader, stdout, stderr io.Writer) (install.InstallResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), nodeApplyTimeout)
-	result, err := runner.InstallNode(ctx, cfg, operationID, repair, pairingCode, install.NodeApplyOptions{})
-	if !repair || !pairingRequired(err) {
+	opts := install.NodeApplyOptions{NonInteractive: nonInteractive}
+	result, err := runner.InstallNode(ctx, cfg, operationID, repair, pairingCode, opts)
+	if !repair || !pairingRequired(err) || nonInteractive {
 		cancel()
 		return result, err
 	}
@@ -210,7 +234,7 @@ func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bo
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), nodeApplyTimeout)
 	defer cancel()
-	return runner.InstallNode(ctx, cfg, operationID, true, code, install.NodeApplyOptions{})
+	return runner.InstallNode(ctx, cfg, operationID, true, code, opts)
 }
 
 func pairingRequired(err error) bool {

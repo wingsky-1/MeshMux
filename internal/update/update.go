@@ -1,6 +1,7 @@
 // Package update validates a Web-approved target on the target node, fetches
-// the pinned manifest and package, and leaves SHA-256 verified bytes on disk.
-// It never installs: the handoff to the new package is Task 4 (#11c-1).
+// the pinned manifest and package, verifies its SHA-256, and hands the verified
+// bytes to the new package's own install: the old binary never installs itself
+// (pull-then-handoff, #11c-1).
 package update
 
 import (
@@ -15,28 +16,65 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
 const DefaultWorkDir = "/var/lib/meshmux-agent/update"
 
+// requiredSpace is the free space a handoff needs for the backup snapshot and
+// the new package; it matches the installer's own preflight floor.
+const requiredSpace = 1 << 30
+
+// systemctlPath is the fixed systemd entry the handoff uses to restart the
+// Agent. No caller or remote request can select another executable.
+const systemctlPath = "/usr/bin/systemctl"
+
 // Config is one approved update; the manifest body never travels through argv.
 type Config struct {
 	Target, ManifestSHA256, OperationID, WorkDir string
 	FetchManifest                                func(context.Context) ([]byte, error)
+	// CurrentVersion and Releases are the running build and the ordered
+	// release history of the approved manifest. Task 6 supplies the history;
+	// with none the executor can only honour the manifest's version binding.
+	CurrentVersion string
+	Releases       []string
+	// NodeConfig, Space and Readback are the host seams of the handoff. The
+	// defaults read the installed Agent configuration, stat / and hash the
+	// installed executor.
+	NodeConfig func() (node.Config, error)
+	Space      func(path string, minimum uint64) error
+	Readback   func() (string, error)
 }
 
-// Result reports what was staged; it never claims the target is installed.
+// Result reports what the handoff staged and observed. It never claims the
+// target is installed before ReadbackDigest matched the verified package.
 // A non-nil Result returned with an error is staged-only: VerifiedPath is set
-// only after the digest matched, and no handoff has run.
+// only after the digest matched.
 type Result struct {
-	VerifiedPath string           `json:"verified_path"`
-	Manifest     upgrade.Manifest `json:"manifest"`
+	VerifiedPath   string           `json:"verified_path"`
+	Manifest       upgrade.Manifest `json:"manifest"`
+	BackupPointer  string           `json:"backup_pointer,omitempty"`
+	ReadbackDigest string           `json:"readback_digest,omitempty"`
+}
+
+// backupPointer is the rollback pointer of one release: it names the release
+// being replaced before the new package runs. One file per target keeps every
+// step of a multi-release catch-up independently addressable (11c-3 owns the
+// restore semantics).
+type backupPointer struct {
+	OperationID    string `json:"operation_id"`
+	FromVersion    string `json:"from_version"`
+	Target         string `json:"target"`
+	ManifestSHA256 string `json:"manifest_sha256"`
+	PackageSHA256  string `json:"package_sha256"`
+	VerifiedPath   string `json:"verified_path"`
 }
 
 func fail(code, detail string) error { return errors.New(code + ": " + detail) }
@@ -46,14 +84,13 @@ var (
 	targetRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 	digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opIDRE   = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	// errHandoff is the Task 4 seam: until then a verified package is staged
-	// only, never applied, and no subprocess has run.
-	errHandoff = fail("UPDATE_HANDOFF_NOT_IMPLEMENTED", "verified package staged; the handoff segment is not installed")
 )
 
 // Run validates the approved target, fetches the pinned manifest and package,
-// then stops after the verified bytes are on disk. runner is the future handoff
-// boundary: it is stored and never executed in this segment.
+// then hands the verified bytes to the new package's install. The order is
+// fixed: gates before the space check, the space check before the backup
+// pointer, the pointer before any mutation, the new package before the Agent
+// restart, and the readback last.
 func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, error) {
 	var m upgrade.Manifest
 	switch {
@@ -67,6 +104,15 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 		return Result{}, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
 	case cfg.FetchManifest == nil:
 		return Result{}, fail("MANIFEST_UNAVAILABLE", "no authenticated manifest channel")
+	}
+	if cfg.NodeConfig == nil {
+		cfg.NodeConfig = installedNodeConfig
+	}
+	if cfg.Space == nil {
+		cfg.Space = install.DiskAvailable
+	}
+	if cfg.Readback == nil {
+		cfg.Readback = installedDigest
 	}
 	body, err := cfg.FetchManifest(ctx)
 	if err != nil || len(body) == 0 {
@@ -82,26 +128,145 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	if err := compatGate(m); err != nil {
+		return Result{}, err
+	}
+	if err := adjacencyGate(cfg); err != nil {
+		return Result{}, err
+	}
+	// The handoff reuses the recorded Agent configuration. Reading it is a
+	// gate, not a mutation: a host without one is not a Node this executor may
+	// upgrade (a Hub upgrades itself in 11d), so nothing is fetched or written.
+	installed, err := cfg.NodeConfig()
+	if err != nil {
+		return Result{}, fail("AGENT_CONFIG_UNAVAILABLE", "the installed Agent configuration could not be read")
+	}
+	// The backup snapshot and the new package both land on the root
+	// filesystem, exactly as the installer's own preflight checks it. Nothing
+	// is fetched, written or executed when that space is not there.
+	if err := cfg.Space("/", requiredSpace); err != nil {
+		return Result{}, fail("UPDATE_NO_SPACE", "the handoff needs free space for the backup snapshot and the new package")
+	}
 	path, err := fetchPackage(ctx, cfg.WorkDir, cfg.Target, c)
 	if err != nil {
 		return Result{}, err
 	}
-	_ = runner // Task 4 executes the fixed argv through this boundary.
-	return Result{VerifiedPath: path, Manifest: m}, errHandoff
+	result := Result{VerifiedPath: path, Manifest: m}
+	pointer, err := writeBackupPointer(cfg, c, path)
+	if err != nil {
+		return result, err
+	}
+	result.BackupPointer = pointer
+	if err := handoff(ctx, installed, cfg.OperationID, path, runner); err != nil {
+		return result, err
+	}
+	digest, err := cfg.Readback()
+	if err != nil || digest != c.SHA256 {
+		return result, fail("UPDATE_READBACK_MISMATCH", "the installed executor does not match the verified package digest")
+	}
+	result.ReadbackDigest = digest
+	return result, nil
+}
+
+// compatGate refuses a target this host cannot adopt: the stored policy schema
+// must be the one the manifest names (UPDATE_SCHEMA_INCOMPATIBLE), and every
+// route policy revision must name a known layer above zero. The target gate
+// checks the manifest's own shape; this gate is the migration contract.
+func compatGate(m upgrade.Manifest) error {
+	if m.PolicySchema != upgrade.PolicySchema {
+		return fail("UPDATE_SCHEMA_INCOMPATIBLE", "the target names another stored policy schema")
+	}
+	for layer, revision := range m.RoutePolicyRevisions {
+		if (layer != "client" && layer != "server") || revision < 1 {
+			return fail("MANIFEST_POLICY_REVISION_INVALID", "only client/server revisions above zero are valid")
+		}
+	}
+	return nil
+}
+
+// adjacencyGate applies the one-release-at-a-time rule when the approved
+// manifest carries the ordered history. Without a history there is nothing to
+// compare against, so the manifest's own version binding is the only gate.
+func adjacencyGate(cfg Config) error {
+	if len(cfg.Releases) == 0 || cfg.CurrentVersion == "" {
+		return nil
+	}
+	return upgrade.AdjacentRelease(cfg.Releases, cfg.CurrentVersion, cfg.Target)
+}
+
+// writeBackupPointer records the release being replaced before anything runs.
+// The file is written atomically so a crash leaves either no pointer or the
+// complete one, never a truncated rollback target.
+func writeBackupPointer(cfg Config, c upgrade.Component, path string) (string, error) {
+	pointer := backupPointer{OperationID: cfg.OperationID, FromVersion: cfg.CurrentVersion,
+		Target: cfg.Target, ManifestSHA256: cfg.ManifestSHA256, PackageSHA256: c.SHA256, VerifiedPath: path}
+	data, err := json.MarshalIndent(pointer, "", "  ")
+	if err != nil {
+		return "", fail("UPDATE_BACKUP_FAILED", "the rollback pointer could not be encoded")
+	}
+	final := filepath.Join(cfg.WorkDir, "backup-"+cfg.Target+".json")
+	if os.WriteFile(final+".part", data, 0600) != nil {
+		return "", fail("UPDATE_BACKUP_FAILED", "the rollback pointer could not be written")
+	}
+	if os.Rename(final+".part", final) != nil {
+		_ = os.Remove(final + ".part")
+		return "", fail("UPDATE_BACKUP_FAILED", "the rollback pointer could not be published")
+	}
+	return final, nil
+}
+
+// handoff execs the verified package's own install with a fixed argv and then
+// restarts the Agent. The install entry is the private one only: --repair
+// reuses the recorded identity and --non-interactive refuses every prompt, so
+// no stdin is ever read on a Web-driven upgrade.
+func handoff(ctx context.Context, installed node.Config, operationID, path string, runner node.CommandRunner) error {
+	args := []string{"install", string(installed.Role), "--hub", installed.HubURL,
+		"--node", installed.NodeID, "--vless-port", strconv.Itoa(installed.VLESSPort),
+		"--ssh-port", strconv.Itoa(installed.SSHPort), "--operation-id", operationID,
+		"--yes", "--repair", "--non-interactive"}
+	if _, err := runner.Run(ctx, path, args...); err != nil {
+		return fail("UPDATE_INSTALL_FAILED", "the new package's install refused the handoff; the previous release is preserved")
+	}
+	if _, err := runner.Run(ctx, systemctlPath, "restart", node.AgentUnit); err != nil {
+		return fail("UPDATE_RESTART_FAILED", "the verified package is installed but the Agent did not restart")
+	}
+	return nil
+}
+
+// installedNodeConfig reads the recorded Agent configuration the handoff
+// reuses, through the same 0600-and-owner rule as HubManifest.
+func installedNodeConfig() (node.Config, error) {
+	var cfg node.Config
+	if err := readAgentFile(node.AgentConfigPath, &cfg, "AGENT_CONFIG_UNAVAILABLE"); err != nil {
+		return node.Config{}, err
+	}
+	if err := cfg.ValidateInstalled(); err != nil {
+		return node.Config{}, err
+	}
+	return cfg, nil
+}
+
+// installedDigest hashes the installed executor, the readback the handoff
+// compares with the verified package.
+func installedDigest() (string, error) {
+	data, err := os.ReadFile(node.AgentBinaryPath)
+	if err != nil || len(data) == 0 {
+		return "", fail("UPDATE_READBACK_UNAVAILABLE", "the installed executor could not be read")
+	}
+	return hexDigest(data), nil
 }
 
 // validateTarget is the gate for a *target* release, which is by definition not
 // the table of the running build. It therefore checks what an upgrade must
-// honour rather than table equality: the target's own schema and policy
-// schema, its architecture, and a pinned meshmuxd component whose source class
-// matches its Dev flag. upgrade.Manifest.Validate stays the running-build
-// self-check and is not applied here.
+// honour rather than table equality: the target's own schema, its
+// architecture, and a pinned meshmuxd component whose source class matches its
+// Dev flag. The stored policy schema is the separate compat gate, because that
+// is the migration contract rather than a manifest-shape check.
+// upgrade.Manifest.Validate stays the running-build self-check and is not
+// applied here.
 func validateTarget(m upgrade.Manifest, target string) (upgrade.Component, error) {
 	if m.Schema != upgrade.Schema {
 		return upgrade.Component{}, fail("MANIFEST_SCHEMA_INVALID", "the target names another manifest schema")
-	}
-	if m.PolicySchema != upgrade.PolicySchema {
-		return upgrade.Component{}, fail("MANIFEST_POLICY_SCHEMA_INVALID", "the target names another policy schema")
 	}
 	if m.Version != target || !targetRE.MatchString(m.Version) {
 		return upgrade.Component{}, fail("UPDATE_TARGET_INVALID", "the manifest does not describe the approved target")

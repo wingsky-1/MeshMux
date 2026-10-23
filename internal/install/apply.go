@@ -111,8 +111,12 @@ type ApplyOptions struct {
 	// Test-only seam used by the isolated systemd integration test. It is not
 	// exposed by the CLI and cannot be enabled through user configuration.
 	InternalTLSForTest bool
-	Artifacts          []Artifact
-	Verify             func(context.Context, Config, CommandRunner, func(context.Context, string) error) error
+	// NonInteractive marks a Web-driven handoff: the operation must never wait
+	// for an operator, so a path that would need a prompt is refused with
+	// UPDATE_INTERACTIVE_REFUSED instead.
+	NonInteractive bool
+	Artifacts      []Artifact
+	Verify         func(context.Context, Config, CommandRunner, func(context.Context, string) error) error
 }
 
 type operationEvent struct {
@@ -211,6 +215,11 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	}
 	if repair && !hasState {
 		return fail("preflight", "REPAIR_STATE_MISSING", "Repair requires a state record created by MeshMux.")
+	}
+	if opts.NonInteractive && !repair {
+		// A Web-driven handoff reuses the recorded installation; without
+		// --repair the only continuation is an operator decision.
+		return fail("preflight", "UPDATE_INTERACTIVE_REFUSED", "A non-interactive handoff must pass repair and reuse the recorded installation.")
 	}
 	if hasState && !SameConfig(state.Config, c) {
 		return fail("preflight", "CONFIG_CONFLICT", "Repair only supports the recorded domains and proxy trust mode; domain migration is not part of this operation.")

@@ -26,8 +26,8 @@ func TestRunStagesChangedMeshmuxdTable(t *testing.T) {
 	cfg := fixtureConfig(t, m)
 
 	result, err := Run(context.Background(), cfg, &fixtureRunner{})
-	if code := codeOf(err); code != "UPDATE_HANDOFF_NOT_IMPLEMENTED" {
-		t.Fatalf("code = %q, want UPDATE_HANDOFF_NOT_IMPLEMENTED (err %v)", code, err)
+	if err != nil {
+		t.Fatalf("handoff: %v", err)
 	}
 	if staged, readErr := os.ReadFile(result.VerifiedPath); readErr != nil || string(staged) != string(pkg) {
 		t.Fatalf("staged bytes = %q, err %v", staged, readErr)
@@ -37,14 +37,15 @@ func TestRunStagesChangedMeshmuxdTable(t *testing.T) {
 	}
 }
 
-// TestRunRefusesForeignPolicySchema keeps the policy-schema gate: a target that
-// names another stored policy schema cannot be applied by this binary.
+// TestRunRefusesForeignPolicySchema keeps the stored-policy gate: a target that
+// names another stored policy schema cannot be applied by this binary, and the
+// refusal is the handoff's own compat code.
 func TestRunRefusesForeignPolicySchema(t *testing.T) {
 	m := fixtureManifest(t, []byte("fixture package\n"), strings.Repeat("a", 64))
 	m.PolicySchema = upgrade.PolicySchema + 1
 	cfg := fixtureConfig(t, m)
-	if code := runCode(t, cfg); code != "MANIFEST_POLICY_SCHEMA_INVALID" {
-		t.Fatalf("code = %q, want MANIFEST_POLICY_SCHEMA_INVALID", code)
+	if code := runCode(t, cfg); code != "UPDATE_SCHEMA_INCOMPATIBLE" {
+		t.Fatalf("code = %q, want UPDATE_SCHEMA_INCOMPATIBLE", code)
 	}
 }
 

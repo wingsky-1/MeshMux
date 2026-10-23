@@ -40,6 +40,11 @@ type NodeApplyOptions struct {
 	Preflight        func(context.Context, node.Config, bool) ([]Check, []int)
 	DownloadArtifact func(context.Context, Artifact, string) (string, error)
 
+	// NonInteractive marks a Web-driven handoff: the operation must never wait
+	// for an operator, so a path that would need a prompt is refused with
+	// UPDATE_INTERACTIVE_REFUSED instead.
+	NonInteractive bool
+
 	// Test-only seams. Root != "/" is required to use either override.
 	Artifacts []Artifact
 	Verify    func(context.Context, node.Config, CommandRunner, node.Readback) error
