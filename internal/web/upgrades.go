@@ -226,7 +226,7 @@ func upgradePage(p pageData, v upgradeSnapshot) templ.Component {
 func upgradeCheckHTML(v upgradeSnapshot) string {
 	out := `<section class="panel"><div class="panel-heading"><h2>检查新版本</h2><span class="badge">显式触发</span></div>` +
 		`<p class="hint">新版本只在操作员点击时查询，没有后台定时任务。查到的标签只是<b>未验证</b>建议：只有带固定 manifest pin 的版本才能批准，latest 永远不会直接落地。</p>` +
-		`<p class="hint">在 Hub 自升级（11d）与真实发行 pin 就绪前，批准会被拒绝：本机构建只能 pin 自己，因此不会有可成功的升级。</p>` +
+		`<p class="hint">本机构建只能 pin 自己的发行版本：比本机新的版本在 Hub 自升级（11d）与真实发行 pin 就绪前无法批准；落后于本机的节点仍可批准到本机发行，已运行本机构建的节点会被判为无需升级。</p>` +
 		`<p><a class="refresh" href="/tasks/check">检查新版本 ↻</a></p>`
 	if v.Checked != "" {
 		out += `<div class="notice" role="status">发现 ` + templ.EscapeString(v.Checked) +

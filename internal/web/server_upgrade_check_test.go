@@ -421,13 +421,13 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 	}
 }
 
-// TestApproveRefusedUntilHubSelfUpgrade pins the documented boundary: until
-// 11d ships with real release pins, this Hub can only pin its own build, so an
-// approval can only be refused. The page says so, and the self-version case
-// returns the stable UPGRADE_ALREADY_CURRENT code without writing anything.
+// TestApproveRefusedUntilHubSelfUpgrade pins the self-version boundary and the
+// page's claim: a node already reporting this build is refused as
+// UPGRADE_ALREADY_CURRENT (nothing written), and the page says a *newer* release
+// needs 11d plus real pins. Approving a lagging node is a separate, intended
+// path covered by TestApproveEnqueuesStampedChain.
 func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
-	// A node that already reports this build: the only non-empty read-back a
-	// single-pin Hub can produce.
+	// A node that already reports this build.
 	b, app, nodeID, _ := upgradeApproveFixture(t, node.CurrentAgentVersion)
 	manifest, err := upgrade.ForArch(runtime.GOARCH)
 	if err != nil {
@@ -448,9 +448,16 @@ func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
 	// The page states the boundary instead of letting the operator discover it
 	// through a refusal.
 	app.releaseSource = func(context.Context) (string, error) { return manifest.Version, nil }
+	// The page states the boundary precisely: newer releases need 11d, while a
+	// lagging node is still approvable to this Hub's release.
 	body := b.req("GET", "/tasks/check", nil, nil).Body.String()
-	if !strings.Contains(body, "11d") || !strings.Contains(body, "批准会被拒绝") {
-		t.Fatal("check page does not state that approvals stay refused until 11d")
+	for _, want := range []string{"11d", "无法批准", "落后于本机的节点仍可批准"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("check page does not state %q", want)
+		}
+	}
+	if strings.Contains(body, "不会有可成功的升级") {
+		t.Fatal("check page claims no upgrade can succeed")
 	}
 }
 

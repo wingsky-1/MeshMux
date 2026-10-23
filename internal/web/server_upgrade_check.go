@@ -15,15 +15,15 @@ package web
 // target on that chain's pending config.stage row. A refusal stores nothing and
 // leaves the previous revision live.
 //
-// Until 11d (Hub self-upgrade) ships with real release pins, every approval is
-// refused, by construction and on purpose. This Hub can only pin its own build,
-// so manifest.Version is always node.CurrentAgentVersion; a node's read-back
-// version can therefore only be empty (UPGRADE_AGENT_UNOBSERVED) or equal to
-// that same build (UPGRADE_ALREADY_CURRENT). Both paths fail closed and write
-// nothing. The mixed-version, retry and adjacency branches below are the
-// reachable behaviour only once a Hub can pin a release other than the one it
-// runs, which is exactly what 11d plus a published meshmuxd release provide.
-// This is a documented boundary, not a missing implementation.
+// Until 11d (Hub self-upgrade) ships with real release pins, this Hub can pin
+// only the release it runs, so a target newer than the running build cannot be
+// approved (MANIFEST_UNAVAILABLE). A node already reporting the running build is
+// refused as UPGRADE_ALREADY_CURRENT. A node whose read-back is older — for
+// example a fleet node recorded by a previous Hub build and still persisted in
+// observed_agent_version — can be approved to the running build and queues
+// normally; that is an intended path today, and the mixed-version, retry and
+// adjacency branches below govern it. Those branches are not conditionally
+// reachable code: they run on every lagging-node approval.
 
 import (
 	"context"
@@ -193,11 +193,12 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 	// The pin is the manifest this Hub can hand the Agent; a tag alone never
 	// becomes a target.
 	//
-	// Consequence until 11d: this Hub can only pin its own build, so a requested
-	// release other than node.CurrentAgentVersion is refused here
-	// (MANIFEST_UNAVAILABLE) and the same build is refused below as
-	// UPGRADE_ALREADY_CURRENT. No approval can succeed yet; that is the intended
-	// fail-closed boundary, not an untested gap.
+	// Consequence until 11d: this Hub can pin only the build it runs, so a
+	// requested release other than node.CurrentAgentVersion is refused here
+	// (MANIFEST_UNAVAILABLE). The running build itself is refused below as
+	// UPGRADE_ALREADY_CURRENT only when the node already reports it; a lagging
+	// node's read-back differs, so it passes through to the gates below, which
+	// decide whether the chain may queue.
 	if manifest.Version != version {
 		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeManifestUnavailable,
 			"该版本尚未有可验证的 manifest pin。", "latest 只是建议；请等待该发行提供 manifest 后再批准。")
@@ -273,9 +274,8 @@ func (s *store) approveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 		return approvedUpgrade{}, err
 	}
 	if manifest.Version == observed {
-		// Reachable today: the Hub pins only its own build, so a node that has
-		// read back that build lands here. 11d lifts this by making a newer
-		// release pinnable.
+		// A node already on the running build. 11d lifts the *newer* target
+		// refusal; it does not change this branch.
 		return approvedUpgrade{}, errors.New("UPGRADE_ALREADY_CURRENT: the node already runs the approved release")
 	}
 	if len(history) > 0 {

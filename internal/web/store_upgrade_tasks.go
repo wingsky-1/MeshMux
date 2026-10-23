@@ -3,9 +3,11 @@ package web
 // Persistence of #11b upgrade task records. The record is not a new table: the
 // existing agent_tasks row that carries the fixed chain gains the target release
 // columns, so the same polling pull and revision space stay authoritative.
-// #11b has no executor and no HTTP write path; stampUpgradeTarget is the seam
-// #11c-1 calls when it enqueues an upgrade chain. Upgrade kinds are still
-// rejected by protocol.ValidateTask, so no upgrade.* row can be dispatched.
+// #11c-1 added the HTTP write path (POST /tasks/approve) and agent read
+// (GET /api/agent/upgrade-target/{operation_id}); both funnel through
+// stampUpgradeTargetTx, which an approval calls in the same transaction as the
+// chain it stamps. Upgrade kinds are still rejected by protocol.ValidateTask, so
+// no upgrade.* row can be dispatched.
 
 import (
 	"database/sql"
