@@ -199,7 +199,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 	manifest, manifestSHA, err := pinnedManifest(architecture)
 	if err != nil {
 		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeManifestUnavailable,
-			"当前构建没有可验证的发行 manifest。", "请修复 Hub 构建后重试；未写入任何升级记录。")
+			"该节点架构没有可验证的发行 manifest。", "请确认节点架构受支持（amd64/arm64）后重试；未写入任何升级记录。")
 		return
 	}
 	// The pin is the manifest this Hub can hand the Agent; a tag alone never

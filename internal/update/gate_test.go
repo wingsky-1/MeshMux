@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,12 +82,39 @@ func TestRunRefusesManifestForAnotherTarget(t *testing.T) {
 	}
 }
 
-// TestRunRefusesManifestForAnotherArchitecture keeps the architecture binding.
-func TestRunRefusesManifestForAnotherArchitecture(t *testing.T) {
+// TestRunRefusesForeignKeySetSchema keeps the set-envelope gate: a bare
+// single-arch manifest (the pre-6b shape) or a foreign set schema is refused
+// before any projection, package fetch or host action.
+func TestRunRefusesForeignKeySetSchema(t *testing.T) {
 	m := fixtureManifest(t, []byte("fixture package\n"), strings.Repeat("a", 64))
-	m.Architecture = "riscv64"
-	if code := runCode(t, fixtureConfig(t, m)); code != "MANIFEST_ARCH_INVALID" {
-		t.Fatalf("code = %q, want MANIFEST_ARCH_INVALID", code)
+	bare, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := fixtureSet(m)
+	foreign.Schema = upgrade.SetSchema + "-v2"
+	foreignBody, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"bare single-arch manifest", bare},
+		{"foreign set schema", foreignBody},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := fixtureConfig(t, m)
+			cfg.FetchManifest = func(context.Context) ([]byte, error) { return tc.body, nil }
+			runner := &fixtureRunner{}
+			if _, err := Run(context.Background(), cfg, runner); codeOf(err) != "MANIFEST_SCHEMA_INVALID" {
+				t.Fatalf("code = %q, want MANIFEST_SCHEMA_INVALID (err %v)", codeOf(err), err)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("foreign set schema executed %v", runner.calls)
+			}
+		})
 	}
 }
 

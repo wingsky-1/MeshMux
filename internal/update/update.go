@@ -92,7 +92,6 @@ var (
 // pointer, the pointer before any mutation, the new package before the Agent
 // restart, and the readback last.
 func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, error) {
-	var m upgrade.Manifest
 	switch {
 	case !targetRE.MatchString(cfg.Target):
 		return Result{}, fail("UPDATE_TARGET_INVALID", "target is not a SemVer release")
