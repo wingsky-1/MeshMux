@@ -1,6 +1,8 @@
 package upgrade
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -160,5 +162,117 @@ func TestManifestAcceptsDevFileSource(t *testing.T) {
 	m.Components[index].Dev = false
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "MANIFEST_COMPONENT_INVALID") {
 		t.Fatalf("dev build declared as release err = %v, want MANIFEST_COMPONENT_INVALID", err)
+	}
+}
+
+// cloneSet returns an independent copy so one mutation case cannot leak into the
+// pinned tables.
+func cloneSet(base ManifestSet) ManifestSet {
+	out := ManifestSet{Schema: base.Schema, Version: base.Version, PolicySchema: base.PolicySchema,
+		Manifests: make(map[string]Manifest, len(base.Manifests))}
+	for arch, m := range base.Manifests {
+		m.Components = append([]Component(nil), m.Components...)
+		out.Manifests[arch] = m
+	}
+	return out
+}
+
+// TestForArchSetCarriesBothPinnedTables pins the dual-arch set contract (U4):
+// one release and policy schema, both architecture tables, and a per-arch
+// projection whose bytes are exactly upgrade.ForArch(arch). That byte identity
+// is what lets the approval pin one projection and the Agent verify the same
+// bytes after selecting its runtime.GOARCH entry from the served set.
+func TestForArchSetCarriesBothPinnedTables(t *testing.T) {
+	set, err := ForArchSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.Schema != SetSchema || set.Version != node.CurrentAgentVersion || set.PolicySchema != PolicySchema {
+		t.Fatalf("set header = %+v", set)
+	}
+	if err := set.Validate(); err != nil {
+		t.Fatalf("pinned set refused: %v", err)
+	}
+	if len(set.Manifests) != 2 {
+		t.Fatalf("set carries %d architecture tables, want both", len(set.Manifests))
+	}
+	body, err := json.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var served ManifestSet
+	if err := json.Unmarshal(body, &served); err != nil {
+		t.Fatalf("served set does not decode: %v", err)
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		want, err := ForArch(arch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBytes, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rawBytes, err := json.Marshal(served.Manifests[arch])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(rawBytes, wantBytes) {
+			t.Fatalf("%s projection bytes differ from ForArch:\n got: %s\nwant: %s", arch, rawBytes, wantBytes)
+		}
+		projected, projectedBytes, err := served.Projection(arch)
+		if err != nil || projected.Architecture != arch || !bytes.Equal(projectedBytes, wantBytes) {
+			t.Fatalf("%s projection = %+v, %q, %v", arch, projected, projectedBytes, err)
+		}
+	}
+	if _, _, err := served.Projection("mips"); err == nil || !strings.Contains(err.Error(), "MANIFEST_ARCH_INVALID") {
+		t.Fatalf("unknown architecture projection err = %v", err)
+	}
+}
+
+// TestManifestSetValidateRejectsTampering refuses a partial set, a foreign set
+// schema and a set whose entry contradicts its key, header or the pinned table.
+func TestManifestSetValidateRejectsTampering(t *testing.T) {
+	base, err := ForArchSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*ManifestSet)
+		code   string
+	}{
+		{"foreign set schema", func(s *ManifestSet) { s.Schema = "meshmux-release-set/v2" }, "MANIFEST_SET_SCHEMA_INVALID"},
+		{"version not semver", func(s *ManifestSet) { s.Version = "latest" }, "MANIFEST_VERSION_INVALID"},
+		{"policy schema mismatch", func(s *ManifestSet) { s.PolicySchema = 9 }, "MANIFEST_POLICY_SCHEMA_INVALID"},
+		{"missing arm64", func(s *ManifestSet) { delete(s.Manifests, "arm64") }, "MANIFEST_SET_INCOMPLETE"},
+		{"extra architecture", func(s *ManifestSet) { s.Manifests["riscv64"] = s.Manifests["amd64"] }, "MANIFEST_SET_INCOMPLETE"},
+		{"architecture under wrong key", func(s *ManifestSet) {
+			m := s.Manifests["amd64"]
+			m.Architecture = "arm64"
+			s.Manifests["amd64"] = m
+		}, "MANIFEST_ARCH_INVALID"},
+		{"entry version mismatch", func(s *ManifestSet) {
+			m := s.Manifests["amd64"]
+			m.Version = "9.9.9"
+			s.Manifests["amd64"] = m
+		}, "MANIFEST_VERSION_INVALID"},
+		{"entry policy mismatch", func(s *ManifestSet) {
+			m := s.Manifests["amd64"]
+			m.PolicySchema = 7
+			s.Manifests["amd64"] = m
+		}, "MANIFEST_POLICY_SCHEMA_INVALID"},
+		{"tampered component", func(s *ManifestSet) {
+			m := s.Manifests["amd64"]
+			m.Components = m.Components[1:]
+			s.Manifests["amd64"] = m
+		}, "MANIFEST_COMPONENT_INVALID"},
+	}
+	for _, tc := range cases {
+		set := cloneSet(base)
+		tc.mutate(&set)
+		if err := set.Validate(); err == nil || !strings.Contains(err.Error(), tc.code) {
+			t.Fatalf("%s: err = %v, want %s", tc.name, err, tc.code)
+		}
 	}
 }

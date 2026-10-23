@@ -254,6 +254,24 @@ func (s *store) getNodeAt(id string, now time.Time) (Node, error) {
 	return n, err
 }
 
+// observedArchitecture reads the architecture the node last reported. An
+// approval pins the manifest projection of that architecture, so an arm64 node
+// behind an amd64 Hub still verifies the bytes it selects from the set. The
+// value is the node's immutable runtime.GOARCH (validated on readback), so
+// reading it outside the approval transaction cannot race it to another arch;
+// the same-arch fallback is applied by the caller.
+func (s *store) observedArchitecture(id string) (string, error) {
+	var architecture string
+	err := s.db.QueryRow(`SELECT observed_architecture FROM nodes WHERE id=?`, id).Scan(&architecture)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("NODE_NOT_FOUND")
+	}
+	if err != nil {
+		return "", errors.New("DATABASE_UNAVAILABLE")
+	}
+	return architecture, nil
+}
+
 // consumePairing atomically exchanges a one-time code for a node-scoped
 // identity. Replay, expiry and role mismatch are distinct rejections; an
 // unknown code is a generic rejection to avoid node enumeration.

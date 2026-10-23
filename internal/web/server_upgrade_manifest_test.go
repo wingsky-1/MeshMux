@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"runtime"
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
@@ -27,10 +26,10 @@ func TestAgentManifestRequiresAuth(t *testing.T) {
 }
 
 // TestAgentManifestReturnsPinnedBytes pins the manifest-to-node channel: an
-// authenticated agent receives exactly the canonical JSON of this build's
-// pinned manifest (upgrade.ForArch), never a cached or caller-supplied version.
-// An unknown agent path still falls through to 404, so the new route does not
-// widen the agent surface.
+// authenticated agent receives the dual-arch set of this build (U4), and each
+// embedded architecture table is byte-identical to upgrade.ForArch(arch), the
+// document the approval pins. An unknown agent path still falls through to 404,
+// so the new route does not widen the agent surface.
 func TestAgentManifestReturnsPinnedBytes(t *testing.T) {
 	app, _ := testApp(t)
 	created, code := createPendingNode(t, app, "edge", "manifest-line", 8443, 2222)
@@ -48,16 +47,38 @@ func TestAgentManifestReturnsPinnedBytes(t *testing.T) {
 	if got := w.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
-	manifest, err := upgrade.ForArch(runtime.GOARCH)
-	if err != nil {
+	// Read the served envelope without re-encoding it: the projection bytes must
+	// be exactly what a per-arch manifest pin covers.
+	var envelope struct {
+		Schema    string                     `json:"schema"`
+		Manifests map[string]json.RawMessage `json:"manifests"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("manifest set: %v", err)
+	}
+	if envelope.Schema != upgrade.SetSchema || len(envelope.Manifests) != 2 {
+		t.Fatalf("served set header = %q with %d tables, want %q with both", envelope.Schema, len(envelope.Manifests), upgrade.SetSchema)
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		manifest, err := upgrade.ForArch(arch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(envelope.Manifests[arch], want) {
+			t.Fatalf("%s projection bytes differ from the pinned document:\n got: %s\nwant: %s", arch, envelope.Manifests[arch], want)
+		}
+	}
+	// The whole body is the Hub build's own valid set, not two loose documents.
+	var set upgrade.ManifestSet
+	if err := json.Unmarshal(w.Body.Bytes(), &set); err != nil {
 		t.Fatal(err)
 	}
-	want, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(w.Body.Bytes(), want) {
-		t.Fatalf("manifest bytes differ from the pinned document:\n got: %s\nwant: %s", w.Body.Bytes(), want)
+	if err := set.Validate(); err != nil {
+		t.Fatalf("served set is not this build's pinned release: %v", err)
 	}
 
 	if unknown := bearerReq(app, "GET", "/api/agent/manifests", paired.IdentityToken, nil); unknown.Code != http.StatusNotFound {

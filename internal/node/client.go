@@ -82,9 +82,10 @@ func (e *ClientError) Error() string {
 	return e.Code
 }
 
-// ManifestBytes is the release manifest document exactly as the Hub served it.
-// It stays opaque here: the update path owns the pin it verifies, so this
-// package never parses, rewrites or caches a manifest body.
+// ManifestBytes is the release manifest-set document exactly as the Hub served
+// it. It stays opaque here: the update path selects its own architecture
+// projection and owns the pin it verifies, so this package never parses,
+// rewrites or caches a manifest body.
 type ManifestBytes []byte
 
 // Client is the outbound Hub management client. One Client may be reused for
@@ -224,10 +225,11 @@ func (c *Client) Metadata(ctx context.Context) (Metadata, error) {
 	return metadata, nil
 }
 
-// Manifest fetches the read-only release manifest of this Hub build from the
-// fixed agent path. The bytes are returned untouched: the caller (the update
-// path) verifies them against its pinned manifest SHA-256 and never falls back
-// to a cached newer release.
+// Manifest fetches the read-only dual-arch release manifest set of this Hub
+// build from the fixed agent path. The bytes are returned untouched: the caller
+// (the update path) selects its own runtime.GOARCH projection, verifies that
+// projection against its pinned per-arch SHA-256 and never falls back to a
+// cached newer release or another architecture's table.
 func (c *Client) Manifest(ctx context.Context) (ManifestBytes, error) {
 	identity, err := c.authenticatedIdentity()
 	if err != nil {
