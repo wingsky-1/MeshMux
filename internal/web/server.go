@@ -132,6 +132,9 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/api/agent/pair", jsonAPI(app.pairAgent))
 	r.Get("/api/agent/node", jsonAPI(app.agentMetadata))
 	r.Get("/api/agent/config/{revision}", jsonAPI(app.agentCandidate))
+	// The read-only release manifest of the restricted executor (#11c-1): the
+	// body never travels as config.* params.
+	r.Get("/api/agent/manifest", jsonAPI(app.agentManifest))
 	r.Get("/api/agent/tasks", jsonAPI(app.agentTasks))
 	r.Post("/api/agent/heartbeat", jsonAPI(app.agentHeartbeat))
 	r.Post("/api/agent/result", jsonAPI(app.agentResult))
