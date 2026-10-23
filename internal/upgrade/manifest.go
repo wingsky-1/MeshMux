@@ -25,9 +25,12 @@ const Schema = "meshmux-release/v1"
 const PolicySchema = 8
 
 // Component is one fixed release asset. Architecture is explicit so an amd64
-// digest is never paired with an arm64 source.
+// digest is never paired with an arm64 source. Dev marks a pre-release dev
+// build: a dev- version with a file:// or https:// source instead of a GitHub
+// release, still pinned by SHA-256 (12e switches meshmuxd to a release).
 type Component struct {
 	Name, Version, Architecture, Source, SHA256, Format string
+	Dev                                                 bool
 }
 
 // Manifest is the release description the Hub shows and verifies.
@@ -44,8 +47,8 @@ type Manifest struct {
 // package, so its pins live here; scripts/ci-subscription-clients.sh verifies the
 // same release assets.
 var mihomo = map[string]Component{
-	"amd64": {"mihomo", node.MihomoVersion, "amd64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz", "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20", "gz"},
-	"arm64": {"mihomo", node.MihomoVersion, "arm64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz", "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0", "gz"},
+	"amd64": {"mihomo", node.MihomoVersion, "amd64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz", "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20", "gz", false},
+	"arm64": {"mihomo", node.MihomoVersion, "arm64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz", "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0", "gz", false},
 }
 
 // ForArch assembles the immutable manifest of one supported architecture. An
@@ -62,13 +65,19 @@ func ForArch(architecture string) (Manifest, error) {
 
 // pinnedComponents derives the table from the existing single sources of truth.
 func pinnedComponents(architecture string) ([]Component, bool) {
-	hub, kernel, client := install.PinnedArtifacts(architecture), install.PinnedNodeArtifacts(architecture), mihomo[architecture]
-	if len(hub) == 0 || len(kernel) == 0 || client.Name == "" {
+	hub, kernel := install.PinnedArtifacts(architecture), install.PinnedNodeArtifacts(architecture)
+	daemon, client := install.PinnedMeshmuxd(architecture), mihomo[architecture]
+	if len(hub) == 0 || len(kernel) == 0 || len(daemon) != 1 || client.Name == "" {
 		return nil, false
 	}
-	out := make([]Component, 0, len(hub)+len(kernel)+1)
-	for _, a := range append(append(hub, kernel...), install.Artifact{Component: client.Name, Version: client.Version, Source: client.Source, SHA256: client.SHA256, Format: client.Format}) {
-		out = append(out, Component{a.Component, a.Version, architecture, a.Source, a.SHA256, a.Format})
+	fixed := make([]install.Artifact, 0, len(hub)+len(kernel)+len(daemon)+1)
+	fixed = append(fixed, hub...)
+	fixed = append(fixed, kernel...)
+	fixed = append(fixed, daemon...)
+	fixed = append(fixed, install.Artifact{Component: client.Name, Version: client.Version, Source: client.Source, SHA256: client.SHA256, Format: client.Format})
+	out := make([]Component, 0, len(fixed))
+	for _, a := range fixed {
+		out = append(out, Component{a.Component, a.Version, architecture, a.Source, a.SHA256, a.Format, strings.HasPrefix(a.Version, "dev-")})
 	}
 	return out, true
 }
@@ -102,7 +111,17 @@ func (m Manifest) Validate() error {
 	}
 	byName := make(map[string]Component, len(canonical))
 	for _, c := range m.Components {
-		if !digestSHA.MatchString(c.SHA256) || !strings.HasPrefix(c.Source, "https://github.com/") {
+		if !digestSHA.MatchString(c.SHA256) {
+			return errors.New("MANIFEST_COMPONENT_INVALID: component source or digest is not pinned")
+		}
+		if c.Dev {
+			// A dev build is never a release: dev- version and a pinned local
+			// or intranet source, with the digest above as trust anchor.
+			if !strings.HasPrefix(c.Version, "dev-") || len(c.Version) == len("dev-") ||
+				!(strings.HasPrefix(c.Source, "file://") || strings.HasPrefix(c.Source, "https://")) {
+				return errors.New("MANIFEST_COMPONENT_INVALID: dev component is not pinned to a dev- build")
+			}
+		} else if !strings.HasPrefix(c.Source, "https://github.com/") {
 			return errors.New("MANIFEST_COMPONENT_INVALID: component source or digest is not pinned")
 		}
 		if _, duplicate := byName[c.Name]; duplicate {
@@ -116,4 +135,20 @@ func (m Manifest) Validate() error {
 		}
 	}
 	return nil
+}
+
+// AdjacentRelease refuses a version jump: target must be the immediate
+// successor of current in the ordered release history. Skipping a release would
+// make rollback target an unverified N-2, so it fails with UPGRADE_NOT_ADJACENT.
+func AdjacentRelease(history []string, current, target string) error {
+	for i, version := range history {
+		if version != current {
+			continue
+		}
+		if i+1 < len(history) && history[i+1] == target {
+			return nil
+		}
+		break
+	}
+	return errors.New("UPGRADE_NOT_ADJACENT: upgrade one release at a time")
 }

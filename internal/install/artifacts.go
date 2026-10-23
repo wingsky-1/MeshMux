@@ -56,8 +56,31 @@ var nodeArtifacts = map[string][]Artifact{
 	},
 }
 
+// meshmuxd is the executor itself. Until 12e publishes it on GitHub Releases it
+// ships as a Hub-hosted dev build: a dev- version and a file:// or intranet
+// https:// source, with SHA-256 as the only trust anchor. No dev build is
+// published yet, so these digests pin no existing artifact: replace them with
+// the published build's digest before serving an upgrade, until then
+// verification fails closed rather than trusting an unpinned file.
+var meshmuxdArtifacts = map[string][]Artifact{
+	"amd64": {
+		{Component: "meshmuxd", Version: "dev-20261023", Source: "file:///var/lib/meshmux/dev/meshmuxd-linux-amd64", SHA256: "7f4b5db4d75b5ceea146a4c0f7d0f13598bb4d9e1d1e8cceedd9ad368c163035", Format: "elf"},
+	},
+	"arm64": {
+		{Component: "meshmuxd", Version: "dev-20261023", Source: "file:///var/lib/meshmux/dev/meshmuxd-linux-arm64", SHA256: "de695531ef06285e0bbdd4a12d24d05ef4a74b1e54e86390f2673030fca25b9a", Format: "elf"},
+	},
+}
+
 func PinnedArtifacts(arch string) []Artifact {
 	a := artifacts[arch]
+	out := make([]Artifact, len(a))
+	copy(out, a)
+	return out
+}
+
+// PinnedMeshmuxd copies the executor pin so a caller cannot mutate the table.
+func PinnedMeshmuxd(arch string) []Artifact {
+	a := meshmuxdArtifacts[arch]
 	out := make([]Artifact, len(a))
 	copy(out, a)
 	return out
