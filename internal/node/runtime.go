@@ -86,15 +86,15 @@ type StageTarget struct {
 // task. A false ok means the row carries no target and is an ordinary config
 // stage.
 //
-// Wiring point (#11c-1 Task 6): the Hub exposes the read as
-// `GET /api/agent/upgrade-target/{operation_id}` on the authenticated agent
-// channel — the same shape as `GET /api/agent/config/{revision}` — returning the
-// stamped `target_version` + `manifest_sha256` for a pending stage row (404 when
-// the row is unstamped). `(*node.Client).StageTarget(ctx, operationID)` is the
-// client side, and `runInstalledAgent` (internal/node/command.go) must pass it as
-// `RuntimeOptions.StageTargets`. Until then the field stays nil, which keeps the
-// pre-upgrade behaviour: a stamped row is staged as ordinary config instead of
-// handing off. No upgrade can start, and nothing false is reported.
+// The Hub exposes the read as `GET /api/agent/upgrade-target/{operation_id}` on
+// the authenticated agent channel — the same shape as
+// `GET /api/agent/config/{revision}` — returning the stamped `target_version` +
+// `manifest_sha256` for the row regardless of its status (404 when the row is
+// unstamped). `(*node.Client).StageTarget(ctx, operationID)` is the client side
+// and is wired as `RuntimeOptions.StageTargets` by `runInstalledAgent`
+// (internal/node/command.go). A runtime without a source keeps the pre-upgrade
+// behaviour: a stamped row is staged as ordinary config instead of handing off,
+// so no upgrade starts and nothing false is reported.
 type StageTargetSource interface {
 	StageTarget(context.Context, string) (StageTarget, bool, error)
 }

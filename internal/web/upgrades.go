@@ -121,6 +121,13 @@ type upgradeSnapshot struct {
 	ManifestErr string
 	Nodes       []Node
 	Staged      map[string]StagedReadback
+	// Approved is the newest #11b target per node, so the page can show what an
+	// operator approved next to what the node actually read back.
+	Approved map[string]ApprovedTarget
+	// Checked and CheckErr carry the explicit "check new version" result. An
+	// empty Checked with an empty CheckErr means the operator has not asked.
+	Checked  string
+	CheckErr string
 	// LivePolicyRevisions is the active revision per layer read from the store.
 	// The manifest's route_policy_revisions slot is a target release contract and
 	// is deliberately not filled from live state.
@@ -155,7 +162,17 @@ func (app *Server) upgradeView(now time.Time) (upgradeSnapshot, error) {
 	if view.Staged, err = app.store.stagedReadbacks(); err != nil {
 		return upgradeSnapshot{}, err
 	}
+	if view.Approved, err = app.store.approvedTargets(); err != nil {
+		return upgradeSnapshot{}, err
+	}
 	return view, nil
+}
+
+// targetExcluded reports whether an approval cannot be offered for this node:
+// without a read-back Agent version the Hub cannot prove which candidate schema
+// the node consumes, so it is excluded instead of guessed.
+func (v upgradeSnapshot) targetExcluded(n Node) bool {
+	return n.ObservedAgentVersion == ""
 }
 
 // tasksPage is the "任务与升级" route. It reads the manifest and the two
@@ -169,8 +186,10 @@ func (app *Server) tasksPage(w http.ResponseWriter, r *http.Request, sess sessio
 	app.render(w, r, 200, upgradePage(pageData{Title: "任务与升级", Path: "/tasks", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, view))
 }
 
-// upgradePage renders the read-only page. It reuses Document for the head and
-// assets and holds no form, so it cannot mutate anything.
+// upgradePage renders the page. It reuses Document for the head and assets. It
+// is not read-only any more: the per-node approval form is the single mutation,
+// and the check link is a GET that stores nothing. The page never claims that a
+// queued chain is an applied release.
 func upgradePage(p pageData, v upgradeSnapshot) templ.Component {
 	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
 		var nav strings.Builder
@@ -185,20 +204,38 @@ func upgradePage(p pageData, v upgradeSnapshot) templ.Component {
 		body := `<a class="skip" href="#main">跳到内容</a><div class="shell"><aside class="sidebar">` +
 			`<a class="brand" href="/" aria-label="MeshMux 概览"><span class="mark" aria-hidden="true">M</span><span>MeshMux<small>网络，由你掌控</small></span></a>` +
 			`<div class="nav-label">工作空间</div><nav aria-label="主导航">` + nav.String() + `</nav>` +
-			`<div class="sidebar-foot"><span class="dot"></span> 任务与升级 · 只读预览<small>首个正式版本目标 v1.0.0</small></div></aside>` +
+			`<div class="sidebar-foot"><span class="dot"></span> 任务与升级 · 批准后排队<small>首个正式版本目标 v1.0.0</small></div></aside>` +
 			`<div class="workspace"><header class="topbar"><span>控制台 <span class="crumb">/ ` + templ.EscapeString(p.Title) + `</span></span>` +
 			`<div class="account"><span class="avatar">A</span><span>管理员</span><form action="/logout" method="post">` +
 			`<input type="hidden" name="csrf" value="` + templ.EscapeString(p.CSRF) + `"/><button class="text-button" type="submit">退出</button></form></div></header>` +
 			`<main id="main" class="content"><div class="page-heading"><div><p class="eyebrow">MESHMUX CONSOLE</p><h1>` +
-			templ.EscapeString(p.Title) + `</h1></div><span class="pill">只读 · 发行 manifest</span></div>` +
-			`<p class="subtitle">本页只展示发行 manifest 与各节点已回读的 active / staged 版本。它不发起升级、不执行 apply、不回滚，也不把已排队或已 staged 说成已生效。</p>`
+			templ.EscapeString(p.Title) + `</h1></div><span class="pill">发行 manifest · 逐台批准</span></div>` +
+			`<p class="subtitle">本页展示发行 manifest 与各节点已回读的 active / staged / 已批准版本。“检查新版本”只是建议；批准只登记目标并排队固定四任务链，执行在目标机本地完成。它不执行 apply、不回滚，也不把已排队说成已生效。</p>`
 		if p.Dev {
 			body += `<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>`
 		}
-		body += upgradeManifestHTML(v) + upgradeNodesHTML(v) +
+		body += upgradeCheckHTML(v) + upgradeManifestHTML(v) + upgradeNodesHTML(v, p.CSRF) +
 			`<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span><a href="/">返回控制台 →</a></span></footer></main></div></div>`
 		return Document(p.Title).Render(templ.WithChildren(ctx, templ.Raw(body)), w)
 	})
+}
+
+// upgradeCheckHTML is the explicit "check new version" button and its
+// advisory-only result. It is a GET link, so a check can never mutate anything;
+// the approve form next to each node is the only write on the page.
+func upgradeCheckHTML(v upgradeSnapshot) string {
+	out := `<section class="panel"><div class="panel-heading"><h2>检查新版本</h2><span class="badge">显式触发</span></div>` +
+		`<p class="hint">新版本只在操作员点击时查询，没有后台定时任务。查到的标签只是<b>未验证</b>建议：只有带固定 manifest pin 的版本才能批准，latest 永远不会直接落地。</p>` +
+		`<p class="hint">本机构建只能 pin 自己的发行版本：比本机新的版本在 Hub 自升级（11d）与真实发行 pin 就绪前无法批准；落后于本机的节点仍可批准到本机发行，已运行本机构建的节点会被判为无需升级。</p>` +
+		`<p><a class="refresh" href="/tasks/check">检查新版本 ↻</a></p>`
+	if v.Checked != "" {
+		out += `<div class="notice" role="status">发现 ` + templ.EscapeString(v.Checked) +
+			`（未验证）。仅提示，不代表可升级；请核对发行 manifest 后再逐台批准。</div>`
+	}
+	if v.CheckErr != "" {
+		out += `<div class="error" role="alert">` + templ.EscapeString(v.CheckErr) + `</div>`
+	}
+	return out + `</section>`
 }
 
 func upgradeManifestHTML(v upgradeSnapshot) string {
@@ -229,15 +266,16 @@ func upgradeManifestHTML(v upgradeSnapshot) string {
 	return out + `</tbody></table></section>`
 }
 
-func upgradeNodesHTML(v upgradeSnapshot) string {
-	out := `<section class="panel"><div class="panel-heading"><h2>节点 active vs staged</h2><span class="badge">只读回读</span></div>` +
-		`<p class="hint">active 来自最近一次严格 <code>config.readback</code>；staged 优先来自持久化的升级任务记录（#11b），只有没有记录的节点才回退到最近一次成功 <code>config.stage</code> 并标注“派生”。两者都不证明公网可达、协议握手或客户端可用。</p>`
+func upgradeNodesHTML(v upgradeSnapshot, csrf string) string {
+	out := `<section class="panel"><div class="panel-heading"><h2>节点 active vs staged</h2><span class="badge">回读 + 批准</span></div>` +
+		`<p class="hint">active 来自最近一次严格 <code>config.readback</code>；staged 优先来自持久化的升级任务记录（#11b），只有没有记录的节点才回退到最近一次成功 <code>config.stage</code> 并标注“派生”。批准只登记目标并排队，不证明已安装、公网可达或客户端可用。</p>`
 	if len(v.Nodes) == 0 {
 		return out + `<p class="muted">尚未纳管节点，没有可展示的版本回读。</p></section>`
 	}
-	out += `<table class="details"><thead><tr><th>节点</th><th>active</th><th>staged</th><th>结论</th></tr></thead><tbody>`
+	out += `<table class="details"><thead><tr><th>节点</th><th>active</th><th>staged</th><th>已批准目标</th><th>结论</th></tr></thead><tbody>`
 	for _, n := range v.Nodes {
 		staged := v.Staged[n.ID]
+		approved := v.Approved[n.ID]
 		verdict := "尚无 staged"
 		if v.converged(n) {
 			verdict = "staged 已回读为 active"
@@ -259,9 +297,39 @@ func upgradeNodesHTML(v upgradeSnapshot) string {
 				`<br/><code>` + templ.EscapeString(staged.ConfigSHA256) + `</code><br/>manifest <code>` +
 				templ.EscapeString(staged.ManifestSHA256) + `</code><br/><code>` + templ.EscapeString(staged.OperationID) + `</code>`
 		}
-		out += `</td><td>` + verdict + `</td></tr>`
+		out += `</td><td>` + approvedTargetHTML(v, n, approved, csrf) + `</td><td>` + verdict + `</td></tr>`
 	}
-	return out + `</tbody></table><p class="hint">升级记录已持久化到既有 agent_tasks；执行、备份指针与兼容回退属 #11c-11e，本页不提供任何可点击的升级控件。</p></section>`
+	return out + `</tbody></table><p class="hint">批准只写入既有 <code>agent_tasks</code> 的目标记录并排队固定四任务链；执行由目标机本地 update 完成，备份指针、兼容回退与 Hub 自升级属后续段。queued 不等于已生效。</p></section>`
+}
+
+// approvedTargetHTML renders the newest persisted approval and the single
+// per-node approval control. The control only exists when the Hub can prove the
+// node's Agent version and the manifest can name a target; otherwise the cell
+// says why the node is excluded instead of offering a refusal to the operator.
+func approvedTargetHTML(v upgradeSnapshot, n Node, approved ApprovedTarget, csrf string) string {
+	out := ""
+	if approved.Version != "" {
+		out += `<span class="badge accent">` + templ.EscapeString(approved.Version) + `</span> · ` +
+			templ.EscapeString(approved.Status) + `<br/>policy_schema ` + strconv.Itoa(approved.PolicySchema) +
+			`<br/>rev ` + strconv.FormatInt(approved.Revision, 10) + `<br/>manifest <code>` +
+			templ.EscapeString(approved.ManifestSHA256) + `</code><br/><code>` + templ.EscapeString(approved.OperationID) + `</code>`
+	} else {
+		out += `<span class="muted">未批准</span>`
+	}
+	if v.targetExcluded(n) {
+		return out + `<br/><span class="muted">无 Agent 回读版本，已排除（不猜 schema）</span>`
+	}
+	if n.ObservedAgentVersion != v.Manifest.Version {
+		out += `<br/><span class="muted">混版本：该节点仍运行 ` + templ.EscapeString(n.ObservedAgentVersion) +
+			`，批准前请确认它理解的候选 schema</span>`
+	}
+	if v.Manifest.Version == "" || v.ManifestErr != "" {
+		return out + `<br/><span class="muted">本机 manifest 不可用，无法批准</span>`
+	}
+	return out + `<form action="/tasks/approve" method="post"><input type="hidden" name="csrf" value="` +
+		templ.EscapeString(csrf) + `"/><input type="hidden" name="node_id" value="` + templ.EscapeString(n.ID) +
+		`"/><input type="hidden" name="version" value="` + templ.EscapeString(v.Manifest.Version) +
+		`"/><button class="text-button" type="submit">批准 ` + templ.EscapeString(v.Manifest.Version) + `</button></form>`
 }
 
 // valueOrUnknown marks an empty readback field as unknown instead of printing an

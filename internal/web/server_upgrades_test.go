@@ -73,14 +73,18 @@ func TestUpgradePageShowsManifestAndStagedVersusActive(t *testing.T) {
 			t.Fatalf("page is missing %q", want)
 		}
 	}
-	// The view is read-only: no upgrade, apply or rollback control exists yet.
+	// The view offers one gated approval and no direct apply/rollback control.
 	for _, forbidden := range []string{"升级到此版本", "立即升级", `/tasks/apply`, `/tasks/upgrade`} {
 		if strings.Contains(body, forbidden) {
-			t.Fatalf("read-only page offered %q", forbidden)
+			t.Fatalf("page offered %q", forbidden)
 		}
 	}
-	if !strings.Contains(body, "只读") {
-		t.Fatal("page does not declare its read-only boundary")
+	// #11c-1 replaced the read-only boundary with a gated approval: the page
+	// says that a queued chain is not an applied release.
+	for _, want := range []string{"逐台批准", "queued", "不等于已生效"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("page does not declare %q", want)
+		}
 	}
 	if w = (&browser{app: app}).req("GET", "/tasks", nil, nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated /tasks status=%d, want 401", w.Code)

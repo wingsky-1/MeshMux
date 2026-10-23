@@ -9,6 +9,20 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
+// stampTargetTx drives the transaction-scoped stamp the way the approval path
+// does: one transaction, committed here.
+func stampTargetTx(app *Server, operationID string, target jobs.Target) error {
+	tx, err := app.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := stampUpgradeTargetTx(tx, operationID, target, app.now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // TestUpgradeTaskRecordRoundTripAndPage pins #11b: the target release snapshot
 // rides on the existing pending task row, the /tasks view prefers it over the
 // #11a derivation, and no upgrade kind becomes deliverable.
@@ -25,15 +39,15 @@ func TestUpgradeTaskRecordRoundTripAndPage(t *testing.T) {
 		Version: "1.2.3", ManifestSHA256: strings.Repeat("cd", 32),
 		PolicySchema: upgrade.PolicySchema, CandidateRevision: latest.Revision,
 	}
-	if err := app.store.stampUpgradeTarget("", target, app.now()); err == nil {
+	if err := stampTargetTx(app, "", target); err == nil {
 		t.Fatal("empty operation_id accepted")
 	}
 	bad := target
 	bad.Version = "latest"
-	if err := app.store.stampUpgradeTarget(tasks[1].OperationID, bad, app.now()); err == nil {
+	if err := stampTargetTx(app, tasks[1].OperationID, bad); err == nil {
 		t.Fatal("floating target accepted")
 	}
-	if err := app.store.stampUpgradeTarget(tasks[1].OperationID, target, app.now()); err != nil {
+	if err := stampTargetTx(app, tasks[1].OperationID, target); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.store.reportResultAudited(created.ID, protocol.TaskResult{
@@ -41,7 +55,7 @@ func TestUpgradeTaskRecordRoundTripAndPage(t *testing.T) {
 	}, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.stampUpgradeTarget(tasks[1].OperationID, target, app.now()); err == nil {
+	if err := stampTargetTx(app, tasks[1].OperationID, target); err == nil {
 		t.Fatal("healthy task accepted a new target")
 	}
 	staged, err := app.store.stagedReadbacks()

@@ -46,6 +46,10 @@ type Server struct {
 	// so the real kernel verifier is always built from the deployment
 	// configuration; it exists so a unit test never needs a kernel install.
 	publishGate func() (publishVerifier, error)
+	// releaseSource is the explicit release check's upstream. Production leaves
+	// it nil so the fixed GitHub releases endpoint is read; tests inject a
+	// deterministic tag without a network. It never approves anything.
+	releaseSource func(context.Context) (string, error)
 }
 
 type requestKey int
@@ -132,6 +136,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/api/agent/pair", jsonAPI(app.pairAgent))
 	r.Get("/api/agent/node", jsonAPI(app.agentMetadata))
 	r.Get("/api/agent/config/{revision}", jsonAPI(app.agentCandidate))
+	// The stamped upgrade target of one stage row (#11c-1): the read-only
+	// channel the Agent uses instead of stuffing a target into frozen config.*
+	// params.
+	r.Get("/api/agent/upgrade-target/{operationID}", jsonAPI(app.agentUpgradeTarget))
 	// The read-only release manifest of the restricted executor (#11c-1): the
 	// body never travels as config.* params.
 	r.Get("/api/agent/manifest", jsonAPI(app.agentManifest))
@@ -159,9 +167,12 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// per Line. It is never a bare render-to-response.
 	r.Post("/policies/publish", jsonAPI(app.mutation(app.policiesPublish, true)))
 	// /tasks is the read-only upgrade view of issue #11a: the release manifest
-	// plus each node's staged vs active readback. It has no mutation route;
-	// apply/rollback belong to #11b-11e.
+	// plus each node's staged vs active readback. #11c-1 adds the explicit
+	// "check new version" query and the gated per-node approval; the check is a
+	// GET (it stores nothing) and the approval is a CSRF-protected POST.
 	r.Get("/tasks", app.authenticated(app.tasksPage))
+	r.Get("/tasks/check", app.authenticated(app.tasksCheck))
+	r.Post("/tasks/approve", jsonAPI(app.mutation(app.tasksApprove, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
