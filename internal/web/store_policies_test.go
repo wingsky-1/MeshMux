@@ -59,7 +59,7 @@ func TestRoutePolicyCreateReadAndGuards(t *testing.T) {
 func TestSchemaV8MigrationReplays(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	var version int
-	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 8 {
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 9 {
 		t.Fatalf("schema version %d err=%v", version, err)
 	}
 	clientPayload, _, _ := policyFixtures()
@@ -72,13 +72,13 @@ func TestSchemaV8MigrationReplays(t *testing.T) {
 	if err := s.migrate(); err != nil {
 		t.Fatalf("replay schema 8: %v", err)
 	}
-	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 8 {
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 9 {
 		t.Fatalf("replayed version %d err=%v", version, err)
 	}
 	if policies, err := s.listRoutePolicies(""); err != nil || len(policies) != 0 {
 		t.Fatalf("replayed tables not empty: %d err=%v", len(policies), err)
 	}
-	if _, err := s.db.Exec(`PRAGMA user_version=9`); err != nil {
+	if _, err := s.db.Exec(`PRAGMA user_version=10`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {
