@@ -33,6 +33,9 @@ const (
 	agentHeartbeatPath = "/api/agent/heartbeat"
 	agentTasksPath     = "/api/agent/tasks"
 	agentResultPath    = "/api/agent/result"
+	// agentUpgradeTargetPrefix is the read of one stamped upgrade target
+	// (#11c-1). The operation id follows it, so the read stays one exact row.
+	agentUpgradeTargetPrefix = "/api/agent/upgrade-target/"
 
 	configSHA256Header = "X-MeshMux-Config-SHA256"
 	maxErrorBody       = 4 << 10
@@ -43,10 +46,13 @@ const (
 	// the per-Line VLESS users and the REALITY block, so the bound is sized
 	// for the fixed maximum of 1024 users and stays bounded: a larger body
 	// is rejected instead of being buffered.
-	maxConfigBody         = 1 << 20
-	maxHeartbeatBody      = 4 << 10
-	maxTasksBody          = 64 << 10
-	maxResultBody         = 4 << 10
+	maxConfigBody    = 1 << 20
+	maxHeartbeatBody = 4 << 10
+	maxTasksBody     = 64 << 10
+	maxResultBody    = 4 << 10
+	// maxStageTargetBody bounds the stamped-target read: two short fields, so
+	// anything larger is a Hub defect rather than a target.
+	maxStageTargetBody    = 4 << 10
 	maxTasks              = 8
 	defaultRequestTimeout = 20 * time.Second
 )
@@ -54,6 +60,11 @@ const (
 var (
 	stableErrorCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 	responseKey     = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,63}$`)
+	hex32Pattern    = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	// stageTargetVersionPattern mirrors the SemVer shape the Agent already
+	// enforces on a stamped target; a target that does not match is refused
+	// rather than handed to a subprocess.
+	stageTargetVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 )
 
 // ClientError is returned for validation, transport, protocol and Hub errors.
@@ -232,6 +243,42 @@ func (c *Client) Manifest(ctx context.Context) (ManifestBytes, error) {
 	return ManifestBytes(response.body), nil
 }
 
+// StageTarget fetches the release the Hub stamped onto one pending config.stage
+// row (#11b/#11c-1). A false ok means the row carries no target and is an
+// ordinary config stage; a 404 from the Hub is that same "no target" answer, not
+// a transport failure, so a normal chain never fails because of this read.
+//
+// The path is fixed and the operation id must be 32 lowercase hex, so no caller
+// can turn this into a general Hub read.
+func (c *Client) StageTarget(ctx context.Context, operationID string) (StageTarget, bool, error) {
+	if !hex32Pattern.MatchString(operationID) {
+		return StageTarget{}, false, &ClientError{Code: "OPERATION_ID_INVALID"}
+	}
+	identity, err := c.authenticatedIdentity()
+	if err != nil {
+		return StageTarget{}, false, err
+	}
+	path := agentUpgradeTargetPrefix + operationID
+	response, err := c.doJSON(ctx, http.MethodGet, path, identity.IdentityToken, nil, maxStageTargetBody)
+	if err != nil {
+		var clientErr *ClientError
+		if errors.As(err, &clientErr) && clientErr.StatusCode == http.StatusNotFound {
+			return StageTarget{}, false, nil
+		}
+		return StageTarget{}, false, err
+	}
+	var body struct {
+		TargetVersion  string `json:"target_version"`
+		ManifestSHA256 string `json:"manifest_sha256"`
+	}
+	if err := decodeResponseObject(response.body, &body, "target_version", "manifest_sha256"); err != nil ||
+		!stageTargetVersionPattern.MatchString(body.TargetVersion) ||
+		!sha256Pattern.MatchString(body.ManifestSHA256) {
+		return StageTarget{}, false, &ClientError{Code: "STAGE_TARGET_INVALID", StatusCode: response.status}
+	}
+	return StageTarget{Version: body.TargetVersion, ManifestSHA256: body.ManifestSHA256}, true, nil
+}
+
 // Candidate fetches one exact immutable candidate from the fixed revision
 // path. The body is hashed before strict decoding, then bound to Config and
 // to the requested revision.
@@ -395,7 +442,9 @@ func (c *Client) doJSON(
 	fixedPath := path == agentPairPath || path == agentMetadataPath ||
 		path == agentManifestPath || path == agentHeartbeatPath || path == agentTasksPath ||
 		path == agentResultPath ||
-		strings.HasPrefix(path, agentConfigPrefix) && validRevisionPath(path)
+		strings.HasPrefix(path, agentConfigPrefix) && validRevisionPath(path) ||
+		strings.HasPrefix(path, agentUpgradeTargetPrefix) && validOperationIDPath(path) ||
+		strings.HasPrefix(path, agentUpgradeTargetPrefix) && validOperationIDPath(path)
 	if !fixedPath {
 		return jsonResponse{}, &ClientError{Code: "REQUEST_INVALID"}
 	}
@@ -685,4 +734,12 @@ func validRevisionPath(path string) bool {
 	}
 	_, err := strconv.ParseInt(revision, 10, 64)
 	return err == nil
+}
+
+// validOperationIDPath accepts exactly one 32-lowercase-hex operation id after
+// the fixed prefix. A trailing slash, a longer id or an uppercase digit is not a
+// path this client may request, so the allowlist cannot be widened by a caller.
+func validOperationIDPath(path string) bool {
+	operationID, ok := strings.CutPrefix(path, agentUpgradeTargetPrefix)
+	return ok && hex32Pattern.MatchString(operationID)
 }

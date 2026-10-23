@@ -301,9 +301,11 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
 		Runner:     ExecRunner{},
 		Controller: controller,
 		Logger:     newRunLogger(stderr),
-		// StageTargets is wired by #11c-1 Task 6: Client.StageTarget reads
-		// GET /api/agent/upgrade-target/{operation_id}. Until then the field is
-		// nil and every stage row takes the pre-upgrade config stage path.
+		// The stamped upgrade target is read over the authenticated agent
+		// channel (#11c-1): the target never travels in the frozen config.*
+		// params. Without this the stage step would stage a stamped row as an
+		// ordinary config change and no upgrade could ever start.
+		StageTargets: controller,
 	})
 	if err != nil {
 		return err
