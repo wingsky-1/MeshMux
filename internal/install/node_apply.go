@@ -52,6 +52,12 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	if err := cfg.Validate(); err != nil {
 		return fail("preflight", "CONFIG_INVALID", "Supply a valid HTTPS Hub URL, node identity, edge/out role and distinct SSH/VLESS ports.")
 	}
+	if opts.NonInteractive && !repair {
+		// A Web-driven handoff never has an operator at the terminal: a fresh
+		// install would have to prompt for a pairing code, so it is refused
+		// before any file is staged.
+		return fail("preflight", "UPDATE_INTERACTIVE_REFUSED", "A non-interactive handoff must pass repair and reuse the recorded identity.")
+	}
 	if opts.Root == "" {
 		opts.Root = "/"
 	}
@@ -311,6 +317,12 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return result, resolveErr
 	}
 	if resolved.pairingPending {
+		if opts.NonInteractive {
+			// Defensive: no Web-driven handoff may stop at a prompt. The
+			// preflight already refuses this path; this keeps the invariant
+			// next to the branch that would wait.
+			return fail("pairing", "UPDATE_INTERACTIVE_REFUSED", "A non-interactive handoff cannot wait for a pairing code.")
+		}
 		return result, identityFailures.pairingCodeRequired
 	}
 	identity, candidate := resolved.identity, resolved.candidate

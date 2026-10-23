@@ -110,6 +110,7 @@ func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		return 3
 	}
 	cfg.WorkDir, cfg.FetchManifest = update.DefaultWorkDir, update.HubManifest
+	cfg.CurrentVersion = node.CurrentAgentVersion
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	result, err := update.Run(ctx, cfg, node.ExecRunner{})
@@ -144,6 +145,10 @@ func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	planOnly := flags.Bool("plan", false, "show a read-only installation plan")
 	yes := flags.Bool("yes", false, "confirm installation after displaying the plan")
 	repair := flags.Bool("repair", false, "repair an existing MeshMux installation without deleting state")
+	// nonInteractive is set only by the Web-driven handoff, which has no
+	// operator at the terminal. It is refused unless the run can complete
+	// without reading stdin, so it never becomes a second install mode.
+	nonInteractive := flags.Bool("non-interactive", false, "refuse any prompt; used by the Web-driven handoff")
 	flags.StringVar(&c.ManagementDomain, "management-domain", "", "HTTPS management hostname")
 	flags.StringVar(&c.SubscriptionDomain, "subscription-domain", "", "subscription hostname")
 	flags.StringVar(&c.HeadscaleDomain, "headscale-domain", "", "Headscale/DERP hostname")
@@ -155,6 +160,10 @@ func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	if *planOnly && (*yes || *repair) {
 		fmt.Fprintln(stderr, "CONFIG_INVALID: --plan cannot be combined with --yes or --repair")
 		return 2
+	}
+	if *nonInteractive && (!*yes || !*repair) {
+		fmt.Fprintln(stderr, "UPDATE_INTERACTIVE_REFUSED: --non-interactive requires --yes --repair")
+		return 3
 	}
 	if *yes && (c.ManagementDomain == "" || c.SubscriptionDomain == "" || c.HeadscaleDomain == "") {
 		fmt.Fprintln(stderr, "CONFIG_REQUIRED: --yes requires all three domain flags")
@@ -241,7 +250,7 @@ func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	result, applyErr := install.InstallHub(ctx, c, id, *repair, install.ApplyOptions{})
+	result, applyErr := install.InstallHub(ctx, c, id, *repair, install.ApplyOptions{NonInteractive: *nonInteractive})
 	if applyErr != nil {
 		if ie, ok := errors.AsType[*install.InstallError](applyErr); ok {
 			result.ErrorCode, result.Stage, result.Recovery = ie.Code, ie.Stage, ie.Recovery

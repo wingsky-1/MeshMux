@@ -14,8 +14,8 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
-// fixtureRunner records every fixed argv the future handoff would run; the
-// verify-only segment must never execute one.
+// fixtureRunner records every fixed argv the handoff runs; a refusal must
+// never execute one.
 type fixtureRunner struct{ calls [][]string }
 
 func (r *fixtureRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -47,7 +47,9 @@ func fixtureManifest(t *testing.T, pkg []byte, componentSHA string) upgrade.Mani
 
 // fixtureConfig pins one manifest body the way a Web approval pins its SHA-256.
 // The fixture describes a target release, not the running build's table, so the
-// real target gate is exercised.
+// real target gate is exercised. The host seams are deterministic fixtures: the
+// real ones read the installed Agent files, stat / and hash the installed
+// executor.
 func fixtureConfig(t *testing.T, m upgrade.Manifest) Config {
 	t.Helper()
 	body, err := json.Marshal(m)
@@ -55,7 +57,10 @@ func fixtureConfig(t *testing.T, m upgrade.Manifest) Config {
 		t.Fatal(err)
 	}
 	return Config{Target: "1.0.1", ManifestSHA256: shaOf(body), OperationID: strings.Repeat("a", 32),
-		WorkDir: t.TempDir(), FetchManifest: func(context.Context) ([]byte, error) { return body, nil }}
+		WorkDir: t.TempDir(), FetchManifest: func(context.Context) ([]byte, error) { return body, nil },
+		CurrentVersion: "1.0.0", Releases: []string{"1.0.0", "1.0.1"},
+		NodeConfig: fixtureInstalled, Space: func(string, uint64) error { return nil },
+		Readback: func() (string, error) { return m.Components[0].SHA256, nil }}
 }
 
 func TestRunRefusesInvalidArguments(t *testing.T) {
@@ -137,19 +142,22 @@ func TestRunRefusesUnpinnedManifest(t *testing.T) {
 	}
 }
 
+// TestRunStagesVerifiedPackage pins the staged bytes the handoff receives: the
+// verified path holds exactly the package, and the result names the manifest
+// that was approved.
 func TestRunStagesVerifiedPackage(t *testing.T) {
 	pkg := []byte("fixture package\n")
 	cfg := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
 	runner := &fixtureRunner{}
 	result, err := Run(context.Background(), cfg, runner)
-	if code := codeOf(err); code != "UPDATE_HANDOFF_NOT_IMPLEMENTED" {
-		t.Fatalf("code = %q, want UPDATE_HANDOFF_NOT_IMPLEMENTED (err %v)", code, err)
+	if err != nil {
+		t.Fatalf("run: %v", err)
 	}
 	staged, readErr := os.ReadFile(result.VerifiedPath)
 	if result.Manifest.Version != cfg.Target || readErr != nil || string(staged) != string(pkg) {
 		t.Fatalf("result = %+v, readErr %v", result, readErr)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("pre-handoff executed %v", runner.calls)
+	if len(runner.calls) != 2 {
+		t.Fatalf("handoff calls = %q, want install then restart", runner.calls)
 	}
 }
