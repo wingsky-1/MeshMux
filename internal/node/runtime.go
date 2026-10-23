@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -22,6 +24,11 @@ const (
 	maxIdempotency     = 1024
 	maxFinalCache      = 1024
 )
+
+// stageTargetVersion is the release shape the Agent accepts for a stamped
+// upgrade target. It mirrors the update CLI's own SemVer gate; a floating tag
+// never reaches the fixed argv.
+var stageTargetVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 
 // errRuntimeStateTooLarge refuses a runtime state that does not fit the
 // state size bound. The previous readable state stays untouched.
@@ -43,6 +50,10 @@ type RuntimeOptions struct {
 	HTTPClient   *http.Client
 	Logger       *slog.Logger
 	PollInterval time.Duration
+	// StageTargets reports the release the Hub stamped onto a pending
+	// config.stage row (#11b). It is optional: without it every stage row is an
+	// ordinary config stage, which is the pre-upgrade behaviour.
+	StageTargets StageTargetSource
 }
 
 // Runtime executes the frozen task set against one installed node.
@@ -55,10 +66,28 @@ type Runtime struct {
 	httpClient      *http.Client
 	logger          *slog.Logger
 	pollInterval    time.Duration
+	stageTargets    StageTargetSource
 	now             func() time.Time
 	procRoot        string
 	writeState      func(*runtimeState) error
 	enforceProcArgs bool
+}
+
+// StageTarget is the release record the Hub stamped onto one pending
+// config.stage row: the version and the pinned manifest digest the node should
+// converge to. It is deliberately not a task parameter — config.* params stay
+// frozen — so the Agent reads it over the outbound Hub boundary.
+type StageTarget struct {
+	Version        string
+	ManifestSHA256 string
+}
+
+// StageTargetSource reports the stamped upgrade target of one config.stage
+// task. A false ok means the row carries no target and is an ordinary config
+// stage. The Hub read that supplies the target arrives with the enqueue path;
+// until then a nil source keeps the pre-upgrade behaviour.
+type StageTargetSource interface {
+	StageTarget(context.Context, string) (StageTarget, bool, error)
 }
 
 type runtimeState struct {
@@ -172,6 +201,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		httpClient:      opts.HTTPClient,
 		logger:          opts.Logger,
 		pollInterval:    defaultPollInterval(opts.PollInterval),
+		stageTargets:    opts.StageTargets,
 		now:             time.Now,
 		procRoot:        rooted(root, "/proc"),
 		enforceProcArgs: root == "/",
@@ -437,7 +467,7 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 			result, executeErr = failedResult(result, "RECOVERY_REQUIRED"), errors.New("RECOVERY_REQUIRED")
 			break
 		}
-		result, executeErr = r.stage(taskContext, revision, allowed)
+		result, executeErr = r.stageOrHandOff(taskContext, task, revision, allowed)
 	case protocol.KindConfigApply:
 		if state.Journal != nil {
 			return failedResult(result, "RECOVERY_REQUIRED")
@@ -471,6 +501,94 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "final", "error_code", result.ErrorCode)
 	return final
+}
+
+// stageOrHandOff runs the config.stage step of one task chain. A row stamped
+// with an upgrade target that differs from the running version is not a local
+// stage at all: the Agent starts the local update with the fixed argv and
+// reports the handoff at once. Every other row keeps the existing stage path.
+//
+// The child is never waited for. The poll interval is 30s, so blocking here
+// would stop the heartbeat and make a live node look offline for the length of
+// an install. The update reports its own outcome through the files it owns; this
+// receipt therefore says "queued", never "applied". Because the Agent never
+// reads the child's Result, the receipt cannot carry its BackupPointer either:
+// update writes that pointer to WorkDir/backup-<target>.json before it mutates
+// anything, and 11c-3 must read the file rather than a receipt field.
+func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revision int64, allowed []string) (protocol.TaskResult, error) {
+	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
+	target, handoff, err := r.stampedStageTarget(ctx, task)
+	if err != nil {
+		return failedResult(result, errorCode(err)), err
+	}
+	if !handoff {
+		return r.stage(ctx, revision, allowed)
+	}
+	spawner, ok := r.runner.(Spawner)
+	if !ok {
+		return failedResult(result, "UPDATE_SPAWN_UNAVAILABLE"), errors.New("UPDATE_SPAWN_UNAVAILABLE")
+	}
+	// The executable is the fixed installed Agent, never a caller-named path.
+	// On a real root its digest is the configured one, so a swapped binary is
+	// refused instead of started.
+	binary, err := fixedBinary(r.root, AgentBinaryPath, r.cfg)
+	if err != nil {
+		return failedResult(result, errorCodeOr(err, "UPDATE_SPAWN_FAILED")), err
+	}
+	// The child outlives this poll cycle: a cancelled cycle (Agent shutdown,
+	// task timeout) must not kill an update that is already installing. Its
+	// lifetime is the update's own, not the poll's.
+	err = spawner.Spawn(context.WithoutCancel(ctx), binary,
+		"__internal-update",
+		"--target", target.Version,
+		"--manifest-sha256", target.ManifestSHA256,
+		"--operation-id", task.OperationID,
+		"--confirm-target")
+	if err != nil {
+		return failedResult(result, "UPDATE_SPAWN_FAILED"), err
+	}
+	result.Status = "healthy"
+	result.Detail = handoffDetail(target)
+	return result, nil
+}
+
+// stampedStageTarget reports the upgrade target stamped onto this stage row and
+// whether it is an upgrade at all. No source means the pre-upgrade behaviour: a
+// plain config stage. A stamped target equal to the running version is the same
+// chain's redelivery after the update installed it, so it is a plain stage too;
+// treating it as a second upgrade would loop.
+func (r *Runtime) stampedStageTarget(ctx context.Context, task protocol.Task) (StageTarget, bool, error) {
+	if r.stageTargets == nil {
+		return StageTarget{}, false, nil
+	}
+	target, ok, err := r.stageTargets.StageTarget(ctx, task.OperationID)
+	if err != nil {
+		return StageTarget{}, false, fmt.Errorf("STAGE_TARGET_UNAVAILABLE: %w", err)
+	}
+	if !ok {
+		return StageTarget{}, false, nil
+	}
+	if !stageTargetVersion.MatchString(target.Version) || !sha256Pattern.MatchString(target.ManifestSHA256) {
+		return StageTarget{}, false, errors.New("STAGE_TARGET_INVALID: target must be a pinned SemVer release")
+	}
+	if target.Version == r.cfg.AgentVersion {
+		return StageTarget{}, false, nil
+	}
+	return target, true, nil
+}
+
+// handoffDetail is the bounded receipt of a handoff: the target and the fact
+// that only the local update was started. It names no path, URL or digest of the
+// child's own run, because the Agent does not observe that run.
+func handoffDetail(target StageTarget) string {
+	data, err := json.Marshal(struct {
+		State  string `json:"state"`
+		Target string `json:"target"`
+	}{State: "queued", Target: target.Version})
+	if err != nil {
+		return `{"state":"queued"}`
+	}
+	return string(data)
 }
 
 func (r *Runtime) loadStateForExecution() (runtimeState, error) {

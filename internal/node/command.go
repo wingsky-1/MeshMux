@@ -28,12 +28,39 @@ type CommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
 }
 
+// Spawner is the start-only half of the same boundary. Spawn returns once the
+// child exists; the Agent never waits for it, because the poll loop must keep
+// heartbeating while the child runs (30s poll interval).
+type Spawner interface {
+	Spawn(context.Context, string, ...string) error
+}
+
 // ExecRunner invokes one executable with an explicit argv and no shell.
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
+
+// Spawn starts one fixed argv and returns without waiting. The child's exit is
+// reaped on its own goroutine so a long-lived Agent accumulates no zombies; the
+// caller's poll loop is never held. Stdin and stdout stay empty, so the child can
+// never wait on a terminal, and its stderr joins the Agent's own journal so a
+// failed update still leaves its stable code behind. A cgroup/transient-unit
+// boundary for the child is 11c-2.
+func (ExecRunner) Spawn(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+// The production runner must keep both halves of the boundary: a lost Spawn
+// would turn every upgrade handoff into UPDATE_SPAWN_UNAVAILABLE at runtime.
+var _ Spawner = ExecRunner{}
 
 type runtimeLock struct {
 	file *os.File
