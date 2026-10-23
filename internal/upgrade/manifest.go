@@ -1,7 +1,9 @@
 // Package upgrade is the read-only release manifest of issue #11a: MeshMux
-// version, the fixed component table of one Debian architecture, the policy
-// schema and the route policy revision slot. It describes a release only and
-// never downloads, applies, rolls back or enqueues a task (#11b-11e).
+// version, the fixed component tables of the supported Debian architectures,
+// the policy schema and the route policy revision slot. It describes a release
+// only and never downloads, applies, rolls back or enqueues a task
+// (#11b-11e). The set endpoint carries both architecture tables; a node selects
+// its own runtime.GOARCH projection locally.
 //
 // It reuses install's pinned artifact tables as data and node's version
 // constants, so internal/web shows the release without importing the privileged
@@ -9,6 +11,7 @@
 package upgrade
 
 import (
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -20,9 +23,18 @@ import (
 // Schema identifies the manifest document; another schema is another contract.
 const Schema = "meshmux-release/v1"
 
+// SetSchema identifies the dual-arch manifest set served to Agents (U4). Each
+// entry keeps the single-arch Schema above, so an entry's projection is exactly
+// the document an approval pins.
+const SetSchema = "meshmux-release-set/v1"
+
 // PolicySchema is the stored route policy schema (10d-1); a manifest naming
 // another value cannot be applied by this binary.
 const PolicySchema = 8
+
+// supportedArchitectures is the fixed Debian architecture matrix of this build.
+// A set always carries every entry: a missing table is a partial release.
+var supportedArchitectures = []string{"amd64", "arm64"}
 
 // Component is one fixed release asset. Architecture is explicit so an amd64
 // digest is never paired with an arm64 source. Dev marks a pre-release dev
@@ -51,6 +63,19 @@ var mihomo = map[string]Component{
 	"arm64": {"mihomo", node.MihomoVersion, "arm64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz", "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0", "gz", false},
 }
 
+// ManifestSet is the release description of one build across the supported
+// architectures. The Agent selects its own runtime.GOARCH entry and verifies
+// that entry's canonical bytes against its approved per-arch SHA-256; the set
+// never carries a caller-selected file, URL or version. PolicySchema and
+// Version are repeated at the top so a partial or mixed set is refused before
+// any entry is trusted.
+type ManifestSet struct {
+	Schema       string              `json:"schema"`
+	Version      string              `json:"version"`
+	PolicySchema int                 `json:"policy_schema"`
+	Manifests    map[string]Manifest `json:"manifests"`
+}
+
 // ForArch assembles the immutable manifest of one supported architecture. An
 // unknown architecture is refused, never given a partial or floating release.
 func ForArch(architecture string) (Manifest, error) {
@@ -61,6 +86,85 @@ func ForArch(architecture string) (Manifest, error) {
 	m := Manifest{Schema: Schema, Version: node.CurrentAgentVersion, Architecture: architecture,
 		PolicySchema: PolicySchema, Components: components}
 	return m, m.Validate()
+}
+
+// ForArchSet assembles this build's dual-arch set. Every supported architecture
+// is projected through ForArch, so each embedded table is byte-identical to the
+// single-arch document the approval pins.
+func ForArchSet() (ManifestSet, error) {
+	set := ManifestSet{Schema: SetSchema, Version: node.CurrentAgentVersion, PolicySchema: PolicySchema,
+		Manifests: make(map[string]Manifest, len(supportedArchitectures))}
+	for _, architecture := range supportedArchitectures {
+		m, err := ForArch(architecture)
+		if err != nil {
+			return ManifestSet{}, err
+		}
+		set.Manifests[architecture] = m
+	}
+	if err := set.Validate(); err != nil {
+		return ManifestSet{}, err
+	}
+	return set, nil
+}
+
+// Projection returns one architecture's manifest and its canonical JSON bytes.
+// For a set built by ForArchSet those bytes are exactly json.Marshal(ForArch):
+// the Agent hashes this projection against the approved SHA-256, so a set
+// envelope can never shift the trust anchor. A missing or mismatched entry is
+// refused instead of falling back to another architecture.
+func (s ManifestSet) Projection(architecture string) (Manifest, []byte, error) {
+	m, ok := s.Manifests[architecture]
+	if !ok {
+		return Manifest{}, nil, errors.New("MANIFEST_ARCH_INVALID: the manifest set has no table for this architecture")
+	}
+	if m.Architecture != architecture {
+		return Manifest{}, nil, errors.New("MANIFEST_ARCH_INVALID: the manifest entry names another architecture")
+	}
+	body, err := json.Marshal(m)
+	if err != nil {
+		return Manifest{}, nil, errors.New("MANIFEST_INVALID: the manifest projection could not be encoded")
+	}
+	return m, body, nil
+}
+
+// Validate refuses a partial or mixed set: every supported architecture table
+// must be present exactly once, agree with the set header, and pass the same
+// running-build self-check as Manifest.Validate. This is the Hub's serving
+// contract; a target release on the Agent side is checked by update's
+// validateTarget instead, because its component table is not the running
+// build's table.
+func (s ManifestSet) Validate() error {
+	if s.Schema != SetSchema {
+		return errors.New("MANIFEST_SET_SCHEMA_INVALID: unknown manifest set schema")
+	}
+	if !releaseVersion.MatchString(s.Version) {
+		return errors.New("MANIFEST_VERSION_INVALID: version is not a SemVer release")
+	}
+	if s.PolicySchema != PolicySchema {
+		return errors.New("MANIFEST_POLICY_SCHEMA_INVALID: policy schema does not match this binary")
+	}
+	if len(s.Manifests) != len(supportedArchitectures) {
+		return errors.New("MANIFEST_SET_INCOMPLETE: the set must carry every supported architecture")
+	}
+	for _, architecture := range supportedArchitectures {
+		m, ok := s.Manifests[architecture]
+		if !ok {
+			return errors.New("MANIFEST_SET_INCOMPLETE: the set must carry every supported architecture")
+		}
+		if m.Architecture != architecture {
+			return errors.New("MANIFEST_ARCH_INVALID: the manifest entry names another architecture")
+		}
+		if m.Version != s.Version {
+			return errors.New("MANIFEST_VERSION_INVALID: the manifest entry names another version")
+		}
+		if m.PolicySchema != s.PolicySchema {
+			return errors.New("MANIFEST_POLICY_SCHEMA_INVALID: the manifest entry names another policy schema")
+		}
+		if err := m.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pinnedComponents derives the table from the existing single sources of truth.

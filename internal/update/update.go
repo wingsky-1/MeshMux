@@ -118,11 +118,27 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err != nil || len(body) == 0 {
 		return Result{}, fail("MANIFEST_UNAVAILABLE", "the Hub manifest could not be fetched")
 	}
-	if hexDigest(body) != cfg.ManifestSHA256 {
-		return Result{}, fail("UPDATE_DIGEST_MISMATCH", "the manifest does not match the approved SHA-256")
+	// The channel is a dual-arch set (U4). Parsing it before the digest only
+	// selects the local projection; the approved per-arch SHA-256 still gates
+	// every host action below, so no byte is trusted or executed before it.
+	var set upgrade.ManifestSet
+	if err := json.Unmarshal(body, &set); err != nil {
+		return Result{}, fail("MANIFEST_INVALID", "the manifest set is not valid JSON")
 	}
-	if json.Unmarshal(body, &m) != nil {
-		return Result{}, fail("MANIFEST_INVALID", "the manifest is not valid JSON")
+	if set.Schema != upgrade.SetSchema {
+		return Result{}, fail("MANIFEST_SCHEMA_INVALID", "the Hub served an unknown manifest set schema")
+	}
+	// Select this Agent's own runtime.GOARCH entry. A missing table is refused
+	// as MANIFEST_ARCH_INVALID; the Hub never supplies a caller-chosen arch.
+	m, manifestBody, err := set.Projection(runtime.GOARCH)
+	if err != nil {
+		return Result{}, err
+	}
+	// The pin is exactly the selected per-arch manifest projection. The set
+	// envelope cannot move the trust anchor, and another architecture's digest
+	// never verifies this Agent's bytes.
+	if hexDigest(manifestBody) != cfg.ManifestSHA256 {
+		return Result{}, fail("UPDATE_DIGEST_MISMATCH", "the manifest does not match the approved SHA-256")
 	}
 	c, err := validateTarget(m, cfg.Target)
 	if err != nil {

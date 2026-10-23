@@ -184,7 +184,19 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 			"目标版本不是 SemVer 发行版。", "请重新检查新版本后再批准。")
 		return
 	}
-	manifest, manifestSHA, err := pinnedManifest()
+	architecture, err := app.store.observedArchitecture(nodeID)
+	if err != nil {
+		app.failUpgradeApprove(w, r, err)
+		return
+	}
+	// A node that has not read back an architecture is pinned to this Hub's own
+	// projection. A cross-arch node then refuses the digest mismatch instead of
+	// installing wrong-arch bytes; once it reports its architecture the approval
+	// pins that table from the same set.
+	if architecture == "" {
+		architecture = runtime.GOARCH
+	}
+	manifest, manifestSHA, err := pinnedManifest(architecture)
 	if err != nil {
 		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeManifestUnavailable,
 			"当前构建没有可验证的发行 manifest。", "请修复 Hub 构建后重试；未写入任何升级记录。")
@@ -383,10 +395,14 @@ func mixedVersionGate(candidate node.Candidate, observed string) error {
 	return nil
 }
 
-// pinnedManifest returns this build's canonical manifest and its exact digest,
-// the value the approval pins and the Agent later verifies.
-func pinnedManifest() (upgrade.Manifest, string, error) {
-	manifest, err := upgrade.ForArch(runtime.GOARCH)
+// pinnedManifest returns the canonical per-architecture manifest this build can
+// hand a target node and its exact digest, the value the approval pins and the
+// Agent later verifies. The Agent selects the same architecture's entry from
+// the served set and reproduces these bytes exactly, so the pin stays the
+// per-arch manifest projection rather than the set envelope; for the Hub's own
+// architecture this is byte-identical to the pre-set document.
+func pinnedManifest(architecture string) (upgrade.Manifest, string, error) {
+	manifest, err := upgrade.ForArch(architecture)
 	if err != nil {
 		return upgrade.Manifest{}, "", err
 	}

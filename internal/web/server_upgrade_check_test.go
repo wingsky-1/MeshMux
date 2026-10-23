@@ -253,6 +253,44 @@ func TestApproveEnqueuesStampedChain(t *testing.T) {
 	}
 }
 
+// TestApprovePinsObservedArchitecture pins U4 on the approval side: the Hub
+// stamps the manifest projection of the target node's read-back architecture,
+// not blindly its own. A node behind a Hub of another architecture therefore
+// verifies the bytes it selects from the same served set.
+func TestApprovePinsObservedArchitecture(t *testing.T) {
+	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
+	otherArch := "arm64"
+	if runtime.GOARCH == "arm64" {
+		otherArch = "amd64"
+	}
+	if _, err := app.store.db.Exec(`UPDATE nodes SET observed_architecture=? WHERE id=?`, otherArch, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := upgrade.ForArch(otherArch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	wantSHA := hex.EncodeToString(sum[:])
+
+	receipt := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusOK)
+	if receipt.ManifestSHA256 != wantSHA {
+		t.Fatalf("approval pins %q, want the %s projection %q", receipt.ManifestSHA256, otherArch, wantSHA)
+	}
+	var stored string
+	if err := app.store.db.QueryRow(`SELECT target_manifest_sha256 FROM agent_tasks
+ WHERE node_id=? AND target_version<>''`, nodeID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != wantSHA {
+		t.Fatalf("stamped manifest = %q, want %q", stored, wantSHA)
+	}
+}
+
 // TestUpgradeApproveRefusesInFlightChain pins the single-flight guard: a second
 // approval while the first chain is unfinished is refused, the live revision is
 // untouched and the previous target stays the only record.
