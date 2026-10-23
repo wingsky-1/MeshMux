@@ -15,8 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/update"
 	"github.com/wingsky-1/MeshMux/internal/webcmd"
 )
 
@@ -31,6 +34,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-agent" {
 		os.Exit(node.RunCommand(os.Args[2:], os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-update" {
+		os.Exit(runInternalUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-agent-version" {
 		os.Exit(runInternalAgentVersion(os.Args[2:], os.Stdout, os.Stderr))
@@ -55,6 +61,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	if len(args) > 0 && args[0] == "__internal-agent" {
 		return agent.RunCommand(args[1:], stderr)
 	}
+	if len(args) > 0 && args[0] == "__internal-update" {
+		return runInternalUpdate(args[1:], stdin, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "__internal-agent-version" {
 		return runInternalAgentVersion(args[1:], stdout, stderr)
 	}
@@ -73,6 +82,59 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 		return 2
 	}
 	return runNodeInstall(role, args[2:], stdin, stdout, stderr, nodes)
+}
+
+// runInternalUpdate is the private Agent-driven entry. It accepts exactly one
+// fixed argv and never prompts: a terminal without --confirm-target is refused,
+// because only the Agent may approve an upgrade on this host.
+func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-update", flag.ContinueOnError)
+	// Never echo caller-supplied arguments: unknown flags print only the fixed
+	// usage line, as the other hidden commands do.
+	flags.SetOutput(io.Discard)
+	var cfg update.Config
+	confirm := flags.Bool("confirm-target", false, "confirm the Web-approved target")
+	flags.StringVar(&cfg.Target, "target", "", "approved target version")
+	flags.StringVar(&cfg.ManifestSHA256, "manifest-sha256", "", "approved manifest SHA-256")
+	flags.StringVar(&cfg.OperationID, "operation-id", "", "operation ID")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-update --target SEMVER --manifest-sha256 HEX --operation-id HEX32 --confirm-target")
+		return 2
+	}
+	if !*confirm {
+		code := "UPDATE_CONFIRM_REQUIRED"
+		if isTerminal(stdin) {
+			code = "UPDATE_INTERACTIVE_REFUSED"
+		}
+		fmt.Fprintln(stderr, code+": this command is driven by the Agent; pass --confirm-target")
+		return 3
+	}
+	cfg.WorkDir, cfg.FetchManifest = update.DefaultWorkDir, update.HubManifest
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	result, err := update.Run(ctx, cfg, node.ExecRunner{})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if enc.Encode(result) != nil {
+		fmt.Fprintln(stderr, "UPDATE_RESULT_OUTPUT_FAILED")
+		return 1
+	}
+	return 0
+}
+
+// isTerminal reports whether stdin is a terminal. ModeCharDevice alone is not
+// enough: /dev/null is also a character device, so the ioctl is the test.
+func isTerminal(stdin io.Reader) bool {
+	file, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	_, err := unix.IoctlGetTermios(int(file.Fd()), unix.TCGETS)
+	return err == nil
 }
 
 func runHubInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
