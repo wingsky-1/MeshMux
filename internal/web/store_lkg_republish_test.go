@@ -10,6 +10,7 @@ package web
 // Agent never mistakes the rollback for another upgrade.
 
 import (
+	"fmt"
 	"net/url"
 	"reflect"
 	"strings"
@@ -148,24 +149,32 @@ func TestLkgRepublishNoOpIsStillPlainStage(t *testing.T) {
 // TestLkgRepublishRefusals pins the fail-closed edges: no observed revision,
 // an unknown revision and an unfinished chain are refusals, not a guessed
 // target.
+func requireRepublishError(t *testing.T, err error, prefix string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("republish succeeded, want %s", prefix)
+	}
+	if !strings.HasPrefix(err.Error(), prefix) {
+		t.Fatalf("error = %v, want %s", err, prefix)
+	}
+}
+
 func TestLkgRepublishRefusals(t *testing.T) {
 	t.Run("no observed revision", func(t *testing.T) {
 		app, created := lkgFixture(t)
 		if _, err := app.store.db.Exec(`UPDATE nodes SET observed_revision=0 WHERE id=?`, created.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := app.store.republishLKG(created.ID, app.now()); !strings.HasPrefix(err.Error(), "LKG_UNAVAILABLE") {
-			t.Fatalf("error = %v, want LKG_UNAVAILABLE", err)
-		}
+		_, _, err := app.store.republishLKG(created.ID, app.now())
+		requireRepublishError(t, err, "LKG_UNAVAILABLE")
 	})
 	t.Run("unknown observed revision", func(t *testing.T) {
 		app, created := lkgFixture(t)
 		if _, err := app.store.db.Exec(`UPDATE nodes SET observed_revision=9 WHERE id=?`, created.ID); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := app.store.republishLKG(created.ID, app.now()); !strings.HasPrefix(err.Error(), "LKG_UNAVAILABLE") {
-			t.Fatalf("error = %v, want LKG_UNAVAILABLE", err)
-		}
+		_, _, err := app.store.republishLKG(created.ID, app.now())
+		requireRepublishError(t, err, "LKG_UNAVAILABLE")
 	})
 	t.Run("unfinished chain", func(t *testing.T) {
 		app, created := lkgFixture(t)
@@ -175,10 +184,36 @@ func TestLkgRepublishRefusals(t *testing.T) {
 			strings.Repeat("f", 32), protocol.KindConfigCheck, `{"revision":1}`, now.Unix(), now.Unix()); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := app.store.republishLKG(created.ID, now); !strings.HasPrefix(err.Error(), "TASKS_IN_PROGRESS") {
-			t.Fatalf("error = %v, want TASKS_IN_PROGRESS", err)
-		}
+		_, _, err := app.store.republishLKG(created.ID, now)
+		requireRepublishError(t, err, "TASKS_IN_PROGRESS")
 	})
+}
+
+// TestLkgRollbackFailureMessages pins the post-commit distinction: a readback
+// failure after the chain was committed never says "not published", while
+// every pre-commit refusal does.
+func TestLkgRollbackFailureMessages(t *testing.T) {
+	committed := lkgRollbackFailure(fmt.Errorf("LKG_ROLLBACK_READBACK_FAILED: DATABASE_UNAVAILABLE"))
+	if committed.code != "LKG_ROLLBACK_READBACK_FAILED" || committed.status != 503 {
+		t.Fatalf("committed failure = %+v", committed)
+	}
+	if !strings.Contains(committed.message, "已发布") || strings.Contains(committed.message, "未发布") {
+		t.Fatalf("committed message = %q, want a published-but-unreadable message", committed.message)
+	}
+	for _, tc := range []struct{ err, code string }{
+		{"TASKS_IN_PROGRESS: busy", "TASKS_IN_PROGRESS"},
+		{"LKG_UNAVAILABLE: none", "LKG_UNAVAILABLE"},
+		{"NODE_NOT_FOUND: gone", "NODE_NOT_FOUND"},
+		{"DATABASE_UNAVAILABLE", "LKG_ROLLBACK_FAILED"},
+	} {
+		failure := lkgRollbackFailure(fmt.Errorf("%s", tc.err))
+		if failure.code != tc.code || !strings.Contains(failure.message, "未发布") {
+			t.Fatalf("%q => %+v, want %s / not-published", tc.err, failure, tc.code)
+		}
+	}
+	if failure := lkgRollbackFailure(nil); failure.code != "LKG_ROLLBACK_FAILED" {
+		t.Fatalf("nil error = %+v", failure)
+	}
 }
 
 // TestRollbackLkgRoute is the narrow Web surface: one authenticated, CSRF

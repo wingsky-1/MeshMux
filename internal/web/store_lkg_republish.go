@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
@@ -83,7 +84,9 @@ func (s *store) republishLKG(nodeID string, now time.Time) (storedCandidate, []p
 	}
 	republished, err := s.candidate(nodeID, next)
 	if err != nil {
-		return storedCandidate{}, nil, err
+		// The chain is already committed. Say so explicitly: the caller must
+		// not report "not published" and invite a duplicate submission.
+		return storedCandidate{}, nil, fmt.Errorf("LKG_ROLLBACK_READBACK_FAILED: %w", err)
 	}
 	return republished, tasks, nil
 }

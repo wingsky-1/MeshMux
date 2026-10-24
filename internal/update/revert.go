@@ -8,9 +8,13 @@ package update
 // outcome. The unit's ExecStart is the verified OLD package staged out of the
 // rollback payload (from_agent_sha256 is the trust anchor); its fixed argv is
 // `__internal-update-revert`. The Agent-side Reverter starts that argv with
-// systemd-run --wait and returns only when the unit has finished: the first
-// terminal receipt is cached and replayed by Execute, so a revert that lands
-// asynchronously could never be reported (binding review carry).
+// systemd-run --wait and returns only when the unit's verdict exists. --wait is
+// a convenience, not the guarantee: the unit restarts the Agent, which can kill
+// the waiting client. The guarantee is the <operation_id>.revert.json verdict
+// plus done=false (the caller keeps the receipt non-terminal) whenever the
+// client cannot observe the finished unit. The first terminal receipt is cached
+// and replayed by Execute, so a revert that lands asynchronously could never be
+// reported (binding review carry).
 //
 // The unit restores the recorded change set through the installer's
 // rollbackNodeFiles path (see install.RestoreNodeSnapshot), reconciles the
@@ -103,9 +107,11 @@ func (cfg Config) revertRoot() string {
 }
 
 // BuildRevertArgv builds the one fixed `systemd-run` command line of a revert
-// (spec §4.17). `--wait` is deliberate and is the whole ordering contract: the
-// Agent must not cache a terminal receipt while the change set is half
-// restored.
+// (spec §4.17). `--wait` is a best-effort convenience, not the ordering
+// guarantee: the unit restarts the Agent, so the waiting client can be killed
+// before it observes the exit. The ordering guarantee is the verdict file plus
+// done=false: the caller never caches a terminal receipt while the change set
+// may still be restoring.
 func BuildRevertArgv(cfg Config) ([]string, error) {
 	switch {
 	case cfg.OperationID == "":
@@ -388,10 +394,12 @@ func revertCode(err error) string {
 }
 
 // Reverter is the Agent-side half of the revert trigger. It stages the verified
-// old package, starts the fixed transient argv and waits for it to finish.
-// RevertOperation is idempotent: an existing verdict, a still-running unit and
-// a finished-but-verdict-less unit are each reported without starting a second
-// revert.
+// old package, starts the fixed transient argv and waits for the verdict. The
+// unit restarts the Agent, so the waiting client may be killed; that case is
+// done=false (keep the receipt non-terminal) and the next Agent boot reads the
+// verdict. RevertOperation is idempotent: an existing verdict, a still-running
+// unit and a finished-but-verdict-less unit are each reported without starting
+// a second revert.
 type Reverter struct {
 	BackupRoot string
 	WorkDir    string
@@ -561,13 +569,16 @@ func NewRollbackStore() *RollbackStore {
 }
 
 // ConfirmVersion implements node.UpgradeConfirmer exactly as the Task 3
-// contract froze it: an already-confirmed record is an idempotent success
-// BEFORE the staged-only rule (otherwise every later accepted readback of the
-// same operation would log UPDATE_CONFIRM_FAILED forever); a failed record is
-// refused; the running digest/target must match the record; and the N-1 GC runs
-// after the confirm write, never before it. A successful revert also blocks
-// confirmation, because its stale install result must never release the pointer
-// the revert depends on.
+// contract froze it. The target/digest anchors are checked FIRST, before the
+// idempotent confirmed short-circuit: a readback that names another release or
+// another package must never "confirm" (and GC) a record merely because that
+// record is already confirmed. Then an already-confirmed record is an
+// idempotent success BEFORE the staged-only rule (otherwise every later
+// accepted readback of the same operation would log UPDATE_CONFIRM_FAILED
+// forever); a failed record is refused; and the N-1 GC runs after the confirm
+// write, never before it. A successful revert also blocks confirmation, because
+// its stale install result must never release the pointer the revert depends
+// on.
 func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVersion, agentSHA256 string) error {
 	if !opIDRE.MatchString(operationID) {
 		return fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
@@ -587,6 +598,12 @@ func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVer
 	if err != nil {
 		return err
 	}
+	// The anchors come before any state short-circuit: an already-confirmed
+	// record must still answer only the readback it describes, or a stale or
+	// foreign readback could re-confirm it and release generations to GC.
+	if record.TargetVersion != targetVersion || record.PackageSHA256 != agentSHA256 {
+		return fail("UPDATE_BACKUP_MISMATCH", "the readback does not name the record's target release and package")
+	}
 	if record.State == BackupStateConfirmed {
 		// Idempotent success: the GC and the durable-source refresh still run
 		// so a previously failed one is retried by the next accepted readback
@@ -596,9 +613,6 @@ func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVer
 	}
 	if record.State != BackupStateStaged {
 		return fail("UPDATE_CONFIRM_REFUSED", "the rollback record is not a confirmable staged source")
-	}
-	if record.TargetVersion != targetVersion || record.PackageSHA256 != agentSHA256 {
-		return fail("UPDATE_BACKUP_MISMATCH", "the readback does not name the record's target release and package")
 	}
 	if !record.RollbackComplete() {
 		return fail("UPDATE_BACKUP_CORRUPT", "the rollback record holds nothing to restore")

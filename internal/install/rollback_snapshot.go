@@ -540,6 +540,14 @@ func writeUpgradeSnapshot(root string, layout nodeLayout, state InstallState, ro
 		_ = os.RemoveAll(part)
 		return err
 	}
+	// Publishing the snapshot is RemoveAll(final) + Rename(part, final), not one
+	// atomic replace: POSIX rename cannot replace a non-empty directory. The
+	// window is fail-closed — the part tree is already complete, so the only
+	// observable states are the old complete tree, the new complete tree, or
+	// (between the two calls) no tree at all. A caller that finds no tree gets
+	// ROLLBACK_SOURCE_MISSING and the next upgrade/refresh rewrites it; a
+	// half-written tree is never visible under the final name. Callers must not
+	// read the source concurrently with this replacement.
 	if err := os.RemoveAll(final); err != nil {
 		_ = os.RemoveAll(part)
 		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",

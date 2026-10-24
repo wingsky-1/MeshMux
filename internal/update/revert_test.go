@@ -4,8 +4,9 @@ package update
 // §4.12/§4.17).
 //
 // The revert executor is a NEW transient argv family: the Agent stages the
-// verified old package out of the rollback payload, starts it as one transient
-// unit with a fixed argv, and WAITS for it (systemd-run --wait). The unit
+// verified old package out of the rollback payload and starts it as one
+// transient unit with a fixed argv (systemd-run --wait is only a convenience;
+// the verdict file plus done=false is the guarantee). The unit
 // restores the recorded change set through the installer's rollbackNodeFiles
 // path (binary-only only when the Agent binary is the whole observed change and
 // the kernel still matches), reconciles the ledger/agent.json disagreement that
@@ -255,8 +256,8 @@ func (r *revertRunner) restarted() []string {
 
 // TestRevertArgvFixedShape pins the new fixed argv family: one systemd-run
 // unit, the staged old package, one hidden subcommand, two fixed values. The
-// --wait is the ordering contract: the revert must finish before the Agent can
-// cache a terminal receipt.
+// --wait is a best-effort convenience; the ordering guarantee is the verdict
+// file plus done=false (the unit restarts the Agent and may kill this client).
 func TestRevertArgvFixedShape(t *testing.T) {
 	cfg := Config{OperationID: strings.Repeat("a", 32), WorkDir: "/var/lib/meshmux-agent/update",
 		FromAgentSHA256: strings.Repeat("b", 64)}
@@ -572,6 +573,37 @@ func TestConfirmVersionMarksConfirmedAndGCs(t *testing.T) {
 	}
 }
 
+// TestConfirmVersionChecksAnchorsBeforeConfirmedShortCircuit pins the ordering:
+// once a record is confirmed, a readback that names another release or another
+// package is still refused. A stale or foreign readback can therefore never
+// re-confirm the record and release older generations to GC.
+func TestConfirmVersionChecksAnchorsBeforeConfirmedShortCircuit(t *testing.T) {
+	f := newRevertFixture(t)
+	f.writeRecord(t, "")
+	store := &RollbackStore{BackupRoot: f.root, WorkDir: f.work}
+	if err := store.ConfirmVersion(context.Background(), f.op, f.newVer, f.pkgSH); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		target string
+		sha    string
+	}{
+		{"another target", "9.9.8", f.pkgSH},
+		{"another package", f.newVer, strings.Repeat("0", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := store.ConfirmVersion(context.Background(), f.op, tc.target, tc.sha); codeOf(err) != "UPDATE_BACKUP_MISMATCH" {
+				t.Fatalf("confirmed record with %s anchors = %v, want UPDATE_BACKUP_MISMATCH", tc.name, err)
+			}
+		})
+	}
+	// The matching anchors still take the idempotent success path.
+	if err := store.ConfirmVersion(context.Background(), f.op, f.newVer, f.pkgSH); err != nil {
+		t.Fatalf("matching re-confirm: %v", err)
+	}
+}
+
 // TestConfirmVersionGCRunsAfterConfirm is the N-1 rule after a confirmed
 // generation: the oldest confirmed record is released, while staged and failed
 // records are retained.
@@ -674,9 +706,10 @@ func TestConfirmVersionRefusesMismatchedAnchors(t *testing.T) {
 	}
 }
 
-// TestReverterAwaitsTheUnit pins the spawn-and-await contract: the reverter
-// returns only after the transient unit wrote its verdict, and a still-active
-// unit is reported as not finished (never cached as failed).
+// TestReverterAwaitsTheUnit pins the spawn-and-await contract: when the client
+// can observe the unit, the reverter returns only after the transient unit
+// wrote its verdict; a still-active unit (or a killed helper that cannot prove
+// completion) is reported as not finished and is never cached as failed.
 func TestReverterAwaitsTheUnit(t *testing.T) {
 	t.Run("unit finished and wrote the verdict", func(t *testing.T) {
 		f := newRevertFixture(t)
