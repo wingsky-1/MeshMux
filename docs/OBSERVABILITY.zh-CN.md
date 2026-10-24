@@ -14,6 +14,8 @@
 | DNS_RESOLUTION_FAILED | 网络 | DNS 与 A/AAAA |
 | ARTIFACT_CHECKSUM_MISMATCH | 供应链 | manifest/来源验证 |
 | AGENT_PAIRING_REJECTED | 鉴权 | code 失效、Hub 身份/TLS |
+| PAIRING_RATE_LIMITED | 鉴权 | 配对端点进程内预算 20 次/分钟已耗尽（429 + `Retry-After`）；核对 Node ID/角色后等窗口结束，勿用已配身份重试 |
+| PAIRING_INVALID | 鉴权 | 未知/过期/已消费的码共用此码（响应不区分，避免码历史 oracle）；凭 `operation_id` 查日志得 `PAIRING_EXPIRED`/`PAIRING_CONSUMED` |
 | CONFIG_VALIDATION_FAILED | 代理配置 | sing-box check 日志 |
 | PUBLIC_PORT_UNREACHABLE | 公网入口 | 本机监听 vs 云侧安全组 |
 | OUT_ACL_UNATTESTED | Out 授权 | 来源集合/远端 ACL 状态 |

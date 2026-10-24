@@ -35,6 +35,11 @@ type Server struct {
 	handler  http.Handler
 	now      func() time.Time
 	authSlot chan struct{}
+	// pairing is the unauthenticated pairing budget (see pair_limiter.go). It is
+	// process-local on purpose: the store has one connection, and a shared
+	// database counter on this path would either contend that connection or let
+	// an anonymous flood spend the administrator's login budget.
+	pairing pairLimiter
 	// mesh is the narrow Headscale control-plane adapter behind the mesh
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.

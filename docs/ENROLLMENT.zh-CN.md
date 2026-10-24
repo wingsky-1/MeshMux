@@ -49,6 +49,8 @@ sequenceDiagram
 
 Web 节点记录从 `pending` 开始；配对事务消费一次性码并签发节点身份后变为 `paired`，心跳更新最近联系时间。配置链使用固定 `config.check → config.stage → config.apply → config.readback`，任务结果可为 `healthy`、`partial`、`failed` 或 `rolled_back`；Node 页面只把最新 desired revision 与严格本机 readback 一致标为“本机服务已确认”，历史成功不会覆盖当前失败或排队状态。
 
+`/api/agent/pair` 自带进程内 20 次/分钟预算（窗口从首次尝试起算、配对成功即清零），第 21 次返回 429 `PAIRING_RATE_LIMITED` + 窗口剩余时间；它不共用登录预算，也不占用唯一数据库连接，已配对身份的心跳/任务/配置不受影响。未知、过期、已消费的码一律 `401 PAIRING_INVALID`（相同 body），响应不区分码的历史；精确原因只进 Hub 日志，凭 `operation_id` 可查。角色不匹配仍为 `403 ROLE_MISMATCH`。因此安装器的 `PAIRING_FAILED` 恢复文案保持“核对码/角色/端口，失败请求可能已消费，重试前先重签”——客户端无法从响应判断码是否已用掉。
+
 节点没有 heartbeat、仍为 `pending`，或最近 heartbeat 超过 2 分钟，Web 显示离线且不向其投递会改动节点状态的任务。离线不会触发停线操作。安装/apply 失败返回 `operation_id`、`stage`、`status`、稳定 `error_code` 与 recovery；`partial`/`failed` 以非零退出，plan 成功不代表安装成功。
 
 Web 当前提供固定“重新校验 / 应用”入口，在单个事务中生成不可变候选 revision 和固定四任务链。身份重签会撤销旧节点身份、替换待用配对码、终止未完成的旧任务并回到 `pending`，但不停止节点服务或删除候选/配置数据；若旧身份仍可用于 repair，则不应无谓重签。没有通用节点管理命令或任意 task 编辑器。

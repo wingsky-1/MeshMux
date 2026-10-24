@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
@@ -29,7 +30,15 @@ func shellQuote(value string) string {
 }
 
 func (s *Server) agentFail(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
-	s.event(r, code)
+	s.agentFailWithReason(w, r, status, code, code, message, next)
+}
+
+// agentFailWithReason writes one failure whose body names code, while the Hub
+// log records reason. The two differ only where the response must not say what
+// the log may: an unauthenticated caller must not be able to tell two refusals
+// apart by their status or body, but an operator reading the operation_id must.
+func (s *Server) agentFailWithReason(w http.ResponseWriter, r *http.Request, status int, code, reason, message, next string) {
+	s.event(r, reason)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "operation_id": operation(r), "stage": "agent", "message": message, "next_action": next})
@@ -286,6 +295,20 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 // pairAgent exchanges a one-time pairing code for a node-scoped identity.
 // The code and the issued token never appear in logs; only operation_id and
 // stable error codes are recorded.
+//
+// Two properties matter here beyond the exchange itself:
+//
+//   - The endpoint spends work before any session exists, so it carries its own
+//     budget (pair_limiter.go). The refusal needs no database access, which keeps
+//     an anonymous flood off the single SQLite connection.
+//   - An unknown code, an expired code and an already-spent code all answer the
+//     same 401 PAIRING_INVALID. The response is therefore not an oracle for a
+//     code's history: a caller cannot learn from it whether a guessed code ever
+//     existed, when it lapsed or that it was used. Only the Hub log keeps the
+//     distinction (PAIRING_EXPIRED / PAIRING_CONSUMED), reachable through the
+//     operation_id the response carries. A wrong role stays a distinct 403
+//     because it is a fact about the caller's own configuration, not about a
+//     secret, and an operator needs it to fix a wrong-role install.
 func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req protocol.PairingRequest
@@ -293,29 +316,48 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 400, "PAIRING_INVALID", "配对请求不正确。", "请使用 Web 显示的一次性配对指令重试。")
 		return
 	}
+	// Charge the budget before the store is touched. A malformed body costs no
+	// budget (it never reaches the database either), while every well-formed
+	// attempt is bounded before it can hash a code or open a transaction.
+	if ok, retry := s.pairing.spend(s.now()); !ok {
+		seconds := int((retry + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.agentFail(w, r, 429, "PAIRING_RATE_LIMITED", "配对尝试过于频繁。",
+			"配对预算为 "+strconv.Itoa(pairBudget)+" 次 / 分钟，约 "+retryText(seconds)+"后可再试；已配对身份、心跳与任务不受影响，请勿反复重试。")
+		return
+	}
 	token, err := s.store.consumePairing(req.NodeID, req.Role, req.PairingCode, req.AgentVersion, req.KernelVersion, s.now())
 	if err != nil {
 		msg := err.Error()
-		code := "PAIRING_INVALID"
-		status := 401
+		// Default: one neutral refusal, whatever the code's history. The log
+		// reason is the precise one so the operator can still diagnose it.
+		code, status, reason := "PAIRING_INVALID", 401, "PAIRING_INVALID"
+		message, next := "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。"
 		switch {
 		case strings.HasPrefix(msg, "ROLE_MISMATCH"):
-			code = "ROLE_MISMATCH"
-			status = 403
+			code, status, reason = "ROLE_MISMATCH", 403, "ROLE_MISMATCH"
 		case strings.HasPrefix(msg, "PAIRING_EXPIRED"):
-			code = "PAIRING_EXPIRED"
-			status = 410
+			reason = "PAIRING_EXPIRED"
 		case strings.HasPrefix(msg, "PAIRING_CONSUMED"):
-			code = "PAIRING_CONSUMED"
-			status = 409
+			reason = "PAIRING_CONSUMED"
 		case strings.HasPrefix(msg, "VERSION_INVALID"):
-			code = "VERSION_INVALID"
-			status = 400
+			code, status, reason = "VERSION_INVALID", 400, "VERSION_INVALID"
+		case strings.HasPrefix(msg, "DATABASE_UNAVAILABLE"):
+			// A database outage is not a rejected credential. Reporting it as one
+			// would send an operator to reissue a code that was never the problem.
+			code, status, reason = "DATABASE_UNAVAILABLE", 503, "DATABASE_UNAVAILABLE"
+			message, next = "暂时无法验证配对。", "请检查数据库与服务日志，稍后重试。"
+		case strings.HasPrefix(msg, "IDENTITY_ISSUE_FAILED"):
+			code, status, reason = "IDENTITY_ISSUE_FAILED", 500, "IDENTITY_ISSUE_FAILED"
+			message, next = "无法签发节点身份。", "请凭操作编号检查服务日志后重试；配对码未被消费。"
 		}
 		// Never echo node IDs, roles or secrets in the error body beyond the code.
-		s.agentFail(w, r, status, code, "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。")
+		s.agentFailWithReason(w, r, status, code, reason, message, next)
 		return
 	}
+	// A spent code is the pairing analogue of a proven password: the exchange
+	// succeeded, so the failures a flood produced no longer hold the budget.
+	s.pairing.clear()
 	s.event(r, "AGENT_PAIRED")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"node_id": req.NodeID, "identity_token": token, "operation_id": operation(r)})

@@ -273,8 +273,11 @@ func (s *store) observedArchitecture(id string) (string, error) {
 }
 
 // consumePairing atomically exchanges a one-time code for a node-scoped
-// identity. Replay, expiry and role mismatch are distinct rejections; an
-// unknown code is a generic rejection to avoid node enumeration.
+// identity. Replay, expiry and role mismatch are distinct rejections here so the
+// Hub log can name the reason; the HTTP layer deliberately merges replay and
+// expiry into one neutral answer so the response cannot be used to learn a
+// code's history. An unknown code is a generic rejection to avoid node
+// enumeration.
 func (s *store) consumePairing(nodeID, role, code, agentVersion, kernelVersion string, now time.Time) (string, error) {
 	if err := protocol.ValidatePairingRequest(protocol.PairingRequest{NodeID: nodeID, Role: role, PairingCode: code, AgentVersion: agentVersion, KernelVersion: kernelVersion}); err != nil {
 		return "", err
