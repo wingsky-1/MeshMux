@@ -427,6 +427,44 @@ func TestRouteApprovalRefusesUnsafePrefixes(t *testing.T) {
 	}
 }
 
+// TestApprovableRoutePrefixMatchesTheRefusal pins the exported predicate against
+// the adapter's own refusal: a caller that builds a complete approved set must be
+// able to drop exactly the entries SetApprovedRoutes would refuse, no more and no
+// less.
+func TestApprovableRoutePrefixMatchesTheRefusal(t *testing.T) {
+	cases := []struct {
+		prefix string
+		ok     bool
+	}{
+		{prefix: "192.168.1.0/24", ok: true},
+		{prefix: "10.0.0.0/8", ok: true},
+		{prefix: "fd7a:115c:a1e0::/48", ok: true},
+		{prefix: "2001:db8::/32", ok: true},
+		{prefix: "0.0.0.0/0"},
+		{prefix: "::/0"},
+		{prefix: "10.0.0.1/8"},
+		{prefix: "fd00::1/8"},
+		{prefix: "10.0.0.1"},
+		{prefix: "lan"},
+		{prefix: ""},
+		{prefix: " 10.0.0.0/8"},
+		{prefix: "--identifier"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.prefix, func(t *testing.T) {
+			if got := ApprovableRoutePrefix(tc.prefix); got != tc.ok {
+				t.Fatalf("ApprovableRoutePrefix(%q) = %v, want %v", tc.prefix, got, tc.ok)
+			}
+			// The predicate and the refusal agree, so a set filtered by the
+			// predicate never carries an entry the command would reject.
+			err := validateRoutePrefix(tc.prefix)
+			if (err == nil) != tc.ok {
+				t.Fatalf("validateRoutePrefix(%q) = %v, want ok=%v", tc.prefix, err, tc.ok)
+			}
+		})
+	}
+}
+
 // TestSetApprovedRoutesKeepsCallerOrderAndDuplicates asserts the adapter does not
 // rewrite the approved set. Headscale compacts duplicates server-side; doing it
 // here too would hide a caller that built its list wrongly, and the domain is the

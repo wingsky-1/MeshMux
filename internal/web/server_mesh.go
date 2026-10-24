@@ -51,6 +51,14 @@ const codeMeshHeadscaleUserUnknown = "MESH_HEADSCALE_USER_UNKNOWN"
 const (
 	codeMeshRouteApprovalUnconfirmed = "MESH_ROUTE_APPROVAL_UNCONFIRMED"
 	codeMeshRouteNodeUnobserved      = "MESH_ROUTE_NODE_UNOBSERVED"
+
+	// codeMeshRouteUntrackedDropped is the web_event code for one approved
+	// prefix that could not be carried in the complete set Headscale's replace
+	// operation takes, and was therefore left out instead of blocking the whole
+	// request. It is a log-only audit event: it is not a mesh_route_events kind,
+	// which the schema's CHECK constraint keeps to route state changes, and not
+	// a rendered failure code, because the request itself succeeded.
+	codeMeshRouteUntrackedDropped = "MESH_ROUTE_UNTRACKED_DROPPED"
 )
 
 // meshUserView is one selectable Headscale user. The list is read live; the
@@ -392,12 +400,17 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 			"Headscale 未报告该设备的节点，无法批准子网路由。", "请重新核对；设备可能已离线或过期。")
 		return
 	}
-	prefixes := meshRouteApprovalSet(node.ApprovedRoutes, route.Prefix, "")
+	prefixes, dropped := meshRouteApprovalSet(node.ApprovedRoutes, route.Prefix, "")
 	readback, err := app.mesh.SetApprovedRoutes(ctx, device.HeadscaleNodeID, prefixes)
 	if err != nil {
 		app.meshControlPlaneFail(w, r, err, codeMeshRouteApproval, "Headscale 未接受路由批准。", "请检查 Headscale 服务与节点状态后重试。")
 		return
 	}
+	// The dropped entry was left out of the set, and a set operation replaces
+	// the whole list: Headscale no longer approves it. That is a deliberate
+	// change of the approved set, so it is audited and reported once the
+	// mutation itself was accepted.
+	droppedCount := app.logDroppedApprovedRoutes(r, dropped)
 	if readback.ID != device.HeadscaleNodeID || !meshRoutePrefixIn(readback.ApprovedRoutes, route.Prefix) {
 		app.fail(w, r, http.StatusConflict, codeMeshRouteApprovalUnconfirmed,
 			"Headscale 未在 readback 中确认该前缀已批准。",
@@ -419,7 +432,7 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 	}
 	app.event(r, routeEventApproved)
 	app.renderMesh(w, r, sess, nil,
-		"已批准前缀 "+route.Prefix+"；Headscale readback 已确认。approved 集合已更新，但这不表示客户端已实际转发流量。", "notice")
+		"已批准前缀 "+route.Prefix+"；Headscale readback 已确认。approved 集合已更新，但这不表示客户端已实际转发流量。"+meshRouteDroppedNotice(droppedCount, false), "notice")
 }
 
 // meshRouteRevoke withdraws an approval while keeping the declaration. It sends
@@ -458,9 +471,12 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 			"Headscale 未报告该设备的节点，无法撤销路由批准。", "请重新核对；设备可能已离线或过期。")
 		return
 	}
-	prefixes := meshRouteApprovalSet(node.ApprovedRoutes, "", route.Prefix)
+	prefixes, dropped := meshRouteApprovalSet(node.ApprovedRoutes, "", route.Prefix)
 	var readback headscale.Node
 	if len(prefixes) == 0 {
+		// Nothing sendable remains. Clearing is a superset of the difference the
+		// caller asked for, so a prefix the adapter refuses is withdrawn too
+		// instead of pinning the node to a set that can never be sent again.
 		readback, err = app.mesh.ClearApprovedRoutes(ctx, device.HeadscaleNodeID)
 	} else {
 		readback, err = app.mesh.SetApprovedRoutes(ctx, device.HeadscaleNodeID, prefixes)
@@ -469,6 +485,7 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 		app.meshControlPlaneFail(w, r, err, codeMeshRouteWithdraw, "Headscale 未接受撤销路由批准。", "请检查 Headscale 服务与节点状态后重试。")
 		return
 	}
+	droppedCount := app.logDroppedApprovedRoutes(r, dropped)
 	if readback.ID != device.HeadscaleNodeID || meshRoutePrefixIn(readback.ApprovedRoutes, route.Prefix) {
 		app.fail(w, r, http.StatusConflict, codeMeshRouteApprovalUnconfirmed,
 			"Headscale readback 中该前缀仍为已批准。",
@@ -490,7 +507,7 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 	}
 	app.event(r, routeEventWithdrawn)
 	app.renderMesh(w, r, sess, nil,
-		"已撤销前缀 "+route.Prefix+" 的批准；声明仍保留，可再次批准。已批准集合的其余前缀未被清除。", "notice")
+		"已撤销前缀 "+route.Prefix+" 的批准；声明仍保留，可再次批准。已批准集合的其余前缀未被清除。"+meshRouteDroppedNotice(droppedCount, len(prefixes) == 0), "notice")
 }
 
 // meshRouteTarget resolves the device and one declared prefix of a route action.
@@ -525,11 +542,19 @@ func (app *Server) meshNode(ctx context.Context, nodeID uint64) (headscale.Node,
 }
 
 // meshRouteApprovalSet builds the complete approved set Headscale's set
-// operation expects. Existing entries are canonicalised when possible but never
-// dropped: a prefix MeshMux cannot parse is still sent back so the adapter
-// refuses it explicitly instead of the Hub silently clearing it. add and remove
-// are canonical prefixes; remove applies to the difference set of a withdrawal.
-func meshRouteApprovalSet(existing []string, add, remove string) []string {
+// operation expects. Existing entries are canonicalised when possible and
+// deduplicated. add and remove are canonical prefixes; remove applies to the
+// difference set of a withdrawal.
+//
+// An entry the Headscale adapter refuses is dropped from the set and returned in
+// dropped instead of being sent back verbatim. `nodes approve-routes` replaces
+// the whole list in one CSV value, so sending an exit route (0.0.0.0/0 or ::/0),
+// a prefix with host bits set or anything else that is not a prefix makes the
+// adapter refuse the entire request: one un-sendable entry that a device or an
+// operator put into Headscale's approved list would otherwise block every later
+// approval and withdrawal of a legitimate prefix forever. The values are
+// returned so the caller can audit each drop; they never reach a log line.
+func meshRouteApprovalSet(existing []string, add, remove string) (set, dropped []string) {
 	out := make([]string, 0, len(existing)+1)
 	seen := make(map[string]struct{}, len(existing)+1)
 	for _, raw := range existing {
@@ -547,15 +572,52 @@ func meshRouteApprovalSet(existing []string, add, remove string) []string {
 			continue
 		}
 		seen[prefix] = struct{}{}
+		if !headscale.ApprovableRoutePrefix(prefix) {
+			dropped = append(dropped, prefix)
+			continue
+		}
 		out = append(out, prefix)
 	}
 	if add != "" {
+		// add is a stored declaration, which the mesh domain already refused
+		// unless it is a routable prefix, so it is sendable by construction and
+		// is never dropped: a request that silently approved nothing would
+		// report success for a prefix Headscale never saw.
 		if _, ok := seen[add]; !ok {
 			out = append(out, add)
 		}
 	}
 	sort.Strings(out)
-	return out
+	sort.Strings(dropped)
+	return out, dropped
+}
+
+// logDroppedApprovedRoutes records one MESH_ROUTE_UNTRACKED_DROPPED event per
+// approved prefix the set could not carry, and returns how many were dropped.
+// The event is an audit fact, not a page failure: the request itself still
+// succeeds for the prefixes that were sent. Only the stable code and
+// operation_id are logged, so the network values stay out of the log.
+func (app *Server) logDroppedApprovedRoutes(r *http.Request, dropped []string) int {
+	for range dropped {
+		app.event(r, codeMeshRouteUntrackedDropped)
+	}
+	return len(dropped)
+}
+
+// meshRouteDroppedNotice describes approved prefixes left out of the set MeshMux
+// sent to Headscale. It names only a count, never a network, and states what
+// happened to them: a replaced set no longer approves them, and a cleared set
+// withdraws them with everything else.
+func meshRouteDroppedNotice(count int, cleared bool) string {
+	if count == 0 {
+		return ""
+	}
+	if cleared {
+		return fmt.Sprintf("另有 %d 条无法发送给 Headscale 的已批准前缀随本次清空一并撤销（记录 %s 审计事件）。",
+			count, codeMeshRouteUntrackedDropped)
+	}
+	return fmt.Sprintf("另有 %d 条无法发送给 Headscale 的已批准前缀已被移出该集合（记录 %s 审计事件）；它们不再是批准状态，需要时请重新声明并批准。",
+		count, codeMeshRouteUntrackedDropped)
 }
 
 // meshRoutePrefixIn reports membership with canonical comparison, so a

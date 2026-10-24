@@ -326,17 +326,27 @@ func validateID(id uint64) error {
 // refuses. A comma is refused implicitly: no prefix parses with one, and the
 // joined value is a CSV list for the CLI's StringSlice flag.
 func validateRoutePrefix(raw string) error {
+	if ApprovableRoutePrefix(raw) {
+		return nil
+	}
+	return failure(CodeRouteInvalid)
+}
+
+// ApprovableRoutePrefix reports whether raw is a prefix this adapter will send to
+// Headscale. It is the exported half of the same rule validateRoutePrefix
+// enforces, so a caller that has to hand over a complete approved set can leave
+// out an entry this predicate refuses instead of having the whole set refused and
+// every other approval blocked. It says nothing about whether the prefix is a
+// routable LAN: that decision belongs to the mesh domain.
+func ApprovableRoutePrefix(raw string) bool {
 	prefix, err := netip.ParsePrefix(raw)
 	if err != nil {
-		return failure(CodeRouteInvalid)
+		return false
 	}
 	if prefix.Bits() == 0 {
-		return failure(CodeRouteInvalid)
+		return false
 	}
-	if prefix != prefix.Masked() {
-		return failure(CodeRouteInvalid)
-	}
-	return nil
+	return prefix == prefix.Masked()
 }
 
 // joinRoutePrefixes turns validated prefixes into the single comma-separated
