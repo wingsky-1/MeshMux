@@ -127,7 +127,7 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 | `/var/lib/meshmux-agent/identity.json` | 节点专属私有 identity |
 | `/var/lib/meshmux-agent/state.json` | Agent runtime 状态与 LKG |
 | `/var/lib/meshmux-agent/active-candidate.json` | 当前 active candidate 元数据 |
-| `/var/lib/meshmux-agent/staged/` | runtime 暂存目录 |
+| `/var/lib/meshmux-agent/staged/` | runtime 暂存目录（按 revision 保留 candidate/config；健康 apply+readback 后只保留当前 revision、上一 revision 与最近窗口，失败/回退的暂存不回收） |
 | `/var/lib/meshmux-singbox/config.json` | active sing-box 配置 |
 | `/var/lib/meshmux-agent/out.nft` | Out ACL 脚本 |
 | `/etc/systemd/system/meshmux-agent.service` | Agent 服务 |

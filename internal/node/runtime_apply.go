@@ -169,6 +169,7 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	if err != nil {
 		return r.finishApply(ctx, &state, task, payload, failedResult(result, "READBACK_DETAIL_FAILED"))
 	}
+	previousRevision := state.Revision
 	state.Revision = revision
 	state.Digest = sha256Hex(documentData)
 	state.LKG = append([]byte(nil), config...)
@@ -178,7 +179,25 @@ func (r *Runtime) apply(ctx context.Context, task protocol.Task, payload string,
 	state.Journal = nil
 	result.Status = "healthy"
 	result.Detail = boundedDetail(detail)
-	return r.finishApply(ctx, &state, task, payload, result)
+	result = r.finishApply(ctx, &state, task, payload, result)
+	// The change set is now proven (apply + readback) AND its verdict is
+	// durable, so the staged revisions behind the retention window are dead
+	// weight. The GC runs only here: a failed or rolled-back apply still needs
+	// every staged file it might restore from, a stage-only revision is pending
+	// work, and a healthy verdict that could not be persisted must leave the
+	// directory exactly as it was. It is best effort — a collection failure
+	// never downgrades the verdict the readback just proved; the next healthy
+	// apply retries it.
+	if result.Status == "healthy" {
+		if removed, gcErr := gcStagedRevisions(r.root, revision, previousRevision, stagedKeepRevisions); gcErr != nil {
+			r.logger.WarnContext(ctx, "staged revision GC incomplete",
+				"operation_id", task.OperationID, "error_code", errorCode(gcErr))
+		} else if len(removed) > 0 {
+			r.logger.InfoContext(ctx, "staged revisions collected",
+				"operation_id", task.OperationID, "count", len(removed))
+		}
+	}
+	return result
 }
 
 func (r *Runtime) stageCandidateFiles(revision int64, document, config []byte) error {
