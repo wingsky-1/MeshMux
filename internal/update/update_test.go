@@ -88,8 +88,7 @@ func fixtureConfig(t *testing.T, m upgrade.Manifest) Config {
 	return Config{Target: "1.0.1", ManifestSHA256: shaOf(pinned), OperationID: strings.Repeat("a", 32),
 		WorkDir: t.TempDir(), FetchManifest: func(context.Context) ([]byte, error) { return body, nil },
 		CurrentVersion: "1.0.0", Releases: []string{"1.0.0", "1.0.1"},
-		NodeConfig: fixtureInstalled, Space: func(string, uint64) error { return nil },
-		Readback: func() (string, error) { return m.Components[0].SHA256, nil }}
+		NodeConfig: fixtureInstalled, Space: func(string, uint64) error { return nil }}
 }
 
 func TestRunRefusesInvalidArguments(t *testing.T) {
@@ -243,7 +242,10 @@ func TestRunStagesVerifiedPackage(t *testing.T) {
 	if result.Manifest.Version != cfg.Target || readErr != nil || string(staged) != string(pkg) {
 		t.Fatalf("result = %+v, readErr %v", result, readErr)
 	}
-	if len(runner.calls) != 2 {
-		t.Fatalf("handoff calls = %q, want install then restart", runner.calls)
+	if len(runner.calls) != 1 {
+		t.Fatalf("handoff calls = %q, want exactly one transient unit start", runner.calls)
+	}
+	if len(runner.calls[0]) < 2 || runner.calls[0][0] != "/usr/bin/systemd-run" {
+		t.Fatalf("handoff argv = %q", runner.calls[0])
 	}
 }
