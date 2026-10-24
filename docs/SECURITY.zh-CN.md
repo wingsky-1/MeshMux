@@ -3,7 +3,8 @@
 ## 安全边界
 
 - 外网：Caddy HTTPS 是唯一 Hub Web 入口；Web Go HTTP 服务必须以非 root 身份监听 loopback。
-- Web：单管理员（无自助注册），强密码哈希（Argon2id），服务端会话、Secure/HttpOnly/SameSite cookie，精确 Origin + CSRF 验证，身份失败限速及注销/失效。
+- Web：单管理员（无自助注册），强密码哈希（Argon2id），服务端会话、Secure/HttpOnly/SameSite cookie，精确 Origin + CSRF 验证，身份失败限速及注销/失效。认证预算是一次**成功即清零**的全局 10 次/10 分钟窗口：只有已证明的凭据能清零，错误密码永不清零，因此暴力破解成本不因成功路径降低。
+- **认证预算的 DoS 取舍（显式接受）：** 全局预算不按键或 IP 分摊，持续攻击者可以短暂耗尽它，让真正的管理员暂时无法提交密码。这是为了在无法可信区分来源（Cloudflare/CDN/共享出口）时仍能限制 Argon2id 成本而付出的代价，属于**已知的可用性风险，不是缺陷**。缓解与边界：预算持久化在 SQLite，服务重启不清零；已登录会话的只读访问、页面浏览和退出不受预算影响，管理员不会因此被踢出；429 返回窗口剩余时间而不是固定等待，成功登录/改密在同一事务内清零预算；窗口从首次尝试起算，失败尝试不会延长锁定。该预算不承担抗 DDoS 职责，公网 DDoS 需由 Caddy/前置网络层处理。
 - Privilege boundary：Web API 不直接执行 root 命令；通过固定 schema/allowlist 的特权执行器或 Agent 权限边界访问 systemd、Headscale 与 sing-box；不得提供任意 Shell、下载 URL、进程参数或文件路径。Node Agent 实际为受限 root，只允许固定任务/路径/argv；独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行。不能把该 Agent 描述为 unprivileged。Agent 的 systemd capability 集合为 `CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE`；其中 `CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash，`CAP_DAC_READ_SEARCH` 用于 `ss -p` 解析非 root 进程的监听映射（无 `CAP_DAC_OVERRIDE`）。权限边界和该 capability 的真实必要性仍需 Debian 13 VM 验证，当前不宣称已证明全部权限最小。
 - Node pairing：短期一次性注册码仅首次使用，可信 TLS 验证，配对后升级为节点专属可轮换和可吊销身份，所有任务携带单调修订/超时/审计 ID。用户 CLI 的 `edge|out` 不接受 pairing-code/token flag；43 字符 code 只在 plan 与确认后从 stdin 单行读取，并只传给安装调用，不写入 argv、URL、Node config、InstallState、日志或结果输出。
 - Auth secrets、数据库、Headscale 身份及 REALITY 私钥保持本地 0600 root/服务账户边界，备份加密、可恢复，不在公开 Git、诊断包或通用日志中。
@@ -40,6 +41,6 @@ Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，�
 
 ## 阶段一已实现边界
 
-Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
+Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速（成功即清零，取舍见上文）、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
 
 Issue #6 已关闭，Node/Agent 边界以上文固定通道为准。Issue #7 PR-A 已合入订阅域模型（schema 4、仅哈希 Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器；Web 用户操作、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含 CI 与隔离 VM 证据），也不得据此宣称真实公网握手或客户端可用。

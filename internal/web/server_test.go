@@ -267,8 +267,9 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
-	// One attempt was used by setup. Forwarded headers must not affect the budget.
-	for range 9 {
+	// Initialization proved the bootstrap secret and cleared the shared budget,
+	// so ten wrong attempts now exhaust it. Forwarded headers must not affect it.
+	for range 10 {
 		requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-Forwarded-For": {"192.0.2.5"}, "X-MeshMux-Client-Ip": {"192.0.2.6"}}), 401)
 	}
 	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
@@ -297,6 +298,90 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	if !found {
 		t.Fatal("missing explicit direct-Caddy candidate")
 	}
+}
+
+func TestSuccessfulLoginsResetTheGlobalBudget(t *testing.T) {
+	app, _ := testApp(t)
+	initialize(t, &browser{app: app})
+	// Ten routine logins inside one window must never lock the only
+	// administrator out: every proven password clears the shared budget, so the
+	// run below keeps succeeding past the nominal limit.
+	for i := range 12 {
+		b := &browser{app: app}
+		requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+		if w := b.post("/login", url.Values{"password": {testPassword}}); w.Code != 303 {
+			t.Fatalf("login %d status %d want 303: %.200s", i+1, w.Code, w.Body.String())
+		}
+	}
+	var attempts int
+	if err := app.store.db.QueryRow("SELECT attempts FROM auth_limit WHERE id=1").Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts after a successful login = %d, want 0", attempts)
+	}
+}
+
+func TestOnlyAProvenPasswordResetsTheBudget(t *testing.T) {
+	app, _ := testApp(t)
+	initialize(t, &browser{app: app})
+	attempt := func(password string) *httptest.ResponseRecorder {
+		t.Helper()
+		b := &browser{app: app}
+		requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+		return b.post("/login", url.Values{"password": {password}})
+	}
+	// Nine failures leave exactly one slot; the proven password may spend it.
+	for range 9 {
+		requireStatus(t, attempt("wrong"), 401)
+	}
+	requireStatus(t, attempt(testPassword), 303)
+	// A failed attempt never refills the budget: ten fresh failures are again
+	// needed before the next refusal, which proves the reset followed the
+	// successful proof rather than the mere passage of requests.
+	for range 10 {
+		requireStatus(t, attempt("wrong"), 401)
+	}
+	requireStatus(t, attempt(testPassword), 429)
+}
+
+func TestRateLimitRefusalStatesWhenToRetry(t *testing.T) {
+	app, _ := testApp(t)
+	base := time.Now()
+	app.now = func() time.Time { return base }
+	initialize(t, &browser{app: app})
+	b := &browser{app: app}
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+	wrong := func() *httptest.ResponseRecorder {
+		return b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, nil)
+	}
+	for range 10 {
+		requireStatus(t, wrong(), 401)
+	}
+	w := wrong()
+	requireStatus(t, w, 429)
+	// A constant "600" would be wrong after four minutes: the refusal must state
+	// the remainder of the window that already started.
+	if got := w.Header().Get("Retry-After"); got != "600" {
+		t.Fatalf("Retry-After at the start of the window = %q, want 600", got)
+	}
+	for _, want := range []string{"AUTH_RATE_LIMITED", "约 10 分钟后", "成功认证会立即清零", "只读页面与退出不受"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("refusal page lacks %q", want)
+		}
+	}
+	app.now = func() time.Time { return base.Add(4 * time.Minute) }
+	w = wrong()
+	requireStatus(t, w, 429)
+	if got := w.Header().Get("Retry-After"); got != "360" {
+		t.Fatalf("Retry-After four minutes in = %q, want 360", got)
+	}
+	if !strings.Contains(w.Body.String(), "约 6 分钟后") {
+		t.Fatal("refusal page does not state the remaining wait")
+	}
+	// The window reopens on its own; a failed attempt does not slide it.
+	app.now = func() time.Time { return base.Add(11 * time.Minute) }
+	requireStatus(t, wrong(), 401)
 }
 
 func TestDatabaseFailureClosedAndHeaders(t *testing.T) {

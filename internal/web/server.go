@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -450,17 +451,30 @@ func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session)
 }
 
 func (s *Server) budget(w http.ResponseWriter, r *http.Request) bool {
-	ok, err := s.store.attempt(s.now())
+	ok, retry, err := s.store.attempt(s.now())
 	if err != nil {
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法验证登录频率。", "请检查数据库。")
 		return false
 	}
 	if !ok {
-		w.Header().Set("Retry-After", "600")
-		s.fail(w, r, 429, "AUTH_RATE_LIMITED", "认证尝试过于频繁。", "请等待十分钟后再试。")
+		// Report the remaining window instead of a constant, so a locked-out
+		// administrator knows when the next attempt can succeed. This reveals
+		// nothing about a password: the budget is consumed by right and wrong
+		// attempts alike, and a success clears it.
+		seconds := int((retry + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.fail(w, r, 429, "AUTH_RATE_LIMITED", "认证尝试过于频繁。", "鉴权预算为 10 次 / 10 分钟，约 "+retryText(seconds)+"后可再试；成功认证会立即清零。已登录会话、只读页面与退出不受此预算影响，请勿反复重试。")
 		return false
 	}
 	return true
+}
+
+// retryText renders a wait in the unit an administrator can act on.
+func retryText(seconds int) string {
+	if seconds < 120 {
+		return strconv.Itoa(seconds) + " 秒"
+	}
+	return strconv.Itoa((seconds+59)/60) + " 分钟"
 }
 
 func (s *Server) authFailure(w http.ResponseWriter, r *http.Request, sess session, setup bool) {
@@ -524,6 +538,12 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 	if _, err = tx.Exec("INSERT INTO admin VALUES(1,?)", hash); err == nil {
 		_, err = tx.Exec("DELETE FROM bootstrap; DELETE FROM sessions;")
 	}
+	// The bootstrap secret and the new password were both proven, so the shared
+	// budget is cleared with the same commit: the operator's first login must
+	// not inherit the initialization attempt.
+	if err == nil {
+		err = resetAuthBudget(tx)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -566,6 +586,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 	_, err = tx.Exec("DELETE FROM sessions WHERE authenticated=1 OR token_hash=?", sess.Hash)
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,1,?,?)", tokenHash(token), csrf, expires, s.now().Unix())
+	}
+	// The password was proven, so the shared budget is cleared in this same
+	// transaction: ten routine logins never lock the only administrator out,
+	// and a session that failed to persist cannot leave a half-applied reset.
+	if err == nil {
+		err = resetAuthBudget(tx)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -621,6 +647,12 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 	_, err = tx.Exec("UPDATE admin SET password_hash=? WHERE id=1", newHash)
 	if err == nil {
 		_, err = tx.Exec("DELETE FROM sessions")
+	}
+	// The current password was proven and every session is about to be revoked,
+	// so the budget is cleared here: otherwise the operator's next login could
+	// hit the limit that this successful change just consumed.
+	if err == nil {
+		err = resetAuthBudget(tx)
 	}
 	if err == nil {
 		err = tx.Commit()

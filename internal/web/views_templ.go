@@ -454,7 +454,7 @@ func Dashboard(p pageData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><label for=\"current\">当前密码</label><input id=\"current\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\"><label for=\"new\">新密码</label><input id=\"new\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符，最多 256 字节。</p><button type=\"submit\">修改密码并退出登录</button></form></section><section class=\"panel\"><h2>认证边界</h2><dl class=\"details\"><dt>账号</dt><dd>admin · 单管理员</dd><dt>会话</dt><dd>最长 8 小时 / 空闲 30 分钟</dd><dt>并行登录</dt><dd>新登录替换旧会话</dd><dt>登录保护</dt><dd>全局 10 次 / 10 分钟</dd><dt>代理 IP 信任</dt><dd>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><label for=\"current\">当前密码</label><input id=\"current\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\"><label for=\"new\">新密码</label><input id=\"new\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符，最多 256 字节。</p><button type=\"submit\">修改密码并退出登录</button></form></section><section class=\"panel\"><h2>认证边界</h2><dl class=\"details\"><dt>账号</dt><dd>admin · 单管理员</dd><dt>会话</dt><dd>最长 8 小时 / 空闲 30 分钟</dd><dt>并行登录</dt><dd>新登录替换旧会话</dd><dt>登录保护</dt><dd>全局 10 次 / 10 分钟 · 成功认证即清零</dd><dt>代理 IP 信任</dt><dd>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
