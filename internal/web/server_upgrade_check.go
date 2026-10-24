@@ -39,9 +39,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/jobs"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -315,12 +317,18 @@ func (s *store) approveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 	if err != nil {
 		return approvedUpgrade{}, err
 	}
-	// An approval must not silently drop a route a policy publication already
-	// resolved for this node: the new revision carries the same route forward,
-	// so the data plane stays identical while the revision advances.
-	if latest, err := candidateTx(tx, nodeID); err == nil && len(latest.Document.Route) > 0 {
-		candidate.Route = append(json.RawMessage(nil), latest.Document.Route...)
+	// An approval must not silently drop the route the live policy resolves for
+	// this node, and it must not resurrect one the policy no longer justifies:
+	// the route is re-derived from the active server revision and the current
+	// Out facts, exactly like a policy publication. An Out that was unbound,
+	// deleted or went offline therefore invalidates the old route instead of
+	// being republished by an upgrade, and a policy that selects it fails closed
+	// here with the compiler's own code.
+	serverRoute, err := lineServerRouteTx(tx, nodeID, now)
+	if err != nil {
+		return approvedUpgrade{}, err
 	}
+	candidate.Route = serverRoute
 	if err := mixedVersionGate(candidate, observed); err != nil {
 		return approvedUpgrade{}, err
 	}
@@ -457,6 +465,21 @@ func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, er
 		strings.HasPrefix(code, "CANDIDATE_MISMATCH"):
 		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_CHAIN_INVALID",
 			"当前快照无法生成合法的升级链。", "请先复核该节点配置；未写入任何升级记录。")
+	// The approval re-derives the Line route from the live policy, so it can
+	// meet the same Out contract a publication does. The refusal is reported
+	// with the compiler's own stable code and the operator's next step (fix the
+	// Out, or publish a direct server policy) instead of a generic retry hint.
+	case strings.HasPrefix(code, "OUT_BINDING_INVALID"):
+		app.writeUpgradeFailure(w, r, http.StatusConflict, "OUT_BINDING_INVALID",
+			"当前服务端策略指向一个该线路没有的 Out。", "请先绑定 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
+	case strings.HasPrefix(code, route.CodeOutOfflineFailClosed):
+		app.writeUpgradeFailure(w, r, http.StatusConflict, route.CodeOutOfflineFailClosed,
+			"当前服务端策略指向的 Out 不可用。", "请恢复 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
+	case strings.HasPrefix(code, "POLICY_CORRUPT"), strings.HasPrefix(code, "POLICY_PINS_INVALID"),
+		strings.HasPrefix(code, compiler.CodePolicyInvalid), strings.HasPrefix(code, compiler.CodePolicyConflict),
+		strings.HasPrefix(code, compiler.CodeRulesetUnpinned):
+		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_CHAIN_INVALID",
+			"当前 active 服务端策略无法解析出线路路由。", "请先修复并重新发布服务端策略；未写入任何升级记录。")
 	default:
 		app.writeUpgradeFailure(w, r, http.StatusServiceUnavailable, "UPGRADE_APPROVAL_FAILED",
 			"批准未完成。", "请凭操作编号检查服务日志；已应用修订保持不变。")

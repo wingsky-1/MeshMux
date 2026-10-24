@@ -97,7 +97,14 @@ func subscriberLineNodeOfflineTx(tx *sql.Tx, nodeID string, now time.Time) (bool
 // Only an Edge node with stored Line settings is a credential-carrying Line.
 // The builder returns the full active user set, so publishing it can never
 // remove the credentials of another subscriber.
-func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candidate, error) {
+//
+// The route is derived from the live intent, never copied from the previous
+// candidate: a Line keeps the server policy that is active now, and an Out that
+// was unbound, deleted or went offline invalidates the old route instead of
+// being republished from a stale copy (see lineServerRouteTx). A credential
+// change therefore cannot keep a route alive that the current policy and Out
+// facts no longer justify.
+func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64, now time.Time) (node.Candidate, error) {
 	candidate, err := buildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
 		return node.Candidate{}, err
@@ -105,40 +112,12 @@ func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candid
 	if candidate.Role != node.RoleEdge || candidate.Reality == nil {
 		return node.Candidate{}, errors.New("LINE_NOT_CONFIGURED: line transport is not configured")
 	}
-	// A credential change never drops the published server policy: the route of
-	// the newest candidate is carried into the desired snapshot, so the next
-	// subscriber-driven revision still serves the same routes. A Line without a
-	// published policy carries none, which keeps the previous behavior exactly.
-	if route, err := latestLineRouteTx(tx, nodeID); err != nil {
-		return node.Candidate{}, err
-	} else if len(route) > 0 {
-		candidate.Route = route
-	}
-	return candidate, nil
-}
-
-// latestLineRouteTx returns the route fragment of the newest candidate of one
-// Line, or nil when that candidate has none. The fragment is re-validated by the
-// candidate decoder, so a corrupted row is reported instead of being carried
-// into a new revision.
-func latestLineRouteTx(tx *sql.Tx, nodeID string) (json.RawMessage, error) {
-	var document []byte
-	err := tx.QueryRow(`SELECT candidate_json FROM node_candidates
- WHERE node_id=? ORDER BY revision DESC LIMIT 1`, nodeID).Scan(&document)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+	route, err := lineServerRouteTx(tx, nodeID, now)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return node.Candidate{}, err
 	}
-	var parsed node.CandidateDocument
-	if err := json.Unmarshal(document, &parsed); err != nil {
-		return nil, errors.New("CANDIDATE_CORRUPT")
-	}
-	if len(parsed.Route) == 0 {
-		return nil, nil
-	}
-	return parsed.Route, nil
+	candidate.Route = route
+	return candidate, nil
 }
 
 // compiledCandidateHash returns the SHA-256 of the compiled sing-box bytes.
@@ -390,8 +369,8 @@ func subscriberLineTrackedTx(tx *sql.Tx, nodeID string) (bool, error) {
 // desiredLineDigestTx builds the desired snapshot of one Line and returns its
 // compiled digest. The revision only has to be positive; a configured Line's
 // compiled bytes do not depend on it.
-func desiredLineDigestTx(tx *sql.Tx, nodeID string) (string, error) {
-	candidate, err := lineSyncCandidateTx(tx, nodeID, 1)
+func desiredLineDigestTx(tx *sql.Tx, nodeID string, now time.Time) (string, error) {
+	candidate, err := lineSyncCandidateTx(tx, nodeID, 1, now)
 	if err != nil {
 		return "", err
 	}
@@ -424,7 +403,7 @@ func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 		// proxy credentials and is not part of subscriber synchronization.
 		return nil
 	}
-	desiredDigest, err := desiredLineDigestTx(tx, nodeID)
+	desiredDigest, err := desiredLineDigestTx(tx, nodeID, now)
 	if err != nil {
 		return err
 	}
@@ -501,7 +480,7 @@ func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&nextRevision); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
-	candidate, err := lineSyncCandidateTx(tx, nodeID, nextRevision)
+	candidate, err := lineSyncCandidateTx(tx, nodeID, nextRevision, now)
 	if err != nil {
 		return err
 	}
@@ -539,13 +518,13 @@ func sameUserSnapshot(left, right []node.VLESSUser) bool {
 // subscriberLinesConvergedTx reports whether every historical Line of a
 // deleting subscriber proved the exact desired snapshot that no longer carries
 // any of the subscriber's UUIDs.
-func subscriberLinesConvergedTx(tx *sql.Tx, subscriberID string) (bool, error) {
+func subscriberLinesConvergedTx(tx *sql.Tx, subscriberID string, now time.Time) (bool, error) {
 	lineIDs, err := subscriberHistoricalLineIDsTx(tx, subscriberID)
 	if err != nil {
 		return false, err
 	}
 	for _, lineID := range lineIDs {
-		desiredDigest, err := desiredLineDigestTx(tx, lineID)
+		desiredDigest, err := desiredLineDigestTx(tx, lineID, now)
 		if err != nil {
 			return false, err
 		}
@@ -625,7 +604,7 @@ func finalizeDeletingSubscribersTx(tx *sql.Tx, nodeID string, now time.Time) err
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	for _, id := range ids {
-		finalized, err := subscriberLinesConvergedTx(tx, id)
+		finalized, err := subscriberLinesConvergedTx(tx, id, now)
 		if err != nil {
 			return err
 		}
@@ -764,7 +743,7 @@ func (s *store) subscriberSyncStatus(subscriberID string, now time.Time) (string
 // subscriberLineSyncViewTx evaluates one Line against the persisted desired
 // snapshot and the exact readback evidence.
 func subscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string, string, error) {
-	desiredDigest, err := desiredLineDigestTx(tx, nodeID)
+	desiredDigest, err := desiredLineDigestTx(tx, nodeID, now)
 	if err != nil {
 		return subscriberSyncPartial, sanitizeSubscriberSyncCode(err.Error()), nil
 	}

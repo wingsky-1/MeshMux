@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -512,6 +514,26 @@ func (app *Server) subscriberFail(w http.ResponseWriter, r *http.Request, err er
 		code, status = "LINE_NOT_FOUND", http.StatusNotFound
 	case strings.HasPrefix(err.Error(), "LINE_NOT_CONFIGURED"):
 		code, status = "LINE_NOT_CONFIGURED", http.StatusConflict
+	// A subscriber publication re-derives the Line route from the live server
+	// policy, so it can refuse on the same Out contract as a policy
+	// publication. The operator sees the real reason instead of a generic sync
+	// failure, and the previous revision stays live.
+	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
+		code, status = "OUT_BINDING_INVALID", http.StatusConflict
+	case strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed):
+		code, status = route.CodeOutOfflineFailClosed, http.StatusConflict
+	case strings.HasPrefix(err.Error(), codeOutNotAuthorized):
+		code, status = codeOutNotAuthorized, http.StatusConflict
+	case strings.HasPrefix(err.Error(), "POLICY_CORRUPT"):
+		code, status = "POLICY_CORRUPT", http.StatusConflict
+	case strings.HasPrefix(err.Error(), "POLICY_PINS_INVALID"):
+		code, status = "POLICY_PINS_INVALID", http.StatusConflict
+	case strings.HasPrefix(err.Error(), compiler.CodePolicyInvalid):
+		code, status = compiler.CodePolicyInvalid, http.StatusConflict
+	case strings.HasPrefix(err.Error(), compiler.CodePolicyConflict):
+		code, status = compiler.CodePolicyConflict, http.StatusConflict
+	case strings.HasPrefix(err.Error(), compiler.CodeRulesetUnpinned):
+		code, status = compiler.CodeRulesetUnpinned, http.StatusConflict
 	}
 	app.fail(w, r, status, code, message, next)
 }
