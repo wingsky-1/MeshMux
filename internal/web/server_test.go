@@ -257,9 +257,15 @@ func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {
 	requireStatus(t, other.req("GET", "/setup", nil, nil), 200)
 	initialize(t, b)
 	requireStatus(t, other.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 401)
-	app.authSlot <- struct{}{}
-	requireStatus(t, b.req("POST", "/login", url.Values{}, nil), 429)
-	<-app.authSlot
+	// The password slot is taken after the session/form/CSRF checks, so only a
+	// well-formed login is refused while another hash holds it; a forged or
+	// session-less request is refused earlier with its own code.
+	anon := &browser{app: app}
+	requireStatus(t, anon.req("GET", "/login", nil, nil), 200)
+	app.kdfSlot <- struct{}{}
+	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 429)
+	<-app.kdfSlot
+	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 303)
 }
 
 func TestDurableRateLimitAndProxyLog(t *testing.T) {

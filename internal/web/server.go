@@ -29,12 +29,17 @@ import (
 var assets embed.FS
 
 type Server struct {
-	cfg      Config
-	store    *store
-	log      *slog.Logger
-	handler  http.Handler
-	now      func() time.Time
-	authSlot chan struct{}
+	cfg     Config
+	store   *store
+	log     *slog.Logger
+	handler http.Handler
+	now     func() time.Time
+	// kdfSlot bounds the password KDF: at most one Argon2id operation (64 MiB)
+	// runs at a time, so a burst of login/setup/password requests cannot
+	// multiply the hash memory. It is deliberately held by those three routes
+	// only: a publication that gates kernels for minutes used to keep the slot,
+	// turning an unrelated node creation into a 429.
+	kdfSlot chan struct{}
 	// pairing is the unauthenticated pairing budget (see pair_limiter.go). It is
 	// process-local on purpose: the store has one connection, and a shared
 	// database counter on this path would either contend that connection or let
@@ -92,7 +97,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 		s.Close()
 		return nil, err
 	}
-	app := &Server{cfg: c, store: s, log: logger, now: time.Now, authSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner()}
+	app := &Server{cfg: c, store: s, log: logger, now: time.Now, kdfSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner()}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -104,10 +109,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
 	r.Get("/login", app.loginPage)
 	r.Get("/setup", app.setupPage)
-	r.Post("/login", app.mutation(app.login, false))
-	r.Post("/setup", app.mutation(app.setup, false))
+	r.Post("/login", app.mutation(app.kdfGuard(app.login), false))
+	r.Post("/setup", app.mutation(app.kdfGuard(app.setup), false))
 	r.Post("/logout", app.mutation(app.logout, true))
-	r.Post("/password", app.mutation(app.password, true))
+	r.Post("/password", app.mutation(app.kdfGuard(app.password), true))
 	r.Get("/api/status", jsonAPI(app.authenticated(app.status)))
 	r.Get("/status", app.authenticated(app.statusFragment))
 	r.Get("/nodes", app.authenticated(func(w http.ResponseWriter, r *http.Request, sess session) {
@@ -416,15 +421,6 @@ func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) { s.authPage(
 
 func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session), auth bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Serialize security mutations, bounding Argon2 to one 64 MiB operation.
-		select {
-		case s.authSlot <- struct{}{}:
-			defer func() { <-s.authSlot }()
-		default:
-			w.Header().Set("Retry-After", "2")
-			s.fail(w, r, 429, "AUTH_BUSY", "认证请求正在处理中。", "请稍后重试。")
-			return
-		}
 		sess, err := s.current(r)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
@@ -457,6 +453,32 @@ func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session)
 		}
 		if !equal(r.PostForm.Get("csrf"), sess.CSRF) {
 			s.fail(w, r, 403, "CSRF_REJECTED", "表单已失效或校验失败。", "请刷新页面后重试。")
+			return
+		}
+		next(w, r, sess)
+	}
+}
+
+// kdfGuard bounds the password KDF to one Argon2id operation (64 MiB) at a
+// time. Only the three routes that prove or derive a password go through it:
+// login, setup and password change.
+//
+// The slot is deliberately not held by any other mutation. It used to wrap
+// every management POST, so a publication that gates kernels for minutes kept
+// the slot and made an unrelated node creation answer 429. A password hash is
+// the only unbounded memory cost that needs serializing; everything else has
+// its own narrower guard.
+//
+// The guard runs after the mutation wrapper has checked the session, form and
+// CSRF token, so unauthenticated or forged requests never occupy the slot.
+func (s *Server) kdfGuard(next func(http.ResponseWriter, *http.Request, session)) func(http.ResponseWriter, *http.Request, session) {
+	return func(w http.ResponseWriter, r *http.Request, sess session) {
+		select {
+		case s.kdfSlot <- struct{}{}:
+			defer func() { <-s.kdfSlot }()
+		default:
+			w.Header().Set("Retry-After", "2")
+			s.fail(w, r, 429, "AUTH_KDF_BUSY", "另一个密码运算正在进行中。", "请稍后重试；该限制只影响登录、初始化与改密，其他操作不受影响。")
 			return
 		}
 		next(w, r, sess)

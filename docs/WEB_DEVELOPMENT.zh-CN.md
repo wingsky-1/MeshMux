@@ -66,6 +66,7 @@ systemd 验证需要候选 `ExecStart` 路径存在；开发时可复制到临�
 | Cookie | 生产 `__Host-`、Secure、HttpOnly、Strict；重复同名 Cookie、未知/过期/已撤销令牌拒绝 |
 | 未认证 | `/` 跳登录；受保护页面和 API 返回 401；静态资产、初始化/登录表单和本机 healthz 允许匿名 |
 | 限速 | 初始化、登录、改密共用持久化全局预算，10 次/10 分钟；窗口从首次尝试起算，服务重启不清零；第 11 次返回 429 + 窗口剩余等待时间。初始化成功、登录成功、改密成功在同一事务内清零预算——只有已证明的凭据能清零，错误密码永不清零，因此 10 次成功登录不会锁住唯一管理员；一次只执行一个密码运算 |
+| 密码运算槽 | 进程内单槽只由 `POST /login`、`POST /setup`、`POST /password` 持有，保证同一时刻最多一个 Argon2id（64 MiB）运算；占用时密码请求返回 `429 AUTH_KDF_BUSY` + `Retry-After: 2`。其他管理 POST（发布、建节点、Out 绑定、订阅写入等）不占此槽，因此长任务进行中它们不会被拒；槽在会话/表单/CSRF 校验通过后才获取 |
 | 配对限速 | `/api/agent/pair` 用**独立的进程内**预算（20 次/分钟，窗口从首次尝试起算、失败不延长、配对成功即清零），第 21 次返回 429 `PAIRING_RATE_LIMITED` + `Retry-After`。它不共用 `auth_limit`：匿名洪水不能花掉登录预算，也不占用 `SetMaxOpenConns(1)` 的唯一连接（预算判定本身零数据库访问）。格式错误的请求在触库前被拒，不计费。配对成功后已配发身份的心跳/任务/配置端点不受任何配对预算影响 |
 | 配对拒绝 | 未知、过期、已消费的码一律 `401 PAIRING_INVALID`（相同 body），响应不是码历史的 oracle；`PAIRING_EXPIRED`/`PAIRING_CONSUMED` 只进 `web_event` 日志，凭 `operation_id` 可查。角色不匹配仍是 `403 ROLE_MISMATCH`；数据库不可用为 `503 DATABASE_UNAVAILABLE`，身份签发失败为 `500 IDENTITY_ISSUE_FAILED`，都不伪装成码被拒绝 |
 | 失败封闭 | 数据库故障时不会跳过认证或限速，返回 503；退出失败不声称会话已经撤销 |
@@ -128,7 +129,9 @@ sqlite3 /path/to/private-restored/meshmux.db \
 
 `GET /healthz` 仅返回本机 Web/数据库探针 `{"status":"ok"}`；DB 不可用返回 503，不包含版本、凭据或主机信息，Caddy 候选拒绝公网访问。登录后 `GET /api/status` 返回真实 Web 状态，代理与 Mesh 等未实测业务状态按 OBSERVABILITY 标为 `unknown` / `pending-verification`。
 
-响应带 `X-Operation-ID`。失败页面/JSON 包含 `operation_id`、`stage`、稳定 `error_code` 和下一步建议。常见错误包括 `AUTH_REQUIRED`、`SESSION_INVALID`、`CSRF_REJECTED`、`ORIGIN_REJECTED`、`HOST_REJECTED`、`FORM_INVALID`、`AUTH_FAILED`、`AUTH_RATE_LIMITED`、`DATABASE_UNAVAILABLE`。日志也记录初始化、登录、退出、改密完成事件；原始数据库/请求内容不会写入日志。启动期的本地配置/权限错误保留原因以便管理员定位，不包含凭据值。
+响应带 `X-Operation-ID`。失败页面/JSON 包含 `operation_id`、`stage`、稳定 `error_code` 和下一步建议。常见错误包括 `AUTH_REQUIRED`、`SESSION_INVALID`、`CSRF_REJECTED`、`ORIGIN_REJECTED`、`HOST_REJECTED`、`FORM_INVALID`、`AUTH_FAILED`、`AUTH_RATE_LIMITED`、`AUTH_KDF_BUSY`、`DATABASE_UNAVAILABLE`。日志也记录初始化、登录、退出、改密完成事件；原始数据库/请求内容不会写入日志。启动期的本地配置/权限错误保留原因以便管理员定位，不包含凭据值。
+
+`AUTH_KDF_BUSY` 与 `AUTH_RATE_LIMITED` 是两件事（#113 3-2）：前者表示另一个密码运算正占着进程内的单槽，只影响登录/初始化/改密，几秒后重试即可；后者是持久化全局预算被错误密码耗尽，需等窗口剩余时间。发布、建节点、Out 绑定等不哈希密码的 POST 既不受前者影响，也不消耗后者。
 
 ## 订阅同步的 offline 码表
 
