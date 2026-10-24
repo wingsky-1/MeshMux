@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -150,6 +151,18 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 		status int
 	}{
 		{"unverified backup", func(r *update.BackupRecord) { r.IntegrityOK = false }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
+		{"no payload files", func(r *update.BackupRecord) { r.PayloadFiles = 0 }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
+		{"payload named elsewhere", func(r *update.BackupRecord) { r.PayloadPath = "/var/tmp/elsewhere" }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
+		{"empty payload directory", nil, func(path string) {
+			if err := os.Remove(filepath.Join(filepath.Dir(path), databaseBackupPayloadDirName, "meshmux.db")); err != nil {
+				t.Fatal(err)
+			}
+		}, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
+		{"public payload directory", nil, func(path string) {
+			if err := os.Chmod(filepath.Join(filepath.Dir(path), databaseBackupPayloadDirName), 0755); err != nil {
+				t.Fatal(err)
+			}
+		}, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
 		{"foreign operation inside the record", func(r *update.BackupRecord) { r.OperationID = strings.Repeat("f", 32) }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
 		{"no source schema", func(r *update.BackupRecord) { r.DBSchema = 0 }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
 		{"future record schema", func(r *update.BackupRecord) { r.Schema = update.BackupRecordSchema + 1 }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},

@@ -54,11 +54,18 @@ func userVersion(t *testing.T, dir string) int {
 }
 
 // hubDatabaseRecord writes the fixed Hub database backup record the gate and the
-// irreversible-confirmation action read. It is metadata only and 0600.
+// irreversible-confirmation action read. It is metadata only and 0600; the
+// payload is one private database copy, because an approval must never confirm a
+// record that holds nothing to restore.
 func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*update.BackupRecord)) (string, update.BackupRecord) {
 	t.Helper()
 	root := filepath.Join(dataDir, databaseBackupDirName)
-	if err := os.MkdirAll(filepath.Join(root, databaseBackupPayloadDirName), 0700); err != nil {
+	payload := filepath.Join(root, databaseBackupPayloadDirName)
+	if err := os.MkdirAll(payload, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// The payload bytes are a fixture copy, never opened by the approval path.
+	if err := os.WriteFile(filepath.Join(payload, "meshmux.db"), []byte("fixture database copy"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	record := update.BackupRecord{
@@ -66,7 +73,7 @@ func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*u
 		FromVersion: "1.0.0", TargetVersion: "1.0.1",
 		DBSchema: databaseSchemaVersion - 1, PolicySchema: upgrade.PolicySchema,
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("b", 64),
-		PayloadPath: filepath.Join(root, databaseBackupPayloadDirName), PayloadSHA256: strings.Repeat("c", 64),
+		PayloadPath: payload, PayloadSHA256: strings.Repeat("c", 64),
 		PayloadFiles: 1, IntegrityOK: true, State: update.BackupStateStaged,
 		CreatedAt: time.Now().UTC(),
 	}

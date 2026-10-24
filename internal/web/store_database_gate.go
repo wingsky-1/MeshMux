@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,6 +44,8 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/update"
 )
+
+var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
 
 const (
 	// databaseSchemaVersion is the storage schema this binary owns. 11c-3 adds
@@ -185,6 +188,55 @@ func readDatabaseBackupRecord(path, operationID string) (update.BackupRecord, er
 	return record, nil
 }
 
+// verifyDatabaseBackupPayload closes the vacuous-gate class Task 2 fixed: a
+// record that is staged and claims integrity but holds nothing must never be
+// accepted as an irreversible-migration rollback source. The Hub copy is a large
+// database file, so this check is metadata-only (presence, private modes and the
+// recorded file count), not a re-hash on every operator click; 11d's restore step
+// still runs PRAGMA integrity_check on the copy it opens.
+func verifyDatabaseBackupPayload(record update.BackupRecord, root string) error {
+	if record.PayloadFiles <= 0 {
+		return errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup holds no payload files")
+	}
+	payload := filepath.Join(root, databaseBackupPayloadDirName)
+	if filepath.Clean(record.PayloadPath) != payload {
+		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record names another payload path")
+	}
+	info, err := os.Lstat(payload)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
+		info.Mode().Perm() != 0700 || !ownedByCurrentUser(info) {
+		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup payload is not a private 0700 directory")
+	}
+	files := 0
+	err = filepath.WalkDir(payload, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 || info.Mode()&os.ModeSymlink != 0 {
+			return errDatabasePayloadUnsafe
+		}
+		if info.IsDir() {
+			if info.Mode().Perm() != 0700 || !ownedByCurrentUser(info) {
+				return errDatabasePayloadUnsafe
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || !ownedByCurrentUser(info) {
+			return errDatabasePayloadUnsafe
+		}
+		files++
+		return nil
+	})
+	if err != nil || files == 0 || files != record.PayloadFiles {
+		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup payload does not match its record")
+	}
+	return nil
+}
+
 // databaseMigrationApproval is the accepted confirmation plus its stored record.
 type databaseMigrationApproval struct {
 	Record          update.BackupRecord
@@ -221,6 +273,9 @@ func (s *store) approveIrreversibleMigration(operationID string, confirmed bool)
 	}
 	if !record.IntegrityOK {
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup has no integrity readback")
+	}
+	if err := verifyDatabaseBackupPayload(record, root); err != nil {
+		return databaseMigrationApproval{}, err
 	}
 	out := databaseMigrationApproval{Record: record, RecordPath: recordPath}
 	if record.IrreversibleApproved {

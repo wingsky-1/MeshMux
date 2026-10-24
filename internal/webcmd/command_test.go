@@ -2,6 +2,7 @@ package webcmd
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/wingsky-1/MeshMux/internal/web"
 )
@@ -86,23 +89,27 @@ func TestRunRejectsFlagErrors(t *testing.T) {
 	}
 }
 
-func TestRunRejectsInvalidStartupConfig(t *testing.T) {
+func TestRunSurfacesStableStartupCodes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root is refused before configuration validation")
+	}
 	for _, tc := range []struct {
-		name string
-		args func(string) []string
+		name     string
+		args     func(string) []string
+		wantCode string
 	}{
 		{"missing origin", func(dir string) []string {
 			return []string{"--data-dir", dir}
-		}},
+		}, "ORIGIN_INVALID"},
 		{"missing data dir", func(string) []string {
 			return []string{"--origin", "https://console.example.invalid"}
-		}},
+		}, "DATA_DIR_REQUIRED"},
 		{"non HTTPS origin", func(dir string) []string {
 			return []string{"--origin", "http://console.example.invalid", "--data-dir", dir}
-		}},
+		}, "HTTPS_REQUIRED"},
 		{"origin with path", func(dir string) []string {
 			return []string{"--origin", "https://console.example.invalid/admin", "--data-dir", dir}
-		}},
+		}, "ORIGIN_INVALID"},
 		{"development origin does not match listener", func(dir string) []string {
 			return []string{
 				"--listen", "127.0.0.1:9080",
@@ -110,7 +117,7 @@ func TestRunRejectsInvalidStartupConfig(t *testing.T) {
 				"--data-dir", dir,
 				"--dev-http",
 			}
-		}},
+		}, "ORIGIN_INVALID"},
 		{"development HTTP with direct Caddy", func(dir string) []string {
 			return []string{
 				"--listen", "127.0.0.1:9080",
@@ -119,24 +126,82 @@ func TestRunRejectsInvalidStartupConfig(t *testing.T) {
 				"--dev-http",
 				"--direct-caddy",
 			}
-		}},
+		}, "ORIGIN_INVALID"},
 		{"non-loopback listener", func(dir string) []string {
 			return []string{
 				"--listen", "0.0.0.0:9080",
 				"--origin", "https://console.example.invalid",
 				"--data-dir", dir,
 			}
-		}},
+		}, "LISTEN_INVALID"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, stdout, _ := runWebCommand(t, tc.args(tempDataDir(t))...)
 			if code != 1 {
 				t.Fatalf("Run()=%d, want startup failure exit 1; stdout=%s", code, stdout)
 			}
-			if !strings.Contains(stdout, `"error_code":"STARTUP_FAILED"`) {
-				t.Fatalf("startup failure was not logged as STARTUP_FAILED: %s", stdout)
+			if !strings.Contains(stdout, `"error_code":"`+tc.wantCode+`"`) {
+				t.Fatalf("startup refusal was not logged as %s: %s", tc.wantCode, stdout)
+			}
+			if strings.Contains(stdout, `"error_code":"STARTUP_FAILED"`) {
+				t.Fatalf("stable code was collapsed into STARTUP_FAILED: %s", stdout)
 			}
 		})
+	}
+}
+
+// TestRunSurfacesSchemaTooNewRecord is the operator-facing half of the DB gate:
+// the old binary's refusal must keep its stable code and name the fixed backup
+// record, instead of being flattened into an unexplained STARTUP_FAILED.
+func TestRunSurfacesSchemaTooNewRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root is refused before the store opens")
+	}
+	dir := tempDataDir(t)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "meshmux.db")
+	file, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version=11`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+	recordPath := filepath.Join(dir, "database-backup", "record.json")
+	if err := os.MkdirAll(filepath.Dir(recordPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Existence is the whole check for the old binary, so even an unreadable
+	// future record must be named.
+	if err := os.WriteFile(recordPath, []byte(`{"schema":99}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runWebCommand(t,
+		"--listen", "127.0.0.1:9080",
+		"--origin", "https://console.example.invalid",
+		"--data-dir", dir,
+	)
+	if code != 1 {
+		t.Fatalf("Run()=%d, want startup failure exit 1; stdout=%s stderr=%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, `"error_code":"SCHEMA_TOO_NEW"`) {
+		t.Fatalf("SCHEMA_TOO_NEW was not surfaced: %s", stdout)
+	}
+	if !strings.Contains(stdout, recordPath) {
+		t.Fatalf("startup log does not name the backup record %q: %s", recordPath, stdout)
+	}
+	if !strings.Contains(stdout, `"detail"`) {
+		t.Fatalf("SCHEMA_TOO_NEW detail was dropped: %s", stdout)
 	}
 }
 
@@ -153,7 +218,7 @@ func TestRunAcceptsSupportedModes(t *testing.T) {
 	wantStage := "LISTEN_FAILED"
 	if os.Geteuid() == 0 {
 		// web.Config.Validate rejects root before the listener is reached.
-		wantStage = "STARTUP_FAILED"
+		wantStage = "ROOT_FORBIDDEN"
 	}
 	for _, tc := range []struct {
 		name string
