@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,9 +45,9 @@ type publishGateConfig struct {
 
 // execPublishVerifier runs the fixed kernel checks.
 type execPublishVerifier struct {
-	cfg   publishGateConfig
-	dir   string
-	clock func() string
+	cfg  publishGateConfig
+	dir  string
+	name func() (string, error)
 }
 
 func newPublishVerifier(cfg publishGateConfig, dir string) (publishVerifier, error) {
@@ -62,7 +63,7 @@ func newPublishVerifier(cfg publishGateConfig, dir string) (publishVerifier, err
 	if dir == "" || !filepath.IsAbs(dir) {
 		return nil, errors.New("PUBLISH_GATE_FAILED: the gate needs an absolute scratch directory")
 	}
-	return &execPublishVerifier{cfg: cfg, dir: dir, clock: randomGateName}, nil
+	return &execPublishVerifier{cfg: cfg, dir: dir, name: randomGateName}, nil
 }
 
 // executablePresent reports whether one configured gate binary is a regular,
@@ -78,12 +79,17 @@ func executablePresent(path string) error {
 	return nil
 }
 
-func randomGateName() string {
+// randomGateName returns one unpredictable scratch file suffix. Entropy
+// failure is a refusal: a fixed name would let concurrent gate runs share a
+// file and turn a failed check into an unverified pass.
+func randomGateName() (string, error) {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "check"
+	// crypto/rand.Read crashes the process on a broken entropy source in Go
+	// 1.27; io.ReadFull lets this gate report the failure instead.
+	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+		return "", errors.New("PUBLISH_GATE_FAILED: the gate scratch name could not be generated")
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:]), nil
 }
 
 func (v *execPublishVerifier) CheckSingBox(ctx context.Context, document []byte) (string, error) {
@@ -131,7 +137,11 @@ func (v *execPublishVerifier) write(kernel string, document []byte) (string, fun
 	if kernel == "mihomo" {
 		ext = ".yaml"
 	}
-	path := filepath.Join(dir, kernel+"-"+v.clock()+ext)
+	name, err := v.name()
+	if err != nil {
+		return "", func() {}, err
+	}
+	path := filepath.Join(dir, kernel+"-"+name+ext)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return "", func() {}, errors.New("PUBLISH_GATE_FAILED: the gate scratch file was not created")
