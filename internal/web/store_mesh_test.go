@@ -270,24 +270,59 @@ func TestMeshEnrollmentKeySingleActive(t *testing.T) {
 		t.Fatalf("expired key revoked: %v", err)
 	}
 
-	// Only a pending device may hold a key, and the lapsed secret is spent
-	// evidence: it can never register the device.
-	if _, err = s.confirmMeshEnrollment(secret, 7, later); err == nil || !hasErrorCode(err, mesh.CodeKeyExpired) {
-		t.Fatalf("lapsed secret accepted: %v", err)
-	}
-	if _, err = s.confirmMeshEnrollment(freshSecret, 7, later); err != nil {
+	// Registration evidence spends the live key in the same transaction: the
+	// fresh row becomes consumed with its digest cleared, while the lapsed row
+	// keeps the expired state the issue path gave it.
+	registered, err := s.recordMeshObservation(device.ID, 7, later)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if registered.Status != mesh.StatusRegistered || registered.HeadscaleNodeID != 7 {
+		t.Fatalf("observation did not register the device: %+v", registered)
+	}
+	var (
+		freshState    string
+		freshHash     []byte
+		freshConsumed int64
+		lapsedState   string
+		lapsedHash    []byte
+	)
+	if err = s.db.QueryRow(`SELECT state, secret_hash, consumed_at FROM mesh_enrollment_keys WHERE id=?`, fresh.ID).
+		Scan(&freshState, &freshHash, &freshConsumed); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.db.QueryRow(`SELECT state, secret_hash FROM mesh_enrollment_keys WHERE id=?`, key.ID).
+		Scan(&lapsedState, &lapsedHash); err != nil {
+		t.Fatal(err)
+	}
+	if freshState != string(mesh.KeyConsumed) || freshHash != nil || freshConsumed != later.Unix() {
+		t.Fatalf("registration left the live key %q hash=%v consumed_at=%d, want consumed/NULL/%d",
+			freshState, freshHash, freshConsumed, later.Unix())
+	}
+	if lapsedState != string(mesh.KeyExpired) || len(lapsedHash) != 32 {
+		t.Fatalf("lapsed key row = %q with a %d-byte digest, want expired with its digest kept", lapsedState, len(lapsedHash))
+	}
+	// The spent plaintext no longer matches any row: the digest was the only
+	// way back to it and it is gone.
+	var matches int
+	if err = s.db.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash=?`, mesh.EnrollmentKeyHash(freshSecret)).
+		Scan(&matches); err != nil {
+		t.Fatal(err)
+	}
+	if matches != 0 {
+		t.Fatalf("a spent key secret still matches %d row(s)", matches)
 	}
 	if _, _, err = s.issueMeshEnrollmentKey(device.ID, later); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
 		t.Fatalf("key issued for a registered device: %v", err)
 	}
 }
 
-// TestMeshEnrollmentConsumeIsTerminal follows one key through D1: the device
-// becomes registered, the key is consumed, the digest is cleared and the spent
-// secret can never be replayed. The row itself survives for audit and the
-// trigger refuses any later state change.
-func TestMeshEnrollmentConsumeIsTerminal(t *testing.T) {
+// TestMeshRegistrationConsumesKey follows one key through D1 on the path that
+// actually proves registration: the device becomes registered with the observed
+// node id, the key becomes consumed with its digest cleared, and a repeated
+// observation neither revives nor re-spends it. The row itself survives for
+// audit and the trigger refuses any later state change.
+func TestMeshRegistrationConsumesKey(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	device, err := s.createMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
@@ -297,7 +332,7 @@ func TestMeshEnrollmentConsumeIsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registered, err := s.confirmMeshEnrollment(secret, 42, now.Add(time.Minute))
+	registered, err := s.recordMeshObservation(device.ID, 42, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,9 +351,30 @@ func TestMeshEnrollmentConsumeIsTerminal(t *testing.T) {
 			state, hash, consumedAt, now.Add(time.Minute).Unix())
 	}
 
-	// The spent secret is rejected exactly like an unknown one.
-	if _, err = s.confirmMeshEnrollment(secret, 42, now.Add(2*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeKeySecretInvalid) {
-		t.Fatalf("spent secret replayed: %v", err)
+	// A repeat observation of the same node neither re-spends nor revives the
+	// key: the consumed row is terminal, so the second read finds no issued row.
+	again, err := s.recordMeshObservation(device.ID, 42, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("repeat observation refused: %v", err)
+	}
+	if again.Status != mesh.StatusRegistered || again.HeadscaleNodeID != 42 {
+		t.Fatalf("repeat observation changed the registration: %+v", again)
+	}
+	if err = s.db.QueryRow(`SELECT state, secret_hash, consumed_at FROM mesh_enrollment_keys WHERE id=?`, key.ID).
+		Scan(&state, &hash, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(mesh.KeyConsumed) || hash != nil || consumedAt != now.Add(time.Minute).Unix() {
+		t.Fatalf("repeat observation rewrote the key row: state %q hash %v consumed_at %d", state, hash, consumedAt)
+	}
+	// The spent secret matches no row, so no future path can replay it.
+	var matches int
+	if err = s.db.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash=?`, mesh.EnrollmentKeyHash(secret)).
+		Scan(&matches); err != nil {
+		t.Fatal(err)
+	}
+	if matches != 0 {
+		t.Fatalf("a spent key secret still matches %d row(s)", matches)
 	}
 	// consumed is terminal at the storage boundary, not only in the domain.
 	if _, err = s.db.Exec(`UPDATE mesh_enrollment_keys SET state='issued', secret_hash=x'01' WHERE id=?`, key.ID); err == nil || !strings.Contains(err.Error(), "MESH_ENROLLMENT_KEY_TERMINAL") {
@@ -456,7 +512,7 @@ func TestMeshEnrollmentKeyRevokeTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, secret, err := s.issueMeshEnrollmentKey(device.ID, now)
+	key, _, err := s.issueMeshEnrollmentKey(device.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,8 +523,17 @@ func TestMeshEnrollmentKeyRevokeTerminal(t *testing.T) {
 	if again, err := s.revokeMeshEnrollmentKey(key.ID); err != nil || again.State != mesh.KeyRevoked {
 		t.Fatalf("repeat revoke: %+v %v", again, err)
 	}
-	if _, err = s.confirmMeshEnrollment(secret, 5, now.Add(time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeKeyTransitionInvalid) {
-		t.Fatalf("revoked key consumed: %v", err)
+	// A revoked row is terminal, and the registration path only ever spends an
+	// issued row: a device registered after a withdrawal keeps that audit fact.
+	if _, err = s.recordMeshObservation(device.ID, 5, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err = s.db.QueryRow(`SELECT state FROM mesh_enrollment_keys WHERE id=?`, key.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(mesh.KeyRevoked) {
+		t.Fatalf("a revoked key row became %q after registration", state)
 	}
 	if _, err = s.revokeMeshEnrollmentKey("ffffffffffffffffffffffffffffffff"); err == nil || !hasErrorCode(err, codeMeshEnrollmentKeyNotFound) {
 		t.Fatalf("unknown key reported as revoked: %v", err)

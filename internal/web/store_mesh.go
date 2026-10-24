@@ -324,80 +324,64 @@ func (s *store) issueMeshEnrollmentKey(deviceID string, now time.Time) (mesh.Enr
 	return key, secret, nil
 }
 
-// confirmMeshEnrollment spends one key and records the proven registration in
-// one transaction (D1): the device becomes registered with the observed
-// Headscale node id, and the key becomes the terminal consumed state with its
-// digest cleared. Clearing the digest is what makes replay impossible even
-// though the row is retained for audit; a spent secret matches no row and is
-// rejected like an unknown one.
-func (s *store) confirmMeshEnrollment(secret string, headscaleNodeID uint64, now time.Time) (MeshDeviceRecord, error) {
-	if err := mesh.ValidateEnrollmentSecret(secret); err != nil {
-		return MeshDeviceRecord{}, err
-	}
-	if headscaleNodeID == 0 {
-		return MeshDeviceRecord{}, meshError(mesh.CodeHeadscaleNodeIDInvalid, "registration needs the observed headscale node id")
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer tx.Rollback()
+// spendMeshEnrollmentKeyTx retires the live one-time key of a device whose
+// registration is proven, inside the transaction that records the evidence.
+//
+// This is what makes the key genuinely one-time (D1): there is no endpoint that
+// accepts the secret, so the one-time semantic is "the registration the key
+// authorized consumes it". A key still inside its 15-minute window becomes the
+// terminal consumed state with its digest cleared — clearing the digest is what
+// makes replay impossible even though the row is kept for audit. A key whose
+// window already closed is retired as expired, because D1 forbids consuming a
+// key outside its window. A key that is not valid yet (clock moved backwards) is
+// left for the issue path, and a device with no issued row — never signed, or
+// already consumed/expired/revoked — is untouched, so a repeat observation is a
+// no-op.
+func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error {
 	var (
-		keyID, deviceID, state string
-		issuedAt, expiresAt    int64
-		consumedAt             int64
-		hash                   []byte
+		keyID               string
+		hash                []byte
+		issuedAt, expiresAt int64
 	)
-	err = tx.QueryRow(`SELECT id, device_id, secret_hash, state, issued_at, expires_at, consumed_at
- FROM mesh_enrollment_keys WHERE secret_hash=?`, mesh.EnrollmentKeyHash(secret)).
-		Scan(&keyID, &deviceID, &hash, &state, &issuedAt, &expiresAt, &consumedAt)
+	err := tx.QueryRow(`SELECT id, secret_hash, issued_at, expires_at FROM mesh_enrollment_keys
+ WHERE device_id=? AND state='issued'`, deviceID).Scan(&keyID, &hash, &issuedAt, &expiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return MeshDeviceRecord{}, meshError(mesh.CodeKeySecretInvalid, "unknown or already spent enrollment key")
+		return nil
 	}
 	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	key := mesh.EnrollmentKey{
 		ID:        keyID,
 		DeviceID:  deviceID,
 		Hash:      hash,
-		State:     mesh.KeyState(state),
+		State:     mesh.KeyIssued,
 		IssuedAt:  time.Unix(issuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(expiresAt, 0).UTC(),
 	}
-	consumed, err := key.Consume(deviceID, now)
-	if err != nil {
-		return MeshDeviceRecord{}, err
+	switch {
+	case key.Active(now):
+		consumed, err := key.Consume(deviceID, now)
+		if err != nil {
+			return err
+		}
+		res, err := tx.Exec(`UPDATE mesh_enrollment_keys SET state='consumed', secret_hash=NULL, consumed_at=?
+ WHERE id=? AND state='issued'`, consumed.ConsumedAt.Unix(), keyID)
+		if err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		if affected, _ := res.RowsAffected(); affected != 1 {
+			return meshError(mesh.CodeKeyTransitionInvalid, "the enrollment key was no longer issued")
+		}
+	case key.Expired(now):
+		if _, err = key.Expire(now); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`UPDATE mesh_enrollment_keys SET state='expired' WHERE id=? AND state='issued'`, keyID); err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
 	}
-	record, err := meshDeviceTx(tx, deviceID)
-	if err != nil {
-		return MeshDeviceRecord{}, err
-	}
-	registered, err := record.MeshDevice.MarkRegistered(headscaleNodeID)
-	if err != nil {
-		return MeshDeviceRecord{}, err
-	}
-	res, err := tx.Exec(`UPDATE mesh_enrollment_keys SET state='consumed', secret_hash=NULL, consumed_at=?
- WHERE id=? AND state='issued'`, consumed.ConsumedAt.Unix(), consumed.ID)
-	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	if affected, _ := res.RowsAffected(); affected != 1 {
-		return MeshDeviceRecord{}, meshError(mesh.CodeKeyTransitionInvalid, "the enrollment key was no longer issued")
-	}
-	res, err = tx.Exec(`UPDATE mesh_devices SET status=?, headscale_node_id=?, observed_at=?, updated_at=?
- WHERE id=? AND status='pending'`,
-		string(registered.Status), registered.HeadscaleNodeID, now.Unix(), now.Unix(), deviceID)
-	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	if affected, _ := res.RowsAffected(); affected != 1 {
-		return MeshDeviceRecord{}, meshError(mesh.CodeStatusTransitionInvalid, "only a pending device can be registered")
-	}
-	if err = tx.Commit(); err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return s.getMeshDevice(deviceID)
+	return nil
 }
 
 // recordMeshObservation stores what Headscale currently reports for one device.
@@ -406,6 +390,13 @@ func (s *store) confirmMeshEnrollment(secret string, headscaleNodeID uint64, now
 // evidence: a registered device becomes expired, and a device whose removal was
 // requested becomes the terminal revoked state. Other statuses are unchanged by
 // a missing node, because they either never had one or already settled.
+//
+// Registration also spends the device's live one-time key in the same
+// transaction (see spendMeshEnrollmentKeyTx). Reconcile and claim are the only
+// two callers and both record evidence here, so "the key is consumed once the
+// registration is proven" holds for either path; a device that is already
+// registered has a lingering issued row spent as well, which is the state an
+// older database keeps.
 func (s *store) recordMeshObservation(deviceID string, headscaleNodeID uint64, now time.Time) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
 		return MeshDeviceRecord{}, meshError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
@@ -452,6 +443,14 @@ func (s *store) recordMeshObservation(deviceID string, headscaleNodeID uint64, n
 	}
 	if err != nil {
 		return MeshDeviceRecord{}, err
+	}
+	// Proven registration spends the key that authorized this attempt, in the
+	// same transaction as the evidence that proves it. A repeat observation of
+	// an already registered device finds no issued row and changes nothing.
+	if next.Status == mesh.StatusRegistered {
+		if err = spendMeshEnrollmentKeyTx(tx, deviceID, now); err != nil {
+			return MeshDeviceRecord{}, err
+		}
 	}
 	if _, err = tx.Exec(`UPDATE mesh_devices SET status=?, headscale_node_id=?, observed_at=?, updated_at=? WHERE id=?`,
 		string(next.Status), next.HeadscaleNodeID, now.Unix(), now.Unix(), deviceID); err != nil {
@@ -609,8 +608,9 @@ func (s *store) revokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 }
 
 // listMeshEnrollmentKeys returns the key history of one device, oldest first.
-// It exposes no digest, so an issued key can only be spent through its one-time
-// plaintext secret.
+// It exposes no digest, so the plaintext secret has no read path at all: the
+// only way a key leaves the issued state is the registration transaction that
+// proves the enrollment, or an explicit revoke/expire.
 func (s *store) listMeshEnrollmentKeys(deviceID string) ([]MeshEnrollmentKeyRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
 		return nil, meshError(mesh.CodeKeyDeviceIDInvalid, "need 32 lowercase hex characters")

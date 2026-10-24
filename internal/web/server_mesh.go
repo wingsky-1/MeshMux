@@ -10,7 +10,9 @@ package web
 //     reconcile button is the only path that persists an observation;
 //   - the one-time enrollment key: Hub-side material that is shown exactly once
 //     in a POST response body, stored only as a SHA-256 digest, and never put in
-//     a URL, a log line or a second response.
+//     a URL, a log line or a second response. Nothing accepts the secret back:
+//     the key is spent by the transaction that proves registration, so the
+//     reconcile or claim that observes the node id consumes it.
 //
 // A pending device never becomes registered by rendering: registration needs
 // an observed Headscale node id, recorded only by an explicit reconcile or an

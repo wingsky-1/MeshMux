@@ -84,9 +84,10 @@ PR-9a 分四个切片交付：9a-1 `internal/mesh` 纯领域模型、9a-2 `inter
 | B | 设备与 Key 生命周期：用途/绑定规则、NodeName 同用户占用唯一、`pending`/`registered` 只由观测到的 Node ID 推进、Key 15 分钟仅存 SHA-256 且单活/`consumed` 不可逆、注销先写意图再远端删除且幂等重试、撤销一台设备不影响订阅用户/凭据/Token | [x] `go test ./internal/web/ -run Mesh` 全绿（`store_mesh_test.go`、`server_mesh_test.go`、`mesh_fixture_test.go`）；`TestMeshHubFixture` 默认 SKIP |
 | B | Web 路由边界：`/mesh` 需认证；四个 mutation 需 CSRF；页面渲染只发 `users list`/`nodes list` 两次只读调用；Headscale 不可用时返回稳定 `HEADSCALE_*` 且不写入任何设备/Key | [x] `TestMeshRoutesRequireAuthentication`、`TestMeshPageRequiresCSRFOnMutations`、`TestMeshPageRenderOnlyReadsControlPlane`、`TestMeshWithoutHeadscaleRefusesBeforeWrites` |
 | B | 安装侧 socket 边界（9a-4）：`meshmux-web.service` 仅以 `SupplementaryGroups=meshmux-headscale` 穿过 0770 socket，数据目录仍 0700 且无 `Group=`/`ReadWritePaths` | [x] 模板断言 `internal/install/render_test.go`；**真实组权限链未验证** |
+| B | 一次性 Key 的消费语义（#113 2-4）：不存在接收 secret 的消费端点，`reconcile`/`claim` 证明注册（观测到 Headscale Node ID）时在同一事务消费该设备 live Key（`consumed`、摘要清空）；窗口已过的 Key 记为 `expired`，停留 `issued` 之外的记录不被改写 | [x] `TestMeshRegistrationConsumesKey`、`TestMeshEnrollmentKeySingleActive`、`TestMeshClaimBindsUnclaimedSameNameNodeExplicitly`、`TestMeshRekeyWithdrawsOldKey` |
 | C | 隔离 Debian 13 Hub VM：真实 Headscale 0.29.5 下 Web 账户经 socket 完成 `version`/`users list`/`nodes list`，页面创建设备并核对、注销，事件日志无 Key 明文 | [ ] 待执行：`MESHMUX_MESH_HUB_FIXTURE_DIR=... /tmp/web.test -test.run '^TestMeshHubFixture$'`，需在干净 VM 内以 `meshmux` 账户运行；head/tree 与 run 链接待回填 |
 
-- [ ] **未含真机与真实注册**：本 PR 没有真实 tailnet 客户端入网，因此 `registered`、在线状态、Tailnet IP、真实 `nodes delete` 与 Key 消费均未被证明；`confirmMeshEnrollment` 目前只有 store 级单测，尚无 HTTP 消费端点。
+- [ ] **未含真机与真实注册**：本 PR 没有真实 tailnet 客户端入网，因此 `registered`、在线状态、Tailnet IP、真实 `nodes delete` 与真实 Headscale Key 消费均未被证明；自动化只证明观测到 Node ID 时 Hub 侧一次性 Key 转为 `consumed`、摘要清空。
 - [ ] **未含 C 级结论**：子网路由发布/批准/readback、路由策略与单 VPN 客户端配置分别属 9b/9c；Mesh 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 中的 Mesh-only 与 NAS 网段项）仍需真机与 #12 阶段验收。
 
 ## Issue #9 PR-9b 子网路由批准流与证据归档（B 级）

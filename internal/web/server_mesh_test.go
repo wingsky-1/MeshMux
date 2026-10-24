@@ -481,6 +481,60 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	}
 }
 
+// TestMeshReconcileConsumesLingeringKey proves the one-time key is settled by
+// the path that proves registration: a database written before keys were spent
+// on registration keeps a live issued row for an already registered device, and
+// the next explicit reconcile turns it into the terminal consumed state with its
+// digest cleared. Nothing accepts the secret back, so the observation is what
+// retires it.
+func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
+	app, b, fake, _ := meshTestApp(t)
+	now := app.now()
+	device, err := app.store.createMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.store.recordMeshObservation(device.ID, 42, now); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := mesh.NewEnrollmentSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID := strings.Repeat("a", 32)
+	if _, err = app.store.db.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
+ VALUES(?,?,?,'issued',?,?,0)`, keyID, device.ID, mesh.EnrollmentKeyHash(secret), now.Unix(), now.Add(mesh.KeyTTL).Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.nodes = []headscale.Node{{ID: 42, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser}}
+	w := b.post("/mesh/reconcile", url.Values{})
+	requireStatus(t, w, 200)
+
+	var (
+		state      string
+		hash       []byte
+		consumedAt int64
+	)
+	if err = app.store.db.QueryRow(`SELECT state, secret_hash, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
+		Scan(&state, &hash, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(mesh.KeyConsumed) || hash != nil || consumedAt == 0 {
+		t.Fatalf("reconcile left the key %q hash=%v consumed_at=%d, want consumed/NULL/set", state, hash, consumedAt)
+	}
+	// A second check finds no issued row and changes nothing.
+	w = b.post("/mesh/reconcile", url.Values{})
+	requireStatus(t, w, 200)
+	if err = app.store.db.QueryRow(`SELECT state, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
+		Scan(&state, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(mesh.KeyConsumed) || consumedAt == 0 {
+		t.Fatalf("repeat reconcile rewrote the consumed key: state %q consumed_at %d", state, consumedAt)
+	}
+}
+
 // TestMeshRevokeIsIdempotentAndIsolated covers the two guarantees a device
 // deletion must keep: repeating it is a no-op, and it never disables the bound
 // subscriber, its credentials or its subscription token.
@@ -679,14 +733,34 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	if issued != 1 || revoked != 1 {
 		t.Fatalf("after reissue: issued=%d revoked=%d, want 1/1", issued, revoked)
 	}
-	// The withdrawn key can no longer enroll anything.
-	if _, err = app.store.confirmMeshEnrollment(firstSecret, 42, app.now()); err == nil {
-		t.Fatal("a revoked key still enrolled a device")
-	}
 	// The live key is the one the list reports; an older revoked record does not
 	// hide it.
 	if label, _, _ := meshKeyState(keys, app.now()); label != "已签发 · 未使用" {
 		t.Fatalf("key column rendered %q after reissue", label)
+	}
+	// Registration spends only the live key: the withdrawn row stays revoked in
+	// the audit trail and is never rewired into a consumption.
+	if _, err = app.store.recordMeshObservation(device.ID, 42, app.now()); err != nil {
+		t.Fatal(err)
+	}
+	keys, err = app.store.listMeshEnrollmentKeys(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, revoked = 0, 0
+	var consumed int
+	for _, key := range keys {
+		switch key.State {
+		case mesh.KeyIssued:
+			issued++
+		case mesh.KeyConsumed:
+			consumed++
+		case mesh.KeyRevoked:
+			revoked++
+		}
+	}
+	if issued != 0 || consumed != 1 || revoked != 1 {
+		t.Fatalf("after registration: issued=%d consumed=%d revoked=%d, want 0/1/1", issued, consumed, revoked)
 	}
 	// Rekeying a revoked device is refused with its own stable code.
 	if _, _, err = app.store.requestMeshDeviceRevocation(device.ID, "USER_DELETE", app.now()); err != nil {

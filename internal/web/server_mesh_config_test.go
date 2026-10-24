@@ -271,6 +271,9 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.nodes = []headscale.Node{{ID: 77, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser, Online: true}}
+	if _, _, err = app.store.issueMeshEnrollmentKey(device.ID, app.now()); err != nil {
+		t.Fatalf("fixture key: %v", err)
+	}
 
 	page := b.req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
@@ -294,6 +297,23 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	}
 	if after.Status != mesh.StatusRegistered || after.HeadscaleNodeID != 77 {
 		t.Fatalf("claim did not record the observation: %+v", after)
+	}
+	// Claim is the production path that proves registration, so it spends the
+	// device's one-time key in the same transaction: the row is consumed and its
+	// digest is gone, which is what makes the key one-time.
+	keys, err := app.store.listMeshEnrollmentKeys(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].State != mesh.KeyConsumed || keys[0].ConsumedAt == 0 {
+		t.Fatalf("claim left the key history %+v, want one consumed key", keys)
+	}
+	var digests int
+	if err = app.store.db.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
+		t.Fatal(err)
+	}
+	if digests != 0 {
+		t.Fatalf("a spent key kept its digest: %d non-NULL digests", digests)
 	}
 	if !strings.Contains(logs.String(), "MESH_DEVICE_CLAIMED") {
 		t.Fatal("claim audit event missing")
