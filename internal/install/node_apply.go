@@ -470,7 +470,7 @@ func applyNodeFiles(ctx context.Context, opts NodeApplyOptions, layout nodeLayou
 		keys = append(keys, path)
 	}
 	sort.Strings(keys)
-	for _, target := range keys {
+	applyOne := func(target string) (string, error) {
 		mode, owner := os.FileMode(0644), "root:root"
 		if file, ok := managed[target]; ok {
 			mode, owner = os.FileMode(file.Mode), file.Owner
@@ -480,16 +480,16 @@ func applyNodeFiles(ctx context.Context, opts NodeApplyOptions, layout nodeLayou
 			mode = 0600
 		}
 		if err := copyAtomic(files[target], rooted(opts.Root, target), mode); err != nil {
-			return &InstallError{Code: "FILE_APPLY_FAILED", Recovery: "No Agent was started; inspect the operation journal and run --repair."}
+			return "", &InstallError{Code: "FILE_APPLY_FAILED", Recovery: "No Agent was started; inspect the operation journal and run --repair."}
 		}
 		if opts.Root == "/" {
 			if _, err := opts.Runner.Run(ctx, "chown", owner, target); err != nil {
-				return &InstallError{Code: "FILE_OWNERSHIP_FAILED", Recovery: "No Agent was started; inspect service-account ownership and run --repair."}
+				return "", &InstallError{Code: "FILE_OWNERSHIP_FAILED", Recovery: "No Agent was started; inspect service-account ownership and run --repair."}
 			}
 		}
 		digest, err := sha256File(rooted(opts.Root, target))
 		if err != nil {
-			return &InstallError{Code: "FILE_READBACK_FAILED", Recovery: "Readback failed after an atomic write; inspect the target filesystem."}
+			return "", &InstallError{Code: "FILE_READBACK_FAILED", Recovery: "Readback failed after an atomic write; inspect the target filesystem."}
 		}
 		if file, ok := managed[target]; ok && file.Static {
 			state.ManagedFiles[target] = digest
@@ -501,7 +501,39 @@ func applyNodeFiles(ctx context.Context, opts NodeApplyOptions, layout nodeLayou
 			state.ManagedFiles[target] = digest
 		}
 		if err := writeNodeState(opts.Root, layout, state); err != nil {
-			return &InstallError{Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "The file ledger failed to persist; preserve the journal and run --repair."}
+			return "", &InstallError{Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "The file ledger failed to persist; preserve the journal and run --repair."}
+		}
+		return digest, nil
+	}
+
+	// The Agent binary is renamed first so the one real crash window (spec
+	// §4.8) is covered by the claim record: binary rename, claim write, then
+	// agent.json. A crash after the binary but before agent.json is reclaimed
+	// by the boot self-check; a crash before the claim still fails closed.
+	_, replacesAgent := files[node.AgentBinaryPath]
+	if replacesAgent {
+		digest, err := applyOne(node.AgentBinaryPath)
+		if err != nil {
+			return err
+		}
+		if err := writeNodeUpgradeClaim(opts.Root, state.OperationID, digest); err != nil {
+			return &InstallError{Code: "UPGRADE_CLAIM_WRITE_FAILED", Recovery: "The Agent binary was replaced but the crash-window record could not be written; restore the previous binary or run --repair before restarting the Agent."}
+		}
+	}
+	for _, target := range keys {
+		if replacesAgent && target == node.AgentBinaryPath {
+			continue
+		}
+		if _, err := applyOne(target); err != nil {
+			return err
+		}
+		// agent.json now names the same binary; the recovery window is closed.
+		// A crash after this point boots with a matching pair and never reads
+		// the claim record.
+		if replacesAgent && target == node.AgentConfigPath {
+			if err := clearNodeUpgradeClaim(opts.Root); err != nil {
+				return &InstallError{Code: "UPGRADE_CLAIM_CLEAR_FAILED", Recovery: "The Agent pair is consistent but the crash-window record could not be removed; inspect /var/lib/meshmux-agent and run --repair."}
+			}
 		}
 	}
 	return nil

@@ -57,24 +57,30 @@ type RuntimeOptions struct {
 	// config.stage row (#11b). It is optional: without it every stage row is an
 	// ordinary config stage, which is the pre-upgrade behaviour.
 	StageTargets StageTargetSource
+	// HandoffConvergence is the optional outside-sandbox writer that rewrites
+	// agent.json after an in-memory crash-window adoption. Nil means
+	// convergence is deferred to the next install --repair; the Agent never
+	// writes /etc/meshmux/agent.json itself.
+	HandoffConvergence HandoffConvergenceWriter
 }
 
 // Runtime executes the frozen task set against one installed node.
 type Runtime struct {
-	cfg             Config
-	identity        Identity
-	root            string
-	runner          CommandRunner
-	controller      Controller
-	httpClient      *http.Client
-	logger          *slog.Logger
-	pollInterval    time.Duration
-	lockTimeout     time.Duration
-	stageTargets    StageTargetSource
-	now             func() time.Time
-	procRoot        string
-	writeState      func(*runtimeState) error
-	enforceProcArgs bool
+	cfg                Config
+	identity           Identity
+	root               string
+	runner             CommandRunner
+	controller         Controller
+	httpClient         *http.Client
+	logger             *slog.Logger
+	pollInterval       time.Duration
+	lockTimeout        time.Duration
+	stageTargets       StageTargetSource
+	handoffConvergence HandoffConvergenceWriter
+	now                func() time.Time
+	procRoot           string
+	writeState         func(*runtimeState) error
+	enforceProcArgs    bool
 }
 
 // StageTarget is the release record the Hub stamped onto one pending
@@ -209,22 +215,30 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		opts.LockTimeout = agentLockTimeout
 	}
 	r := &Runtime{
-		cfg:             cfg,
-		identity:        identity,
-		root:            root,
-		runner:          opts.Runner,
-		controller:      opts.Controller,
-		httpClient:      opts.HTTPClient,
-		logger:          opts.Logger,
-		pollInterval:    defaultPollInterval(opts.PollInterval),
-		lockTimeout:     opts.LockTimeout,
-		stageTargets:    opts.StageTargets,
-		now:             time.Now,
-		procRoot:        rooted(root, "/proc"),
-		enforceProcArgs: root == "/",
+		cfg:                cfg,
+		identity:           identity,
+		root:               root,
+		runner:             opts.Runner,
+		controller:         opts.Controller,
+		httpClient:         opts.HTTPClient,
+		logger:             opts.Logger,
+		pollInterval:       defaultPollInterval(opts.PollInterval),
+		lockTimeout:        opts.LockTimeout,
+		stageTargets:       opts.StageTargets,
+		handoffConvergence: opts.HandoffConvergence,
+		now:                time.Now,
+		procRoot:           rooted(root, "/proc"),
+		enforceProcArgs:    root == "/",
 	}
 	r.writeState = r.persistState
 	if err := r.ensureLayout(); err != nil {
+		return nil, err
+	}
+	// Startup reconciliation runs before journal recovery (spec §4.6): the
+	// marker decides whether the previous chain completed, is still owned by a
+	// live unit, or must be failed locally. A corrupt marker refuses startup
+	// with the manual-removal instruction instead of being guessed at.
+	if err := r.reconcileHandoffOnBoot(); err != nil {
 		return nil, err
 	}
 	state, err := r.loadOrInitializeState()
@@ -614,26 +628,43 @@ func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revisi
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
 	}
+	if pending {
+		// Advance the Agent-owned phase from the updater's result file and
+		// apply the local 30-minute orphan rule before deciding who owns the
+		// node. A marker that is already failed is never advanced again.
+		handoff, err = r.reconcileHandoff(handoff)
+		if err != nil {
+			return failedResult(result, errorCode(err)), err
+		}
+	}
 	if pending && handoff.OperationID == task.OperationID {
+		if handoff.State == handoffFailed {
+			code := handoffFailureCode(handoff)
+			return failedResult(result, code), fmt.Errorf("%s: the update attempt already failed", code)
+		}
 		if r.handoffInFlight(handoff) {
 			// Redelivery while the install still runs: replay the same
 			// non-terminal receipt and never start a second update.
 			return upgradeQueuedReceipt(task.OperationID, handoff.TargetVersion), nil
 		}
-		// The child is gone and the running release is still not the target:
-		// the update did not install. Record the failure so the remaining steps
-		// of this chain fail honestly, and fail this step.
+		// The owner chain is gone and the running release is still not the
+		// target: the update did not install. Record the failure so the
+		// remaining steps of this chain fail honestly, and fail this step.
 		if err = r.failUpgradeHandoff(handoff); err != nil {
 			return failedResult(result, errorCode(err)), err
 		}
-		return failedResult(result, "UPDATE_HANDOFF_INCOMPLETE"),
-			errors.New("UPDATE_HANDOFF_INCOMPLETE: the update child exited before installing the target")
+		code := handoffFailureCode(handoff)
+		return failedResult(result, code),
+			fmt.Errorf("%s: the update unit finished without installing the target", code)
 	}
 	if pending && handoff.State == handoffFailed {
 		// A previous chain's upgrade failed. This new chain owns the node now:
 		// drop the stale marker so its steps may run. The previous chain's own
 		// rows are already terminal.
 		if err = r.clearUpgradeHandoff(); err != nil {
+			return failedResult(result, errorCode(err)), err
+		}
+		if err = r.clearUpgradeClaim(); err != nil {
 			return failedResult(result, errorCode(err)), err
 		}
 	} else if pending {
@@ -666,6 +697,7 @@ func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revisi
 	record := upgradeHandoff{
 		Schema:         upgradeHandoffSchema,
 		State:          handoffRunning,
+		Phase:          handoffPhaseStaged,
 		OperationID:    task.OperationID,
 		TargetVersion:  target.Version,
 		ManifestSHA256: target.ManifestSHA256,

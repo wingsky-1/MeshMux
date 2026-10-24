@@ -18,6 +18,7 @@ func writeInFlightHandoff(t *testing.T, runtime *Runtime, operationID, target st
 	handoff := upgradeHandoff{
 		Schema:         upgradeHandoffSchema,
 		State:          handoffRunning,
+		Phase:          handoffPhaseStaged,
 		OperationID:    operationID,
 		TargetVersion:  target,
 		ManifestSHA256: strings.Repeat("d", 64),

@@ -45,6 +45,30 @@ type handoffRunner struct {
 	child    chan struct{}
 	finished chan struct{}
 	spawns   [][]string
+	// unitState is the ActiveState the fixture systemd reports for the
+	// transient update unit. Empty means "active": the owner chain is alive,
+	// which is the default while a handoff is expected to be in flight.
+	unitState  string
+	unitStatus int
+	unitErr    error
+}
+
+// Run answers the transient-unit liveness query with the fixture state and
+// delegates everything else to the shared runtime runner.
+func (r *handoffRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == systemctlPath && len(args) > 1 && args[0] == "show" &&
+		strings.HasPrefix(args[len(args)-1], "meshmux-update-") {
+		if r.unitErr != nil {
+			return nil, r.unitErr
+		}
+		state := r.unitState
+		if state == "" {
+			state = "active"
+		}
+		return []byte("ActiveState=" + state + "\nExecMainStatus=" +
+			strconv.Itoa(r.unitStatus) + "\n"), nil
+	}
+	return r.runtimeTestRunner.Run(ctx, name, args...)
 }
 
 func (r *handoffRunner) Spawn(_ context.Context, name string, args ...string) (int, error) {
@@ -219,21 +243,26 @@ func TestStageHandoffGatesApplyAndReadback(t *testing.T) {
 	close(runner.child)
 }
 
-// TestStageHandoffChildGoneFailsChain pins the failure path: a child that exited
-// without installing the target ends the chain with a stable code, and the
-// remaining steps of that chain fail the same way instead of applying the old
-// release. A later chain may still take the node.
+// TestStageHandoffChildGoneFailsChain pins the failure path: the spawned helper
+// is only diagnostic now (the transient unit owns the install), so liveness
+// comes from the unit state and the updater result file. A unit that is gone,
+// whose result says it never got past install or whose restart never produced
+// the target, ends the chain with a stable code; the remaining steps of that
+// chain fail the same way instead of applying the old release. A later chain
+// may still take the node.
 func TestStageHandoffChildGoneFailsChain(t *testing.T) {
 	root, cfg, identity, base := createRuntimeFixture(t, RoleEdge, 9)
-	// PID 1 is not materialized in the fixture proc root, so the fake child is
-	// already gone by the next check.
-	runner := &handoffRunner{runtimeTestRunner: base, childPID: 1}
+	// The transient unit is gone and the result file says the install reached
+	// installed-awaiting-restart with exit 0 — yet this Agent still runs the old
+	// release, so the restart is not proven and the chain must fail.
+	runner := &handoffRunner{runtimeTestRunner: base, childPID: 1, unitState: "inactive"}
 	runtime := newUpgradeRuntime(t, root, cfg, identity, runner,
 		&runtimeTestController{candidate: testCandidate(10)}, stageHandoffTargetFixture())
 
 	stage := task(protocol.KindConfigStage, strings.Repeat("5", 32), strings.Repeat("6", 32), 11, 10)
 	assertQueuedApplying(t, runtime.Execute(context.Background(), stage), stage.OperationID, stageHandoffTarget)
-	// Same step redelivered after the child is gone.
+	writeHandoffResultFile(t, root, stage.OperationID, stageHandoffTarget, handoffPhaseInstalledAwaitingRestart, 0)
+	// Same step redelivered after the unit is gone.
 	result := runtime.Execute(context.Background(), stage)
 	if result.Status != "failed" || result.ErrorCode != "UPDATE_HANDOFF_INCOMPLETE" {
 		t.Fatalf("stage after child exit = %+v", result)
@@ -309,6 +338,9 @@ func TestStageHandoffCompletesWhenTargetIsRunning(t *testing.T) {
 	if err = runtime.writeUpgradeHandoff(handoff); err != nil {
 		t.Fatal(err)
 	}
+	// The restarted Agent finds a whole on-disk pair: the config names the
+	// binary that is running. Only then is the completed marker cleared.
+	writeAgentConfigFile(t, root, cfg)
 	installed := newUpgradeRuntime(t, root, cfg, identity, runner,
 		&runtimeTestController{candidate: testCandidate(10)}, &stageTargetFixture{
 			stamped: true,
