@@ -35,6 +35,41 @@ const (
 	transientRWPaths = "/usr/local/libexec /etc/meshmux /var/lib/meshmux-agent " +
 		"/etc/systemd/system /var/lib/meshmux-installer /var/cache/meshmux-installer " +
 		"/var/lib/meshmux-singbox /etc/fail2ban /run/lock"
+	// transientCaps is the capability bounding set of the unit, audited against
+	// the install code paths rather than guessed (spec §6, amended 2026-10-24):
+	//
+	//	CAP_CHOWN          os.Chown on every managed file (install/node_apply.go:449,
+	//	                   install/apply.go:459) and the chown(1) calls that set the
+	//	                   Agent data directory to root:meshmux-agent
+	//	                   (install/node_apply.go:731, :1140).
+	//	CAP_NET_ADMIN      every nft call: install/node_stage.go:144 (`nft -c`),
+	//	                   install/node_apply.go:796 (`nft -j list`),
+	//	                   install/node_plan.go:597 (`nft list table`).
+	//	CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE
+	//	                   the install's own readback (pollNodeReadback →
+	//	                   node.ReadbackLocal) runs inside the unit and must
+	//	                   attribute the non-root sing-box listener: `ss -p`
+	//	                   reads /proc/<pid>/fd (install/node_plan.go:321, :441)
+	//	                   and the ownership hash reads /proc/<pid>/exe
+	//	                   (install/node_plan.go:20, :31). Both are declared
+	//	                   together because they are the exact pair the Agent
+	//	                   unit already proves in production for this same
+	//	                   readback (install/node_render.go:113-116); without
+	//	                   them ss omits pid= and the install fails closed with
+	//	                   PORT_OWNER_UNVERIFIED on a real host.
+	//
+	// Deliberately absent: DAC_OVERRIDE (the write set is enumerated and every
+	// target is root-owned), SETUID/SETGID, SYS_ADMIN, SYS_MODULE, MKNOD. The
+	// two install steps that would need them — apt-get for a missing package
+	// (install/apply_shared.go:22-30) and useradd for a missing account
+	// (install/node_apply.go:717) — cannot run on a host MeshMux installed,
+	// because both are already satisfied there; if one ever is not, the unit
+	// fails closed instead of widening its own privileges.
+	transientCaps = "CAP_CHOWN CAP_NET_ADMIN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE"
+	// transientAddressFamilies is the socket-family allowlist: AF_UNIX for
+	// systemctl/fail2ban-client, AF_INET/AF_INET6 for the bind probes and
+	// outbound HTTPS, AF_NETLINK because ss (SOCK_DIAG) and nft speak netlink.
+	transientAddressFamilies = "AF_UNIX AF_INET AF_INET6 AF_NETLINK"
 )
 
 // ActiveState is one systemd unit state as reported by `systemctl show`. It is
@@ -113,8 +148,8 @@ func buildTransientArgv(op Config, arch string) ([]string, error) {
 		"--property=NoNewPrivileges=yes",
 		"--property=PrivateTmp=yes",
 		"--property=ProtectHome=yes",
-		"--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-		"--property=CapabilityBoundingSet=",
+		"--property=RestrictAddressFamilies=" + transientAddressFamilies,
+		"--property=CapabilityBoundingSet=" + transientCaps,
 		binary,
 		"__internal-update-install",
 		"--target", op.Target,

@@ -7,6 +7,7 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -35,8 +36,8 @@ func wantTransientArgv(cfg Config, packageSHA string) []string {
 		"--property=NoNewPrivileges=yes",
 		"--property=PrivateTmp=yes",
 		"--property=ProtectHome=yes",
-		"--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-		"--property=CapabilityBoundingSet=",
+		"--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+		"--property=CapabilityBoundingSet=CAP_CHOWN CAP_NET_ADMIN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE",
 		filepath.Join(cfg.WorkDir, "meshmuxd-"+cfg.Target+"-"+runtime.GOARCH),
 		"__internal-update-install",
 		"--target", cfg.Target,
@@ -96,14 +97,32 @@ func TestTransientArgvPinned(t *testing.T) {
 	if seen["ProtectSystem"] != "strict" {
 		t.Fatalf("ProtectSystem = %q, want strict", seen["ProtectSystem"])
 	}
-	if seen["CapabilityBoundingSet"] != "" {
-		t.Fatalf("CapabilityBoundingSet = %q, want empty", seen["CapabilityBoundingSet"])
+	// The amended §6 capability set. It is not a guess: CAP_CHOWN covers
+	// os.Chown/chown(1) on managed files, CAP_NET_ADMIN covers nft, and
+	// CAP_DAC_READ_SEARCH + CAP_SYS_PTRACE cover reading the non-root sing-box
+	// process behind ss -p and /proc/<pid>/exe in the port-ownership readback.
+	if seen["CapabilityBoundingSet"] != "CAP_CHOWN CAP_NET_ADMIN CAP_DAC_READ_SEARCH CAP_SYS_PTRACE" {
+		t.Fatalf("CapabilityBoundingSet = %q", seen["CapabilityBoundingSet"])
+	}
+	// No privilege that would widen the unit past a fixed install: no
+	// DAC_OVERRIDE (the write set is explicit), no SETUID/SETGID (it never
+	// drops privilege itself), no SYS_ADMIN (no mount/namespace work).
+	for _, forbidden := range []string{"CAP_DAC_OVERRIDE", "CAP_SETUID", "CAP_SETGID", "CAP_SYS_ADMIN",
+		"CAP_SYS_MODULE", "CAP_MKNOD", "CAP_SYS_CHROOT", "ALL"} {
+		if strings.Contains(seen["CapabilityBoundingSet"], forbidden) {
+			t.Fatalf("CapabilityBoundingSet carries %q: %q", forbidden, seen["CapabilityBoundingSet"])
+		}
 	}
 	if seen["NoNewPrivileges"] != "yes" || seen["PrivateTmp"] != "yes" || seen["ProtectHome"] != "yes" {
 		t.Fatalf("sandbox properties = %v", seen)
 	}
-	if seen["RestrictAddressFamilies"] != "AF_UNIX AF_INET AF_INET6" {
+	if seen["RestrictAddressFamilies"] != "AF_UNIX AF_INET AF_INET6 AF_NETLINK" {
 		t.Fatalf("RestrictAddressFamilies = %q", seen["RestrictAddressFamilies"])
+	}
+	// AF_NETLINK is required (ss SOCK_DIAG and nft); AF_PACKET would let the
+	// unit capture traffic and is not needed by any install path.
+	if strings.Contains(seen["RestrictAddressFamilies"], "AF_PACKET") {
+		t.Fatalf("RestrictAddressFamilies carries AF_PACKET: %q", seen["RestrictAddressFamilies"])
 	}
 	if seen["ReadWritePaths"] != "/usr/local/libexec /etc/meshmux /var/lib/meshmux-agent /etc/systemd/system /var/lib/meshmux-installer /var/cache/meshmux-installer /var/lib/meshmux-singbox /etc/fail2ban /run/lock" {
 		t.Fatalf("ReadWritePaths = %q", seen["ReadWritePaths"])
@@ -133,6 +152,57 @@ func TestTransientArgvPinned(t *testing.T) {
 	}
 	if exec := argv[execIndex-1]; exec != filepath.Join(cfg.WorkDir, "meshmuxd-"+cfg.Target+"-"+runtime.GOARCH) {
 		t.Fatalf("ExecStart = %q", exec)
+	}
+}
+
+// TestTransientSandboxCoversInstallPaths is the capability audit as a test:
+// each capability and socket family the unit declares must correspond to a
+// real call in the install/readback code, and each one that does is listed.
+// A future install path that needs a new capability fails here instead of
+// failing on a host with EPERM/EPROTONOSUPPORT.
+func TestTransientSandboxCoversInstallPaths(t *testing.T) {
+	// (capability, reason, files that must still contain the call)
+	for _, need := range []struct {
+		capability string
+		reason     string
+		markers    []string
+	}{
+		{"CAP_CHOWN", "os.Chown on managed files and chown(1) on Agent directories",
+			[]string{"internal/install/node_apply.go:os.Chown", "internal/install/apply.go:os.Chown"}},
+		{"CAP_NET_ADMIN", "nft -c / nft list table need the netfilter netlink socket",
+			[]string{"internal/install/node_stage.go:\"nft\", \"-c\"", "internal/install/node_apply.go:\"nft\", \"-j\""}},
+		{"CAP_DAC_READ_SEARCH", "ss -p reads /proc/<pid>/fd of the non-root sing-box process",
+			[]string{"internal/install/node_plan.go:\"ss\", \"-H\", \"-lntp\"", "internal/install/node_plan.go:\"ss\", \"-H\", \"-lntup\""}},
+		{"CAP_SYS_PTRACE", "/proc/<pid>/exe of that process for the ownership hash",
+			[]string{"internal/install/node_plan.go:os.Readlink(\"/proc/\" + pid + \"/exe\")",
+				"internal/install/node_plan.go:sha256File(\"/proc/\" + pid + \"/exe\")"}},
+	} {
+		if !strings.Contains(transientCaps, need.capability) {
+			t.Fatalf("capability set %q lacks %s (%s)", transientCaps, need.capability, need.reason)
+		}
+		for _, marker := range need.markers {
+			file, fragment, _ := strings.Cut(marker, ":")
+			body, err := os.ReadFile(filepath.Join("..", "..", file))
+			if err != nil {
+				t.Fatalf("read %s: %v", file, err)
+			}
+			if !strings.Contains(string(body), fragment) {
+				t.Fatalf("%s no longer contains %q, so %s may be removable — re-audit the sandbox",
+					file, fragment, need.capability)
+			}
+		}
+	}
+	// AF_NETLINK is what ss and nft actually speak; AF_PACKET is never needed.
+	if !strings.Contains(transientAddressFamilies, "AF_NETLINK") {
+		t.Fatalf("address families %q lack AF_NETLINK (ss/nft)", transientAddressFamilies)
+	}
+	if strings.Contains(transientAddressFamilies, "AF_PACKET") {
+		t.Fatalf("address families %q carry AF_PACKET, which no install path needs", transientAddressFamilies)
+	}
+	// The unit must stay no-new-privileges: capabilities come from the bounding
+	// set only, never from a setuid binary.
+	if transientCaps == "" || strings.Contains(transientCaps, "ALL") {
+		t.Fatalf("capability set %q is empty or unrestricted", transientCaps)
 	}
 }
 
@@ -202,16 +272,42 @@ func TestTransientRejectsUnvalidatedInput(t *testing.T) {
 	}
 
 	// A refused Run leaves the host untouched as well, including the staging
-	// directory: the argv gate sits before the fetch.
+	// directory: the argv gate sits before the fetch, so nothing is created,
+	// staged or written and no runner call happens.
 	pkg := []byte("fixture package\n")
 	badDir := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
-	badDir.WorkDir = "relative"
+	// Built by concatenation: filepath.Join would clean the ".." away.
+	badDir.WorkDir = t.TempDir() + "/not/../update"
 	runRunner := &fixtureRunner{}
 	if _, err := Run(context.Background(), badDir, runRunner); codeOf(err) != "UPDATE_STAGE_FAILED" {
 		t.Fatalf("Run code = %q, want UPDATE_STAGE_FAILED (err %v)", codeOf(err), err)
 	}
 	if len(runRunner.calls) != 0 {
 		t.Fatalf("refused Run executed %q", runRunner.calls)
+	}
+	if _, statErr := os.Lstat(badDir.WorkDir); !os.IsNotExist(statErr) {
+		t.Fatalf("refused Run created %s: %v", badDir.WorkDir, statErr)
+	}
+
+	// The same no-write rule for a refusal that happens later in the gate
+	// order: a target with a foreign policy schema must not even create the
+	// staging directory, let alone a backup pointer or a staged package.
+	schemaCfg := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
+	schemaCfg.WorkDir = filepath.Join(t.TempDir(), "update")
+	m := schemaCfg
+	foreign := fixtureManifest(t, pkg, shaOf(pkg))
+	foreign.PolicySchema++
+	m.FetchManifest = func(context.Context) ([]byte, error) { return setBody(t, foreign), nil }
+	pinned, err := json.Marshal(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ManifestSHA256 = shaOf(pinned)
+	if _, err := Run(context.Background(), m, &fixtureRunner{}); codeOf(err) != "UPDATE_SCHEMA_INCOMPATIBLE" {
+		t.Fatalf("Run code = %q, want UPDATE_SCHEMA_INCOMPATIBLE (err %v)", codeOf(err), err)
+	}
+	if _, statErr := os.Lstat(schemaCfg.WorkDir); !os.IsNotExist(statErr) {
+		t.Fatalf("refused Run created %s: %v", schemaCfg.WorkDir, statErr)
 	}
 }
 
@@ -404,6 +500,10 @@ func TestUnitActiveState(t *testing.T) {
 		{"unknown state", &stateRunner{out: []byte("ActiveState=bogus\nExecMainStatus=0\n")}, "UPDATE_UNIT_STATE_INVALID"},
 		{"missing exec status", &stateRunner{out: []byte("ActiveState=inactive\n")}, "UPDATE_UNIT_STATE_INVALID"},
 		{"non-numeric exec status", &stateRunner{out: []byte("ActiveState=inactive\nExecMainStatus=boom\n")}, "UPDATE_UNIT_STATE_INVALID"},
+		{"negative exec status", &stateRunner{out: []byte("ActiveState=inactive\nExecMainStatus=-1\n")}, "UPDATE_UNIT_STATE_INVALID"},
+		{"duplicate state", &stateRunner{out: []byte("ActiveState=active\nActiveState=failed\nExecMainStatus=0\n")}, "UPDATE_UNIT_STATE_INVALID"},
+		{"duplicate exec status", &stateRunner{out: []byte("ActiveState=active\nExecMainStatus=0\nExecMainStatus=1\n")}, "UPDATE_UNIT_STATE_INVALID"},
+		{"empty reply", &stateRunner{out: nil}, "UPDATE_UNIT_STATE_INVALID"},
 		{"query failed", &stateRunner{err: errors.New("fixture: bus down")}, "UPDATE_UNIT_QUERY_FAILED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -411,6 +511,16 @@ func TestUnitActiveState(t *testing.T) {
 				t.Fatalf("code = %q, want %q (err %v)", codeOf(err), tc.code, err)
 			}
 		})
+	}
+
+	// A missing operation is refused before any systemctl call: the unit name
+	// is derived from it, so an empty one cannot name a unit at all.
+	empty := &stateRunner{out: []byte("ActiveState=active\nExecMainStatus=0\n")}
+	if _, _, err := UnitActiveState(context.Background(), empty, ""); codeOf(err) != "OPERATION_REQUIRED" {
+		t.Fatalf("empty operation: %v", err)
+	}
+	if len(empty.calls) != 0 {
+		t.Fatalf("empty operation queried %q", empty.calls)
 	}
 
 	refused := &stateRunner{out: []byte("ActiveState=active\nExecMainStatus=0\n")}
