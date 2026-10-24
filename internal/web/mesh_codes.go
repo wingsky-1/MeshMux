@@ -39,6 +39,13 @@ const (
 	codeMeshReconcileFailed    = "MESH_RECONCILE_FAILED"
 	codeMeshRouteApproval      = "MESH_ROUTE_APPROVAL_FAILED"
 	codeMeshRouteWithdraw      = "MESH_ROUTE_WITHDRAW_FAILED"
+	// Partial route outcomes. A Headscale mutation that the Hub could not
+	// record is not a plain failure: the control plane and the Hub disagree
+	// until the compensation is confirmed or the operator retries. Both codes
+	// are rendered, so the page can say "partial" instead of claiming nothing
+	// happened.
+	codeMeshRouteApprovalPartial = "MESH_ROUTE_APPROVAL_PARTIAL"
+	codeMeshRouteWithdrawPartial = "MESH_ROUTE_WITHDRAW_PARTIAL"
 )
 
 var (
@@ -77,6 +84,8 @@ var (
 		codeMeshReconcileFailed,
 		codeMeshRouteApproval,
 		codeMeshRouteWithdraw,
+		codeMeshRouteApprovalPartial,
+		codeMeshRouteWithdrawPartial,
 	)
 
 	// meshDomainCodes are the refusals of the pure domain package.

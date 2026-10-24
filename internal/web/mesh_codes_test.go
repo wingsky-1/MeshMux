@@ -78,6 +78,8 @@ func TestMeshStatusIsChosenFromCodesOnly(t *testing.T) {
 		{subscription.CodeMeshLineInTailnet, http.StatusConflict},
 		{subscription.CodeMeshPurposeUnsupported, http.StatusConflict},
 		{codeMeshRouteApprovalUnconfirmed, http.StatusConflict},
+		{codeMeshRouteApprovalPartial, http.StatusInternalServerError},
+		{codeMeshRouteWithdrawPartial, http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
 		if got := meshStatus(tc.code); got != tc.status {
@@ -174,6 +176,8 @@ func TestMeshCodesCoverEveryRenderedConstant(t *testing.T) {
 		codeMeshReconcileFailed,
 		codeMeshRouteApproval,
 		codeMeshRouteWithdraw,
+		codeMeshRouteApprovalPartial,
+		codeMeshRouteWithdrawPartial,
 		codeMeshRouteApprovalUnconfirmed,
 		codeMeshRouteNodeUnobserved,
 		codeMeshHeadscaleUserUnknown,

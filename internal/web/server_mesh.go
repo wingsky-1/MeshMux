@@ -61,6 +61,13 @@ const (
 	// which the schema's CHECK constraint keeps to route state changes, and not
 	// a rendered failure code, because the request itself succeeded.
 	codeMeshRouteUntrackedDropped = "MESH_ROUTE_UNTRACKED_DROPPED"
+
+	// codeMeshRouteCompensated is the web_event code for one accepted Headscale
+	// route mutation that the Hub failed to record and then reverted to the
+	// approved set the request found. It is log-only: the request still fails
+	// with its own code, and this event says the revert was confirmed, so the
+	// failure is not a partial one.
+	codeMeshRouteCompensated = "MESH_ROUTE_COMPENSATED"
 )
 
 // meshUserView is one selectable Headscale user. The list is read live; the
@@ -414,6 +421,12 @@ func meshEnrollmentKeyLive(keys []MeshEnrollmentKeyRecord, keyID string, now tim
 // A failed command or an unconfirmed readback leaves the row exactly as it was
 // (advertised): no local intent claims an approval the control plane did not
 // prove.
+//
+// The local half runs after the remote one, so it follows the same
+// validate → stage → apply → readback order as every other mutation: a failed
+// local write is read back first (a commit whose own read failed is not undone),
+// then the remote set is compensated back to what the request found, and only a
+// compensation that could not restore it is reported as MESH_ROUTE_APPROVAL_PARTIAL.
 func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess session) {
 	device, route, ok := app.meshRouteTarget(w, r)
 	if !ok {
@@ -447,6 +460,10 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	prefixes, dropped := meshRouteApprovalSet(node.ApprovedRoutes, route.Prefix, "")
+	// previous is the sendable set the request found. It is the compensation
+	// target if a Hub write after the mutation fails: putting Headscale back to
+	// this set is the smallest revert that makes "nothing changed" true again.
+	previous, _ := meshRouteApprovalSet(node.ApprovedRoutes, "", "")
 	readback, err := app.mesh.SetApprovedRoutes(ctx, device.HeadscaleNodeID, prefixes)
 	if err != nil {
 		app.meshControlPlaneFail(w, r, err, codeMeshRouteApproval, "Headscale 未接受路由批准。", "请检查 Headscale 服务与节点状态后重试。")
@@ -465,13 +482,37 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 	}
 	now := app.now()
 	if err = app.recordUntrackedApprovedRoutes(device.ID, readback, operation(r), now); err != nil {
-		app.meshFail(w, r, err, codeMeshRouteApproval, "Headscale 已批准，但未声明的已批准前缀未能写入审计记录。", "请检查数据库后重新核对。")
+		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
+			Fallback: codeMeshRouteApproval,
+			Partial:  codeMeshRouteApprovalPartial,
+			Applied:  "Headscale 已批准该前缀",
+			Intended: mesh.RouteDesiredApproved,
+			DeviceID: device.ID,
+			Prefix:   route.Prefix,
+			NodeID:   device.HeadscaleNodeID,
+			Previous: previous,
+			Dropped:  droppedCount,
+		})
 		return
 	}
 	if _, err = app.store.setMeshRouteDesired(device.ID, route.Prefix, mesh.RouteDesiredApproved, operation(r), now); err != nil {
-		app.meshFail(w, r, err, codeMeshRouteApproval, "Headscale 已批准，但 Hub 未能记录批准意图。", "请重新核对并检查数据库后重试。")
+		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
+			Fallback: codeMeshRouteApproval,
+			Partial:  codeMeshRouteApprovalPartial,
+			Applied:  "Headscale 已批准该前缀",
+			Intended: mesh.RouteDesiredApproved,
+			DeviceID: device.ID,
+			Prefix:   route.Prefix,
+			NodeID:   device.HeadscaleNodeID,
+			Previous: previous,
+			Dropped:  droppedCount,
+		})
 		return
 	}
+	// The remaining local write is evidence, not intent. The intent above is
+	// already stored and matches Headscale, so reverting the control plane here
+	// would create the disagreement this handler avoids: only the evidence is
+	// stale, and the message says so.
 	if _, _, err = app.store.recordMeshRouteObservation(device.ID, route.Prefix, meshRouteObservedFromNode(readback, route.Prefix), operation(r), now); err != nil {
 		app.meshFail(w, r, err, codeMeshRouteApproval, "批准意图已保存，但路由观测未写入。", "请重新核对以刷新证据。")
 		return
@@ -518,6 +559,9 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 		return
 	}
 	prefixes, dropped := meshRouteApprovalSet(node.ApprovedRoutes, "", route.Prefix)
+	// previous is the sendable set the request found, used as the compensation
+	// target if the Hub cannot record the withdrawal after Headscale accepted it.
+	previous, _ := meshRouteApprovalSet(node.ApprovedRoutes, "", "")
 	var readback headscale.Node
 	if len(prefixes) == 0 {
 		// Nothing sendable remains. Clearing is a superset of the difference the
@@ -540,11 +584,31 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 	}
 	now := app.now()
 	if err = app.recordUntrackedApprovedRoutes(device.ID, readback, operation(r), now); err != nil {
-		app.meshFail(w, r, err, codeMeshRouteWithdraw, "Headscale 已撤销批准，但未声明前缀的审计记录未写入。", "请检查数据库后重新核对。")
+		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
+			Fallback: codeMeshRouteWithdraw,
+			Partial:  codeMeshRouteWithdrawPartial,
+			Applied:  "Headscale 已撤销该前缀的批准",
+			Intended: mesh.RouteDesiredAdvertised,
+			DeviceID: device.ID,
+			Prefix:   route.Prefix,
+			NodeID:   device.HeadscaleNodeID,
+			Previous: previous,
+			Dropped:  droppedCount,
+		})
 		return
 	}
 	if _, err = app.store.setMeshRouteDesired(device.ID, route.Prefix, mesh.RouteDesiredAdvertised, operation(r), now); err != nil {
-		app.meshFail(w, r, err, codeMeshRouteWithdraw, "Headscale 已撤销批准，但 Hub 未能记录意图。", "请重新核对并检查数据库后重试。")
+		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
+			Fallback: codeMeshRouteWithdraw,
+			Partial:  codeMeshRouteWithdrawPartial,
+			Applied:  "Headscale 已撤销该前缀的批准",
+			Intended: mesh.RouteDesiredAdvertised,
+			DeviceID: device.ID,
+			Prefix:   route.Prefix,
+			NodeID:   device.HeadscaleNodeID,
+			Previous: previous,
+			Dropped:  droppedCount,
+		})
 		return
 	}
 	if _, _, err = app.store.recordMeshRouteObservation(device.ID, route.Prefix, meshRouteObservedFromNode(readback, route.Prefix), operation(r), now); err != nil {
@@ -554,6 +618,172 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 	app.event(r, routeEventWithdrawn)
 	app.renderMesh(w, r, sess, nil,
 		"已撤销前缀 "+route.Prefix+" 的批准；声明仍保留，可再次批准。已批准集合的其余前缀未被清除。"+meshRouteDroppedNotice(droppedCount, len(prefixes) == 0), "notice")
+}
+
+// meshRouteLocalFailure describes one accepted Headscale route mutation whose
+// local half failed. It carries what the handler already knows so the failure
+// path can read the intent back, compensate the control plane and report which
+// of the two outcomes actually happened.
+type meshRouteLocalFailure struct {
+	// Fallback is the handler's own failure code, used when the store error has
+	// no registered code of its own.
+	Fallback string
+	// Partial is the code reported when the compensation could not restore the
+	// approved set the request found.
+	Partial string
+	// Applied is the mutation the control plane already accepted, in the
+	// operator's language ("Headscale 已批准该前缀").
+	Applied string
+	// Intended is the desired state the local write tried to store.
+	Intended mesh.RouteDesired
+	DeviceID string
+	Prefix   string
+	NodeID   uint64
+	// Previous is the sendable approved set the request found: the compensation
+	// target.
+	Previous []string
+	// Dropped counts approved prefixes the complete-set operation could not
+	// carry. They are disclosed, never silently counted as restored.
+	Dropped int
+}
+
+// meshRouteLocalFail settles a route mutation whose Headscale call was accepted
+// but whose Hub write failed.
+//
+// The order is the one every other mutation uses: validate → stage → apply →
+// readback. The readback comes first because "the write returned an error" is
+// not proof that it did not commit - a commit whose response read failed looks
+// exactly the same. Only a row that still shows the old intent is compensated.
+//
+// Compensation puts Headscale back to the approved set the request found (or
+// clears it when nothing sendable was approved), so a failure that is reported
+// never leaves the control plane ahead of the Hub. The compensation's own
+// readback decides the answer:
+//
+//   - intended state stored: the local write committed, so nothing is reverted
+//     and the page asks for a reconcile to refresh the evidence;
+//   - restored: the ordinary failure code, stating that the request did not take
+//     effect and the approved set was reverted;
+//   - not restored, or the Hub record itself could not be read: the
+//     MESH_ROUTE_*_PARTIAL code, stating that Headscale changed and the Hub
+//     cannot prove its own record, with the retry that reconciles the two.
+func (app *Server) meshRouteLocalFail(w http.ResponseWriter, r *http.Request, sess session, err error, f meshRouteLocalFailure) {
+	code := meshErrorCode(err)
+	if code == "" {
+		code = meshCodeOrInternal(f.Fallback)
+	}
+	// Readback: a row that already carries the intended state means the local
+	// write committed and only its response (or a later evidence write) failed.
+	// Reverting the control plane then would manufacture the disagreement.
+	stored, readErr := app.store.getMeshRoute(f.DeviceID, f.Prefix)
+	if readErr == nil && stored.Desired == f.Intended {
+		app.event(r, code)
+		app.renderMesh(w, r, sess, nil,
+			f.Applied+"，Hub 也已记录该状态（"+code+"）；但本次响应未能确认全部证据，请“重新核对全部设备”刷新观测。", "error")
+		return
+	}
+	if readErr != nil {
+		// Neither side is provable: Headscale changed, and the Hub record cannot
+		// be read. Reverting on an unknown local state could undo a committed
+		// write, so the control plane is left as it is and the outcome is
+		// partial rather than a claim of "nothing happened".
+		app.meshRoutePartial(w, r, f, "Hub 记录状态无法回读（"+meshErrorCode(readErr)+"）")
+		return
+	}
+	restored, compensateErr := app.compensateMeshRouteApproval(r, f.NodeID, f.Previous)
+	if restored {
+		app.event(r, codeMeshRouteCompensated)
+		revert := "已将 Headscale 的批准集合回退到操作前的状态"
+		if f.Dropped > 0 {
+			// The revert can only carry sendable prefixes: the ones the request
+			// dropped were unsendable before it too, so they are not restored and
+			// the page must not imply that they are.
+			revert = "已将 Headscale 的批准集合回退到操作前可发送的集合"
+		}
+		app.meshFail(w, r, err, f.Fallback,
+			f.Applied+"，但 Hub 未能记录该变更；"+revert+"（记录 "+codeMeshRouteCompensated+" 事件）。"+meshRouteDroppedNotice(f.Dropped, len(f.Previous) == 0),
+			"本次变更未生效；请检查数据库后重试。")
+		return
+	}
+	detail := "回退也未获 Headscale 确认"
+	if compensateErr != nil {
+		// The refused revert keeps its own stable code, so an operator can tell
+		// "Headscale is unreachable" from "Headscale answered with another set".
+		app.event(r, meshErrorCode(compensateErr))
+		detail = "回退请求被拒绝（" + meshErrorCode(compensateErr) + "）"
+	}
+	app.meshRoutePartial(w, r, f, detail)
+}
+
+// meshRoutePartial reports the one outcome that must never be softened: the
+// control plane accepted a change the Hub could not record or revert.
+func (app *Server) meshRoutePartial(w http.ResponseWriter, r *http.Request, f meshRouteLocalFailure, detail string) {
+	app.event(r, f.Partial)
+	app.fail(w, r, meshStatus(f.Partial), f.Partial,
+		f.Applied+"，但 Hub 未能记录该变更，"+detail+"。Headscale 与 Hub 当前不一致。"+meshRouteDroppedNotice(f.Dropped, len(f.Previous) == 0),
+		"请“重新核对全部设备”确认 Headscale 现状，再重新执行一次批准或撤销；在两者一致前不要依赖页面的意图列。")
+}
+
+// compensateMeshRouteApproval reverts one accepted route mutation to the
+// approved set the request found. An empty target is a real target: clearing is
+// how the request found "nothing approved". The returned boolean is the
+// readback of the revert, not the success of the command: only a node that lists
+// exactly the target set counts as restored, so a mutation that changed nothing
+// the compensation could name is not reported as reverted.
+//
+// The call is bound to a context without the request's cancellation: the client
+// disconnecting after Headscale already changed is exactly when the revert
+// matters, and skipping it would leave the control plane ahead of the Hub.
+func (app *Server) compensateMeshRouteApproval(r *http.Request, nodeID uint64, previous []string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), meshControlPlaneTimeout)
+	defer cancel()
+	var (
+		node headscale.Node
+		err  error
+	)
+	if len(previous) == 0 {
+		node, err = app.mesh.ClearApprovedRoutes(ctx, nodeID)
+	} else {
+		node, err = app.mesh.SetApprovedRoutes(ctx, nodeID, previous)
+	}
+	if err != nil {
+		return false, err
+	}
+	if node.ID != nodeID {
+		return false, nil
+	}
+	return meshRouteApprovedSetEqual(node.ApprovedRoutes, previous), nil
+}
+
+// meshRouteApprovedSetEqual compares an approved list with a canonical target.
+// Spelling differences are not a disagreement; a missing or extra prefix is.
+// A value the domain cannot parse is compared verbatim: the adapter's own rule
+// decides what may travel in the CSV value, so this readback must not invent a
+// second rule.
+func meshRouteApprovedSetEqual(list, want []string) bool {
+	if len(list) != len(want) {
+		return false
+	}
+	present := make(map[string]struct{}, len(list))
+	for _, raw := range list {
+		present[meshRouteCanonicalOrRaw(raw)] = struct{}{}
+	}
+	for _, prefix := range want {
+		if _, ok := present[meshRouteCanonicalOrRaw(prefix)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// meshRouteCanonicalOrRaw is the comparison form of one approved prefix: the
+// canonical spelling when the mesh domain parses it, the trimmed value
+// otherwise.
+func meshRouteCanonicalOrRaw(raw string) string {
+	if canonical, err := mesh.ParseRoutePrefix(strings.TrimSpace(raw)); err == nil {
+		return canonical.String()
+	}
+	return strings.TrimSpace(raw)
 }
 
 // meshRouteTarget resolves the device and one declared prefix of a route action.
@@ -1502,6 +1732,10 @@ func meshStatus(code string) int {
 		codeMeshRouteNotFound:
 		return http.StatusNotFound
 	case codeMeshDeviceCorrupt, codeMeshRouteCorrupt, codeMeshInternalError:
+		return http.StatusInternalServerError
+	// A partial route outcome is a Hub-side inconsistency, not a refused
+	// request: Headscale accepted a change the Hub could not record.
+	case codeMeshRouteApprovalPartial, codeMeshRouteWithdrawPartial:
 		return http.StatusInternalServerError
 	case mesh.CodeDeviceIDInvalid, mesh.CodeDisplayNameInvalid, codeDisplayNameInvalid,
 		mesh.CodePurposeInvalid, mesh.CodePlatformInvalid, mesh.CodeSubscriberBindingInvalid,
