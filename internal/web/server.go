@@ -114,6 +114,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/nodes/{nodeID}/reconcile", app.mutation(app.nodesReconcile, true))
 	r.Post("/nodes/{nodeID}/recheck", app.mutation(app.nodesReconcile, true))
 	r.Post("/nodes/{nodeID}/retry", app.mutation(app.nodesReconcile, true))
+	r.Post("/nodes/{nodeID}/rollback-lkg", app.mutation(app.nodesRollbackLKG, true))
 	r.Post("/nodes/{nodeID}/reissue", app.mutation(app.nodesReissue, true))
 	r.Post("/nodes/{nodeID}/reissue-pairing", app.mutation(app.nodesReissue, true))
 	r.Post("/nodes/{nodeID}/revoke", app.mutation(app.nodesRevoke, true))

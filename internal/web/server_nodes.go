@@ -124,6 +124,32 @@ func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess ses
 		nodeID, candidate.Revision, candidate.ConfigSHA256, len(tasks)))
 }
 
+// nodesRollbackLKG is the explicit LKG rollback action: republish the Agent's
+// observed candidate revision through the fixed four-task chain, with no
+// upgrade target stamp (spec §4.11 U5 exemption). The caller supplies no
+// revision; the Hub uses the node's own readback.
+func (s *Server) nodesRollbackLKG(w http.ResponseWriter, r *http.Request, sess session) {
+	nodeID := nodeIDFromRequest(r)
+	candidate, tasks, err := s.store.republishLKG(nodeID, s.now())
+	if err != nil {
+		code := "LKG_ROLLBACK_FAILED"
+		switch {
+		case strings.HasPrefix(err.Error(), "TASKS_IN_PROGRESS"):
+			code = "TASKS_IN_PROGRESS"
+		case strings.HasPrefix(err.Error(), "LKG_UNAVAILABLE"):
+			code = "LKG_UNAVAILABLE"
+		case strings.HasPrefix(err.Error(), "NODE_NOT_FOUND"):
+			code = "NODE_NOT_FOUND"
+		}
+		s.event(r, code)
+		s.fail(w, r, 409, code, "LKG 回退链未发布。", "确认节点已成功读取当前修订且没有进行中的任务后重试。")
+		return
+	}
+	s.event(r, "LKG_ROLLBACK_QUEUED")
+	s.render(w, r, 200, NodeActionPage(pageData{Title: "LKG 回退已排队", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP},
+		nodeID, candidate.Revision, candidate.ConfigSHA256, len(tasks)))
+}
+
 func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess session) {
 	nodeID := nodeIDFromRequest(r)
 	code, err := s.store.reissuePairing(nodeID, s.now())

@@ -94,6 +94,14 @@ type Config struct {
 	// without touching the host.
 	SelfExecutable string
 	RecordedRole   func() (node.Role, error)
+
+	// FromAgentSHA256 is the old package's digest for the transient revert
+	// executor (RunRevert). It is filled from the rollback record, never from
+	// a caller.
+	FromAgentSHA256 string
+	// Root is the installed-system root of the revert command. Production
+	// leaves it empty ("/"); tests restore into a fixture tree.
+	Root string
 }
 
 // Result reports what the handoff staged and observed. It never claims the
@@ -104,24 +112,12 @@ type Result struct {
 	VerifiedPath string           `json:"verified_path"`
 	Manifest     upgrade.Manifest `json:"manifest"`
 	// BackupPointer names the verified rollback record of this operation
-	// (upgrade-backups/<op>/record.json), not the legacy per-target pointer.
+	// (upgrade-backups/<op>/record.json). It is the only rollback pointer:
+	// 11c-3 Task 4 removed the per-target backup-<target>.json file.
 	BackupPointer string `json:"backup_pointer,omitempty"`
 	// ReadbackDigest is the installed executor digest when a caller observed
 	// it. The transient handoff leaves it empty: the unit installs later.
 	ReadbackDigest string `json:"readback_digest,omitempty"`
-}
-
-// backupPointer is the rollback pointer of one release: it names the release
-// being replaced before the new package runs. One file per target keeps every
-// step of a multi-release catch-up independently addressable (11c-3 owns the
-// restore semantics).
-type backupPointer struct {
-	OperationID    string `json:"operation_id"`
-	FromVersion    string `json:"from_version"`
-	Target         string `json:"target"`
-	ManifestSHA256 string `json:"manifest_sha256"`
-	PackageSHA256  string `json:"package_sha256"`
-	VerifiedPath   string `json:"verified_path"`
 }
 
 func fail(code, detail string) error { return errors.New(code + ": " + detail) }
@@ -236,11 +232,18 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err != nil {
 		return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
 	}
+	// The installer's manifest claims the exact old package it recorded. That
+	// digest is the from_* anchor the revert later trusts; agent.json is the
+	// fallback for a snapshot written before the manifest existed.
+	fromPackage, err := snapshotAnchor(snapshot, installed.AgentSHA256)
+	if err != nil {
+		return Result{}, err
+	}
 	recordPath, err := WriteBackupRecord(cfg.backupRoot(), BackupSpec{
 		OperationID: cfg.OperationID, FromVersion: cfg.CurrentVersion, TargetVersion: cfg.Target,
 		DBSchema: nodeDBSchema, PolicySchema: upgrade.PolicySchema,
 		ManifestSHA256: cfg.ManifestSHA256, PackageSHA256: cfg.PackageSHA256,
-		FromPackageSHA256: installed.AgentSHA256, FromAgentSHA256: installed.AgentSHA256,
+		FromPackageSHA256: fromPackage, FromAgentSHA256: fromPackage,
 		SnapshotDir: snapshot,
 	})
 	if err != nil {
@@ -254,9 +257,6 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 		return Result{}, err
 	}
 	result := Result{VerifiedPath: path, Manifest: m, BackupPointer: recordPath}
-	if _, err := writeBackupPointer(cfg, c, path); err != nil {
-		return result, err
-	}
 	if err := handoff(ctx, argv, runner); err != nil {
 		return result, err
 	}
@@ -277,6 +277,36 @@ func compatGate(m upgrade.Manifest) error {
 		}
 	}
 	return nil
+}
+
+// snapshotAnchor resolves the old-package anchor from the installer snapshot.
+// A manifest-bearing snapshot must name the Agent binary, and that digest must
+// agree with agent.json when both are present: the rollback source has to be
+// the release this host actually runs. A snapshot without a manifest is the
+// pre-Task-4 shape and keeps the agent.json anchor.
+func snapshotAnchor(snapshot, installedAgentSHA string) (string, error) {
+	manifestPath := filepath.Join(snapshot, install.SnapshotManifestName)
+	if _, err := os.Lstat(manifestPath); os.IsNotExist(err) {
+		return installedAgentSHA, nil
+	}
+	manifest, err := install.ReadSnapshotManifest(snapshot)
+	if err != nil {
+		return "", fail("UPDATE_BACKUP_CORRUPT", "the installer rollback snapshot is not a valid manifest tree")
+	}
+	anchor := ""
+	for _, entry := range manifest.Files {
+		if entry.Target == node.AgentBinaryPath && entry.Exists {
+			anchor = entry.SHA256
+			break
+		}
+	}
+	if anchor == "" {
+		return "", fail("UPDATE_BACKUP_CORRUPT", "the installer rollback snapshot does not name the Agent binary")
+	}
+	if installedAgentSHA != "" && anchor != installedAgentSHA {
+		return "", fail("UPDATE_BACKUP_MISMATCH", "the installer snapshot belongs to another installed release")
+	}
+	return anchor, nil
 }
 
 // requireVerifiedBackup is the 11c-3 handoff precondition (spec §4.4, §6). It
@@ -312,27 +342,6 @@ func adjacencyGate(cfg Config) error {
 		return nil
 	}
 	return upgrade.AdjacentRelease(cfg.Releases, cfg.CurrentVersion, cfg.Target)
-}
-
-// writeBackupPointer records the release being replaced before anything runs.
-// The file is written atomically so a crash leaves either no pointer or the
-// complete one, never a truncated rollback target.
-func writeBackupPointer(cfg Config, c upgrade.Component, path string) (string, error) {
-	pointer := backupPointer{OperationID: cfg.OperationID, FromVersion: cfg.CurrentVersion,
-		Target: cfg.Target, ManifestSHA256: cfg.ManifestSHA256, PackageSHA256: c.SHA256, VerifiedPath: path}
-	data, err := json.MarshalIndent(pointer, "", "  ")
-	if err != nil {
-		return "", fail("UPDATE_BACKUP_FAILED", "the rollback pointer could not be encoded")
-	}
-	final := filepath.Join(cfg.WorkDir, "backup-"+cfg.Target+".json")
-	if os.WriteFile(final+".part", data, 0600) != nil {
-		return "", fail("UPDATE_BACKUP_FAILED", "the rollback pointer could not be written")
-	}
-	if os.Rename(final+".part", final) != nil {
-		_ = os.Remove(final + ".part")
-		return "", fail("UPDATE_BACKUP_FAILED", "the rollback pointer could not be published")
-	}
-	return final, nil
 }
 
 // handoff starts the verified package's own install as one transient systemd

@@ -83,6 +83,24 @@ func nodeVerifyTail(ctx context.Context, result *InstallResult, state *InstallSt
 	if err != nil {
 		return fail(&InstallError{Stage: "verify", Code: "NATIVE_READBACK_FAILED", Recovery: fmt.Sprintf(failures.nativeReadbackFormat, err)})
 	}
+	// The verified release is also the seed of the NEXT upgrade's rollback
+	// source (11c-3 Task 4): a manifest-backed snapshot of everything this
+	// operation installed. The Agent's live LKG/state bytes are deliberately
+	// not part of this seed (they still belong to the previous release); the
+	// post-confirm RefreshUpgradeSource captures them. A co-located Line never
+	// owns the shared Hub runtime and has no Node upgrade path (11d owns the
+	// Hub), so it keeps its previous behavior instead of failing on a snapshot
+	// it cannot build.
+	if !layout.CoLocated {
+		if err := writeUpgradeSnapshot(opts.Root, layout, *state, installedCfg.Role, false); err != nil {
+			var ie *InstallError
+			if errors.As(err, &ie) {
+				return fail(ie)
+			}
+			return fail(&InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+				Recovery: "The verified release could not be recorded as the next upgrade's rollback source; check disk space and permissions."})
+		}
+	}
 	if err := record("verify", "data_plane_active", ""); err != nil {
 		return fail(failures.journalDataPlane)
 	}
