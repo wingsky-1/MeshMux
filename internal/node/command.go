@@ -296,6 +296,22 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
 	if err := decodeStrictJSON(cfgData, &cfg); err != nil {
 		return stableError("AGENT_CONFIG_UNAVAILABLE")
 	}
+	// The self-check reads the running executable before validating the
+	// recorded config: a crash between the Agent binary rename and the
+	// agent.json rename leaves the new binary running against the old
+	// agent.json, which must be recognized as the recoverable crash window
+	// rather than as a config failure (spec §4.8).
+	selfHash, err := sha256File("/proc/self/exe")
+	if err != nil {
+		return stableError("AGENT_EXECUTABLE_MISMATCH")
+	}
+	if selfHash != cfg.AgentSHA256 {
+		adopted, adoptErr := adoptCrashWindowClaim("/", cfg, selfHash)
+		if adoptErr != nil {
+			return adoptErr
+		}
+		cfg = adopted
+	}
 	if err := cfg.ValidateInstalled(); err != nil {
 		return stableError("AGENT_CONFIG_UNAVAILABLE")
 	}
@@ -310,8 +326,7 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
 	if err := identity.ValidateFor(cfg); err != nil {
 		return stableError("AGENT_IDENTITY_MISMATCH")
 	}
-	selfHash, err := sha256File("/proc/self/exe")
-	if err != nil || selfHash != cfg.AgentSHA256 {
+	if selfHash != cfg.AgentSHA256 {
 		return stableError("AGENT_EXECUTABLE_MISMATCH")
 	}
 	if err := verifyExecutableHash(SingBoxBinaryPath, cfg.KernelSHA256); err != nil {

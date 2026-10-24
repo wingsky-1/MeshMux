@@ -31,8 +31,10 @@ const (
 	// not reach a restart decision.
 	ResultPhaseInstalling = "installing"
 	// ResultPhaseInstalledAwaitingRestart means install succeeded and the unit
-	// restarted the Agent; whether the release is healthy is the chain's
-	// readback verdict, never this file's claim (spec §4.1).
+	// issued the Agent restart request. It is not proof that the restart
+	// happened, that the Agent came back, or that the target is running: the
+	// running version, the transient unit state and the chain's readback
+	// decide that (spec §4.1). The Agent never treats this phase as applied.
 	ResultPhaseInstalledAwaitingRestart = "installed-awaiting-restart"
 )
 
