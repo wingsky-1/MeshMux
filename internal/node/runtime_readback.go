@@ -58,6 +58,8 @@ func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string
 			return failedResult(result, "OUT_ACL_SOURCE_MISMATCH"), errors.New("OUT_ACL_SOURCE_MISMATCH")
 		}
 	}
+	// The live readback is the verdict. Everything after it is a side effect of
+	// that acceptance, never a second verdict (spec §4.6/§4.16).
 	readback, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, exp)
 	if err != nil {
 		return failedResult(result, errorCode(err)), err
@@ -74,6 +76,12 @@ func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string
 	// When the pair is still old and no outside writer is wired, the claim
 	// stays for the next install --repair; this never fails the readback.
 	r.settleHandoffClaim(ctx)
+	// The health-gated finalize is a SIDE EFFECT of this accepted readback, not
+	// a second verdict (spec §4.6): it advances a surviving marker to the
+	// readback step's frozen `verifying` phase, finishes it once the on-disk
+	// pair is proven, and confirms the rollback record so the older generation
+	// is released to GC. It never changes the healthy result.
+	r.finalizeUpgradeReadback(ctx, readback)
 	return result, nil
 }
 

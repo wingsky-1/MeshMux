@@ -62,25 +62,34 @@ type RuntimeOptions struct {
 	// convergence is deferred to the next install --repair; the Agent never
 	// writes /etc/meshmux/agent.json itself.
 	HandoffConvergence HandoffConvergenceWriter
+	// UpgradeConfirmation is the optional rollback-store seam of the finalize
+	// side effect (spec §4.6). The updater owns the private 0700 store and its
+	// N-1 GC, and this package cannot import it (the updater imports node), so
+	// the accepted readback calls this contract instead of reimplementing the
+	// record format. Nil means confirmation is unavailable: the readback still
+	// succeeds, the Agent logs UPDATE_CONFIRM_UNAVAILABLE, and the next
+	// readback retries.
+	UpgradeConfirmation UpgradeConfirmer
 }
 
 // Runtime executes the frozen task set against one installed node.
 type Runtime struct {
-	cfg                Config
-	identity           Identity
-	root               string
-	runner             CommandRunner
-	controller         Controller
-	httpClient         *http.Client
-	logger             *slog.Logger
-	pollInterval       time.Duration
-	lockTimeout        time.Duration
-	stageTargets       StageTargetSource
-	handoffConvergence HandoffConvergenceWriter
-	now                func() time.Time
-	procRoot           string
-	writeState         func(*runtimeState) error
-	enforceProcArgs    bool
+	cfg                 Config
+	identity            Identity
+	root                string
+	runner              CommandRunner
+	controller          Controller
+	httpClient          *http.Client
+	logger              *slog.Logger
+	pollInterval        time.Duration
+	lockTimeout         time.Duration
+	stageTargets        StageTargetSource
+	handoffConvergence  HandoffConvergenceWriter
+	upgradeConfirmation UpgradeConfirmer
+	now                 func() time.Time
+	procRoot            string
+	writeState          func(*runtimeState) error
+	enforceProcArgs     bool
 }
 
 // StageTarget is the release record the Hub stamped onto one pending
@@ -215,20 +224,21 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		opts.LockTimeout = agentLockTimeout
 	}
 	r := &Runtime{
-		cfg:                cfg,
-		identity:           identity,
-		root:               root,
-		runner:             opts.Runner,
-		controller:         opts.Controller,
-		httpClient:         opts.HTTPClient,
-		logger:             opts.Logger,
-		pollInterval:       defaultPollInterval(opts.PollInterval),
-		lockTimeout:        opts.LockTimeout,
-		stageTargets:       opts.StageTargets,
-		handoffConvergence: opts.HandoffConvergence,
-		now:                time.Now,
-		procRoot:           rooted(root, "/proc"),
-		enforceProcArgs:    root == "/",
+		cfg:                 cfg,
+		identity:            identity,
+		root:                root,
+		runner:              opts.Runner,
+		controller:          opts.Controller,
+		httpClient:          opts.HTTPClient,
+		logger:              opts.Logger,
+		pollInterval:        defaultPollInterval(opts.PollInterval),
+		lockTimeout:         opts.LockTimeout,
+		stageTargets:        opts.StageTargets,
+		handoffConvergence:  opts.HandoffConvergence,
+		upgradeConfirmation: opts.UpgradeConfirmation,
+		now:                 time.Now,
+		procRoot:            rooted(root, "/proc"),
+		enforceProcArgs:     root == "/",
 	}
 	r.writeState = r.persistState
 	if err := r.ensureLayout(); err != nil {
@@ -639,8 +649,7 @@ func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revisi
 	}
 	if pending && handoff.OperationID == task.OperationID {
 		if handoff.State == handoffFailed {
-			code := handoffFailureCode(handoff)
-			return failedResult(result, code), fmt.Errorf("%s: the update attempt already failed", code)
+			return r.handoffFailureReceipt(task.OperationID, handoff)
 		}
 		if r.handoffInFlight(handoff) {
 			// Redelivery while the install still runs: replay the same
@@ -653,9 +662,7 @@ func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revisi
 		if err = r.failUpgradeHandoff(handoff); err != nil {
 			return failedResult(result, errorCode(err)), err
 		}
-		code := handoffFailureCode(handoff)
-		return failedResult(result, code),
-			fmt.Errorf("%s: the update unit finished without installing the target", code)
+		return r.handoffFailureReceipt(task.OperationID, handoff)
 	}
 	if pending && handoff.State == handoffFailed {
 		// A previous chain's upgrade failed. This new chain owns the node now:
