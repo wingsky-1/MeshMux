@@ -81,8 +81,16 @@ func BuildConvergeArgv(operationID, expectedSHA256 string) ([]string, error) {
 // It uses node.Spawner, not node.CommandRunner, because the caller holds the
 // shared runtime lock: waiting for the helper (or the unit) would serialize the
 // Agent's poll cycle behind a lock-taking repair, which is exactly what the
-// Task-4 carry forbids. The 15s context the Agent wraps around this call is the
-// only guard.
+// Task-4 carry forbids.
+//
+// The spawn context is deliberately detached from the caller's. The Agent wraps
+// this call in a bounded context and cancels it on return
+// (runtime_handoff.requestHandoffConvergence), and Spawn is
+// exec.CommandContext + Start: handing the caller's context to it would SIGKILL
+// the systemd-run helper at that cancel, before it submitted the job, with no
+// error to log — convergence would silently never happen. The helper's lifetime
+// is the unit's own, not this call's, exactly as the updater's spawn is
+// detached in internal/node/runtime.go.
 type ConvergenceWriter struct {
 	// Spawner is the Agent's start-only process boundary. Production passes
 	// node.ExecRunner; tests pass a fixture that records the argv.
@@ -97,6 +105,12 @@ func NewConvergenceWriter() *ConvergenceWriter {
 // ConvergeHandoffConfig validates the claim again (the Agent validated it
 // before asking) and enqueues exactly one unit. A refusal here is returned to
 // the Agent, which logs it and keeps the claim; it never fails startup.
+//
+// The spawn runs on a context detached from the caller's cancellation: the call
+// returns, the caller's `defer cancel()` fires, and the systemd-run helper must
+// still be alive to submit its job. Nothing after the spawn waits on ctx, so no
+// cancellation bound is lost by detaching — the helper is short-lived (it
+// submits one transient unit) and systemd owns the unit's lifetime.
 func (w *ConvergenceWriter) ConvergeHandoffConfig(ctx context.Context, claim node.HandoffClaim) error {
 	if w == nil || w.Spawner == nil {
 		return errors.New("HANDOFF_CONVERGE_UNAVAILABLE")
@@ -105,7 +119,19 @@ func (w *ConvergenceWriter) ConvergeHandoffConfig(ctx context.Context, claim nod
 	if err != nil {
 		return err
 	}
-	if _, err := w.Spawner.Spawn(ctx, argv[0], argv[1:]...); err != nil {
+	return w.spawn(ctx, argv)
+}
+
+// spawn starts the fixed argv on a context detached from the caller's
+// cancellation. It is the one place the detach lives, so the rule is testable
+// with the real process boundary (see TestConvergeSpawnOutlivesCallerCancel):
+// a fake spawner cannot observe a SIGKILL that only exec.CommandContext
+// performs.
+func (w *ConvergenceWriter) spawn(ctx context.Context, argv []string) error {
+	if len(argv) < 1 {
+		return fail("HANDOFF_CONVERGE_START_FAILED", "the convergence argv is empty")
+	}
+	if _, err := w.Spawner.Spawn(context.WithoutCancel(ctx), argv[0], argv[1:]...); err != nil {
 		return fail("HANDOFF_CONVERGE_START_FAILED", "systemd did not accept the convergence unit; the claim is kept for the next repair")
 	}
 	return nil

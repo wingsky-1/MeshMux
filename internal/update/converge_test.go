@@ -11,9 +11,12 @@ package update
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
@@ -132,5 +135,118 @@ func TestConvergeWriterWithoutRunner(t *testing.T) {
 	}
 	if err := (&ConvergenceWriter{}).ConvergeHandoffConfig(context.Background(), node.HandoffClaim{}); err == nil {
 		t.Fatal("a writer without a spawner reported success")
+	}
+}
+
+// The real-process proof that the spawn outlives the caller's cancellation.
+//
+// The Agent calls the writer from a bounded context and cancels it as soon as
+// the call returns (`defer cancel()` in runtime_handoff.requestHandoffConvergence).
+// Spawn is exec.CommandContext + Start, so a writer that handed that context
+// down would SIGKILL the systemd-run helper at the cancel — after Start
+// succeeded, so Spawn returns nil, nothing is logged, and convergence silently
+// never happens. A fake spawner cannot observe that: only the real
+// exec.CommandContext performs the kill.
+//
+// The helper below is the test binary itself, told to write a marker file after
+// a delay. The test asserts the marker appears after the caller cancelled. The
+// control case spawns the same helper through the same ctx WITHOUT the detach
+// and asserts the marker does not appear, so the test is proven to have teeth.
+
+const (
+	convergeHelperEnv    = "MESHMUX_CONVERGE_HELPER"
+	convergeHelperMarker = "MESHMUX_CONVERGE_MARKER"
+	// convergeHelperDelay is long enough that the cancel in the control case
+	// always lands while the helper is still alive (it is issued microseconds
+	// after Start returns), and short enough to keep the suite quick.
+	convergeHelperDelay = 500 * time.Millisecond
+)
+
+// TestConvergeHelperProcess is the fixture child. Without the environment
+// marker it is skipped, so it never runs as an ordinary test.
+func TestConvergeHelperProcess(t *testing.T) {
+	if os.Getenv(convergeHelperEnv) != "1" {
+		t.Skip("fixture child process")
+	}
+	marker := os.Getenv(convergeHelperMarker)
+	if marker == "" {
+		t.Fatal("fixture child has no marker path")
+	}
+	time.Sleep(convergeHelperDelay)
+	if err := os.WriteFile(marker, []byte("submitted\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The real helper would have submitted its unit and exited; exiting is
+	// part of the contract (nothing waits for it).
+}
+
+func convergeHelperArgv(marker string) []string {
+	return []string{os.Args[0], "-test.run=^TestConvergeHelperProcess$", "-test.timeout=60s"}
+}
+
+// TestConvergeSpawnOutlivesCallerCancel is the High-defect regression: after the
+// caller cancels, the already-started helper still runs to completion.
+func TestConvergeSpawnOutlivesCallerCancel(t *testing.T) {
+	if os.Getenv(convergeHelperEnv) == "1" {
+		t.Skip("fixture child process")
+	}
+	marker := filepath.Join(t.TempDir(), "converged")
+	t.Setenv(convergeHelperMarker, marker)
+	t.Setenv(convergeHelperEnv, "1") // inherited by the child
+
+	// Mirror the Agent exactly: a bounded context, one call, then cancel.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	w := &ConvergenceWriter{Spawner: node.ExecRunner{}}
+	if err := w.spawn(ctx, convergeHelperArgv(marker)); err != nil {
+		cancel()
+		t.Fatalf("spawn: %v", err)
+	}
+	cancel() // the caller's defer cancel(), immediately after the return
+
+	waitForFile(t, marker, 10*time.Second, true, "the helper was killed by the caller's cancel")
+}
+
+// TestConvergeSpawnCancelControlKillsChild is the control that proves the
+// previous test detects the defect: the same helper, through the same real
+// boundary, but spawned on the caller's cancellable context (the pre-fix
+// behaviour). The child dies at cancel and never writes its marker.
+func TestConvergeSpawnCancelControlKillsChild(t *testing.T) {
+	if os.Getenv(convergeHelperEnv) == "1" {
+		t.Skip("fixture child process")
+	}
+	marker := filepath.Join(t.TempDir(), "converged")
+	t.Setenv(convergeHelperMarker, marker)
+	t.Setenv(convergeHelperEnv, "1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := node.ExecRunner{}
+	if _, err := runner.Spawn(ctx, convergeHelperArgv(marker)[0], convergeHelperArgv(marker)[1:]...); err != nil {
+		cancel()
+		t.Fatalf("spawn: %v", err)
+	}
+	cancel()
+	waitForFile(t, marker, convergeHelperDelay+2*time.Second, false, "the undetached spawn survived its caller's cancel")
+}
+
+// waitForFile polls for a marker file. When want is true it fails if the file
+// never appears; when false it fails if the file appears within the window.
+func waitForFile(t *testing.T, path string, window time.Duration, want bool, failure string) {
+	t.Helper()
+	deadline := time.Now().Add(window)
+	for {
+		_, err := os.Stat(path)
+		if err == nil {
+			if !want {
+				t.Fatalf("%s: %s", failure, path)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			if want {
+				t.Fatalf("%s: %v", failure, err)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

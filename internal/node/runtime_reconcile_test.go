@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -465,6 +467,52 @@ func TestInMemoryAdoptionKeepsClaimUntilConvergence(t *testing.T) {
 	if _, err := os.Lstat(rooted(root, upgradeHandoffPath)); !os.IsNotExist(err) {
 		t.Fatalf("converged marker survived: %v", err)
 	}
+}
+
+// TestRequestHandoffConvergenceCancelsOnReturn pins the premise of the
+// convergence-writer contract: the context handed to the writer is cancelled as
+// soon as the call returns (`defer cancel()`). Any writer that passes this
+// context to an exec.CommandContext spawn would SIGKILL its helper at that
+// moment, so the writer must detach (internal/update/converge.go). Pinned here
+// so a future change to this function cannot silently reintroduce the defect on
+// the writer side.
+func TestRequestHandoffConvergenceCancelsOnReturn(t *testing.T) {
+	writer := &cancelProbeWriter{}
+	runtime := &Runtime{
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handoffConvergence: writer,
+	}
+	runtime.requestHandoffConvergence(context.Background(),
+		HandoffClaim{OperationID: strings.Repeat("a", 32), NewSHA256: strings.Repeat("b", 64)})
+	if writer.calls != 1 {
+		t.Fatalf("writer calls = %d, want 1", writer.calls)
+	}
+	if writer.ctx == nil {
+		t.Fatal("the writer received no context")
+	}
+	// The deferred cancel has fired by now: this is exactly the moment the
+	// pre-fix code killed its systemd-run helper.
+	select {
+	case <-writer.ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the writer's context outlived the call; the detach rule would no longer be required")
+	}
+	if !errors.Is(writer.ctx.Err(), context.Canceled) {
+		t.Fatalf("ctx err = %v, want context.Canceled", writer.ctx.Err())
+	}
+}
+
+// cancelProbeWriter captures the context it was given so the test can observe
+// what happens to it after the call returns.
+type cancelProbeWriter struct {
+	calls int
+	ctx   context.Context
+}
+
+func (w *cancelProbeWriter) ConvergeHandoffConfig(ctx context.Context, _ HandoffClaim) error {
+	w.calls++
+	w.ctx = ctx
+	return nil
 }
 
 // TestBootConvergenceWriterReleasesRecords is the positive side: when the
