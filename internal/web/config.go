@@ -32,6 +32,12 @@ import (
 
 var artifactSHA256 = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+// installArtifactMaxBytes bounds both the configured CLI artifact and the
+// download response. The download streams in chunks (see
+// installArtifactDownload), so this limit is a correctness boundary rather than
+// a memory budget.
+const installArtifactMaxBytes = 128 << 20
+
 // InstallArtifact is the current same-origin CLI binary made available by the
 // private Web runtime. Path never enters HTTP responses or logs.
 type InstallArtifact struct {
@@ -128,7 +134,7 @@ func (c Config) Validate(uid int) error {
 			return errors.New("INSTALL_ARTIFACT_INVALID: unsupported architecture")
 		}
 		info, err := os.Lstat(a.Path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 1 || info.Size() > 128<<20 {
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 1 || info.Size() > installArtifactMaxBytes {
 			return errors.New("INSTALL_ARTIFACT_INVALID: require a regular executable of at most 128 MiB")
 		}
 	}

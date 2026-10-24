@@ -35,6 +35,8 @@ v2 候选携带的用户 UUID 与 REALITY 私钥属节点秘密：只经已认�
 
 发行制品版本固定并有 manifest 与 SHA-256；可信发布源、制品检验和 Host/Agent 升级操作必须绑定目标版本。下载失败、签名/哈希异常或运行状态与期望不符，禁止继续启动新配置；保留可回退版本。GitHub Actions 仅在受限工作流里发行，不在通用 PR 作业执行安装到生产主机。
 
+**同源 CLI 下载不把制品读进内存（#113 3-5）。** `/api/nodes/cli` 过去用 `io.ReadAll` 把最多 128 MiB 的制品整块读入，再在增长切片中复制，单个下载的峰值接近两倍文件大小且随并发线性叠加；Hub 常与 Line 同机，这条路径足以把管理面推进 OOM。现在改为固定 32 KiB 分块：先对打开的描述符按 `Stat` 得到的大小做一次流式 SHA-256 预检（不符仍在响应开始前返回 `503 INSTALL_ARTIFACT_CHANGED`），再 `Seek(0)` 用 `io.MultiWriter(响应, sha256)` 边发边算。第二遍摘要不符时字节已经在链路上，任何 handler 都无法收回，因此真正的强制点是安装器固定的 `sha256sum -c`；handler 记录 `INSTALL_ARTIFACT_CHANGED` 并 `panic(http.ErrAbortHandler)` 结束该响应，而不是让它以“成功”收尾。边界仍由 `Stat` 的 128 MiB 上限给出，`Stat` 之后追加的字节既不能延长响应也不能进入摘要。代价是每个下载读两次文件（本地顺序读，远小于一次网络传输），换来每下载恒定 32 KiB 缓冲。
+
 ## Node 安装与 runtime 边界
 
 Node 安装先执行配置校验和真实 preflight，再展示 plan；未通过精确确认或 `--yes`，不进入 apply。即使 `--yes` 也不能绕过 Debian 13、root 和失败检查。`--plan` 不消费 code、不调用安装事务、不写宿主。`--repair` 优先复用私有 identity，只有安装器明确要求 pairing 时才提示重新签发 code。

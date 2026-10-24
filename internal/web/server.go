@@ -233,7 +233,15 @@ func (s *Server) boundary(next http.Handler) http.Handler {
 		// router fallbacks use; the failure writer itself never inspects a path.
 		jsonBody := jsonNamespace(r.URL.Path)
 		defer func() {
-			if recover() != nil {
+			if recovered := recover(); recovered != nil {
+				// http.ErrAbortHandler is the documented way for a handler to
+				// abandon a response whose bytes already started, such as a
+				// streamed artifact that stopped matching its pinned digest.
+				// Re-panic it so net/http closes the connection instead of this
+				// writer appending a 500 to a body that promised its length.
+				if recovered == http.ErrAbortHandler {
+					panic(recovered)
+				}
 				s.failAs(w, r, 500, "INTERNAL_ERROR", "请求未完成。", "请凭操作编号检查服务日志。", jsonBody)
 			}
 		}()

@@ -414,6 +414,49 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "paired", "operation_id": operation(r)})
 }
 
+// The install artifact is served in fixed-size chunks, so one download holds a
+// single chunk plus the hash state instead of the whole file. The previous
+// io.ReadAll buffered up to 128 MiB per download, and its growing slice could
+// briefly hold close to twice that; memory here is flat in the artifact size and
+// grows only by the chunk per concurrent download.
+//
+// The file is read twice rather than buffered: the first pass verifies the
+// pinned digest before any byte or Content-Length is promised to the client, so
+// a changed artifact still gets its honest 503 refusal. The second pass sends
+// the file while hashing it again, so a file rewritten between the two passes
+// cannot be delivered as verified. Both passes share one chunk buffer.
+const installArtifactChunkBytes = 32 << 10
+
+// errInstallArtifactChanged separates "these bytes are not the pinned artifact"
+// from a read or write failure. It is never sent: the first pass turns it into a
+// 503 before the response starts, and the second pass aborts a response that has
+// already started.
+var errInstallArtifactChanged = errors.New("INSTALL_ARTIFACT_CHANGED")
+
+// copyArtifactVerified copies exactly size bytes from r to w and hashes the same
+// bytes in the same pass, in order. Memory is one chunk plus the hash state, so
+// it does not follow the artifact size. A read or write failure is returned
+// as-is, because the caller can no longer retract what was already sent; a copy
+// that ended early is io.ErrUnexpectedEOF, and only a complete copy whose digest
+// differs is errInstallArtifactChanged.
+//
+// Passing io.Discard as w runs the same verification without sending anything,
+// which is how the handler checks the pinned digest before it promises a body.
+func copyArtifactVerified(w io.Writer, r io.Reader, size int64, want string, chunk []byte) (int64, error) {
+	hasher := sha256.New()
+	written, err := io.CopyBuffer(io.MultiWriter(w, hasher), io.LimitReader(r, size), chunk)
+	if err != nil {
+		return written, err
+	}
+	if written != size {
+		return written, io.ErrUnexpectedEOF
+	}
+	if hex.EncodeToString(hasher.Sum(nil)) != want {
+		return written, errInstallArtifactChanged
+	}
+	return written, nil
+}
+
 func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request, _ session) {
 	artifact := s.cfg.InstallArtifact
 	if artifact == nil {
@@ -431,24 +474,45 @@ func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request,
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > 128<<20 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > installArtifactMaxBytes {
 		s.fail(w, r, 503, "INSTALL_ARTIFACT_INVALID", "安装制品大小或类型不安全。", "请重新安装匹配版本。")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(f, 128<<20+1))
-	if err != nil || int64(len(body)) != info.Size() || len(body) > 128<<20 {
+	// The size observed on the open descriptor bounds both passes: bytes
+	// appended after Stat can neither extend the response nor the digest input.
+	size := info.Size()
+	chunk := make([]byte, installArtifactChunkBytes)
+	if _, err := copyArtifactVerified(io.Discard, f, size, artifact.SHA256, chunk); err != nil {
+		if errors.Is(err, errInstallArtifactChanged) {
+			s.fail(w, r, 503, "INSTALL_ARTIFACT_CHANGED", "安装制品校验和不匹配。", "请重新安装匹配版本。")
+			return
+		}
 		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品读取不完整。", "请重新安装匹配版本。")
 		return
 	}
-	sum := sha256.Sum256(body)
-	if hex.EncodeToString(sum[:]) != artifact.SHA256 {
-		s.fail(w, r, 503, "INSTALL_ARTIFACT_CHANGED", "安装制品校验和不匹配。", "请重新安装匹配版本。")
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品暂时不可读。", "请检查服务安装文件。")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="meshmux"`)
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	_, _ = w.Write(body)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	if _, err := copyArtifactVerified(w, f, size, artifact.SHA256, chunk); err != nil {
+		if errors.Is(err, errInstallArtifactChanged) || errors.Is(err, io.ErrUnexpectedEOF) {
+			// A file rewritten between the two passes. The bytes are already on the
+			// wire, so no handler can take them back: the enforcement is the
+			// installer's fixed sha256sum -c, which rejects the file. Abort so a
+			// rewrite that also shortened the file cannot look like a complete
+			// download, and record INSTALL_ARTIFACT_CHANGED for the operator instead
+			// of letting the response end as if it were the pinned artifact.
+			s.event(r, "INSTALL_ARTIFACT_CHANGED")
+			panic(http.ErrAbortHandler)
+		}
+		// A read error or a client that stopped reading leaves the declared
+		// Content-Length unfilled. HTTP clients and the installer's fixed
+		// sha256sum both see a truncated download; there is no clean JSON status
+		// left once bytes are on the wire.
+	}
 }
 
 func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
