@@ -698,8 +698,9 @@ func TestMeshUnknownDeviceIs404(t *testing.T) {
 	}
 }
 
-// TestMeshRekeyWithdrawsOldKeyFirst proves a reissue never leaves two live
-// secrets: the previous issued key is revoked before the new one is minted.
+// TestMeshRekeyWithdrawsOldKey proves a reissue never leaves two live secrets:
+// the swap installs the new key and revokes the previous issued one in the same
+// transaction, so after the response exactly one row is live.
 func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, firstSecret := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")

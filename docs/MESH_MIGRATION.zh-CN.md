@@ -239,7 +239,7 @@ MeshMux 不能读取或修改外部控制面，因此不存在原子路由接管
 
 - **占用规则**：`pending`、`registered`、`revoking` 占用 NodeName；`expired`、`failed`、`revoked` 释放。`expired` 表示 Headscale 已确认节点消失；`failed` 表示从未有节点；`revoked` 表示删除已确认。`revoking` 只表示删除请求已记录，不能释放。注意 `failed` 的注销会先进入 `revoking` 并重新占用名字，因此要复用旧名应先收敛到 `revoked` 再创建同名设备；`expired` 重新入网会进入 `pending` 并重新占用名字，若名字已被其他设备占用则返回 `MESH_NODE_NAME_DUPLICATE`，不得静默换名。
 - **本地与远端两层检查**：MeshMux 唯一索引只覆盖自己的设备记录；Headscale 可能仍有未纳管或外部旧节点。迁移/换机必须同时检查 `nodes list`，不能只凭本地状态复用名字。
-- **“重签”**：只用于 `pending` 或 `expired` 设备。`pending` 撤销未消费 Key 后签发新 Key；`expired` 先 `expired → pending`（清除旧 Node ID 引用）再签发。每台设备同时只有一把 live Key，窗口 15 分钟，Key 只存 SHA-256；`consumed`/`expired`/`revoked` 均不可复用。
+- **“重签”**：只用于 `pending` 或 `expired` 设备。顺序固定为 validate → stage → apply → readback：先在内存里备好新 Key（proxy+mesh 还包括 Headscale pre-auth key 与渲染文档），再用一次事务安装新 Key、作废旧 live Key；`expired` 的 `expired → pending`（清除旧 Node ID 引用）与安装 Key 是同一事务，避免“已回到 pending 但没有可用 Key”。每台设备同时只有一把 live Key，窗口 15 分钟，Key 只存 SHA-256；`consumed`/`expired`/`revoked` 均不可复用。中途失败（Headscale 不可用、文档渲染失败、事务失败）不启用新 Key 也不作废旧 Key，旧 Key 仍然可用；已过窗口的旧 Key 由本次事务记为 `expired`，页面不会把它说成“已作废”。
 - **不是旧 tailnet 的 auth key**：MeshMux 的一次性入网 Key 与 Headscale pre-auth key 是不同层；9d 不复用 NAS 旧控制面的 auth key，也不把旧 NodeKey 写进任何配置或日志。真实 Headscale pre-auth key 由入网消费端点按固定适配器签发；该消费端点的实现仍属后续切片，本文不声称已存在。
 - **路由不随名字转移**：即使新设备得到与旧设备相同的 NodeName，它仍是新的 Node ID，必须重新批准路由；旧批准只属于旧节点。
 

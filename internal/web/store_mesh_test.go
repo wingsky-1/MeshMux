@@ -488,19 +488,45 @@ func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
 	}
 	// The explicit re-enrollment clears the observed reference and returns the
 	// device to pending, which is what "registration not proven yet" means.
-	reenrolled, err := s.reenrollMeshDevice(device.ID, now.Add(4*time.Minute))
+	// Re-enrollment installs the new key in the same transaction, so a status
+	// edge that produced no usable key is not representable.
+	key, _, err := mesh.NewEnrollmentKey(device.ID, now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply, err := s.applyMeshRekey(device.ID, key, now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !apply.Reenrolled {
+		t.Fatalf("expired device was not re-enrolled: %+v", apply)
+	}
+	reenrolled, err := s.getMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reenrolled.Status != mesh.StatusPending || reenrolled.HeadscaleNodeID != 0 {
 		t.Fatalf("re-enrollment wrong: %+v", reenrolled)
 	}
-	if _, _, err = s.issueMeshEnrollmentKey(device.ID, now.Add(5*time.Minute)); err != nil {
-		t.Fatalf("re-enrolled device refused a key: %v", err)
+	// The installed key is the one live row: a second issue would break the
+	// one-issued-key rule.
+	if _, _, err = s.issueMeshEnrollmentKey(device.ID, now.Add(5*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeKeyAlreadyActive) {
+		t.Fatalf("re-enrollment left room for a second live key: %v", err)
 	}
-	// Only expired is a legal re-enrollment source.
-	if _, err = s.reenrollMeshDevice(device.ID, now.Add(6*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
-		t.Fatalf("pending device re-enrolled: %v", err)
+	// Only pending or expired is a legal re-enrollment source: a revoked
+	// tombstone cannot be revived by a key swap.
+	if _, _, err = s.requestMeshDeviceRevocation(device.ID, "USER_DELETE", now.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.recordMeshObservation(device.ID, 0, now.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	revokedKey, _, err := mesh.NewEnrollmentKey(device.ID, now.Add(7*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.applyMeshRekey(device.ID, revokedKey, now.Add(7*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
+		t.Fatalf("revoked device accepted a key swap: %v", err)
 	}
 }
 
@@ -597,7 +623,12 @@ func TestMeshMissingDeviceRejected(t *testing.T) {
 	if _, err := s.renameMeshDevice(unknown, "other", now); err == nil || !hasErrorCode(err, codeMeshDeviceNotFound) {
 		t.Fatalf("unknown device rename: %v", err)
 	}
-	if _, err := s.reenrollMeshDevice(unknown, now); err == nil || !hasErrorCode(err, codeMeshDeviceNotFound) {
+	// The staged key has to name a real device before the swap writes anything.
+	unknownKey, _, err := mesh.NewEnrollmentKey(unknown, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.applyMeshRekey(unknown, unknownKey, now); err == nil || !hasErrorCode(err, codeMeshDeviceNotFound) {
 		t.Fatalf("unknown device reenroll: %v", err)
 	}
 	devices, err := s.listMeshDevices()

@@ -282,20 +282,35 @@ func (app *Server) meshCreate(w http.ResponseWriter, r *http.Request, sess sessi
 	app.renderMesh(w, r, sess, disclosure, message, "notice")
 }
 
-// meshRekey withdraws the live key of a pending device and mints a new one. An
-// expired device is moved back to pending first: re-enrollment is a fresh
-// attempt with no observed node, which is exactly the store's expired → pending
-// edge.
+// meshRekey mints a new one-time key for a pending or expired device and
+// withdraws the one it replaces. An expired device is moved back to pending by
+// the same write that installs the key: re-enrollment is a fresh attempt with no
+// observed node, which is exactly the store's expired → pending edge.
 //
-// The withdrawal happens before both the re-enrollment and the issue: the Hub
-// never holds two live enrollment secrets for one device, and a device is not
-// moved back to pending if its old key could not be withdrawn. A lapsed key is
-// left for the issue path to retire as expired, so the audit trail keeps the two
-// events apart.
+// The order is validate → stage → apply → readback, so a failure anywhere before
+// the last write leaves the device with the key and status it already had:
+//
+//  1. validate the recorded state and read the key history, with no write and no
+//     control-plane call;
+//  2. resolve the Headscale user and mint every secret in memory — the Hub key
+//     and, for proxy+mesh, the Headscale pre-auth key and the rendered document;
+//  3. install the staged key, withdraw the previous live one and, when needed,
+//     move expired → pending in one transaction, so the Hub never holds two live
+//     enrollment secrets for one device;
+//  4. re-read the key history and report that the old secret was withdrawn only
+//     after the committed row proves the new key is the live one.
+//
+// The previous order (withdraw first, mint second) turned a Headscale outage or
+// a failed render into a device with no usable key at all: the operator had
+// already lost the old secret and the new one was never produced. Staging first
+// keeps the old key valid until the replacement is known to exist, and the swap
+// is the single write that makes the new key live, so the two-live-key rule
+// still holds. A lapsed key is retired as expired by the swap, so the audit
+// trail keeps the two events apart.
 //
 // For a proxy+mesh device the same response also carries the device-scoped
 // sing-box configuration: the Headscale pre-auth key and the Hub-side key are
-// minted in one chain and neither is persisted as plaintext. Mesh-only and
+// staged in one chain and neither is persisted as plaintext. Mesh-only and
 // subnet-router devices keep the 9a behaviour and only refresh the Hub key.
 func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
@@ -309,30 +324,11 @@ func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess sessio
 		app.fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable, "当前状态不能签发一次性 Key。", "只有待注册或已过期设备可以重新签发。")
 		return
 	}
-	keys, err := app.store.listMeshEnrollmentKeys(deviceID)
-	if err != nil {
+	if _, err = app.store.listMeshEnrollmentKeys(deviceID); err != nil {
+		// A key history that cannot be read is a database failure, not an
+		// authorisation to write a key the swap might not be able to retire.
 		app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法读取 Key 记录。", "请检查数据库后重试。")
 		return
-	}
-	for _, key := range keys {
-		if key.State != mesh.KeyIssued || !now.Before(time.Unix(key.ExpiresAt, 0)) {
-			// Lapsed keys are retired by the issue path as expired; revoking one
-			// here would report an early withdrawal that did not happen.
-			continue
-		}
-		if _, err = app.store.revokeMeshEnrollmentKey(key.ID); err != nil {
-			app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法作废旧的一次性 Key。", "请刷新页面确认 Key 状态后重试。")
-			return
-		}
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
-	}
-	if record.Status == mesh.StatusExpired {
-		record, err = app.store.reenrollMeshDevice(deviceID, now)
-		if err != nil {
-			app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法让设备重新入网。", "请确认设备已过期且节点名未被占用。")
-			return
-		}
-		app.event(r, "MESH_DEVICE_REENROLLED")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), meshControlPlaneTimeout)
 	defer cancel()
@@ -341,23 +337,71 @@ func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess sessio
 		app.meshControlPlaneFail(w, r, err, codeMeshDeviceRekeyFailed, "无法确认 Headscale 用户。", "请检查 Headscale 服务后重试。")
 		return
 	}
-	disclosure, configNotice, err := app.meshCreateDisclosure(ctx, record, user, now)
+	stage, err := app.stageMeshRekey(ctx, record, user, now)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法签发新的一次性 Key。", "请确认设备仍为待注册状态。")
 		return
 	}
-	if disclosure.Config != "" {
+	apply, err := app.store.applyMeshRekey(deviceID, stage.Key, now)
+	if err != nil {
+		// The staged Headscale key was never handed out, so it is withdrawn
+		// instead of left live. This operation neither installed the new key nor
+		// retired the old one, which is what the page tells the operator; a
+		// node-name conflict is reported with its own domain code and means the
+		// device is still expired.
+		app.discardMeshRekeyStage(ctx, stage)
+		app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法启用新的一次性 Key。", "请刷新页面确认设备与 Key 状态后重试；本次操作未启用新 Key，设备与已有 Key 保持原状。")
+		return
+	}
+	if apply.Reenrolled {
+		app.event(r, "MESH_DEVICE_REENROLLED")
+	}
+	if apply.Lapsed > 0 {
+		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_EXPIRED")
+	}
+	if apply.Withdrawn > 0 {
+		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
+	}
+	// Readback: the page states that the old key is withdrawn only after the
+	// committed row proves the new key is the live one.
+	keys, err := app.store.listMeshEnrollmentKeys(deviceID)
+	if err != nil || !meshEnrollmentKeyLive(keys, stage.Key.ID, now) {
+		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REISSUED")
+		app.renderMesh(w, r, sess, stage.Disclosure,
+			"新 Key 已签发，但旧 Key 状态未能在本次读取中确认；请刷新页面核对 Key 列。", "error")
+		return
+	}
+	converted := ""
+	if apply.Withdrawn > 0 {
+		converted = "旧 Key 已作废，"
+	} else if apply.Lapsed > 0 {
+		converted = "过期的旧 Key 已归档，"
+	}
+	if stage.Disclosure.Config != "" {
 		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
 		app.event(r, "MESH_DEVICE_CONFIG_ISSUED")
-		app.renderMesh(w, r, sess, disclosure, "旧 Key 已作废，新配置与一次性 Key 只在本次响应中显示。", "notice")
+		app.renderMesh(w, r, sess, stage.Disclosure, converted+"新配置与一次性 Key 只在本次响应中显示。", "notice")
 		return
 	}
 	app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REISSUED")
-	message := "旧 Key 已作废，新 Key 只在本次响应中显示。"
-	if configNotice != "" {
-		message += " 设备配置未生成（" + configNotice + "）。"
+	message := converted + "新 Key 只在本次响应中显示。"
+	if stage.ConfigNotice != "" {
+		message += " 设备配置未生成（" + stage.ConfigNotice + "）。"
 	}
-	app.renderMesh(w, r, sess, disclosure, message, "notice")
+	app.renderMesh(w, r, sess, stage.Disclosure, message, "notice")
+}
+
+// meshEnrollmentKeyLive reports whether the named row is the live issued key of
+// its device at now. It is the readback of one swap: the swap's own committed
+// row, not a second opinion about the window.
+func meshEnrollmentKeyLive(keys []MeshEnrollmentKeyRecord, keyID string, now time.Time) bool {
+	for _, key := range keys {
+		if key.ID != keyID {
+			continue
+		}
+		return key.State == mesh.KeyIssued && now.Before(time.Unix(key.ExpiresAt, 0))
+	}
+	return false
 }
 
 // meshRouteApprove moves one declared prefix to approved in Headscale and

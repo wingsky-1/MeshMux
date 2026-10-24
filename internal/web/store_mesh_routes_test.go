@@ -639,7 +639,13 @@ func TestMeshRouteReenrollmentKeepsRoutesRevoked(t *testing.T) {
 	if _, err := s.recordMeshObservation(router.ID, 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.reenrollMeshDevice(router.ID, now.Add(2*time.Minute)); err != nil {
+	// Re-enrollment and the key swap are one write, so the route assertions run
+	// against the state that produced the usable key, not an empty intermediate.
+	key, _, err := mesh.NewEnrollmentKey(router.ID, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.applyMeshRekey(router.ID, key, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	routes, err := s.listMeshRoutes(router.ID)
