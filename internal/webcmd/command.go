@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -49,7 +50,17 @@ func Run(args []string) int {
 	}
 	app, err := web.New(c, logger)
 	if err != nil {
-		logger.Error("startup_failed", "error_code", "STARTUP_FAILED")
+		// Keep the stable code instead of collapsing every refusal into
+		// STARTUP_FAILED: an operator needs SCHEMA_TOO_NEW (and its backup
+		// record path) to choose the matching binary or restore. Only that one
+		// message is logged in full; every other failure stays code-only so no
+		// path, DSN or SQL text reaches the log.
+		code := startupErrorCode(err)
+		attrs := []any{"error_code", code}
+		if detail := startupErrorDetail(err, code); detail != "" {
+			attrs = append(attrs, "detail", detail)
+		}
+		logger.Error("startup_failed", attrs...)
 		return 1
 	}
 	defer app.Close()
@@ -86,6 +97,36 @@ func Run(args []string) int {
 	}
 	logger.Info("web_stopped", "stage", "shutdown", "error_code", "WEB_STOPPED")
 	return 0
+}
+
+// startupCodePattern is the stable error-code shape returned by the layers below
+// webcmd: an uppercase code such as SCHEMA_TOO_NEW or DATA_DIR_REQUIRED,
+// optionally followed by ": detail".
+var startupCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// startupErrorCode keeps the stable code of one startup refusal. A message
+// without that shape is still STARTUP_FAILED, so the log never echoes arbitrary
+// error text as if it were a code.
+func startupErrorCode(err error) string {
+	message := err.Error()
+	if i := strings.IndexByte(message, ':'); i > 0 {
+		message = message[:i]
+	}
+	if startupCodePattern.MatchString(message) {
+		return message
+	}
+	return "STARTUP_FAILED"
+}
+
+// startupErrorDetail exposes the one startup refusal whose full text is safe and
+// actionable: SCHEMA_TOO_NEW names the fixed database backup record (a private
+// path, never a secret) so the operator can restore the last good database. All
+// other messages stay out of the log; their stable code is enough.
+func startupErrorDetail(err error, code string) string {
+	if code == "SCHEMA_TOO_NEW" {
+		return err.Error()
+	}
+	return ""
 }
 
 // parseConfig turns the internal command line into the operator configuration.

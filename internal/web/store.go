@@ -98,6 +98,14 @@ func openStore(dir string) (*store, error) {
 			return nil, e
 		}
 	}
+	// The last-known-good row is written only after the migration transaction
+	// committed and the database was read back at the schema this binary owns.
+	// A database still inside a migration, or one that failed its file-mode
+	// readback, never claims to be last known good.
+	if err = s.confirmDatabaseVersion(time.Now()); err != nil {
+		s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -132,8 +140,11 @@ func (s *store) migrate() error {
 	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 9 {
-		return errors.New("SCHEMA_TOO_NEW: restore matching binary and database; do not downgrade in place")
+	// SCHEMA_TOO_NEW is about the storage schema only. The route policy
+	// contract (`policy_schema`, currently 8) is validated by the upgrade
+	// approval and never moves this ceiling (spec §4.13).
+	if version > databaseSchemaVersion {
+		return s.schemaTooNew(version)
 	}
 	if version == 0 {
 		_, err = tx.Exec(`
@@ -210,6 +221,12 @@ func (s *store) migrate() error {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 9
+	}
+	if version == 9 {
+		if err = migrateSchema10(tx); err != nil {
+			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+		}
+		version = 10
 	}
 	return tx.Commit()
 }

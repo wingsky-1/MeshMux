@@ -90,7 +90,13 @@ SSH 只读预检设计：先读取 sshd 生效配置和监听套接字（包括 
 
 Schema 由 `PRAGMA user_version` 管理，迁移整体事务提交，可重复启动。更高版本 schema 明确拒绝，失败迁移回滚。**不要删除或只复制运行中的 DB 主文件，WAL 中可能仍有已提交数据。**
 
-当前仅提供受控的离线恢复程序，Web 备份按钮未实现。以下是隔离环境操作说明，本 PR 不自动执行：
+**存储 schema 与策略 schema 是两个版本号（#11c-3）。** `PRAGMA user_version` 是 SQLite 文件自身的存储 schema（本构建拥有 `10`），只能由 store 迁移升级；`policy_schema` 是升级 manifest 声明的路由策略契约（当前 `8`），由升级批准与兼容门禁校验。`SCHEMA_TOO_NEW` 只表示数据库比当前二进制新：必须换回匹配的二进制或恢复已验证备份，不能靠修改 `policy_schema`、删除表或降级迁移绕过；反过来，更高 `policy_schema` 的发行会被批准门禁以 `UPGRADE_SCHEMA_INCOMPATIBLE` 拒绝，但不会把数据库标成“太新”。两者都是编译常量，没有新增持久配置值。
+
+`database_versions` 是单行 last-known-good 记录（`last_good_version`、`last_good_schema`、`confirmed_at`）。它只在 Web 打开数据库、迁移事务提交并回读 `user_version` 等于本构建 schema 之后写入；迁移事务本身不写确认行，失败迁移不会留下“上次很好”的假象。Hub 没有 Agent 的 `config.readback` 通道，这一启动时的 schema 回读就是 Hub 侧等价物；11d 的 Hub 健康回读消费该行。
+
+**`SCHEMA_TOO_NEW` 指向数据库备份记录，不指向新表。** Hub 数据库备份独立于节点回滚存储，固定位于 `<data-dir>/database-backup/`：`record.json`（0600 元数据，与节点备份记录共用冻结的 `update.BackupRecord` schema）与 `payload/`（0700 目录，内放 0600 的 `meshmux.db` 一致性副本；留待 11d 用 `VACUUM INTO` 写入并在恢复后做 `PRAGMA integrity_check`）。旧二进制只 `lstat` 记录是否存在，不解析未来 schema；错误直接给出该记录路径，并说明记录中的 `from_version` / `db_schema` 才是上次良好状态。启动失败日志保留稳定码 `SCHEMA_TOO_NEW` 并把该路径写入 `detail`（不含凭据、DSN 或 SQL 文本）；其他启动错误只记录稳定码。不可逆迁移的 Web 确认位 `irreversible_approved` 只存放在这份记录上；`POST /tasks/db-migration/approve` 是唯一写入路径（管理员会话 + 精确 Origin + CSRF + `operation_id`，只接受 `irreversible_confirm=1`，无 flag 绕过），本段不新增确认表，也不执行迁移或备份；实际的备份、恢复与 Hub 自升级属 11d。
+
+当前仅提供受控的离线恢复程序；Web 备份按钮与 Hub 自升级执行尚未实现。以下是隔离环境操作说明，本 PR 不自动执行：
 
 1. 停止 Web，确认所有该目录的写入者已退出。不要复制运行中的 db/wal/shm 组合快照。
 2. 以原服务用户、`umask 077`，用 SQLite 官方 CLI 的 `.backup` 生成一致性备份。该命令会读取源数据库及其 WAL。
