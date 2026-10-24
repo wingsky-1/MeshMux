@@ -34,7 +34,7 @@ templ AuthPage(setup bool, csrf string, dev bool, message string, op string) {
 			<section class="auth-story">
 				@Brand()
 				<div><p class="eyebrow">YOUR NETWORK. YOUR CONTROL.</p><h1>连接每一处。<br/><span>从这里开始。</span></h1><p class="lead">代理、私有组网与路由策略，<br/>一个清晰的管理入口。</p></div>
-				<p class="muted">开发预览 · Web 安全基座<br/>代理与 Mesh 功能尚未实现</p>
+				<p class="muted">开发预览 · Web 安全基座<br/>代理与 Mesh 状态：pending-verification</p>
 			</section>
 			<main class="auth-card">
 				<div class="pill">本地管理员</div>
@@ -102,7 +102,7 @@ templ Dashboard(p pageData) {
 							<article><div class="stat-label">代理节点 <span>◇</span></div><strong>0</strong><p>尚未纳管 Line / Out</p></article>
 							<article><div class="stat-label">订阅用户 <span>◎</span></div><strong>0</strong><p>尚未创建订阅</p></article>
 							<article><div class="stat-label">Mesh 设备 <span>⌘</span></div><strong>0</strong><p>尚未连接私有网络</p></article>
-							<article><div class="stat-label">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器尚未实现</p></article>
+							<article><div class="stat-label">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器 · pending-verification</p></article>
 						</section>
 						<div class="overview-grid">
 							<section class="panel network-panel"><div class="panel-heading"><h2>网络状态</h2><span class="badge">未部署</span></div><div class="empty-network"><span class="network-symbol" aria-hidden="true">◇</span><h3>你的网络，从第一个节点开始</h3><p>节点纳管将在后续阶段开放。<br/>当前没有连接任何代理或 Mesh 服务。</p><a href="/nodes">查看代理节点 <span aria-hidden="true">→</span></a></div></section>
@@ -140,7 +140,7 @@ templ Dashboard(p pageData) {
 									<dt>Fail2ban</dt>
 									<dd>候选配置 · 未验证主机状态</dd>
 								</dl>
-								<p class="hint">软件升级与 Web 备份功能尚未实现。</p>
+								<p class="hint">软件升级与 Web 备份 · pending-verification。</p>
 							</section>
 						</div>
 					} else if p.Path=="/tasks" || p.Path=="/logs" {
@@ -149,7 +149,7 @@ templ Dashboard(p pageData) {
 						<section class="panel"><div class="panel-heading"><h2>SSH 监听端口预检 · 示例</h2><span class="badge failure">模拟失败</span></div><dl class="details"><dt>operation_id</dt><dd><code>demo-ssh-preflight</code></dd><dt>阶段</dt><dd>validate · 只读预检设计</dd><dt>error_code</dt><dd><code>SSH_LISTENER_MISMATCH</code></dd><dt>原因</dt><dd>示例中 SSH 实际监听端口与 jail 覆盖不一致。</dd><dt>建议动作</dt><dd>在后续安装阶段对照 sshd 有效配置、监听套接字与 Fail2ban action 的端口，分别核对 IPv4 / IPv6。</dd></dl><p class="hint">本阶段不读取系统 SSH 配置，不执行命令、不启用 jail、不修改防火墙。真实任务与日志查询尚未实现。</p></section>
 					} else {
 						<p class="subtitle">{ p.Title }将在后续开发阶段开放。</p>
-						<section class="panel empty-page"><span class="network-symbol" aria-hidden="true">◇</span><h2>尚未实现</h2><p>当前仅提供 Web 安全基座。<br/>尚未纳管节点、生成订阅、连接 Headscale 或发布路由配置。</p><a href="/">返回概览 →</a></section>
+						<section class="panel empty-page"><span class="network-symbol" aria-hidden="true">◇</span><h2>pending-verification</h2><p>此入口尚无可用页面。<br/>状态以各功能页和任务记录为准。</p><a href="/">返回概览 →</a></section>
 					}
 					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer>
 				</main>
@@ -313,7 +313,7 @@ templ NodeActionPage(p pageData, nodeID string, configRevision int64, configSHA 
 }
 
 templ Status(checked string) {
-	<div id="web-status" aria-live="polite"><dl class="status-list"><div><dt><span class="dot"></span> Web 服务</dt><dd>运行中</dd></div><div><dt>代理服务</dt><dd class="muted">尚未实现</dd></div><div><dt>Mesh 网络</dt><dd class="muted">尚未实现</dd></div><div><dt>公网与协议验证</dt><dd class="muted">未验证</dd></div></dl><p class="hint">更新于 { checked }</p></div>
+	<div id="web-status" aria-live="polite"><dl class="status-list"><div><dt><span class="dot"></span> Web 服务</dt><dd>运行中</dd></div><div><dt>代理服务</dt><dd class="muted">unknown</dd></div><div><dt>Mesh 网络</dt><dd class="muted">unknown</dd></div><div><dt>公网与协议验证</dt><dd class="muted">pending-verification</dd></div></dl><p class="hint">更新于 { checked }</p></div>
 }
 
 templ ErrorPage(code string, message string, next string, op string) {

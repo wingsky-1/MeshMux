@@ -647,7 +647,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) status(w http.ResponseWriter, r *http.Request, _ session) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"web": "running", "proxy": "not_implemented", "mesh": "not_implemented", "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"web": "running", "proxy": "unknown", "mesh": "unknown", "operation_id": operation(r)})
 }
 func (s *Server) statusFragment(w http.ResponseWriter, r *http.Request, _ session) {
 	s.render(w, r, 200, Status(s.now().UTC().Format("15:04:05 UTC")))

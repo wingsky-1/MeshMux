@@ -120,7 +120,7 @@ sqlite3 /path/to/private-restored/meshmux.db \
 
 ## 日志和健康检查
 
-`GET /healthz` 仅返回本机 Web/数据库探针 `{"status":"ok"}`；DB 不可用返回 503，不包含版本、凭据或主机信息，Caddy 候选拒绝公网访问。登录后 `GET /api/status` 返回真实 Web 状态及明确的 `not_implemented` 业务状态。
+`GET /healthz` 仅返回本机 Web/数据库探针 `{"status":"ok"}`；DB 不可用返回 503，不包含版本、凭据或主机信息，Caddy 候选拒绝公网访问。登录后 `GET /api/status` 返回真实 Web 状态，代理与 Mesh 等未实测业务状态按 OBSERVABILITY 标为 `unknown` / `pending-verification`。
 
 响应带 `X-Operation-ID`。失败页面/JSON 包含 `operation_id`、`stage`、稳定 `error_code` 和下一步建议。常见错误包括 `AUTH_REQUIRED`、`SESSION_INVALID`、`CSRF_REJECTED`、`ORIGIN_REJECTED`、`HOST_REJECTED`、`FORM_INVALID`、`AUTH_FAILED`、`AUTH_RATE_LIMITED`、`DATABASE_UNAVAILABLE`。日志也记录初始化、登录、退出、改密完成事件；原始数据库/请求内容不会写入日志。启动期的本地配置/权限错误保留原因以便管理员定位，不包含凭据值。
 
