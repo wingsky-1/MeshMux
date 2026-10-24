@@ -5,8 +5,10 @@ package update
 // The Agent holds the shared runtime lock when it asks for convergence, so the
 // writer must SPAWN one transient unit and return — never run the /etc write
 // inside the Agent's process and never wait for a repair that would take the
-// same lock. The 15s context the Agent wraps around the call is the only guard.
-// These tests pin the fixed argv and prove the call returns without waiting.
+// same lock. The spawn itself is detached from the caller's cancellation: the
+// Agent's bounded context is cancelled as soon as the call returns, and the
+// systemd-run helper must outlive that to submit its job. These tests pin the
+// fixed argv, the detach and the return-without-waiting rule.
 
 import (
 	"context"
@@ -110,6 +112,46 @@ func TestConvergeWriterSpawnsWithoutWaiting(t *testing.T) {
 	}
 	if calls[0][0] != "/usr/bin/systemd-run" || !slices.Contains(calls[0], "--no-block") {
 		t.Fatalf("call = %q, want the fixed --no-block systemd-run", calls[0])
+	}
+}
+
+// TestConvergeHandoffConfigDetachesThroughThePublicEntry closes the coverage
+// seam: the real-process test calls spawn() directly, so a refactor that made
+// ConvergeHandoffConfig bypass spawn() and pass its own ctx to the Spawner would
+// still leave that test green. This one goes through the public entry and asserts
+// the context the spawner RECEIVED is not Done after the parent cancels — the
+// observable half of the detach, which a fake can see even though it cannot see
+// the SIGKILL.
+func TestConvergeHandoffConfigDetachesThroughThePublicEntry(t *testing.T) {
+	var got context.Context
+	var calls int
+	writer := &ConvergenceWriter{Spawner: spawnerFunc(
+		func(ctx context.Context, _ string, _ ...string) (int, error) {
+			calls++
+			got = ctx
+			return 4242, nil
+		})}
+	claim := node.HandoffClaim{OperationID: strings.Repeat("a", 32), NewSHA256: strings.Repeat("b", 64)}
+
+	parent, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := writer.ConvergeHandoffConfig(parent, claim); err != nil {
+		cancel()
+		t.Fatalf("ConvergeHandoffConfig: %v", err)
+	}
+	cancel()
+
+	if calls != 1 || got == nil {
+		t.Fatalf("spawner calls = %d, ctx nil = %v, want exactly one spawn", calls, got == nil)
+	}
+	// The caller's cancellation is what killed the pre-fix helper; the context
+	// the spawner saw must be unaffected by it.
+	select {
+	case <-got.Done():
+		t.Fatalf("the spawner received the caller's cancellable context (%v); ConvergeHandoffConfig bypassed the detach", got.Err())
+	case <-time.After(50 * time.Millisecond):
+	}
+	if parent.Err() == nil {
+		t.Fatal("the parent context was never cancelled; the test proves nothing")
 	}
 }
 
