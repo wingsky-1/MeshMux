@@ -5,11 +5,205 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
+
+// gateBackup prepares one verified rollback record for the precondition tests.
+func gateBackup(t *testing.T, spec BackupSpec) string {
+	t.Helper()
+	root := t.TempDir()
+	if _, err := WriteBackupRecord(root, spec); err != nil {
+		t.Fatalf("fixture rollback record: %v", err)
+	}
+	return root
+}
+
+// rewriteGateRecord changes a written record the way another writer (a revert
+// or a recovery step) legitimately could, without touching its payload.
+func rewriteGateRecord(t *testing.T, root, operationID string, mutate func(*BackupRecord)) {
+	t.Helper()
+	path := filepath.Join(root, operationID, backupRecordName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture record: %v", err)
+	}
+	var record BackupRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("decode fixture record: %v", err)
+	}
+	mutate(&record)
+	data, err = json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatalf("encode fixture record: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("rewrite fixture record: %v", err)
+	}
+}
+
+// TestCompatGateRequiresBackup pins the 11c-3 handoff precondition (spec §4.4,
+// §6): the handoff may proceed only when the record this operation just wrote
+// is staged, integrity-checked and actually holds files to restore. The stable
+// codes keep their meanings: a missing store/record, a damaged record or one
+// that holds nothing (UPDATE_BACKUP_CORRUPT), and another installed state
+// (UPDATE_BACKUP_MISMATCH).
+func TestCompatGateRequiresBackup(t *testing.T) {
+	t.Run("verified staged record passes", func(t *testing.T) {
+		spec := fixtureBackupSpec(t)
+		root := gateBackup(t, spec)
+		if err := requireVerifiedBackup(root, spec.OperationID, spec.FromVersion, spec.DBSchema, spec.PolicySchema); err != nil {
+			t.Fatalf("gate refused a verified staged record: %v", err)
+		}
+	})
+
+	t.Run("missing record", func(t *testing.T) {
+		spec := fixtureBackupSpec(t)
+		code := codeOf(requireVerifiedBackup(t.TempDir(), spec.OperationID, spec.FromVersion, spec.DBSchema, spec.PolicySchema))
+		if code != "UPDATE_BACKUP_MISSING" {
+			t.Fatalf("code = %q, want UPDATE_BACKUP_MISSING", code)
+		}
+	})
+
+	t.Run("corrupt payload", func(t *testing.T) {
+		spec := fixtureBackupSpec(t)
+		root := gateBackup(t, spec)
+		late := filepath.Join(root, spec.OperationID, backupPayloadDir, "late")
+		if err := os.WriteFile(late, []byte("late byte\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		code := codeOf(requireVerifiedBackup(root, spec.OperationID, spec.FromVersion, spec.DBSchema, spec.PolicySchema))
+		if code != "UPDATE_BACKUP_CORRUPT" {
+			t.Fatalf("code = %q, want UPDATE_BACKUP_CORRUPT", code)
+		}
+	})
+
+	t.Run("record without a payload", func(t *testing.T) {
+		spec := fixtureBackupSpec(t)
+		spec.SnapshotDir = ""
+		root := gateBackup(t, spec)
+		code := codeOf(requireVerifiedBackup(root, spec.OperationID, spec.FromVersion, spec.DBSchema, spec.PolicySchema))
+		if code != "UPDATE_BACKUP_CORRUPT" {
+			t.Fatalf("code = %q, want UPDATE_BACKUP_CORRUPT", code)
+		}
+	})
+
+	// A record left over by a failed or confirmed attempt of the same
+	// operation is present but is not the staged source this handoff wrote.
+	for _, state := range []string{BackupStateFailed, BackupStateConfirmed, "unknown"} {
+		t.Run("record state "+state, func(t *testing.T) {
+			spec := fixtureBackupSpec(t)
+			root := gateBackup(t, spec)
+			rewriteGateRecord(t, root, spec.OperationID, func(record *BackupRecord) { record.State = state })
+			code := codeOf(requireVerifiedBackup(root, spec.OperationID, spec.FromVersion, spec.DBSchema, spec.PolicySchema))
+			if code != "UPDATE_BACKUP_CORRUPT" {
+				t.Fatalf("code = %q, want UPDATE_BACKUP_CORRUPT", code)
+			}
+		})
+	}
+
+	t.Run("mismatched record", func(t *testing.T) {
+		spec := fixtureBackupSpec(t)
+		root := gateBackup(t, spec)
+		for _, tc := range []struct {
+			name   string
+			from   string
+			db     int64
+			policy int
+		}{
+			{"from version", "0.9.0", spec.DBSchema, spec.PolicySchema},
+			{"database schema", spec.FromVersion, spec.DBSchema + 1, spec.PolicySchema},
+			{"policy schema", spec.FromVersion, spec.DBSchema, spec.PolicySchema + 1},
+		} {
+			if code := codeOf(requireVerifiedBackup(root, spec.OperationID, tc.from, tc.db, tc.policy)); code != "UPDATE_BACKUP_MISMATCH" {
+				t.Fatalf("%s: code = %q, want UPDATE_BACKUP_MISMATCH", tc.name, code)
+			}
+		}
+	})
+}
+
+// TestCompatGateRequiresBackupAtRun is the end-to-end half: Run itself refuses
+// a handoff without a restorable backup, before the package fetch, the staging
+// write or the transient unit. Writer-level tests alone cannot catch a gate
+// that exists but is never called.
+func TestCompatGateRequiresBackupAtRun(t *testing.T) {
+	pkg := []byte("fixture package\n")
+	manifest := fixtureManifest(t, pkg, shaOf(pkg))
+
+	assertRefusedWithoutMutation := func(t *testing.T, cfg Config, want string) {
+		t.Helper()
+		runner := &fixtureRunner{}
+		result, err := Run(context.Background(), cfg, runner)
+		if code := codeOf(err); code != want {
+			t.Fatalf("code = %q, want %q (err %v)", code, want, err)
+		}
+		if !reflect.DeepEqual(result, Result{}) {
+			t.Fatalf("refusal reported progress: %+v", result)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("refusal executed %v", runner.calls)
+		}
+		if entries, readErr := os.ReadDir(cfg.WorkDir); readErr == nil && len(entries) != 0 {
+			t.Fatalf("refusal fetched or staged a package: %v", entries)
+		}
+	}
+
+	// The binding case: no installer snapshot at all. The refusal must happen
+	// before the record write, so no vacuous record can stand in for a backup.
+	t.Run("no backup source", func(t *testing.T) {
+		cfg := fixtureConfig(t, manifest)
+		cfg.BackupSource = nil
+		cfg.BackupRoot = filepath.Join(t.TempDir(), "upgrade-backups")
+		assertRefusedWithoutMutation(t, cfg, "UPDATE_BACKUP_MISSING")
+		if _, statErr := os.Lstat(cfg.BackupRoot); !os.IsNotExist(statErr) {
+			t.Fatalf("refusal manufactured a rollback record: %v", statErr)
+		}
+	})
+
+	t.Run("record without a payload", func(t *testing.T) {
+		cfg := fixtureConfig(t, manifest)
+		cfg.BackupRoot = t.TempDir()
+		if _, err := WriteBackupRecord(cfg.BackupRoot, BackupSpec{
+			OperationID: cfg.OperationID, FromVersion: cfg.CurrentVersion, TargetVersion: cfg.Target,
+			DBSchema: nodeDBSchema, PolicySchema: upgrade.PolicySchema,
+			ManifestSHA256: cfg.ManifestSHA256, PackageSHA256: shaOf(pkg),
+		}); err != nil {
+			t.Fatalf("fixture record: %v", err)
+		}
+		assertRefusedWithoutMutation(t, cfg, "UPDATE_BACKUP_CORRUPT")
+	})
+
+	t.Run("mismatched record", func(t *testing.T) {
+		cfg := fixtureConfig(t, manifest)
+		cfg.BackupRoot = t.TempDir()
+		spec := fixtureBackupSpec(t)
+		spec.OperationID = cfg.OperationID
+		spec.FromVersion = "0.9.0"
+		if _, err := WriteBackupRecord(cfg.BackupRoot, spec); err != nil {
+			t.Fatalf("fixture record: %v", err)
+		}
+		assertRefusedWithoutMutation(t, cfg, "UPDATE_BACKUP_MISMATCH")
+	})
+
+	t.Run("verified backup passes through", func(t *testing.T) {
+		cfg := fixtureConfig(t, manifest)
+		runner := &fixtureRunner{}
+		result, err := Run(context.Background(), cfg, runner)
+		if err != nil {
+			t.Fatalf("handoff: %v", err)
+		}
+		record, err := VerifyBackupRecord(cfg.backupRoot(), cfg.OperationID, cfg.CurrentVersion, nodeDBSchema, upgrade.PolicySchema)
+		if err != nil || record.State != BackupStateStaged || !record.RollbackComplete() {
+			t.Fatalf("record = %+v, err %v", record, err)
+		}
+		if len(runner.calls) != 1 || result.BackupPointer == "" {
+			t.Fatalf("calls = %q, result = %+v", runner.calls, result)
+		}
+	})
+}
 
 // TestRunStagesChangedMeshmuxdTable is the regression test for the target gate:
 // a genuine target manifest differs from the running build's pinned table (new

@@ -220,19 +220,21 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err := cfg.Space("/", requiredSpace); err != nil {
 		return Result{}, fail("UPDATE_NO_SPACE", "the handoff needs free space for the backup snapshot and the new package")
 	}
-	// The rollback source is copied and re-read before the package is fetched.
-	// The order is pinned (spec §4.2/§4.4): snapshot copy -> payload digest ->
-	// record -> verify -> fetch -> handoff. A refusal changes nothing on the
-	// installed system; only the private 0700/0600 rollback store may gain a
-	// copy. On a Node the installed package is the Agent binary, so both
-	// from_* anchors name the same recorded artifact (11d supplies the Hub's
-	// separate installer-ledger digest).
-	snapshot := ""
-	if cfg.BackupSource != nil {
-		snapshot, err = cfg.BackupSource()
-		if err != nil {
-			return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
-		}
+	// The rollback source is copied and re-verified before the package is
+	// fetched. The order is pinned (spec §4.4/§6): snapshot copy -> payload
+	// digest -> record -> requireVerifiedBackup -> fetch -> handoff. A refusal
+	// changes nothing on the installed system; only the private 0700/0600
+	// rollback store may gain a copy. Without an installer snapshot there is
+	// nothing to copy, so the handoff is refused before a record can claim a
+	// rollback source exists. On a Node the installed package is the Agent
+	// binary, so both from_* anchors name the same recorded artifact (11d
+	// supplies the Hub's separate installer-ledger digest).
+	if cfg.BackupSource == nil {
+		return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
+	}
+	snapshot, err := cfg.BackupSource()
+	if err != nil {
+		return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
 	}
 	recordPath, err := WriteBackupRecord(cfg.backupRoot(), BackupSpec{
 		OperationID: cfg.OperationID, FromVersion: cfg.CurrentVersion, TargetVersion: cfg.Target,
@@ -244,7 +246,7 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
-	if _, err := VerifyBackupRecord(cfg.backupRoot(), cfg.OperationID, cfg.CurrentVersion, nodeDBSchema, upgrade.PolicySchema); err != nil {
+	if err := requireVerifiedBackup(cfg.backupRoot(), cfg.OperationID, cfg.CurrentVersion, nodeDBSchema, upgrade.PolicySchema); err != nil {
 		return Result{}, err
 	}
 	path, err := fetchPackage(ctx, cfg.WorkDir, cfg.Target, c)
@@ -273,6 +275,31 @@ func compatGate(m upgrade.Manifest) error {
 		if (layer != "client" && layer != "server") || revision < 1 {
 			return fail("MANIFEST_POLICY_REVISION_INVALID", "only client/server revisions above zero are valid")
 		}
+	}
+	return nil
+}
+
+// requireVerifiedBackup is the 11c-3 handoff precondition (spec §4.4, §6). It
+// extends the 11c-1 compatGate family to the rollback contract: the record this
+// operation just wrote must name exactly the installed state, be staged, and
+// hold files a revert can restore. The pinned order is copy -> verify ->
+// handoff: VerifyBackupRecord re-reads the payload digest and its private modes
+// from disk, so the package is never fetched and the unit is never started
+// against an unverified rollback source. The function only reads; the copy it
+// verifies is the sole 0700 store write.
+func requireVerifiedBackup(root, operationID, fromVersion string, dbSchema int64, policySchema int) error {
+	record, err := VerifyBackupRecord(root, operationID, fromVersion, dbSchema, policySchema)
+	if err != nil {
+		return err
+	}
+	// A record that exists but cannot back a revert is corrupt as a rollback
+	// source. MISSING stays reserved for no record at all and MISMATCH for
+	// another installed state, so no fourth refusal code is introduced.
+	if record.State != BackupStateStaged {
+		return fail("UPDATE_BACKUP_CORRUPT", "the rollback record is not a staged handoff source")
+	}
+	if !record.RollbackComplete() {
+		return fail("UPDATE_BACKUP_CORRUPT", "the rollback record holds nothing to restore")
 	}
 	return nil
 }

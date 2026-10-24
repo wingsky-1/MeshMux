@@ -88,7 +88,10 @@ func fixtureConfig(t *testing.T, m upgrade.Manifest) Config {
 	return Config{Target: "1.0.1", ManifestSHA256: shaOf(pinned), OperationID: strings.Repeat("a", 32),
 		WorkDir: t.TempDir(), FetchManifest: func(context.Context) ([]byte, error) { return body, nil },
 		CurrentVersion: "1.0.0", Releases: []string{"1.0.0", "1.0.1"},
-		NodeConfig: fixtureInstalled, Space: func(string, uint64) error { return nil }}
+		NodeConfig: fixtureInstalled, Space: func(string, uint64) error { return nil },
+		// The handoff gate requires a restorable rollback source (11c-3 Task
+		// 2); the installer-provided snapshot is that source.
+		BackupSource: func() (string, error) { return fixtureBackupSource(t), nil }}
 }
 
 func TestRunRefusesInvalidArguments(t *testing.T) {
