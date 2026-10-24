@@ -74,6 +74,17 @@ func policyCountLabel(count int, fallback bool) string {
 	return fmt.Sprintf("%d 条", count)
 }
 
+// policyPreviewLabel marks the client layer as a rendered, gated preview. It
+// keeps the rule count and the default-intent marker, but never implies that
+// the layer is applied anywhere: no candidate and no subscription byte comes
+// from it in this release.
+func policyPreviewLabel(count int, fallback bool) string {
+	if fallback {
+		return fmt.Sprintf("默认预览 · 不改变订阅 · %d 条", count)
+	}
+	return fmt.Sprintf("预览 · 不改变订阅 · %d 条", count)
+}
+
 // policiesDraftView returns the static design sample the page renders until
 // the backend supplies the real snapshot. Sample copy uses example.invalid
 // and documentation ranges only.

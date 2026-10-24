@@ -141,14 +141,16 @@ func policyClientRows(policy compiler.ClientPolicy) []policyRuleView {
 			Match:  policyMatcherLabel(rule.Match),
 			Action: policyActionLabel(rule.Action),
 			Note:   policyRuleNote(rule),
-			State:  "启用",
+			// The client layer has no consumer in this release, so its rows
+			// read as preview instead of claiming they are in effect.
+			State: "预览",
 		})
 	}
 	return append(rows, policyRuleView{
 		Match:  "兜底（未命中任何规则）",
 		Action: policyActionLabel(policy.Default),
 		Note:   "客户端层兜底固定为 Line，规则停用后流量回到兜底而不是断网。",
-		State:  "启用",
+		State:  "预览",
 	})
 }
 

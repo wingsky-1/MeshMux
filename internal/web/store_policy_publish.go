@@ -79,7 +79,10 @@ type policyAssembly struct {
 	// resolved to the same bytes; nil when the Lines rendered different routes
 	// (for example a Line fallback next to a healthy Out), because one field
 	// cannot honestly stand for several fragments.
-	RouteFragment        []byte
+	RouteFragment []byte
+	// ClientDocument and MihomoDocument are the rendered preview documents of
+	// the client layer. They are gated as evidence and never stored: the
+	// client layer has no consumer in the standard subscription export.
 	ClientDocument       []byte
 	MihomoDocument       []byte
 	Targets              []publishTarget
@@ -184,9 +187,10 @@ func (s *store) assemblePolicyPublication(ctx context.Context, verifier publishV
 	}
 	// layer="" publishes the server layer plus any active client layer. The
 	// Line candidate is the only publication artifact the Hub stores; the
-	// client documents are rendered and gated as evidence because a client
-	// layer without its kernel check would be a publication the Hub cannot
-	// prove.
+	// client documents are rendered and gated as a preview because a client
+	// layer without its kernel check would be a claim the Hub cannot prove.
+	// They have no consumer: the standard subscription export is generated
+	// from lines and credentials only.
 	publishClient := request.Layer == "" || request.Layer == string(PolicyLayerClient)
 	publishServer := request.Layer == "" || request.Layer == string(PolicyLayerServer)
 	if request.Layer == "" {
@@ -229,7 +233,8 @@ func (s *store) assemblePolicyPublication(ctx context.Context, verifier publishV
 }
 
 // publishClientDocuments validates the active client revision and assembles
-// the sing-box and Mihomo documents the gate checks.
+// the sing-box and Mihomo preview documents the gate checks. The documents are
+// evidence only: nothing stores them and no download path reads them.
 func (s *store) publishClientDocuments() (int64, []byte, []byte, error) {
 	record, intent, err := s.activePolicyIntent(PolicyLayerClient)
 	if err != nil {
