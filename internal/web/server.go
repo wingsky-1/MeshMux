@@ -174,6 +174,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Get("/tasks", app.authenticated(app.tasksPage))
 	r.Get("/tasks/check", app.authenticated(app.tasksCheck))
 	r.Post("/tasks/approve", jsonAPI(app.mutation(app.tasksApprove, true)))
+	// The irreversible database migration confirmation (11c-3): it stores the
+	// explicit operator bit on the Hub database backup record consumed by 11d.
+	// It performs no migration and no database edit.
+	r.Post("/tasks/db-migration/approve", jsonAPI(app.mutation(app.tasksDatabaseMigrationApprove, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))

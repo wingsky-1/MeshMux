@@ -2,6 +2,7 @@ package install
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -161,10 +162,28 @@ func readStateAt(root, logicalPath string) (InstallState, bool, error) {
 		return state, false, errors.New("INSTALL_STATE_UNSAFE")
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(data, &state) != nil || state.Schema != 1 || state.OperationID == "" || state.Status == "" {
+	if err != nil || decodeStrictJSON(data, &state) != nil || state.Schema != 1 || state.OperationID == "" || state.Status == "" {
 		return state, false, errors.New("INSTALL_STATE_INVALID")
 	}
 	return state, true, nil
+}
+
+// decodeStrictJSON is the ledger reader shared by every fixed installer ledger
+// (#11c-3 spec §4.12). It matches the Agent state reader: an unknown field is a
+// fail-closed error, never silently dropped, and a second JSON document after
+// the object is refused. `state.Schema != 1` stays a separate refusal in the
+// caller, so a future ledger is never interpreted through today's fields.
+func decodeStrictJSON(data []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON")
+	}
+	return nil
 }
 
 func InstallHub(ctx context.Context, c Config, operationID string, repair bool, opts ApplyOptions) (InstallResult, error) {
