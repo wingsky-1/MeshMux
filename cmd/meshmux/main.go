@@ -38,6 +38,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update" {
 		os.Exit(runInternalUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-update-install" {
+		os.Exit(runInternalUpdateInstall(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-agent-version" {
 		os.Exit(runInternalAgentVersion(os.Args[2:], os.Stdout, os.Stderr))
 	}
@@ -63,6 +66,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	}
 	if len(args) > 0 && args[0] == "__internal-update" {
 		return runInternalUpdate(args[1:], stdin, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-update-install" {
+		return runInternalUpdateInstall(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "__internal-agent-version" {
 		return runInternalAgentVersion(args[1:], stdout, stderr)
@@ -122,6 +128,45 @@ func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	enc.SetIndent("", "  ")
 	if enc.Encode(result) != nil {
 		fmt.Fprintln(stderr, "UPDATE_RESULT_OUTPUT_FAILED")
+		return 1
+	}
+	return 0
+}
+
+// runInternalUpdateInstall is the transient unit's entry: the new package
+// installs itself, restarts the Agent and records its result. It mirrors
+// __internal-update: one fixed argv, no prompts and no public surface. The
+// transient unit always passes every flag; a missing --from-recorded-state is a
+// refusal, not an interactive fallback.
+func runInternalUpdateInstall(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-update-install", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var cfg update.Config
+	flags.StringVar(&cfg.Target, "target", "", "approved target version")
+	flags.StringVar(&cfg.ManifestSHA256, "manifest-sha256", "", "approved manifest SHA-256")
+	flags.StringVar(&cfg.PackageSHA256, "expected-sha256", "", "verified package SHA-256")
+	flags.StringVar(&cfg.OperationID, "operation-id", "", "operation ID")
+	fromRecordedState := flags.Bool("from-recorded-state", false, "reuse the recorded Node installation")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-update-install --target SEMVER --manifest-sha256 HEX --expected-sha256 HEX --operation-id HEX32 --from-recorded-state")
+		return 2
+	}
+	if !*fromRecordedState {
+		fmt.Fprintln(stderr, "UPDATE_INTERACTIVE_REFUSED: __internal-update-install requires --from-recorded-state")
+		return 3
+	}
+	cfg.WorkDir = update.DefaultWorkDir
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	result, err := update.RunInstall(ctx, cfg, node.ExecRunner{})
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(result)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		if result.ExitCode > 0 {
+			return result.ExitCode
+		}
 		return 1
 	}
 	return 0
