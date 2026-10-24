@@ -134,6 +134,13 @@ const (
 	upgradeRevertFailed           = "failed"
 	upgradeConfirmUnavailableCode = "UPDATE_CONFIRM_UNAVAILABLE"
 	upgradeConfirmFailedCode      = "UPDATE_CONFIRM_FAILED"
+
+	// upgradeRevertManualAction is the fixed-vocabulary operator hint carried in
+	// a failed-revert receipt. It names no path, host, secret or command: the
+	// detail is stored and rendered by the Hub, so it stays a stable phrase the
+	// UI can key on. The matching long-form guidance belongs in the operator
+	// docs, not in this field.
+	upgradeRevertManualAction = "inspect node and restore manually"
 )
 
 var (
@@ -847,12 +854,28 @@ func handoffFailureCode(handoff upgradeHandoff) string {
 // (spec §4.6). Implementations live where the store lives: the updater owns
 // upgrade-backups/<op>/record.json and update.GCBackups, while this package
 // cannot import it (the updater imports node). The Agent passes the exact
-// anchors its accepted readback proved, and the implementation MUST be
-// idempotent: it marks the operation's staged record confirmed (stamping
-// ConfirmedAt) and keeps N-1 confirmed generations. It MUST refuse a record
-// whose TargetVersion or PackageSHA256 differ from the arguments, and MUST NOT
-// resurrect a record already marked failed — a failed upgrade that was reverted
-// is not confirmed by a later readback of the release it was reverted to.
+// anchors its accepted readback proved.
+//
+// # Contract (11c-3 review ruling, binding for Task 4)
+//
+//  1. Idempotent: confirming an already-confirmed record is a no-op, and the
+//     N-1 GC (update.GCBackups(root, backupKeepConfirmed)) runs after the
+//     confirm write, never before it.
+//  2. It MUST refuse a record already marked failed. A failed upgrade that was
+//     reverted is not confirmed by a later readback of the release it was
+//     reverted to; confirming it would release the very pointer the revert
+//     depends on.
+//  3. It MUST verify the running binary against the record: agentSHA256 (the
+//     digest the accepted readback proved) must equal record.PackageSHA256,
+//     together with record.TargetVersion == targetVersion and
+//     record.State == staged. A mismatch is a refusal, never a rewrite.
+//  4. After a successful revert the implementation MUST clear the operation's
+//     stale <operation_id>.result.json, because that file is the Agent's
+//     confirmation anchor (upgradeConfirmationCandidate) and would otherwise
+//     outlive the attempt it describes.
+//
+// Task 4 MAY touch internal/node narrowly for the revert trigger call only; it
+// must not reshape the marker, the frozen 11c-2 result schema or this contract.
 type UpgradeConfirmer interface {
 	ConfirmVersion(ctx context.Context, operationID, targetVersion, agentSHA256 string) error
 }
@@ -1015,6 +1038,17 @@ func confirmationAnchorsMatch(result handoffResult, readback Readback) bool {
 // TASK_STATE_INVALID, which the Agent cannot resolve and would retry forever.
 // The revert outcome therefore travels in the detail, and the Hub keeps its
 // one-way state machine.
+//
+// # Ordering ruling for the Task 4 trigger (11c-3 review, binding)
+//
+// Task 4 may add the revert trigger here (a narrow internal/node touch is
+// allowed for that call only), but the revert must FINISH before this receipt is
+// returned: Execute caches and replays the first terminal result, so a revert
+// that lands asynchronously can never be reported. The trigger is therefore
+// spawn-and-await over a fixed argv (the transient revert unit), and only its
+// finished outcome — the <operation_id>.revert.json read below — decides the
+// receipt. A still-running revert is not a verdict: it must not be cached as
+// failed, or the chain would end while the change set is half restored.
 func (r *Runtime) handoffFailureReceipt(operationID string, handoff upgradeHandoff) (protocol.TaskResult, error) {
 	code := handoffFailureCode(handoff)
 	failed := protocol.TaskResult{OperationID: operationID, Status: "failed"}
@@ -1023,11 +1057,11 @@ func (r *Runtime) handoffFailureReceipt(operationID string, handoff upgradeHando
 		switch revert.Outcome {
 		case upgradeRevertRolledBack:
 			result := failedResult(failed, code)
-			result.Detail = revertDetail(upgradeRevertRolledBack, revert.FromVersion, "")
+			result.Detail = revertDetail(upgradeRevertRolledBack, revert.FromVersion, "", "")
 			return result, fmt.Errorf("%s: the update failed and the change set was restored to %s", code, revert.FromVersion)
 		case upgradeRevertFailed:
 			result := failedResult(failed, revert.ErrorCode)
-			result.Detail = revertDetail(upgradeRevertFailed, "", code)
+			result.Detail = revertDetail(upgradeRevertFailed, "", code, upgradeRevertManualAction)
 			return result, fmt.Errorf("%s: the revert did not restore the change set; manual action is required", revert.ErrorCode)
 		}
 	} else if err != nil {
@@ -1042,13 +1076,16 @@ func (r *Runtime) handoffFailureReceipt(operationID string, handoff upgradeHando
 // has a recorded revert outcome. It is metadata only: no path, no secret and no
 // claim of success. cause carries the attempt's stable code when the revert
 // itself failed, so the receipt names both the original failure and the failure
-// to undo it.
-func revertDetail(outcome, restoredVersion, cause string) string {
+// to undo it. action is a fixed-vocabulary operator hint: Execute discards the
+// returned error once a stable code is set, so the hint must live in the receipt
+// or it evaporates.
+func revertDetail(outcome, restoredVersion, cause, action string) string {
 	detail := struct {
 		Revert   string `json:"revert"`
 		Restored string `json:"restored,omitempty"`
 		Cause    string `json:"cause,omitempty"`
-	}{Revert: outcome, Restored: restoredVersion, Cause: cause}
+		Action   string `json:"action,omitempty"`
+	}{Revert: outcome, Restored: restoredVersion, Cause: cause, Action: action}
 	data, err := json.Marshal(detail)
 	if err != nil {
 		return ""

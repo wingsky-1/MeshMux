@@ -11,8 +11,11 @@ package node
 // write (the 11c-2 <operation_id>.result.json schema is left untouched).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,6 +245,73 @@ func TestNoConfirmOnMismatchedReadback(t *testing.T) {
 			t.Fatalf("an ordinary readback confirmed %+v", recorder.calls)
 		}
 	})
+
+	// A nil confirmer is the state until Task 4 wires the rollback store. The
+	// readback stays the verdict (healthy, legal, detail intact), no confirmation
+	// is attempted, and the missing side effect is reported as a stable log code
+	// instead of being silently skipped or turned into a failure.
+	t.Run("nil confirmer keeps the verdict", func(t *testing.T) {
+		root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
+		runtime := newConfirmRuntime(t, root, cfg, identity, runner,
+			&runtimeTestController{candidate: testCandidate(7)}, nil)
+		var log bytes.Buffer
+		runtime.logger = slog.New(slog.NewJSONHandler(&log, nil))
+		writeUpgradeResultFile(t, root, strings.Repeat("c", 32), cfg.AgentVersion,
+			cfg.AgentSHA256, handoffPhaseInstalledAwaitingRestart, 0)
+
+		readback := task(protocol.KindConfigReadback,
+			strings.Repeat("d", 32), strings.Repeat("e", 32), 11, 7)
+		result := runtime.Execute(context.Background(), readback)
+		if result.Status != "healthy" || result.ErrorCode != "" || result.Detail == "" {
+			t.Fatalf("readback without a confirmer = %+v, want the unchanged healthy verdict", result)
+		}
+		if err := protocol.ValidateTaskResult(result); err != nil {
+			t.Fatalf("readback receipt is not a legal result: %v", err)
+		}
+		if !strings.Contains(log.String(), upgradeConfirmUnavailableCode) {
+			t.Fatalf("missing confirmation was not reported: %s", log.String())
+		}
+		// The retry anchor survives: a nil confirmer is a deferred finalize, so
+		// the next accepted readback can still confirm once Task 4 wires it.
+		if _, ok, err := runtime.readHandoffResult(strings.Repeat("c", 32)); err != nil || !ok {
+			t.Fatalf("nil confirmer consumed the upgrade record: ok=%v err=%v", ok, err)
+		}
+	})
+
+	// A confirmer that fails must not flip an applied upgrade: the verdict stays
+	// healthy, the failure is logged with its stable code, and the record is left
+	// exactly as it was so the next accepted readback retries.
+	t.Run("confirmer error keeps the verdict", func(t *testing.T) {
+		root, cfg, identity, runner := createRuntimeFixture(t, RoleEdge, 7)
+		recorder := &confirmRecorder{err: errors.New("UPDATE_BACKUP_CORRUPT: the rollback record is not a private 0600 file")}
+		runtime := newConfirmRuntime(t, root, cfg, identity, runner,
+			&runtimeTestController{candidate: testCandidate(7)}, recorder)
+		var log bytes.Buffer
+		runtime.logger = slog.New(slog.NewJSONHandler(&log, nil))
+		operationID := strings.Repeat("c", 32)
+		writeUpgradeResultFile(t, root, operationID, cfg.AgentVersion,
+			cfg.AgentSHA256, handoffPhaseInstalledAwaitingRestart, 0)
+
+		readback := task(protocol.KindConfigReadback,
+			strings.Repeat("d", 32), strings.Repeat("e", 32), 11, 7)
+		result := runtime.Execute(context.Background(), readback)
+		if result.Status != "healthy" || result.ErrorCode != "" {
+			t.Fatalf("readback after a failed confirmation = %+v, want the unchanged healthy verdict", result)
+		}
+		if err := protocol.ValidateTaskResult(result); err != nil {
+			t.Fatalf("readback receipt is not a legal result: %v", err)
+		}
+		if len(recorder.calls) != 1 {
+			t.Fatalf("confirmation attempts = %+v, want exactly one", recorder.calls)
+		}
+		if !strings.Contains(log.String(), "UPDATE_BACKUP_CORRUPT") {
+			t.Fatalf("confirmation failure was not logged with its stable code: %s", log.String())
+		}
+		// No effect on the frozen install result: the retry anchor survives.
+		if _, ok, err := runtime.readHandoffResult(operationID); err != nil || !ok {
+			t.Fatalf("failed confirmation consumed the upgrade record: ok=%v err=%v", ok, err)
+		}
+	})
 }
 
 // TestRevertResultReporting pins the revert outcome contract Task 4's transient
@@ -284,7 +354,14 @@ func TestRevertResultReporting(t *testing.T) {
 		if err := protocol.ValidateTaskResult(result); err != nil {
 			t.Fatalf("revert receipt is not a legal result: %v", err)
 		}
-		if _, err := os.Lstat(rooted(runtime.root, stagedConfigPath(runtime.root, 10))); !os.IsNotExist(err) {
+		// stagedConfigPath already roots the path; double-rooting it would make
+		// this negative assertion vacuous (it would stat a path that can never
+		// exist). Guard the helper's shape, then assert the real path.
+		staged := stagedConfigPath(runtime.root, 10)
+		if !strings.HasPrefix(staged, runtime.root+string(os.PathSeparator)) {
+			t.Fatalf("staged config path %q is outside the fixture root %q", staged, runtime.root)
+		}
+		if _, err := os.Lstat(staged); !os.IsNotExist(err) {
 			t.Fatalf("a rolled-back attempt touched the data plane: %v", err)
 		}
 
@@ -306,6 +383,15 @@ func TestRevertResultReporting(t *testing.T) {
 		result := runtime.Execute(context.Background(), apply)
 		if result.Status != "failed" || result.ErrorCode != "CONFIG_CONFLICT" {
 			t.Fatalf("failed revert receipt = %+v, want the revert's stable code", result)
+		}
+		// The long-form error string is discarded by Execute once a stable code
+		// is set, so the operator hint must survive in the bounded detail.
+		if !strings.Contains(result.Detail, `"action":"`+upgradeRevertManualAction+`"`) ||
+			!strings.Contains(result.Detail, `"cause":"`+handoffIncompleteCode+`"`) {
+			t.Fatalf("failed revert detail = %q, want the fixed manual-action hint", result.Detail)
+		}
+		if len(result.Detail) > 512 || strings.Contains(result.Detail, runtime.root) {
+			t.Fatalf("failed revert detail is unbounded or leaks a path: %q", result.Detail)
 		}
 		if err := protocol.ValidateTaskResult(result); err != nil {
 			t.Fatalf("failed revert receipt is not a legal result: %v", err)
