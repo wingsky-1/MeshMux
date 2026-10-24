@@ -2,7 +2,6 @@ package update
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -47,19 +46,18 @@ func TestHandoffBacksUpBeforeMutating(t *testing.T) {
 	pkg := []byte("fixture package\n")
 	cfg := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
 	runner := &handoffRunner{}
-	var pointer backupPointer
+	var record BackupRecord
 	checked := false
 	runner.atExec = func() {
 		if checked {
 			return
 		}
 		checked = true
-		data, err := os.ReadFile(filepath.Join(cfg.WorkDir, "backup-"+cfg.Target+".json"))
+		var err error
+		record, err = VerifyBackupRecord(cfg.backupRoot(), cfg.OperationID, cfg.CurrentVersion,
+			nodeDBSchema, upgrade.PolicySchema)
 		if err != nil {
-			t.Fatalf("backup pointer missing before the transient unit: %v", err)
-		}
-		if err := json.Unmarshal(data, &pointer); err != nil {
-			t.Fatalf("backup pointer is not JSON: %v", err)
+			t.Fatalf("verified rollback record missing before the transient unit: %v", err)
 		}
 	}
 
@@ -71,10 +69,10 @@ func TestHandoffBacksUpBeforeMutating(t *testing.T) {
 	if len(runner.calls) != 1 || !slices.Equal(runner.calls[0], want) {
 		t.Fatalf("calls = %q, want exactly %q", runner.calls, want)
 	}
-	if pointer.OperationID != cfg.OperationID || pointer.FromVersion != cfg.CurrentVersion ||
-		pointer.Target != cfg.Target || pointer.ManifestSHA256 != cfg.ManifestSHA256 ||
-		pointer.PackageSHA256 != shaOf(pkg) {
-		t.Fatalf("pointer = %+v", pointer)
+	if record.OperationID != cfg.OperationID || record.FromVersion != cfg.CurrentVersion ||
+		record.TargetVersion != cfg.Target || record.ManifestSHA256 != cfg.ManifestSHA256 ||
+		record.PackageSHA256 != shaOf(pkg) || record.State != BackupStateStaged || !record.RollbackComplete() {
+		t.Fatalf("record = %+v", record)
 	}
 	if result.BackupPointer == "" || result.VerifiedPath != filepath.Join(cfg.WorkDir, "meshmuxd-"+cfg.Target+"-"+runtime.GOARCH) {
 		t.Fatalf("result = %+v", result)

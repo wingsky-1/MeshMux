@@ -134,6 +134,7 @@ const (
 	upgradeRevertFailed           = "failed"
 	upgradeConfirmUnavailableCode = "UPDATE_CONFIRM_UNAVAILABLE"
 	upgradeConfirmFailedCode      = "UPDATE_CONFIRM_FAILED"
+	upgradeRevertUnavailableCode  = "UPDATE_REVERT_UNAVAILABLE"
 
 	// upgradeRevertManualAction is the fixed-vocabulary operator hint carried in
 	// a failed-revert receipt. It names no path, host, secret or command: the
@@ -816,7 +817,7 @@ func upgradeQueuedReceipt(operationID, target string) protocol.TaskResult {
 // that chain ends honestly instead of applying the old release.
 // (receipt, false, nil) means no handoff governs this node and the step may run
 // normally.
-func (r *Runtime) handoffGate(operationID string) (protocol.TaskResult, bool, error) {
+func (r *Runtime) handoffGate(ctx context.Context, operationID string) (protocol.TaskResult, bool, error) {
 	result := protocol.TaskResult{OperationID: operationID, Status: "failed"}
 	handoff, pending, err := r.pendingUpgradeHandoff()
 	if err != nil {
@@ -839,7 +840,7 @@ func (r *Runtime) handoffGate(operationID string) (protocol.TaskResult, bool, er
 	if err := r.failUpgradeHandoff(handoff); err != nil {
 		return failedResult(result, errorCode(err)), true, err
 	}
-	receipt, receiptErr := r.handoffFailureReceipt(operationID, handoff)
+	receipt, receiptErr := r.handoffFailureReceipt(ctx, operationID, handoff)
 	return receipt, true, receiptErr
 }
 
@@ -886,6 +887,28 @@ type UpgradeConfirmer interface {
 // accepted readback instead of pretending the finalize happened.
 func WithUpgradeConfirmation(confirmer UpgradeConfirmer) RunOption {
 	return func(opts *RuntimeOptions) { opts.UpgradeConfirmation = confirmer }
+}
+
+// UpgradeReverter is the transient revert executor of a failed upgrade (spec
+// §4.7/§4.17, Task 4). The updater owns the fixed argv and the store, so the
+// Agent only awaits this contract:
+//
+//   - done=true means the revert has a finished verdict (or there is nothing
+//     to revert). The caller then reads <operation_id>.revert.json, exactly as
+//     Task 3 froze it.
+//   - done=false means the unit is still running. The caller MUST return a
+//     non-terminal receipt and must never cache a failed verdict: Execute
+//     replays the first terminal result, so an asynchronous revert could never
+//     be reported and the chain would end with a half-restored change set.
+type UpgradeReverter interface {
+	RevertOperation(ctx context.Context, operationID string) (done bool, err error)
+}
+
+// WithUpgradeRevert wires the transient revert executor. Nil keeps Task 3's
+// behaviour: the failed attempt reports the honest handoff failure and no
+// revert is attempted.
+func WithUpgradeRevert(reverter UpgradeReverter) RunOption {
+	return func(opts *RuntimeOptions) { opts.UpgradeRevert = reverter }
 }
 
 // finalizeUpgradeReadback is the ONLY finalize side effect (spec §4.6). It is
@@ -1049,9 +1072,23 @@ func confirmationAnchorsMatch(result handoffResult, readback Readback) bool {
 // finished outcome — the <operation_id>.revert.json read below — decides the
 // receipt. A still-running revert is not a verdict: it must not be cached as
 // failed, or the chain would end while the change set is half restored.
-func (r *Runtime) handoffFailureReceipt(operationID string, handoff upgradeHandoff) (protocol.TaskResult, error) {
+func (r *Runtime) handoffFailureReceipt(ctx context.Context, operationID string, handoff upgradeHandoff) (protocol.TaskResult, error) {
 	code := handoffFailureCode(handoff)
 	failed := protocol.TaskResult{OperationID: operationID, Status: "failed"}
+	// The revert must FINISH before this receipt is built: Execute caches and
+	// replays the first terminal result, so a revert that lands asynchronously
+	// could never be reported. A still-running unit is not a verdict — return
+	// the legal non-terminal receipt and let the next poll read the outcome.
+	if r.upgradeRevert != nil {
+		done, revertErr := r.upgradeRevert.RevertOperation(ctx, handoff.OperationID)
+		if revertErr != nil {
+			r.logger.WarnContext(ctx, "upgrade revert unavailable",
+				"operation_id", handoff.OperationID, "error_code", errorCodeOr(revertErr, upgradeRevertUnavailableCode))
+		}
+		if !done {
+			return protocol.TaskResult{OperationID: operationID, Status: "applying"}, nil
+		}
+	}
 	revert, ok, err := r.readUpgradeRevert(handoff.OperationID)
 	if err == nil && ok {
 		switch revert.Outcome {

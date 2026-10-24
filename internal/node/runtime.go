@@ -70,6 +70,11 @@ type RuntimeOptions struct {
 	// succeeds, the Agent logs UPDATE_CONFIRM_UNAVAILABLE, and the next
 	// readback retries.
 	UpgradeConfirmation UpgradeConfirmer
+	// UpgradeRevert is the optional transient revert executor (spec §4.7). A
+	// failed attempt must have finished reverting before its first terminal
+	// receipt is cached, so the Agent awaits this contract instead of spawning
+	// a fire-and-forget child. Nil keeps Task 3's honest handoff failure.
+	UpgradeRevert UpgradeReverter
 }
 
 // Runtime executes the frozen task set against one installed node.
@@ -86,6 +91,7 @@ type Runtime struct {
 	stageTargets        StageTargetSource
 	handoffConvergence  HandoffConvergenceWriter
 	upgradeConfirmation UpgradeConfirmer
+	upgradeRevert       UpgradeReverter
 	now                 func() time.Time
 	procRoot            string
 	writeState          func(*runtimeState) error
@@ -236,6 +242,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		stageTargets:        opts.StageTargets,
 		handoffConvergence:  opts.HandoffConvergence,
 		upgradeConfirmation: opts.UpgradeConfirmation,
+		upgradeRevert:       opts.UpgradeRevert,
 		now:                 time.Now,
 		procRoot:            rooted(root, "/proc"),
 		enforceProcArgs:     root == "/",
@@ -447,7 +454,7 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 	// an install is in flight an apply/readback must return its non-terminal
 	// receipt without waiting behind the lock the install/repair holds; the
 	// lock is only needed by work that would touch the data plane.
-	if gated, stop := r.preLockHandoffGate(task); stop {
+	if gated, stop := r.preLockHandoffGate(ctx, task); stop {
 		r.logger.InfoContext(withOperation(ctx, task.OperationID), "task stage",
 			"operation_id", task.OperationID, "stage", "handoff", "error_code", gated.ErrorCode)
 		return gated
@@ -512,7 +519,7 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 	gated := false
 	if task.Kind == protocol.KindConfigReadback ||
 		task.Kind == protocol.KindConfigApply && state.Journal == nil {
-		gateResult, stop, gateErr := r.handoffGate(task.OperationID)
+		gateResult, stop, gateErr := r.handoffGate(ctx, task.OperationID)
 		if stop {
 			result, executeErr, gated = gateResult, gateErr, true
 		}
@@ -582,7 +589,7 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 // replayed like every other final result. The cheap preconditions are the same
 // ones the locked path would check first, so a malformed, stale or already
 // answered task still gets its ordinary result.
-func (r *Runtime) preLockHandoffGate(task protocol.Task) (protocol.TaskResult, bool) {
+func (r *Runtime) preLockHandoffGate(ctx context.Context, task protocol.Task) (protocol.TaskResult, bool) {
 	if task.Kind != protocol.KindConfigApply && task.Kind != protocol.KindConfigReadback {
 		return protocol.TaskResult{}, false
 	}
@@ -608,7 +615,7 @@ func (r *Runtime) preLockHandoffGate(task protocol.Task) (protocol.TaskResult, b
 	if task.Kind == protocol.KindConfigApply && state.Journal != nil {
 		return protocol.TaskResult{}, false
 	}
-	result, stop, _ := r.handoffGate(task.OperationID)
+	result, stop, _ := r.handoffGate(ctx, task.OperationID)
 	if !stop || terminalTaskResult(result.Status) {
 		return protocol.TaskResult{}, false
 	}
@@ -628,10 +635,11 @@ func (r *Runtime) preLockHandoffGate(task protocol.Task) (protocol.TaskResult, b
 // Hub keeps the whole chain open: apply and readback are gated (see
 // handoffGate) and TASKS_IN_PROGRESS refuses a second approval.
 //
-// The update writes its own rollback pointer to WorkDir/backup-<target>.json
-// before it mutates anything (TestHandoffBacksUpBeforeMutating), so the pointer
-// exists regardless of how the handoff ends. The Agent never reads the child's
-// Result, so the receipt cannot carry it: 11c-3 must read that file.
+// The update writes its verified rollback record to
+// upgrade-backups/<operation_id>/record.json before it mutates anything
+// (TestHandoffBacksUpBeforeMutating), so the rollback source exists regardless
+// of how the handoff ends. The Agent never reads the child's Result; the
+// separate <operation_id>.revert.json is the revert outcome it reads.
 func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revision int64, allowed []string) (protocol.TaskResult, error) {
 	result := protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}
 	handoff, pending, err := r.pendingUpgradeHandoff()
@@ -649,7 +657,7 @@ func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revisi
 	}
 	if pending && handoff.OperationID == task.OperationID {
 		if handoff.State == handoffFailed {
-			return r.handoffFailureReceipt(task.OperationID, handoff)
+			return r.handoffFailureReceipt(ctx, task.OperationID, handoff)
 		}
 		if r.handoffInFlight(handoff) {
 			// Redelivery while the install still runs: replay the same
@@ -662,7 +670,7 @@ func (r *Runtime) stageOrHandOff(ctx context.Context, task protocol.Task, revisi
 		if err = r.failUpgradeHandoff(handoff); err != nil {
 			return failedResult(result, errorCode(err)), err
 		}
-		return r.handoffFailureReceipt(task.OperationID, handoff)
+		return r.handoffFailureReceipt(ctx, task.OperationID, handoff)
 	}
 	if pending && handoff.State == handoffFailed {
 		// A previous chain's upgrade failed. This new chain owns the node now:
@@ -840,7 +848,7 @@ func (r *Runtime) cycle(ctx context.Context) {
 			// announce progress: the "applying" pre-report implies the data plane
 			// is being changed. Execute still runs because it owns the gate
 			// receipt and persists a terminal gate failure.
-			if _, stop, _ := r.handoffGate(task.OperationID); stop {
+			if _, stop, _ := r.handoffGate(ctx, task.OperationID); stop {
 				result = r.Execute(withApplyAcknowledged(ctx), task)
 			} else {
 				if reportErr := r.controller.Report(ctx, protocol.TaskResult{

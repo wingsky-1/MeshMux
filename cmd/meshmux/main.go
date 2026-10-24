@@ -36,7 +36,10 @@ func main() {
 		// The convergence writer is process-local: it only enqueues one
 		// transient unit, so it never waits for a lock-taking repair while the
 		// Agent holds the runtime flock (Task 4 carry).
-		os.Exit(node.RunCommand(os.Args[2:], os.Stderr, node.WithHandoffConvergence(update.NewConvergenceWriter())))
+		os.Exit(node.RunCommand(os.Args[2:], os.Stderr,
+			node.WithHandoffConvergence(update.NewConvergenceWriter()),
+			node.WithUpgradeConfirmation(update.NewRollbackStore()),
+			node.WithUpgradeRevert(update.NewReverter())))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update" {
 		os.Exit(runInternalUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
@@ -46,6 +49,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update-converge" {
 		os.Exit(runInternalUpdateConverge(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-update-revert" {
+		os.Exit(runInternalUpdateRevert(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-agent-version" {
 		os.Exit(runInternalAgentVersion(os.Args[2:], os.Stdout, os.Stderr))
@@ -78,6 +84,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	}
 	if len(args) > 0 && args[0] == "__internal-update-converge" {
 		return runInternalUpdateConverge(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-update-revert" {
+		return runInternalUpdateRevert(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "__internal-agent-version" {
 		return runInternalAgentVersion(args[1:], stdout, stderr)
@@ -126,6 +135,16 @@ func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	}
 	cfg.WorkDir, cfg.FetchManifest = update.DefaultWorkDir, update.HubManifest
 	cfg.CurrentVersion = node.CurrentAgentVersion
+	cfg.BackupSource = func() (string, error) {
+		// The record must name what this host is running RIGHT NOW, including
+		// the Agent's live LKG bytes, so capture/refresh the durable snapshot
+		// at upgrade time. A snapshot that already describes the running release
+		// is left untouched.
+		if err := install.RefreshUpgradeSource("/"); err != nil {
+			return "", err
+		}
+		return install.ReadUpgradeSource("/")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	result, err := update.Run(ctx, cfg, node.ExecRunner{})
@@ -196,6 +215,33 @@ func runInternalUpdateConverge(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := install.ConvergeHandoffConfig("/", *operationID, *expectedSHA256); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// runInternalUpdateRevert is the transient revert unit's entry: the staged OLD
+// package restores the recorded change set and writes <operation_id>.revert.json.
+// One fixed argv, no prompts, no public surface.
+func runInternalUpdateRevert(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-update-revert", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var cfg update.Config
+	flags.StringVar(&cfg.OperationID, "operation-id", "", "operation ID")
+	flags.StringVar(&cfg.FromAgentSHA256, "expected-sha256", "", "verified old Agent SHA-256")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-update-revert --operation-id HEX32 --expected-sha256 HEX")
+		return 2
+	}
+	cfg.WorkDir = update.DefaultWorkDir
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	result, err := update.RunRevert(ctx, cfg, node.ExecRunner{})
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(result)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
