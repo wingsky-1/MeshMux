@@ -123,6 +123,15 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if !verifier.hasSingBoxDocument(`"outbound": "out"`) {
 		t.Fatal("the gated Line document does not carry the Out rule")
 	}
+	// The gated document must declare the tag its route names, or the kernel
+	// would resolve the AI rule against a missing egress. The Out itself is a
+	// block stub until the Out access path owns the real body.
+	if !verifier.hasSingBoxDocument(`"tag": "out"`) {
+		t.Fatal("the gated Line document does not declare the out outbound")
+	}
+	if !verifier.hasSingBoxDocument(`"type": "block"`) {
+		t.Fatal("the gated Line document does not carry the fail-closed block stub")
+	}
 
 	// State 3: the Out is unhealthy. The publication fails closed and stores
 	// nothing, and no kernel check runs on a document that must not exist.

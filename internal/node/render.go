@@ -35,6 +35,54 @@ type singBoxOutbound struct {
 	Tag  string `json:"tag"`
 }
 
+// Server document egress tags. compiler.RenderServerRoute maps ActionDirect to
+// "direct" and ActionOut to "out"; the candidate must declare every tag its
+// route names, or the kernel document would reference an egress it does not
+// carry.
+const (
+	singBoxDirectTag = "direct"
+	singBoxOutTag    = "out"
+	singBoxBlockTag  = "block"
+)
+
+// serverEgress is the set of egress tags one server route references.
+type serverEgress struct {
+	out   bool
+	block bool
+}
+
+// serverOutbounds renders the outbound set of one server document.
+//
+// A route that selects the Out renders the fail-closed trio:
+//
+//   - "direct" keeps the Line egress for every rule that does not select the
+//     Out;
+//   - "out" is the tag the route names. Until the Out access path owns the real
+//     outbound body (its endpoint and credential), it is declared as a block
+//     stub, so traffic the policy sends to the Out is refused instead of
+//     silently leaving from the Line address — the leak the fail-closed rule
+//     exists to prevent. An Out that is unavailable never reaches a published
+//     document (the Hub refuses it with OUT_OFFLINE_FAIL_CLOSED); the stub is
+//     what keeps a document published while the Out was healthy from silently
+//     turning into a Line egress if the binding disappears later;
+//   - "block" is the explicit never-route egress, so a document that refuses a
+//     matched flow names a tag it actually carries.
+//
+// Without an Out the document keeps the single "direct" outbound: a route-free
+// or direct-only candidate renders the frozen v1/v2 bytes, and a direct-only
+// Line does not grow an unused tag.
+func (e serverEgress) outbounds() []singBoxOutbound {
+	if !e.out && !e.block {
+		return []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
+	}
+	outbounds := []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
+	if e.out {
+		outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxOutTag})
+	}
+	outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxBlockTag})
+	return outbounds
+}
+
 // The v2 shapes are separate types on purpose: the frozen v1 document is
 // byte-for-byte immutable, so it can never inherit a new field or a changed
 // key order from the REALITY shape.
@@ -108,7 +156,12 @@ const vlessFlow = "xtls-rprx-vision"
 // A candidate that carries a route (a meshmux-node/v3 Line document) renders
 // that route too: the Hub resolved the Out contract before it stored the
 // fragment, and the Agent must apply exactly the published route instead of
-// silently compiling a route-free kernel config.
+// silently compiling a route-free kernel config. The outbound set follows the
+// route: "out" and "block" are declared whenever the route names them, and an
+// "out" body is a block stub until the Out access path owns the real endpoint
+// and credential. `sing-box check` accepts a route tag with no matching
+// outbound, so this renderer — not the kernel gate — is what keeps the document
+// complete.
 //
 // The Out binding is deliberately not re-derived here: resolving "is an Out
 // configured and healthy" needs Hub state the node does not have. A route that
@@ -134,12 +187,12 @@ func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	route, err := compileServerRoute(route, outConfigured)
+	route, egress, err := compileServerRoute(route, outConfigured)
 	if err != nil {
 		return nil, err
 	}
 	if c.Reality != nil {
-		return compileRealityCandidate(c, route)
+		return compileRealityCandidate(c, route, egress)
 	}
 	config := singBoxConfig{
 		Log: singBoxLog{Disabled: true},
@@ -150,7 +203,7 @@ func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([
 			ListenPort: c.VLESSPort,
 			Users:      []json.RawMessage{},
 		}},
-		Outbounds: []singBoxOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: egress.outbounds(),
 		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")
@@ -161,10 +214,19 @@ func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([
 }
 
 // compileServerRoute embeds the route fragment; empty renders no route block.
-// A fragment that selects "out" is refused unless an Out is configured.
-func compileServerRoute(fragment json.RawMessage, outConfigured bool) (json.RawMessage, error) {
+//
+// It returns the egress tags the fragment references, so the caller declares
+// exactly those outbounds. Two refusals happen here, before any bytes exist:
+//
+//   - a tag this renderer cannot declare is CANDIDATE_ROUTE_INVALID, because a
+//     published document that names an unknown egress would fail on the node
+//     instead of at the Hub;
+//   - an "out" reference while no Out is configured is OUT_BINDING_INVALID,
+//     never a silent rewrite to the Line.
+func compileServerRoute(fragment json.RawMessage, outConfigured bool) (json.RawMessage, serverEgress, error) {
+	var egress serverEgress
 	if len(fragment) == 0 {
-		return nil, nil
+		return nil, egress, nil
 	}
 	var route struct {
 		Rules []struct {
@@ -173,21 +235,33 @@ func compileServerRoute(fragment json.RawMessage, outConfigured bool) (json.RawM
 		Final string `json:"final"`
 	}
 	if err := json.Unmarshal(fragment, &route); err != nil {
-		return nil, errors.New("CANDIDATE_RENDER_FAILED")
+		return nil, egress, errors.New("CANDIDATE_RENDER_FAILED")
 	}
-	needsOut := route.Final == "out"
+	tags := make([]string, 0, len(route.Rules)+1)
+	tags = append(tags, route.Final)
 	for _, rule := range route.Rules {
-		needsOut = needsOut || rule.Outbound == "out"
+		tags = append(tags, rule.Outbound)
 	}
-	if needsOut && !outConfigured {
-		return nil, errors.New("OUT_BINDING_INVALID: the route references an Out that is not configured")
+	for _, tag := range tags {
+		switch tag {
+		case singBoxDirectTag:
+		case singBoxOutTag:
+			egress.out = true
+		case singBoxBlockTag:
+			egress.block = true
+		default:
+			return nil, egress, errors.New("CANDIDATE_ROUTE_INVALID: the route names an egress the candidate cannot render")
+		}
 	}
-	return fragment, nil
+	if egress.out && !outConfigured {
+		return nil, serverEgress{}, errors.New("OUT_BINDING_INVALID: the route references an Out that is not configured")
+	}
+	return fragment, egress, nil
 }
 
 // compileRealityCandidate renders the native edge inbound with the REALITY
 // listener and the real credential users.
-func compileRealityCandidate(c Candidate, route json.RawMessage) ([]byte, error) {
+func compileRealityCandidate(c Candidate, route json.RawMessage, egress serverEgress) ([]byte, error) {
 	config := singBoxConfigV2{
 		Log: singBoxLog{Disabled: true},
 		Inbounds: []singBoxInboundV2{{
@@ -210,7 +284,7 @@ func compileRealityCandidate(c Candidate, route json.RawMessage) ([]byte, error)
 			},
 			Users: renderUsers(c.Users),
 		}},
-		Outbounds: []singBoxOutbound{{Type: "direct", Tag: "direct"}},
+		Outbounds: egress.outbounds(),
 		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")

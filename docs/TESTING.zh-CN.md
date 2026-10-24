@@ -32,7 +32,7 @@
 | `MESHMUX_NODE_MESHMUX_BIN` | `internal/install/node_vm_test.go:82` | 被测 `meshmux` 可执行文件路径 | 本地 docker harness `scripts/ci-node-local.sh:113,122`；`hub-vm` 不设置，使用 guest 默认布局 | 默认 `/tmp/meshmux`（`:83-85`） |
 | `MESHMUX_NODE_FIXTURE_DIR` | `internal/install/node_ci_test.go:41` | 把 Node 候选、ACL、unit、jail 渲染到指定目录 | L2 / `hub-components` job `debian13`，step “Debian 13 Node component configuration checks (Issue #6 PR-B L2)”（`scripts/ci-node-components.sh:38` 设置） | 空值时 `TestWriteNodeComponentFixtures` `t.Skip`，普通单测不写文件 |
 | `MESHMUX_HUB_FIXTURE_DIR` | `internal/install/ci_test.go:57` | 把 Hub 候选配置渲染到指定目录 | L2 / `hub-components` job `debian13`，step “Debian 13 official component configuration checks”（`scripts/ci-hub-components.sh:51` 设置） | 空值时 `TestWriteComponentFixtures` `t.Skip` |
-| `MESHMUX_SINGBOX_TEST_BINARY` | `internal/subscription/export_integration_test.go:86`（常量 `envSingBoxBinary`，`:20`） | 真实 sing-box 客户端二进制，用于导入导出的订阅配置 | L2 / `subscription-clients` job `clients`（`scripts/ci-subscription-clients.sh:175` 设置） | 两个客户端变量都未设置时 `t.Skip`；只设置一个在 `:92-96` 致命失败；路径必须绝对且可执行 |
+| `MESHMUX_SINGBOX_TEST_BINARY` | `internal/subscription/export_integration_test.go:86`（常量 `envSingBoxBinary`，`:20`）、`internal/node/render_route_test.go:165`、`internal/node/publish_check_test.go:127`、`internal/web/publish_gate_kernel_test.go:29` | 真实 sing-box 二进制：订阅导入导出、Line 候选（有 Out/无 Out/block 三种路由）与发布门禁（存储的 Out 候选） | L2 / `subscription-clients` job `clients`（`scripts/ci-subscription-clients.sh:175` 设置）；L2 / `hub-components` job 的 REALITY step（`scripts/ci-node-reality.sh:235` 用同一个已校验内核设置） | 订阅检查在客户端变量都未设置时 `t.Skip`（只设一个在 `:92-96` 致命失败）；node/web 的真实 check 在空值时 `t.Skip`，REALITY step 里 `t.Skip` 视为失败；路径必须绝对且可执行 |
 | `MESHMUX_MIHOMO_TEST_BINARY` | `internal/subscription/export_integration_test.go:87`（常量 `envMihomoBinary`，`:21`） | 真实 mihomo 客户端二进制 | 同上（`scripts/ci-subscription-clients.sh:176` 设置） | 同上 |
 | `MESHMUX_REALITY_CHECK_BINARY` | `internal/node/reality_check_test.go:30` | 固定版本 sing-box，供 `TestRealityNativeCheck` 校验候选 REALITY 配置 | L2 / `hub-components` job，step “Debian 13 native REALITY acceptance fixture (Issue #7 first PR L2)”（`scripts/ci-node-reality.sh:197` 设置）；`hub-vm` profiles `edge`/`out`（`scripts/ci-node-vm.sh:191` 设置） | 空值时 `t.Skip`；非绝对路径、非常规文件或摘要不匹配时致命失败 |
 | `MESHMUX_REALITY_INTEGRATION_BINARY` | `internal/node/reality_integration_test.go:165`（常量 `realityIntegrationBinaryEnv`，`:75`） | 同上，供 `TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials` 做真实握手 | 同上（`scripts/ci-node-reality.sh:198`、`scripts/ci-node-vm.sh:192` 设置） | 空值时 `t.Skip`；摘要必须匹配 in-tree pin |
@@ -44,7 +44,7 @@
 | `MESHMUX_NODE_HUB_FIXTURE_ORIGIN_HOST` | `internal/web/node_fixture_test.go:172` | fixture 对外 Origin 主机名白名单 | 同上（`scripts/ci-node-vm.sh:210` 设为 `10.0.2.2`，走 QEMU slirp） | 空值默认 `127.0.0.1`（`:173-175`）；只接受 `127.0.0.1` 与 `10.0.2.2` |
 | `MESHMUX_NODE_HUB_FIXTURE_SSH_PORT` | `internal/web/node_fixture_test.go:235` | fixture 对外公布的 SSH 端口 | 同上（`scripts/ci-node-vm.sh:210`、`scripts/ci-node-local.sh:101` 设为 `22`） | 空值默认 `2222`（`:236-238`）；必须在 1–65535 且不等于 VLESS 端口 8443 |
 
-合计：26 个变量、26 处 `os.Getenv` 读取行（其中 5 个变量的读取调用以包级常量作参数，常量定义位置已列在读取点后）。
+合计：26 个变量；部分变量（如 `MESHMUX_SINGBOX_TEST_BINARY`）在多个测试包里各有一处读取点，其中 5 个变量的读取调用以包级常量作参数，常量定义位置已列在读取点后。
 
 ## 3. 仅由脚本自身读取的变量
 

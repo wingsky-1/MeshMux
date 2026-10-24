@@ -226,4 +226,44 @@ if ! grep -Fxq 'PASS' "${TEST_LOG}"; then
   fail "the test binary did not report an overall PASS"
 fi
 
-printf 'PASS: the pinned sing-box %s accepted the compiled candidate and served a real isolated VLESS/REALITY handshake.\n' "${PIN_VERSION}"
+# --- The Line candidate and the publish gate on the same pinned kernel ------
+# The rendered Line document is what the node runs and what the Hub gates, so
+# the same verified binary checks both: the candidate renderer with and without
+# an Out, and the publish gate over a stored Out-selecting candidate. Both tests
+# skip without MESHMUX_SINGBOX_TEST_BINARY, so the variable is set here and a
+# SKIP is treated as a failure.
+export MESHMUX_SINGBOX_TEST_BINARY="${SINGBOX_BIN}"
+WEB_TEST="${REPO_ROOT}/.ci/bin/web.test"
+if [[ ! -x "${WEB_TEST}" ]]; then
+  fail "prebuilt test binary not found or not executable: ${WEB_TEST}; the CI workflow must build it before running this script"
+fi
+
+run_route_gate() {
+  local suite_name="$1"
+  local suite_binary="$2"
+  local suite_pattern="$3"
+  local suite_log="${TASK_TEMP}/${suite_name}-route-gate.log"
+  local suite_status=0
+
+  set +e
+  "${suite_binary}" \
+    -test.run "${suite_pattern}" \
+    -test.v \
+    -test.timeout=5m 2>&1 | tee "${suite_log}"
+  suite_status="${PIPESTATUS[0]}"
+  set -e
+  if (( suite_status != 0 )); then
+    fail "the ${suite_name} route gate failed against the pinned kernel (exit status ${suite_status})"
+  fi
+  if ! grep -Eq -- '--- PASS: ' "${suite_log}"; then
+    fail "the ${suite_name} route gate reported no PASS"
+  fi
+  if grep -Eq -- '--- SKIP: ' "${suite_log}"; then
+    fail "the ${suite_name} route gate was skipped; SKIP is not accepted"
+  fi
+}
+
+run_route_gate node "${TEST_BINARY}" '^TestCompileCandidateRouteNativeCheck$'
+run_route_gate web "${WEB_TEST}" '^TestPublishGateRealKernelOutCandidate$'
+
+printf 'PASS: the pinned sing-box %s accepted the compiled candidate, the Out-selecting Line candidate and the publish gate, and served a real isolated VLESS/REALITY handshake.\n' "${PIN_VERSION}"
