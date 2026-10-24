@@ -20,6 +20,11 @@ const (
 	// RuntimeLockPath is shared by the Agent transaction writer and installer
 	// repair. It is never held for the lifetime of the Agent process.
 	RuntimeLockPath = "/var/lib/meshmux-agent/runtime.lock"
+	// agentLockTimeout bounds one poll cycle's wait for the shared runtime
+	// lock. It is well under the 30s poll interval, so a lock held by an
+	// install/repair costs one retry and never delays the next heartbeat
+	// (spec §4.9).
+	agentLockTimeout = 5 * time.Second
 )
 
 // CommandRunner is the fixed process boundary used by the Agent. Implementors
@@ -71,16 +76,21 @@ type runtimeLock struct {
 
 // AcquireRuntimeLock serializes dynamic Node writes across the Agent and
 // install --repair. Callers must close the returned lock after their
-// readback/apply/rollback transaction.
+// readback/apply/rollback transaction. The wait is bounded by ctx only: the
+// installer owns its own lock-wait policy (spec §4.9 / D7).
 func AcquireRuntimeLock(ctx context.Context, root string) (io.Closer, error) {
 	root, err := trustedRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	return acquireRuntimeLock(ctx, root, true)
+	return acquireRuntimeLock(ctx, root, true, 0)
 }
 
-func acquireRuntimeLock(ctx context.Context, root string, wait bool) (io.Closer, error) {
+// acquireRuntimeLock takes the shared lock. With wait=false a busy lock is
+// RUNTIME_BUSY at once; with wait=true it polls until ctx ends or, when timeout
+// is positive, until that bound expires (also RUNTIME_BUSY). The Agent passes
+// agentLockTimeout so a contended lock costs one poll cycle at most.
+func acquireRuntimeLock(ctx context.Context, root string, wait bool, timeout time.Duration) (io.Closer, error) {
 	path := rooted(root, RuntimeLockPath)
 	if err := ensureNoSymlinkAncestors(root, path); err != nil {
 		return nil, errors.New("RUNTIME_LOCK_UNSAFE")
@@ -102,19 +112,34 @@ func acquireRuntimeLock(ctx context.Context, root string, wait bool) (io.Closer,
 		file.Close()
 		return nil, errors.New("RUNTIME_LOCK_UNSAFE")
 	}
+	var deadline time.Time
+	if wait && timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
 	for {
 		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			return &runtimeLock{file: file}, nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) || !wait {
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			file.Close()
-			if errors.Is(err, syscall.EWOULDBLOCK) {
-				return nil, errors.New("RUNTIME_BUSY")
-			}
 			return nil, errors.New("RUNTIME_LOCK_FAILED")
 		}
-		timer := time.NewTimer(50 * time.Millisecond)
+		if !wait {
+			file.Close()
+			return nil, errors.New("RUNTIME_BUSY")
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			file.Close()
+			return nil, errors.New("RUNTIME_BUSY")
+		}
+		poll := 50 * time.Millisecond
+		if !deadline.IsZero() {
+			if remaining := time.Until(deadline); remaining < poll {
+				poll = remaining
+			}
+		}
+		timer := time.NewTimer(poll)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

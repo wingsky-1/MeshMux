@@ -50,6 +50,9 @@ type RuntimeOptions struct {
 	HTTPClient   *http.Client
 	Logger       *slog.Logger
 	PollInterval time.Duration
+	// LockTimeout bounds one poll-cycle wait for the shared runtime lock. Zero
+	// means agentLockTimeout (5s, spec §4.9); tests set a shorter bound.
+	LockTimeout time.Duration
 	// StageTargets reports the release the Hub stamped onto a pending
 	// config.stage row (#11b). It is optional: without it every stage row is an
 	// ordinary config stage, which is the pre-upgrade behaviour.
@@ -66,6 +69,7 @@ type Runtime struct {
 	httpClient      *http.Client
 	logger          *slog.Logger
 	pollInterval    time.Duration
+	lockTimeout     time.Duration
 	stageTargets    StageTargetSource
 	now             func() time.Time
 	procRoot        string
@@ -184,7 +188,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 	if release, ok := KernelReleaseFor(runtime.GOARCH); !ok || root == "/" && cfg.KernelSHA256 != release.BinarySHA256 {
 		return nil, errors.New("KERNEL_RELEASE_MISMATCH")
 	}
-	lock, err := acquireRuntimeLock(context.Background(), root, true)
+	lock, err := acquireRuntimeLock(context.Background(), root, true, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +205,9 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 20 * time.Second}
 	}
+	if opts.LockTimeout <= 0 {
+		opts.LockTimeout = agentLockTimeout
+	}
 	r := &Runtime{
 		cfg:             cfg,
 		identity:        identity,
@@ -210,6 +217,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		httpClient:      opts.HTTPClient,
 		logger:          opts.Logger,
 		pollInterval:    defaultPollInterval(opts.PollInterval),
+		lockTimeout:     opts.LockTimeout,
 		stageTargets:    opts.StageTargets,
 		now:             time.Now,
 		procRoot:        rooted(root, "/proc"),
@@ -411,7 +419,16 @@ func (s *runtimeState) trimAcknowledged() {
 
 // Execute validates and executes exactly one frozen task.
 func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.TaskResult {
-	lock, err := acquireRuntimeLock(ctx, r.root, true)
+	// The upgrade gate is answered before the runtime lock (spec §4.9). While
+	// an install is in flight an apply/readback must return its non-terminal
+	// receipt without waiting behind the lock the install/repair holds; the
+	// lock is only needed by work that would touch the data plane.
+	if gated, stop := r.preLockHandoffGate(task); stop {
+		r.logger.InfoContext(withOperation(ctx, task.OperationID), "task stage",
+			"operation_id", task.OperationID, "stage", "handoff", "error_code", gated.ErrorCode)
+		return gated
+	}
+	lock, err := acquireRuntimeLock(ctx, r.root, true, r.lockTimeout)
 	if err != nil {
 		return failedResult(protocol.TaskResult{OperationID: task.OperationID, Status: "failed"}, errorCode(err))
 	}
@@ -533,6 +550,45 @@ func (r *Runtime) Execute(ctx context.Context, task protocol.Task) protocol.Task
 	r.logger.InfoContext(taskContext, "task stage",
 		"operation_id", task.OperationID, "stage", "final", "error_code", result.ErrorCode)
 	return final
+}
+
+// preLockHandoffGate answers the upgrade gate without the runtime lock. Only a
+// non-terminal answer (the install is in flight) takes this early path; a
+// terminal gate answer falls through to the locked path so it is cached and
+// replayed like every other final result. The cheap preconditions are the same
+// ones the locked path would check first, so a malformed, stale or already
+// answered task still gets its ordinary result.
+func (r *Runtime) preLockHandoffGate(task protocol.Task) (protocol.TaskResult, bool) {
+	if task.Kind != protocol.KindConfigApply && task.Kind != protocol.KindConfigReadback {
+		return protocol.TaskResult{}, false
+	}
+	if err := protocol.ValidateTask(task); err != nil || task.NodeID != r.cfg.NodeID {
+		return protocol.TaskResult{}, false
+	}
+	revision, err := taskRevision(task)
+	if err != nil {
+		return protocol.TaskResult{}, false
+	}
+	state, err := r.loadStateForExecution()
+	if err != nil || revision <= state.LastTaskRevision {
+		return protocol.TaskResult{}, false
+	}
+	if _, ok := state.Idempotency[task.IdempotencyKey]; ok {
+		return protocol.TaskResult{}, false
+	}
+	for _, item := range state.Idempotency {
+		if item.OperationID == task.OperationID {
+			return protocol.TaskResult{}, false
+		}
+	}
+	if task.Kind == protocol.KindConfigApply && state.Journal != nil {
+		return protocol.TaskResult{}, false
+	}
+	result, stop, _ := r.handoffGate(task.OperationID)
+	if !stop || terminalTaskResult(result.Status) {
+		return protocol.TaskResult{}, false
+	}
+	return result, true
 }
 
 // stageOrHandOff runs the config.stage step of one task chain. A row stamped
@@ -760,6 +816,15 @@ func (r *Runtime) cycle(ctx context.Context) {
 			}
 		} else {
 			result = r.Execute(ctx, task)
+		}
+		if result.ErrorCode == "RUNTIME_BUSY" {
+			// The shared lock belongs to an install/repair. Reporting a failure
+			// would end the chain over a transient condition, so skip this
+			// cycle: the task is redelivered on the next poll, and this
+			// cycle's heartbeat already went out above (spec §4.9).
+			r.logger.WarnContext(ctx, "runtime busy; retry next poll",
+				"operation_id", task.OperationID, "error_code", "RUNTIME_BUSY")
+			return
 		}
 		if err := protocol.ValidateTaskResult(result); err != nil {
 			result = failedResult(result, "RESULT_INVALID")
