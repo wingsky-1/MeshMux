@@ -174,19 +174,6 @@ func NewMeshConfigModel(input MeshDeviceInput, policies ...MeshPolicy) (MeshConf
 	}, nil
 }
 
-// BuildMeshConfigModel is the descriptive alias of NewMeshConfigModel used by
-// callers that name the view-first step explicitly.
-func BuildMeshConfigModel(input MeshDeviceInput, policies ...MeshPolicy) (MeshConfigModel, error) {
-	return NewMeshConfigModel(input, policies...)
-}
-
-// ValidateMeshDevice checks the non-secret half of a mesh export without
-// requiring the one-shot auth key. The Web layer uses it before CreatePreAuthKey.
-func ValidateMeshDevice(input MeshDeviceInput, policies ...MeshPolicy) error {
-	_, err := NewMeshConfigModel(input, policies...)
-	return err
-}
-
 // ExportMeshDevice renders one deterministic sing-box 1.14.3 client document
 // for one proxy+mesh device. The output is byte-identical for the same input.
 //

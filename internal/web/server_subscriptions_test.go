@@ -540,7 +540,7 @@ func TestSubscriptionRejectsUnconfiguredLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, err := s.getLine(nodeID)
+	line, err := readStoredLine(t, s, nodeID)
 	if err != nil {
 		t.Fatal(err)
 	}

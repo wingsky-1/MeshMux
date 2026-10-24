@@ -87,7 +87,7 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 		"handshake_server": {"handshake.example.invalid"}, "handshake_port": {"443"},
 	})
 	require2xx(t, w)
-	line, err := app.store.getLine(node.ID)
+	line, err := readStoredLine(t, app.store, node.ID)
 	if err != nil {
 		t.Fatal("Line was not stored")
 	}

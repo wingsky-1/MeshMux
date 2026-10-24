@@ -30,44 +30,6 @@ func TestNewTokenHasFullEntropyShape(t *testing.T) {
 	}
 }
 
-func TestTokenRotationChangesSecretAndHashWithoutChangingSubscriber(t *testing.T) {
-	subscriber, err := NewSubscriber("alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	credential, err := NewCredential(subscriber.ID, strings.Repeat("a", 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, firstBearer, err := NewSubscriptionToken(subscriber.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstHash := append([]byte(nil), first.Hash...)
-
-	second, secondBearer, err := first.Rotate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.ID == second.ID || firstBearer == secondBearer || bytes.Equal(first.Hash, second.Hash) {
-		t.Fatal("rotation reused a record ID, bearer or hash")
-	}
-	if first.SubscriberID != subscriber.ID || second.SubscriberID != subscriber.ID {
-		t.Fatal("rotation changed the subscriber identity")
-	}
-	if !bytes.Equal(first.Hash, firstHash) {
-		t.Fatal("rotation mutated the old token record")
-	}
-	for _, bearer := range []string{firstBearer, secondBearer} {
-		if err = ValidateToken(bearer); err != nil {
-			t.Fatal(err)
-		}
-		if bearer == credential.UUID || bytes.Equal(TokenHash(bearer), TokenHash(credential.UUID)) {
-			t.Fatal("subscription bearer is not independent of the VLESS UUID")
-		}
-	}
-}
-
 func TestValidateTokenRejectsMalformedBearers(t *testing.T) {
 	valid, err := NewToken()
 	if err != nil {

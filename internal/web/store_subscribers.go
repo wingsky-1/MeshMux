@@ -435,37 +435,6 @@ func (s *store) revokeTokens(subscriberID string, now time.Time) error {
 	return nil
 }
 
-// resolveTokenSubscriber maps one plaintext bearer to its active subscriber.
-// A revoked token, a token of a non-active subscriber and an unknown token are
-// all rejected the same way so the endpoint cannot be enumerated.
-//
-// The token and the subscriber are read in one joined query, so a state change
-// cannot slip between two reads. Only a missing row is a uniform rejection;
-// every other failure is reported as a database failure.
-func (s *store) resolveTokenSubscriber(token string) (subscription.Subscriber, error) {
-	if err := subscription.ValidateToken(token); err != nil {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
-	sub, err := scanSubscriber(s.db.QueryRow(`SELECT s.id, s.display_name, s.state
-FROM subscription_tokens t JOIN subscribers s ON s.id = t.subscriber_id
-WHERE t.token_hash=? AND t.revoked=0`, subscription.TokenHash(token)))
-	if errors.Is(err, sql.ErrNoRows) {
-		// An unknown token, a revoked token and a token of a non-active
-		// subscriber are indistinguishable for the caller.
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
-	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	if sub.State != subscription.StateActive {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
-	if err := sub.Validate(); err != nil {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_CORRUPT: stored subscriber record is invalid")
-	}
-	return sub, nil
-}
-
 func (s *store) getSubscriber(id string) (subscription.Subscriber, error) {
 	if err := subscription.ValidateID(id); err != nil {
 		return subscription.Subscriber{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")

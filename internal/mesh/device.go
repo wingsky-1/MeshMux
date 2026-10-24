@@ -17,8 +17,6 @@ const (
 
 	// CodeDeviceIDInvalid: the mesh device record id is not canonical.
 	CodeDeviceIDInvalid = "MESH_DEVICE_ID_INVALID"
-	// CodeDeviceDuplicateID: the same device id appears twice in one history.
-	CodeDeviceDuplicateID = "MESH_DEVICE_DUPLICATE_ID"
 	// CodeDisplayNameInvalid: the display label is empty, too long or not
 	// printable. It is a label only and never an identity.
 	CodeDisplayNameInvalid = "MESH_DISPLAY_NAME_INVALID"
@@ -237,8 +235,8 @@ func TransitionAllowed(from, to Status) bool {
 // MeshDevice is one Headscale-side device identity. ID is MeshMux's immutable
 // record id; HeadscaleNodeID is the stable reference to the node Headscale
 // owns. DisplayName is a mutable label while NodeName is the MeshMux-assigned
-// name whose uniqueness must be enforced by the caller (see
-// ValidateNodeNameUniqueness).
+// name whose uniqueness the persistence layer must enforce while the status
+// occupies it.
 type MeshDevice struct {
 	ID              string
 	DisplayName     string
@@ -268,8 +266,8 @@ type DeviceSpec struct {
 // NewMeshDevice creates a pending device with a fresh random identity. It
 // validates the purpose×subscriber binding, the node name and the Headscale
 // user snapshot without performing any Headscale call. A caller that persists
-// the device must still enforce node-name uniqueness with
-// ValidateNodeNameUniqueness (and, in a later PR, a database constraint).
+// the device must still enforce node-name uniqueness while the status occupies
+// the name; the store's unique index expresses the same rule.
 func NewMeshDevice(spec DeviceSpec) (MeshDevice, error) {
 	displayName, err := subscription.NormalizeDisplayName(spec.DisplayName)
 	if err != nil {
@@ -347,14 +345,9 @@ func ValidateSubscriberBinding(purpose Purpose, subscriberID string) error {
 	return nil
 }
 
-// NodeNameKey is the uniqueness key: Headscale requires a node name to be
-// unique within one user, so devices of different users may share a name.
-func (d MeshDevice) NodeNameKey() string {
-	return d.HeadscaleUser + "/" + d.NodeName
-}
-
 // Validate checks the record without any I/O. It does not check uniqueness
-// against other devices; that is ValidateNodeNameUniqueness.
+// against other devices; the persistence layer enforces that while the status
+// occupies the name.
 func (d MeshDevice) Validate() error {
 	if err := subscription.ValidateID(d.ID); err != nil {
 		return failure(CodeDeviceIDInvalid, "need 32 lowercase hex characters")
@@ -401,8 +394,8 @@ func (d MeshDevice) Validate() error {
 // Re-enrollment (expired → pending) clears HeadscaleNodeID, because pending
 // means "no observed node is bound to this record's current attempt". The
 // caller keeps any earlier node reference in its own audit record. Because an
-// expired device releases its node name, a re-enrollment must re-check the name
-// with ValidateNodeNameUniqueness before it is persisted.
+// expired device releases its node name, a re-enrollment must re-check the
+// name against other devices before it is persisted.
 func (d MeshDevice) Transition(next Status) (MeshDevice, error) {
 	if err := next.Validate(); err != nil {
 		return d, err
@@ -503,34 +496,6 @@ func ValidateRevokeReason(reason string) error {
 		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' {
 			return failure(CodeRevokeReasonInvalid, detail)
 		}
-	}
-	return nil
-}
-
-// ValidateNodeNameUniqueness enforces the node-name rule over a device set: a
-// name is unique per Headscale user among devices that still occupy it
-// (pending, registered, revoking). Every record is validated too, so an
-// invalid device cannot enter the set unnoticed. The real guard is a unique
-// index in a later PR; this function is the single rule that index expresses.
-func ValidateNodeNameUniqueness(devices []MeshDevice) error {
-	ids := make(map[string]struct{}, len(devices))
-	names := make(map[string]struct{}, len(devices))
-	for _, device := range devices {
-		if err := device.Validate(); err != nil {
-			return err
-		}
-		if _, ok := ids[device.ID]; ok {
-			return failure(CodeDeviceDuplicateID, "each device id may appear once")
-		}
-		ids[device.ID] = struct{}{}
-		if !device.Status.OccupiesNodeName() {
-			continue
-		}
-		key := device.NodeNameKey()
-		if _, ok := names[key]; ok {
-			return failure(CodeNodeNameDuplicate, "node names must be unique per Headscale user while the name is occupied")
-		}
-		names[key] = struct{}{}
 	}
 	return nil
 }

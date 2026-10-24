@@ -571,7 +571,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	if len(credentials) == 0 {
 		t.Fatal("subscriber credentials disappeared with the mesh device")
 	}
-	if _, err = app.store.resolveTokenSubscriber(token); err != nil {
+	if _, err = resolveBearer(t, app.store, token); err != nil {
 		t.Fatalf("subscription token stopped working: %v", err)
 	}
 	// The sibling device of the same subscriber is untouched.
