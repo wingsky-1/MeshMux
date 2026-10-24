@@ -11,8 +11,10 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -112,9 +114,9 @@ func writeAgentConfigFile(t *testing.T, root string, cfg Config) {
 // crashWindowFixture stages the exact crash window of spec §4.8: the new Agent
 // binary is on disk, agent.json still names the old build, and the installer
 // left its claim record between the two renames.
-func crashWindowFixture(t *testing.T) (root string, oldCfg Config, selfHash, operationID string) {
+func crashWindowFixture(t *testing.T) (root string, oldCfg Config, selfHash, operationID string, identity Identity, base *runtimeTestRunner) {
 	t.Helper()
-	root, cfg, _, _ := createRuntimeFixture(t, RoleEdge, 9)
+	root, cfg, identity, base := createRuntimeFixture(t, RoleEdge, 9)
 	oldCfg = cfg
 	oldCfg.AgentVersion = "0.9.9"
 	oldCfg.AgentSHA256 = strings.Repeat("b", 64)
@@ -135,7 +137,7 @@ func crashWindowFixture(t *testing.T) (root string, oldCfg Config, selfHash, ope
 	writeRawHandoffFile(t, root, handoffMarker(operationID, CurrentAgentVersion,
 		handoffRunning, handoffPhaseInstalling, time.Now().Unix()))
 	writeClaimFile(t, root, selfHash, operationID)
-	return root, oldCfg, selfHash, operationID
+	return root, oldCfg, selfHash, operationID, identity, base
 }
 
 func readAgentConfigFile(t *testing.T, root string) Config {
@@ -152,12 +154,12 @@ func readAgentConfigFile(t *testing.T, root string) Config {
 }
 
 // TestCrashWindowClaimedOnBoot covers both directions of the crash-window
-// claim: a matching record plus the exact binary on disk is adopted (agent.json
-// is rewritten and startup may continue), while a missing or mismatching record
-// fails closed and never rewrites agent.json.
+// claim: a matching record plus the exact binary on disk is adopted in memory
+// (the Agent sandbox never writes agent.json; the claim stays for the outside
+// convergence writer), while a missing or mismatching record fails closed.
 func TestCrashWindowClaimedOnBoot(t *testing.T) {
-	t.Run("matching claim is adopted", func(t *testing.T) {
-		root, oldCfg, selfHash, operationID := crashWindowFixture(t)
+	t.Run("matching claim is adopted in memory", func(t *testing.T) {
+		root, oldCfg, selfHash, operationID, _, _ := crashWindowFixture(t)
 		adopted, err := adoptCrashWindowClaim(root, oldCfg, selfHash)
 		if err != nil {
 			t.Fatal(err)
@@ -168,12 +170,14 @@ func TestCrashWindowClaimedOnBoot(t *testing.T) {
 		if err := adopted.ValidateInstalled(); err != nil {
 			t.Fatalf("adopted config does not validate: %v", err)
 		}
+		// The Agent never writes /etc: the on-disk config still names the old
+		// build and the claim remains for the outside convergence writer.
 		onDisk := readAgentConfigFile(t, root)
-		if onDisk.AgentSHA256 != selfHash || onDisk.AgentVersion != CurrentAgentVersion {
-			t.Fatalf("agent.json was not rewritten: %+v", onDisk)
+		if onDisk.AgentSHA256 != oldCfg.AgentSHA256 || onDisk.AgentVersion != oldCfg.AgentVersion {
+			t.Fatalf("adoption rewrote agent.json from the Agent sandbox: %+v", onDisk)
 		}
-		if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); !os.IsNotExist(err) {
-			t.Fatalf("claim record survived adoption: %v", err)
+		if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); err != nil {
+			t.Fatalf("claim record was dropped on in-memory adoption: %v", err)
 		}
 		marker, ok, err := readUpgradeHandoffFile(root)
 		if err != nil || !ok || marker.OperationID != operationID {
@@ -198,15 +202,16 @@ func TestCrashWindowClaimedOnBoot(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root, oldCfg, selfHash, operationID := crashWindowFixture(t)
+			root, oldCfg, selfHash, operationID, _, _ := crashWindowFixture(t)
 			before, err := os.ReadFile(rooted(root, AgentConfigPath))
 			if err != nil {
 				t.Fatal(err)
 			}
 			tc.change(t, root, selfHash, operationID)
 			if _, err := adoptCrashWindowClaim(root, oldCfg, selfHash); err == nil ||
+				!errors.Is(err, stableError("AGENT_EXECUTABLE_MISMATCH")) ||
 				errorCode(err) != "AGENT_EXECUTABLE_MISMATCH" {
-				t.Fatalf("mismatch = %v, want AGENT_EXECUTABLE_MISMATCH", err)
+				t.Fatalf("mismatch = %v, want a mappable AGENT_EXECUTABLE_MISMATCH", err)
 			}
 			after, err := os.ReadFile(rooted(root, AgentConfigPath))
 			if err != nil {
@@ -355,4 +360,169 @@ func TestInstalledAwaitingRestartIsNotRestartProof(t *testing.T) {
 		marker.ErrorCode != "UPDATE_HANDOFF_INCOMPLETE" {
 		t.Fatalf("failed marker = %+v, %v, %v", marker, ok, err)
 	}
+}
+
+// TestActiveOldUnitStaysInFlight pins the orphan-rule intent explicitly: the
+// 30-minute bound fails an OWNERLESS attempt. A transient unit that is still
+// active owns the attempt, so the gate keeps reporting "applying" even after
+// the age bound instead of failing the chain under a live install.
+func TestActiveOldUnitStaysInFlight(t *testing.T) {
+	root, cfg, identity, base := createRuntimeFixture(t, RoleEdge, 9)
+	runner := &handoffRunner{runtimeTestRunner: base, unitState: "active"}
+	operationID := strings.Repeat("c", 32)
+	writeRawHandoffFile(t, root, handoffMarker(operationID, "1.0.1",
+		handoffRunning, handoffPhaseInstalling, time.Now().Add(-31*time.Minute).Unix()))
+
+	runtime := newUpgradeRuntime(t, root, cfg, identity, runner,
+		&runtimeTestController{candidate: testCandidate(9)}, nil)
+	marker, ok, err := runtime.readUpgradeHandoff()
+	if err != nil || !ok || marker.State != handoffRunning {
+		t.Fatalf("active old unit was failed: %+v, %v, %v", marker, ok, err)
+	}
+	readback := task(protocol.KindConfigReadback, strings.Repeat("d", 32), strings.Repeat("e", 32), 11, 9)
+	result := runtime.Execute(context.Background(), readback)
+	if result.Status != "applying" || result.ErrorCode != "" {
+		t.Fatalf("gate under a live old unit = %+v, want applying", result)
+	}
+	marker, ok, err = runtime.readUpgradeHandoff()
+	if err != nil || !ok || marker.State != handoffRunning {
+		t.Fatalf("live owner marker = %+v, %v, %v", marker, ok, err)
+	}
+}
+
+// convergeWriter is the test seam of the outside-sandbox convergence contract.
+// It behaves like the transient one-shot writer / next install --repair: it
+// rewrites agent.json for the claimed digest; it never runs inside the Agent.
+type convergeWriter struct {
+	t        *testing.T
+	root     string
+	cfg      Config
+	calls    int
+	failWith error
+}
+
+func (w *convergeWriter) ConvergeHandoffConfig(_ context.Context, claim HandoffClaim) error {
+	w.calls++
+	if w.failWith != nil {
+		return w.failWith
+	}
+	cfg := w.cfg
+	cfg.AgentVersion = CurrentAgentVersion
+	cfg.AgentSHA256 = claim.NewSHA256
+	writeAgentConfigFile(w.t, w.root, cfg)
+	return nil
+}
+
+// TestInMemoryAdoptionKeepsClaimUntilConvergence is the amended §4.2 rule: the
+// Agent boots from the verified disk hash and continues (never writing
+// /etc/meshmux/agent.json), but the claim survives that boot. Only the pair
+// readback after an outside writer converges the config may remove it; with no
+// writer the claim stays for the next repair and startup still succeeds.
+func TestInMemoryAdoptionKeepsClaimUntilConvergence(t *testing.T) {
+	root, oldCfg, selfHash, operationID, identity, base := crashWindowFixture(t)
+	adopted, err := adoptCrashWindowClaim(root, oldCfg, selfHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No convergence writer is wired: boot must succeed and retain both the
+	// claim and the marker (the on-disk pair is still old).
+	runtime := newUpgradeRuntime(t, root, adopted, identity, base,
+		&runtimeTestController{candidate: testCandidate(9)}, nil)
+	if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); err != nil {
+		t.Fatalf("in-memory adoption dropped the claim: %v", err)
+	}
+	marker, ok, err := runtime.readUpgradeHandoff()
+	if err != nil || !ok || marker.OperationID != operationID {
+		t.Fatalf("marker after in-memory boot = %+v, %v, %v", marker, ok, err)
+	}
+	// The running target releases the chain gate without claiming applied and
+	// without clearing the convergence debt.
+	if _, pending, err := runtime.pendingUpgradeHandoff(); err != nil || pending {
+		t.Fatalf("running target still gated the chain: pending=%v err=%v", pending, err)
+	}
+	if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); err != nil {
+		t.Fatalf("gate release cleared the claim: %v", err)
+	}
+
+	// A convergence writer becomes available; settlement still clears the
+	// claim only after re-reading a matching on-disk pair.
+	writer := &convergeWriter{t: t, root: root, cfg: oldCfg}
+	runtime.handoffConvergence = writer
+	if runtime.handoffPairConverged() {
+		t.Fatal("pair readback passed before convergence")
+	}
+	runtime.settleHandoffClaim(context.Background())
+	if writer.calls != 1 {
+		t.Fatalf("convergence writer calls = %d, want 1", writer.calls)
+	}
+	if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); !os.IsNotExist(err) {
+		t.Fatalf("claim survived a converged pair: %v", err)
+	}
+	// The next gate pass can now drop the completed marker.
+	if _, pending, err := runtime.pendingUpgradeHandoff(); err != nil || pending {
+		t.Fatalf("pending after convergence = %v, %v", pending, err)
+	}
+	if _, err := os.Lstat(rooted(root, upgradeHandoffPath)); !os.IsNotExist(err) {
+		t.Fatalf("converged marker survived: %v", err)
+	}
+}
+
+// TestBootConvergenceWriterReleasesRecords is the positive side: when the
+// outside writer is wired, boot requests it once, re-reads the pair and only
+// then removes the claim and marker.
+func TestBootConvergenceWriterReleasesRecords(t *testing.T) {
+	root, oldCfg, selfHash, _, identity, base := crashWindowFixture(t)
+	adopted, err := adoptCrashWindowClaim(root, oldCfg, selfHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &convergeWriter{t: t, root: root, cfg: oldCfg}
+	_, err = NewRuntime(adopted, identity, RuntimeOptions{
+		Root: root, Runner: base,
+		Controller:         &runtimeTestController{candidate: testCandidate(9)},
+		HandoffConvergence: writer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writer.calls != 1 {
+		t.Fatalf("boot convergence writer calls = %d, want 1", writer.calls)
+	}
+	if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); !os.IsNotExist(err) {
+		t.Fatalf("claim survived boot convergence: %v", err)
+	}
+	if _, err := os.Lstat(rooted(root, upgradeHandoffPath)); !os.IsNotExist(err) {
+		t.Fatalf("marker survived boot convergence: %v", err)
+	}
+}
+
+// TestHandoffUnitStateArgvPinned is the drift guard for the mirrored Task-1
+// liveness query: exactly one fixed `systemctl show` of ActiveState and
+// ExecMainStatus for the derived unit name, no extra fields and no shell.
+func TestHandoffUnitStateArgvPinned(t *testing.T) {
+	operationID := strings.Repeat("d", 32)
+	runner := &recordingRunner{out: []byte("ActiveState=active\nExecMainStatus=0\n")}
+	runtime := &Runtime{runner: runner}
+	state, status, err := runtime.handoffUnitState(operationID)
+	if err != nil || state != handoffUnitActive || status != 0 {
+		t.Fatalf("unit state = %q/%d/%v", state, status, err)
+	}
+	want := []string{
+		systemctlPath, "show", "-p", "ActiveState", "-p", "ExecMainStatus",
+		"meshmux-update-" + operationID,
+	}
+	if len(runner.calls) != 1 || !slices.Equal(runner.calls[0], want) {
+		t.Fatalf("systemctl argv = %q, want %q", runner.calls, want)
+	}
+}
+
+type recordingRunner struct {
+	calls [][]string
+	out   []byte
+	err   error
+}
+
+func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, append([]string{name}, args...))
+	return r.out, r.err
 }

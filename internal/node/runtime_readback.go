@@ -68,6 +68,12 @@ func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string
 	}
 	result.Status = "healthy"
 	result.Detail = boundedDetail(detail)
+	// The readback is the anchor. It is also the only place a crash-window
+	// claim may be settled: once the on-disk agent.json and Agent binary are a
+	// consistent pair, the claim (kept by an in-memory adoption) is obsolete.
+	// When the pair is still old and no outside writer is wired, the claim
+	// stays for the next install --repair; this never fails the readback.
+	r.settleHandoffClaim(ctx)
 	return result, nil
 }
 

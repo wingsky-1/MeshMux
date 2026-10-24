@@ -57,24 +57,30 @@ type RuntimeOptions struct {
 	// config.stage row (#11b). It is optional: without it every stage row is an
 	// ordinary config stage, which is the pre-upgrade behaviour.
 	StageTargets StageTargetSource
+	// HandoffConvergence is the optional outside-sandbox writer that rewrites
+	// agent.json after an in-memory crash-window adoption. Nil means
+	// convergence is deferred to the next install --repair; the Agent never
+	// writes /etc/meshmux/agent.json itself.
+	HandoffConvergence HandoffConvergenceWriter
 }
 
 // Runtime executes the frozen task set against one installed node.
 type Runtime struct {
-	cfg             Config
-	identity        Identity
-	root            string
-	runner          CommandRunner
-	controller      Controller
-	httpClient      *http.Client
-	logger          *slog.Logger
-	pollInterval    time.Duration
-	lockTimeout     time.Duration
-	stageTargets    StageTargetSource
-	now             func() time.Time
-	procRoot        string
-	writeState      func(*runtimeState) error
-	enforceProcArgs bool
+	cfg                Config
+	identity           Identity
+	root               string
+	runner             CommandRunner
+	controller         Controller
+	httpClient         *http.Client
+	logger             *slog.Logger
+	pollInterval       time.Duration
+	lockTimeout        time.Duration
+	stageTargets       StageTargetSource
+	handoffConvergence HandoffConvergenceWriter
+	now                func() time.Time
+	procRoot           string
+	writeState         func(*runtimeState) error
+	enforceProcArgs    bool
 }
 
 // StageTarget is the release record the Hub stamped onto one pending
@@ -209,19 +215,20 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		opts.LockTimeout = agentLockTimeout
 	}
 	r := &Runtime{
-		cfg:             cfg,
-		identity:        identity,
-		root:            root,
-		runner:          opts.Runner,
-		controller:      opts.Controller,
-		httpClient:      opts.HTTPClient,
-		logger:          opts.Logger,
-		pollInterval:    defaultPollInterval(opts.PollInterval),
-		lockTimeout:     opts.LockTimeout,
-		stageTargets:    opts.StageTargets,
-		now:             time.Now,
-		procRoot:        rooted(root, "/proc"),
-		enforceProcArgs: root == "/",
+		cfg:                cfg,
+		identity:           identity,
+		root:               root,
+		runner:             opts.Runner,
+		controller:         opts.Controller,
+		httpClient:         opts.HTTPClient,
+		logger:             opts.Logger,
+		pollInterval:       defaultPollInterval(opts.PollInterval),
+		lockTimeout:        opts.LockTimeout,
+		stageTargets:       opts.StageTargets,
+		handoffConvergence: opts.HandoffConvergence,
+		now:                time.Now,
+		procRoot:           rooted(root, "/proc"),
+		enforceProcArgs:    root == "/",
 	}
 	r.writeState = r.persistState
 	if err := r.ensureLayout(); err != nil {

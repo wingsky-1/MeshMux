@@ -251,29 +251,45 @@ func (r *Runtime) clearUpgradeHandoff() error {
 	return nil
 }
 
-// upgradeClaim is the installer's crash-window record (spec §4.8): the digest
+// HandoffClaim is the installer's crash-window record (spec §4.8): the digest
 // of the Agent binary that was just renamed into place, plus the operation that
 // owns the rename. It is written between the binary and agent.json renames. It
-// is not a protocol document and carries no version or prose.
-type upgradeClaim struct {
+// is not a protocol document and carries no version or prose. It is exported for
+// the convergence writer contract below.
+type HandoffClaim struct {
 	NewSHA256   string `json:"new_sha256"`
 	OperationID string `json:"operation_id"`
 }
 
-func readUpgradeClaimFile(root string) (upgradeClaim, bool, error) {
+// HandoffConvergenceWriter is the convergence-writer contract for the on-disk
+// half of the crash window. The Agent's unit keeps `/etc` read-only
+// (ProtectSystem=strict, ReadOnlyPaths=agent.json), so the Agent NEVER writes
+// agent.json: it adopts the verified disk hash in memory for this boot and
+// leaves the claim in place. A process outside the Agent mount namespace — the
+// transient one-shot updater or the next `install --repair` — must atomically
+// rewrite agent.json so it names claim.NewSHA256. The Agent calls this hook when
+// one is wired, then clears the claim only after a readback proves the on-disk
+// pair matches; with no hook it keeps the claim for the next repair. Task 5 owns
+// the writer implementation; this package owns the claim format and the
+// post-convergence readback.
+type HandoffConvergenceWriter interface {
+	ConvergeHandoffConfig(context.Context, HandoffClaim) error
+}
+
+func readUpgradeClaimFile(root string) (HandoffClaim, bool, error) {
 	path := rooted(root, upgradeHandoffClaimPath)
 	data, _, err := readPrivateFile(path)
 	if os.IsNotExist(err) {
-		return upgradeClaim{}, false, nil
+		return HandoffClaim{}, false, nil
 	}
 	if err != nil {
-		return upgradeClaim{}, false, errors.New("UPGRADE_CLAIM_UNSAFE")
+		return HandoffClaim{}, false, errors.New("UPGRADE_CLAIM_UNSAFE")
 	}
-	var claim upgradeClaim
+	var claim HandoffClaim
 	if decodeStrictJSON(data, &claim) != nil ||
 		!sha256Pattern.MatchString(claim.NewSHA256) ||
 		!nodeIDPattern.MatchString(claim.OperationID) {
-		return upgradeClaim{}, false, errors.New("UPGRADE_CLAIM_INVALID")
+		return HandoffClaim{}, false, errors.New("UPGRADE_CLAIM_INVALID")
 	}
 	return claim, true, nil
 }
@@ -289,18 +305,93 @@ func (r *Runtime) clearUpgradeClaim() error {
 	return clearUpgradeClaimFile(r.root)
 }
 
+// handoffPairConverged is the readback that gates claim removal. It checks the
+// on-disk pair: agent.json's digest and version must name the running build, and
+// the on-disk Agent binary must hash to that same digest. An in-memory adoption
+// alone never satisfies it because the old agent.json still carries the old
+// digest, so the claim survives until an outside writer (or repair) converges.
+func (r *Runtime) handoffPairConverged() bool {
+	data, _, err := readPrivateFile(rooted(r.root, AgentConfigPath))
+	if err != nil {
+		return false
+	}
+	var onDisk Config
+	if decodeStrictJSON(data, &onDisk) != nil {
+		return false
+	}
+	if onDisk.AgentSHA256 != r.cfg.AgentSHA256 || onDisk.AgentVersion != r.cfg.AgentVersion {
+		return false
+	}
+	diskHash, err := sha256File(rooted(r.root, AgentBinaryPath))
+	return err == nil && diskHash == onDisk.AgentSHA256
+}
+
+// requestHandoffConvergence asks the outside-sandbox writer to rewrite
+// agent.json. It is best effort and never fails the Agent: nil means the
+// convergence is deferred to the next install --repair, which writes the same
+// file as part of its normal apply.
+func (r *Runtime) requestHandoffConvergence(ctx context.Context, claim HandoffClaim) {
+	if r.handoffConvergence == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := r.handoffConvergence.ConvergeHandoffConfig(ctx, claim); err != nil {
+		r.logger.WarnContext(ctx, "handoff config convergence unavailable",
+			"operation_id", claim.OperationID, "error_code", errorCodeOr(err, "UPGRADE_CONVERGENCE_FAILED"))
+	}
+}
+
+// settleHandoffClaim is the only claim-removal path. It may run on boot or
+// immediately after a successful readback. The claim is cleared only after the
+// on-disk pair readback matches; if the pair is still old, a configured writer
+// gets one chance, and a missing/failed writer leaves the claim in place for the
+// next repair. It never returns an error: convergence is never a startup
+// failure.
+func (r *Runtime) settleHandoffClaim(ctx context.Context) {
+	claim, ok, err := readUpgradeClaimFile(r.root)
+	if err != nil || !ok {
+		return
+	}
+	if r.handoffPairConverged() {
+		if err := r.clearUpgradeClaim(); err != nil {
+			r.logger.WarnContext(ctx, "handoff claim could not be cleared",
+				"operation_id", claim.OperationID, "error_code", errorCode(err))
+		}
+		return
+	}
+	// Never ask a writer to publish a config for a binary that is not the one
+	// on disk: that would turn a failed install into a mismatched pair.
+	diskHash, err := sha256File(rooted(r.root, AgentBinaryPath))
+	if err != nil || diskHash != claim.NewSHA256 {
+		return
+	}
+	r.requestHandoffConvergence(ctx, claim)
+	if r.handoffPairConverged() {
+		if err := r.clearUpgradeClaim(); err != nil {
+			r.logger.WarnContext(ctx, "handoff claim could not be cleared",
+				"operation_id", claim.OperationID, "error_code", errorCode(err))
+		}
+	}
+}
+
 // adoptCrashWindowClaim is the boot recovery of the one real window in the
-// two-rename handoff (spec §4.8). The running binary's digest already failed
-// the agent.json self-check, so the claim must prove all of the following:
+// two-rename handoff (spec §4.2 amended, §4.8). The running binary's digest
+// already failed the agent.json self-check, so the claim must prove all of the
+// following:
 //
 //   - the digest of the binary actually on disk equals the claim record;
 //   - the claim names the operation the pending marker names;
 //   - the marker's target is exactly the running build's pinned version.
 //
-// Only then is agent.json rewritten with the running digest and version. A
-// missing claim, a stale claim and any mismatch are fail-closed: startup is
-// refused with AGENT_EXECUTABLE_MISMATCH rather than guessing which bytes the
-// host runs.
+// Only then does this boot continue, with the in-memory identity taken from the
+// verified disk hash and the claim. The Agent deliberately does NOT rewrite
+// agent.json here: its unit has `/etc` read-only. That convergence belongs to a
+// writer outside this mount namespace (the next install --repair or the
+// transient one-shot updater); the claim stays until a pair readback proves the
+// on-disk config matches. A missing claim, a stale claim and any mismatch are
+// fail-closed: startup is refused with AGENT_EXECUTABLE_MISMATCH rather than
+// guessing which bytes the host runs.
 func adoptCrashWindowClaim(root string, cfg Config, selfHash string) (Config, error) {
 	mismatch := func(detail string) error {
 		return fmt.Errorf("%w: %s", stableError(handoffMismatchCode), detail)
@@ -333,23 +424,9 @@ func adoptCrashWindowClaim(root string, cfg Config, selfHash string) (Config, er
 	if err := adopted.ValidateInstalled(); err != nil {
 		return cfg, mismatch("the recovered configuration does not validate")
 	}
-	data, err := json.MarshalIndent(adopted, "", "  ")
-	if err != nil {
-		return cfg, mismatch("the recovered configuration could not be encoded")
-	}
-	data = append(data, '\n')
-	path := rooted(root, AgentConfigPath)
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return cfg, errors.New("AGENT_CONFIG_UNSAFE")
-	}
-	// The old agent.json is root-owned 0600; preserving the owner keeps the
-	// Agent's ReadOnlyPaths contract intact.
-	if err := writeAtomic(path, data, 0600, true); err != nil {
-		return cfg, errors.New("AGENT_CONFIG_UNAVAILABLE")
-	}
-	if err := clearUpgradeClaimFile(root); err != nil {
-		return cfg, err
-	}
+	// In-memory only. The claim and the old agent.json stay exactly as they
+	// are; NewRuntime's boot reconciliation keeps the claim and hands the
+	// convergence to a writer outside this sandbox.
 	return adopted, nil
 }
 
@@ -566,23 +643,29 @@ func (r *Runtime) handoffOrphaned(handoff upgradeHandoff) bool {
 
 // handoffInFlight reports whether the marker still describes a running update.
 // The updater helper's PID is no longer load-bearing: the transient unit and
-// its result file are. A unit that is finished is only trusted when it left a
-// result record behind; before the unit exists (the updater is still fetching)
-// the attempt stays in flight until the age bound (D5: unobservable + over age
-// is a failure, not an early verdict).
+// its result file are. Intent for the age bound is explicit: a unit that is
+// still active owns the attempt and keeps it in flight even past 30 minutes
+// (reconcileHandoff only fails an ownerless attempt); the age bound decides only
+// when the unit cannot be observed or has not appeared yet (the updater helper
+// may still be fetching). A finished unit with a result record is over — the
+// caller fails the chain because the old release is still running.
 func (r *Runtime) handoffInFlight(handoff upgradeHandoff) bool {
 	if handoff.State != handoffRunning {
 		return false
 	}
-	if r.now().Sub(time.Unix(handoff.StartedAt, 0)) > upgradeHandoffMaxAge {
-		return false
-	}
 	state, _, err := r.handoffUnitState(handoff.OperationID)
+	overAge := r.now().Sub(time.Unix(handoff.StartedAt, 0)) > upgradeHandoffMaxAge
 	if err != nil {
-		return true
+		// Unobservable: the local age bound is the only safe verdict.
+		return !overAge
 	}
 	if handoffUnitRunning(state) {
 		return true
+	}
+	if overAge {
+		// Defensive: reconcileHandoff has already turned this ownerless
+		// attempt into the failed/UPGRADE_HANDOFF_ORPHANED state.
+		return false
 	}
 	if _, ok, err := r.readHandoffResult(handoff.OperationID); err == nil && ok {
 		return false
@@ -592,54 +675,74 @@ func (r *Runtime) handoffInFlight(handoff upgradeHandoff) bool {
 
 // pendingUpgradeHandoff returns the marker that still governs this node, or
 // (zero, false, nil) when none does. A marker whose target is already the
-// running release means the update installed and this Agent restarted on it:
-// the handoff is done, so the marker is cleared and the chain may continue as a
-// normal chain. This is not an applied claim — the chain's readback remains the
-// only anchor (spec §4.1).
+// running release means the install reached the running build: the handoff no
+// longer gates the chain, and this is never an applied claim (readback remains
+// the anchor). The marker itself is cleared only after the on-disk pair
+// readback passes; an in-memory adoption (old agent.json, new binary) keeps the
+// marker and claim for the outside convergence writer / next repair while
+// still letting apply and readback run against the running target.
 func (r *Runtime) pendingUpgradeHandoff() (upgradeHandoff, bool, error) {
 	handoff, ok, err := r.readUpgradeHandoff()
 	if err != nil || !ok {
 		return upgradeHandoff{}, false, err
 	}
 	if handoff.TargetVersion == r.cfg.AgentVersion {
-		if err := r.clearUpgradeHandoff(); err != nil {
-			return upgradeHandoff{}, false, err
-		}
-		if err := r.clearUpgradeClaim(); err != nil {
-			return upgradeHandoff{}, false, err
+		if r.handoffPairConverged() {
+			if err := r.clearUpgradeHandoff(); err != nil {
+				return upgradeHandoff{}, false, err
+			}
+			if err := r.clearUpgradeClaim(); err != nil {
+				return upgradeHandoff{}, false, err
+			}
 		}
 		return upgradeHandoff{}, false, nil
 	}
 	return handoff, true, nil
 }
 
-// reconcileHandoffOnBoot is the startup half of the recovery rules (spec §4.6),
-// called by NewRuntime before journal recovery. It never claims the upgrade
-// applied: when the running release is the target it only releases the gate so
-// the chain's readback step can prove the result. A corrupt marker is a
-// terminal refusal.
+// reconcileHandoffOnBoot is the startup half of the recovery rules (spec §4.2
+// amended, §4.6), called by NewRuntime before journal recovery. It never claims
+// the upgrade applied: when the running release is the target it only releases
+// the gate so the chain's readback step can prove the result. A corrupt marker
+// is a terminal refusal. An in-memory claim adoption never fails startup and
+// never clears the claim: convergence happens outside this sandbox.
 func (r *Runtime) reconcileHandoffOnBoot() error {
 	handoff, ok, err := r.readUpgradeHandoff()
 	if err != nil {
 		return err
 	}
+	ctx := context.Background()
 	if !ok {
+		// A claim can outlive its marker (a completed or repaired handoff).
+		// Settle it only by the on-disk pair readback; never invent a marker.
+		r.settleHandoffClaim(ctx)
 		return nil
 	}
 	if handoff.State == handoffRunning && handoff.TargetVersion == r.cfg.AgentVersion {
-		// The restarted Agent runs the target. The boot self-check already
-		// matched the binary digest; the marker's phase and the result exit
-		// code are not restart proof, and neither is this branch. Readback is.
-		if err := r.clearUpgradeHandoff(); err != nil {
-			return err
+		if r.handoffPairConverged() {
+			if err := r.clearUpgradeHandoff(); err != nil {
+				return err
+			}
+			r.settleHandoffClaim(ctx)
+			return nil
 		}
-		return r.clearUpgradeClaim()
+		// The target is running but agent.json still names the old binary:
+		// this is the in-memory adoption branch. Ask an outside-sandbox
+		// writer once, if one is wired, then re-read the pair. A missing
+		// writer keeps both records for the next install --repair.
+		r.settleHandoffClaim(ctx)
+		if r.handoffPairConverged() {
+			if err := r.clearUpgradeHandoff(); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if _, err := r.reconcileHandoff(handoff); err != nil {
 		// A corrupt updater result must not prevent the Agent from starting;
 		// the marker has already been moved to failed where possible, and the
 		// chain gate reports the stable code.
-		r.logger.ErrorContext(context.Background(), "upgrade handoff result rejected on boot",
+		r.logger.ErrorContext(ctx, "upgrade handoff result rejected on boot",
 			"operation_id", handoff.OperationID, "error_code", errorCode(err))
 		return nil
 	}

@@ -338,6 +338,9 @@ func TestStageHandoffCompletesWhenTargetIsRunning(t *testing.T) {
 	if err = runtime.writeUpgradeHandoff(handoff); err != nil {
 		t.Fatal(err)
 	}
+	// The restarted Agent finds a whole on-disk pair: the config names the
+	// binary that is running. Only then is the completed marker cleared.
+	writeAgentConfigFile(t, root, cfg)
 	installed := newUpgradeRuntime(t, root, cfg, identity, runner,
 		&runtimeTestController{candidate: testCandidate(10)}, &stageTargetFixture{
 			stamped: true,
