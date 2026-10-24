@@ -53,6 +53,14 @@ type Config struct {
 	// the installed Agent configuration and stat /.
 	NodeConfig func() (node.Config, error)
 	Space      func(path string, minimum uint64) error
+
+	// SelfExecutable and RecordedRole are the seams of the new binary's
+	// install step (RunInstall). Production leaves both empty: the running
+	// executable is os.Executable() and the role comes from the installed Node
+	// ledger. Tests use them to point at fixture bytes and a fixture role
+	// without touching the host.
+	SelfExecutable string
+	RecordedRole   func() (node.Role, error)
 }
 
 // Result reports what the handoff staged and observed. It never claims the
