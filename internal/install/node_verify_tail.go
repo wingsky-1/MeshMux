@@ -93,6 +93,13 @@ func nodeVerifyTail(ctx context.Context, result *InstallResult, state *InstallSt
 		return fail(failures.agentStart)
 	}
 	state.Status, state.Stage, state.ErrorCode, state.Recovery = "installed", "verify", "", ""
+	// The ledger records the release pair this operation actually installed.
+	// A repair must not wipe the verified hashes (that is what the preflight
+	// needs to recognize its own listener), and an upgrade must not leave the
+	// old pair behind: the recorded-state handoff compares these two fields
+	// with agent.json before it repairs, so a stale ledger would refuse every
+	// later upgrade with CONFIG_CONFLICT.
+	state.Node = cloneNodeConfig(&installedCfg)
 	state.UpdatedAt = time.Now().UTC()
 	if err := writeNodeState(opts.Root, layout, *state); err != nil {
 		return fail(failures.finalLedger)

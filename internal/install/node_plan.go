@@ -45,6 +45,20 @@ type NodeApplyOptions struct {
 	// UPDATE_INTERACTIVE_REFUSED instead.
 	NonInteractive bool
 
+	// FromRecordedState marks the hidden handoff family
+	// (`install <role> --repair --non-interactive --from-recorded-state
+	// --operation-id <op>`): every configuration value and the identity come
+	// from the recorded ledger, so a lost identity is terminal
+	// (UPDATE_REENROLL_REQUIRED) instead of a prompt. It is never a second
+	// install mode: the public `install` surface cannot set it.
+	FromRecordedState bool
+
+	// LockWait bounds how long an unattended operation retries the host-wide
+	// install lock before UPDATE_RETRY_EXHAUSTED. Zero uses installLockWait
+	// (60s, spec §4.9 / D7) for a non-interactive run and no wait at all for
+	// an interactive one. Tests set a short bound.
+	LockWait time.Duration
+
 	// Test-only seams. Root != "/" is required to use either override.
 	Artifacts []Artifact
 	Verify    func(context.Context, node.Config, CommandRunner, node.Readback) error

@@ -61,6 +61,23 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	if opts.Root == "" {
 		opts.Root = "/"
 	}
+	if opts.FromRecordedState {
+		// The hidden handoff family owns every input: no configuration and no
+		// identity travel through argv, so a run that is not a repair, or that
+		// could still wait for an operator, is refused before any read.
+		if !repair || !opts.NonInteractive {
+			return fail("preflight", "UPDATE_INTERACTIVE_REFUSED",
+				"A recorded-state handoff must pass --repair --non-interactive; it never becomes a second install mode.")
+		}
+		recorded, recordedErr := recordedNodeConfig(opts.Root, cfg.Role)
+		if recordedErr != nil {
+			return fail(recordedErr.Stage, recordedErr.Code, recordedErr.Recovery)
+		}
+		cfg = recorded
+	}
+	if err := cfg.Validate(); err != nil {
+		return fail("preflight", "CONFIG_INVALID", "Supply a valid HTTPS Hub URL, node identity, edge/out role and distinct SSH/VLESS ports.")
+	}
 	if opts.Root == "/" && os.Geteuid() != 0 {
 		return fail("preflight", "ROOT_REQUIRED", "Run the installer as root; the Agent service does not listen for management traffic.")
 	}
@@ -111,7 +128,10 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		opts.Verify = verifyNodeInstall
 	}
 
-	lock, lockErr := acquireInstallLock(opts.Root, "Check /run/lock ownership and symlinks.")
+	// An unattended handoff retries the host-wide lock for a bounded window
+	// (60s, D7) because no operator can retry it; an interactive run keeps the
+	// immediate INSTALL_BUSY refusal (spec §4.9).
+	lock, lockErr := acquireInstallLockWithin(ctx, opts.Root, "Check /run/lock ownership and symlinks.", installLockWaitFor(opts))
 	if lockErr != nil {
 		return fail(lockErr.Stage, lockErr.Code, lockErr.Recovery)
 	}
@@ -231,6 +251,10 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 
 	now := time.Now().UTC()
 	previous := cloneInstallState(state)
+	// A re-entry of the same operation is an idempotent redo (ruling I13), not
+	// a conflict. It is decided from the ledger as it was read, before this
+	// attempt overwrites the operation stamps below.
+	sameOperationRedo := hasState && state.LastOperation == operationID
 	if !hasState {
 		state = InstallState{Schema: 1, CreatedAt: now, ManagedFiles: map[string]string{}, Artifacts: map[string]string{}}
 	}
@@ -274,7 +298,15 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	if err := record("stage", "started", ""); err != nil {
 		return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
 	}
-
+	if opts.FromRecordedState && sameOperationRedo {
+		// Ruling I13: re-entering the same operation is an idempotent redo,
+		// not a conflict. Every apply step below is a verified atomic replace
+		// of recorded files, so the redo converges; the journal entry is the
+		// audit record that it happened.
+		if err := recordSameOperationRedo(record); err != nil {
+			return failNodePartial(result, state, opts, layout, record, "stage", "OPERATION_LOG_FAILED", "Check installer state directory permissions and run --repair.")
+		}
+	}
 	stage, stageErr := stageNodeArtifacts(ctx, &result, &state, &opts, layout, record, cfg, hasState, operationID, artifacts[0], release, nodeStageErrors{
 		stageRemove:              &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Remove only the incomplete staging directory for this operation and retry."},
 		stageCache:               &InstallError{Stage: "stage", Code: "STAGE_UNAVAILABLE", Recovery: "Check /var/cache space and permissions; no host files were applied."},
@@ -311,6 +343,11 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		agentStateUnsafe:      &InstallError{Stage: "stage", Code: "AGENT_STATE_UNSAFE", Recovery: "Use a root-owned 0700 Agent directory; the kernel group must not read identity tokens."},
 		identityPersistFailed: &InstallError{Stage: "stage", Code: "IDENTITY_PERSIST_FAILED", Recovery: "The Hub code may already be consumed. Preserve this operation's journal, reissue a code for the same node in Web and retry after fixing disk permissions."},
 		stateWriteFailed:      &InstallError{Stage: "stage", Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "Check installer state disk space and permissions; preserve the private identity."},
+	}
+	if opts.FromRecordedState {
+		// No operator is present: a lost or revoked identity is terminal
+		// (UPDATE_REENROLL_REQUIRED) and never becomes a prompt.
+		identityFailures = recordedStateIdentityErrors(identityFailures)
 	}
 	resolved, resolveErr := nodeResolveIdentityAndCandidate(ctx, &result, &state, &opts, layout, record, installedCfg, repair, pairingCode, identityFailures)
 	if resolveErr != nil {

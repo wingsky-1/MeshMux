@@ -8,9 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/install"
@@ -99,6 +101,15 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	// It is validated with the installer's own 32-hex rule; an empty value
 	// generates a fresh local ID as before.
 	operationIDFlag := flags.String("operation-id", "", "operation ID of the upgrade chain")
+	// fromRecordedState is the hidden handoff family's only input mode: every
+	// configuration value and the identity come from the recorded ledger, so
+	// the transient unit never has to carry them. It is deliberately absent
+	// from the public usage text.
+	fromRecordedState := flags.Bool("from-recorded-state", false, "reuse the recorded Node installation")
+	// pairingCodeFile is the operator-placed fresh code of the same hidden
+	// family. There is no automatic delivery: a missing file means the identity
+	// is lost, and the run ends terminally.
+	pairingCodeFile := flags.String("pairing-code-file", "", "root-owned 0600 file holding one pairing code")
 	flags.StringVar(&cfg.HubURL, "hub", "", "Hub HTTPS origin")
 	flags.StringVar(&cfg.NodeID, "node", "", "32-character lowercase node ID")
 	flags.IntVar(&cfg.VLESSPort, "vless-port", 0, "VLESS listening port")
@@ -107,24 +118,72 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		fmt.Fprintln(stderr, "CONFIG_INVALID: unknown or unexpected install options")
 		return 2
 	}
+	// The hidden inputs exist only for the recorded-state handoff. Refusing
+	// them on the public surface keeps `install` a single mode and keeps a
+	// hand-placed secret from being read by an interactive run.
+	if *pairingCodeFile != "" && !*fromRecordedState {
+		fmt.Fprintln(stderr, "CONFIG_INVALID: --pairing-code-file is reserved for the recorded-state handoff")
+		return 2
+	}
 	if *planOnly && (*yes || *repair) {
 		fmt.Fprintln(stderr, "CONFIG_INVALID: --plan cannot be combined with --yes or --repair")
 		return 2
 	}
-	if *nonInteractive && (!*yes || !*repair) {
+	if *fromRecordedState {
+		// The recorded-state family is one fixed shape: a plan-only run would
+		// exit 0 without installing, which the unit would record as success,
+		// and anything less than a non-interactive repair could still wait for
+		// an operator.
+		if *planOnly {
+			fmt.Fprintln(stderr, "CONFIG_INVALID: --from-recorded-state cannot be combined with --plan")
+			return handoffExitForCode("CONFIG_INVALID")
+		}
+		if !*nonInteractive || !*repair {
+			fmt.Fprintln(stderr, "UPDATE_INTERACTIVE_REFUSED: --from-recorded-state requires --repair --non-interactive")
+			return handoffExitForCode("UPDATE_INTERACTIVE_REFUSED")
+		}
+	} else if *nonInteractive && (!*yes || !*repair) {
+		// The public gate is unchanged: a non-interactive run is still a
+		// confirmed repair, and it still says so in the same words.
 		fmt.Fprintln(stderr, "UPDATE_INTERACTIVE_REFUSED: --non-interactive requires --yes --repair")
 		return 3
 	}
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+	if *fromRecordedState && *operationIDFlag == "" {
+		// The whole point of the handoff is one auditable operation ID from
+		// approval to readback, so it is mandatory here and refused before any
+		// state or journal path is derived from it.
+		fmt.Fprintln(stderr, "OPERATION_REQUIRED: --from-recorded-state requires --operation-id")
+		return handoffExitForCode("OPERATION_REQUIRED")
+	}
+	if !*fromRecordedState {
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
 	}
 	operationID := *operationIDFlag
 	if operationID != "" && !operationIDPattern.MatchString(operationID) {
 		fmt.Fprintln(stderr, "OPERATION_ID_INVALID: need 32 lowercase hex characters")
+		if *fromRecordedState {
+			// The ID is unusable, so the structured result carries no operation
+			// identity: never echo the rejected value back.
+			handoffRefusal(stdout, "", "preflight", "OPERATION_ID_INVALID",
+				"Carry the upgrade chain's 32 lowercase hex operation ID.")
+			return handoffExitForCode("OPERATION_ID_INVALID")
+		}
 		return 2
 	}
 
+	// refusal is the one pre-plan stop that still carries the structured
+	// result on the recorded-state path: the unit records only an exit code, so
+	// without the JSON the stable code would be lost from the audit trail.
+	refusal := func(stage, code, recovery string, fallback int) int {
+		if *fromRecordedState {
+			handoffRefusal(stdout, operationID, stage, code, recovery)
+			return handoffExitForCode(code)
+		}
+		return fallback
+	}
 	state, exists, err := runner.ReadNodeState("/")
 	if err != nil {
 		code := "INSTALL_STATE_INVALID"
@@ -133,7 +192,25 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 			code = ie.Code
 		}
 		fmt.Fprintf(stderr, "%s: inspect the recorded installer state; do not delete application data\n", code)
-		return 1
+		return refusal("preflight", code, "Inspect the recorded installer state; do not delete application data.", 1)
+	}
+	if *fromRecordedState {
+		// The ledger is the only source of configuration and identity in this
+		// mode; the positional role is cross-checked against it instead of
+		// being trusted. Nothing is read from stdin.
+		if !exists || state.Node == nil {
+			fmt.Fprintln(stderr, "REPAIR_STATE_MISSING: a recorded-state handoff needs a recorded Node installation")
+			return refusal("preflight", "REPAIR_STATE_MISSING", "A recorded-state handoff needs a Node ledger created by MeshMux; enroll the node first.", 3)
+		}
+		if state.Node.Role != role {
+			fmt.Fprintln(stderr, "CONFIG_CONFLICT: this host recorded a different node role; a recorded-state repair never changes it")
+			return refusal("preflight", "CONFIG_CONFLICT", "The recorded node role differs from this handoff; a recorded-state repair never changes the role.", 3)
+		}
+		cfg = *state.Node
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintln(stderr, "CONFIG_INVALID: the recorded node configuration is not usable")
+			return refusal("preflight", "CONFIG_INVALID", "The recorded node configuration is not usable; enroll the node again.", 2)
+		}
 	}
 	if *repair && (!exists || state.Node == nil) {
 		fmt.Fprintln(stderr, "REPAIR_STATE_MISSING: --repair is allowed only for a recorded node installation")
@@ -141,7 +218,7 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	}
 	if state.Node != nil && !install.SameNodeConfig(*state.Node, cfg) {
 		fmt.Fprintln(stderr, "CONFIG_CONFLICT: this host has a different recorded node configuration; changing it is not an in-place repair")
-		return 3
+		return refusal("preflight", "CONFIG_CONFLICT", "Repair only supports the recorded Hub URL, node, role and ports; create a new node enrollment for migration.", 3)
 	}
 
 	if operationID == "" {
@@ -149,6 +226,20 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		if err != nil {
 			fmt.Fprintln(stderr, "OPERATION_ID_FAILED")
 			return 1
+		}
+	}
+
+	pairingCode := ""
+	if *fromRecordedState {
+		// The only accepted fresh code is the one an operator placed on the
+		// host. A missing, public or malformed file is refused before any host
+		// work: there is no automatic fetch and no prompt to fall back on.
+		if *pairingCodeFile != "" {
+			var ok bool
+			pairingCode, ok = readPairingCodeFile(*pairingCodeFile, stderr)
+			if !ok {
+				return refusal("preflight", "PAIRING_CODE_INVALID", "Place one root-owned 0600 file holding a current 43-character code, or re-enroll the node.", 2)
+			}
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nodePlanTimeout)
@@ -162,6 +253,18 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		return 1
 	}
 	if plan.Status == "preflight_blocked" || !plan.ApplyAvailable {
+		if *fromRecordedState {
+			// The plan already carries the per-check codes; the unit still needs
+			// one stable result code, and the first failing check is the cause.
+			code, recovery := "preflight_blocked", "Resolve the failed Node preflight check and retry."
+			for _, check := range plan.Checks {
+				if check.Status == "fail" {
+					code, recovery = check.Code, check.Recovery
+					break
+				}
+			}
+			return refusal("preflight", code, recovery, 3)
+		}
 		return 3
 	}
 	if *planOnly {
@@ -169,7 +272,8 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	}
 
 	reader := bufio.NewReader(stdin)
-	if !*yes {
+	confirmed := *yes || *fromRecordedState
+	if !confirmed {
 		fmt.Fprintf(stdout, "Type 'install %s' to apply this plan, or anything else to stop:\n", role)
 		answer, readErr := reader.ReadString('\n')
 		if (readErr != nil && answer == "") || strings.TrimSpace(answer) != "install "+string(role) {
@@ -178,7 +282,6 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 
-	pairingCode := ""
 	if !*repair && !*nonInteractive {
 		var ok bool
 		pairingCode, ok = readPairingCode(reader, stdout, stderr)
@@ -186,7 +289,8 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 			return 2
 		}
 	}
-	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, *nonInteractive, reader, stdout, stderr)
+	opts := install.NodeApplyOptions{NonInteractive: *nonInteractive, FromRecordedState: *fromRecordedState}
+	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, opts, reader, stdout, stderr)
 	if applyErr != nil {
 		if ie, ok := errors.AsType[*install.InstallError](applyErr); ok {
 			result.ErrorCode, result.Stage, result.Recovery = ie.Code, ie.Stage, ie.Recovery
@@ -206,6 +310,14 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		fmt.Fprintln(stderr, "RESULT_OUTPUT_FAILED")
 		return 1
 	}
+	if *fromRecordedState {
+		// The JSON error_code above is the contract; the exit code is only the
+		// coarse bucket the transient unit records.
+		if applyErr != nil || result.Status != "installed" {
+			fmt.Fprintf(stderr, "%s: %s\n", result.ErrorCode, result.Recovery)
+		}
+		return handoffResultExit(result)
+	}
 	if applyErr != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", result.ErrorCode, result.Recovery)
 		return 1
@@ -216,11 +328,78 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 	return 0
 }
 
-func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bool, pairingCode string, nonInteractive bool, reader *bufio.Reader, stdout, stderr io.Writer) (install.InstallResult, error) {
+// handoffResultExit collapses one recorded-state result into the coarse exit
+// map of spec §4.10 (I14/I15): 0 installed only, 3 interaction/state class, 4
+// UPDATE_REENROLL_REQUIRED, 5 precondition failure, 6 retry exhausted. The JSON
+// error_code stays the contract; this bucket only tells the unit's result file
+// what broad class of failure happened.
+func handoffResultExit(result install.InstallResult) int {
+	if result.Status == "installed" && result.ErrorCode == "" {
+		return 0
+	}
+	return handoffExitForCode(result.ErrorCode)
+}
+
+// handoffExitForCode maps one stable code onto the coarse bucket. An empty or
+// unknown code is a precondition failure (5): it is never 0.
+func handoffExitForCode(code string) int {
+	switch code {
+	case "UPDATE_REENROLL_REQUIRED":
+		return 4
+	case "UPDATE_RETRY_EXHAUSTED":
+		return 6
+	case "UPDATE_INTERACTIVE_REFUSED", "INSTALL_CANCELLED", "UPDATE_CONFIRM_REQUIRED",
+		"REPAIR_STATE_MISSING", "INSTALL_PARTIAL_REPAIR_REQUIRED", "HOST_LAYOUT_CONFLICT",
+		"REINSTALL_REJECTED", "preflight_blocked":
+		return 3
+	default:
+		return 5
+	}
+}
+
+// handoffRefusal writes the one structured refusal of a recorded-state run that
+// stops before the plan is printed. It never echoes a caller value: the fields
+// are the stable code, the fixed next action and the already-validated
+// operation ID.
+func handoffRefusal(stdout io.Writer, operationID, stage, code, recovery string) {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(install.InstallResult{
+		OperationID: operationID, Stage: stage, Status: "failed",
+		ErrorCode: code, Recovery: recovery,
+	})
+}
+
+// readPairingCodeFile reads the one operator-placed fresh code of the hidden
+// handoff family. The file must be a root-owned regular 0600 file: MeshMux never
+// fetches a code, never invents one and never reads it from stdin here.
+func readPairingCodeFile(path string, stderr io.Writer) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
+		fmt.Fprintln(stderr, "PAIRING_CODE_INVALID: --pairing-code-file must be a root-owned regular 0600 file")
+		return "", false
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+		fmt.Fprintln(stderr, "PAIRING_CODE_INVALID: --pairing-code-file must be owned by the invoking user")
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > pairingCodeLimit+2 {
+		fmt.Fprintln(stderr, "PAIRING_CODE_INVALID: --pairing-code-file is unreadable")
+		return "", false
+	}
+	code := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+	if !pairingCodePattern.MatchString(code) {
+		fmt.Fprintln(stderr, "PAIRING_CODE_INVALID: the file must hold one 43-character code")
+		return "", false
+	}
+	return code, true
+}
+
+func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bool, pairingCode string, opts install.NodeApplyOptions, reader *bufio.Reader, stdout, stderr io.Writer) (install.InstallResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), nodeApplyTimeout)
-	opts := install.NodeApplyOptions{NonInteractive: nonInteractive}
 	result, err := runner.InstallNode(ctx, cfg, operationID, repair, pairingCode, opts)
-	if !repair || !pairingRequired(err) || nonInteractive {
+	if !repair || !pairingRequired(err) || opts.NonInteractive {
 		cancel()
 		return result, err
 	}
