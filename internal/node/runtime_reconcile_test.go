@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -467,6 +469,52 @@ func TestInMemoryAdoptionKeepsClaimUntilConvergence(t *testing.T) {
 	}
 }
 
+// TestRequestHandoffConvergenceCancelsOnReturn pins the premise of the
+// convergence-writer contract: the context handed to the writer is cancelled as
+// soon as the call returns (`defer cancel()`). Any writer that passes this
+// context to an exec.CommandContext spawn would SIGKILL its helper at that
+// moment, so the writer must detach (internal/update/converge.go). Pinned here
+// so a future change to this function cannot silently reintroduce the defect on
+// the writer side.
+func TestRequestHandoffConvergenceCancelsOnReturn(t *testing.T) {
+	writer := &cancelProbeWriter{}
+	runtime := &Runtime{
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handoffConvergence: writer,
+	}
+	runtime.requestHandoffConvergence(context.Background(),
+		HandoffClaim{OperationID: strings.Repeat("a", 32), NewSHA256: strings.Repeat("b", 64)})
+	if writer.calls != 1 {
+		t.Fatalf("writer calls = %d, want 1", writer.calls)
+	}
+	if writer.ctx == nil {
+		t.Fatal("the writer received no context")
+	}
+	// The deferred cancel has fired by now: this is exactly the moment the
+	// pre-fix code killed its systemd-run helper.
+	select {
+	case <-writer.ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the writer's context outlived the call; the detach rule would no longer be required")
+	}
+	if !errors.Is(writer.ctx.Err(), context.Canceled) {
+		t.Fatalf("ctx err = %v, want context.Canceled", writer.ctx.Err())
+	}
+}
+
+// cancelProbeWriter captures the context it was given so the test can observe
+// what happens to it after the call returns.
+type cancelProbeWriter struct {
+	calls int
+	ctx   context.Context
+}
+
+func (w *cancelProbeWriter) ConvergeHandoffConfig(ctx context.Context, _ HandoffClaim) error {
+	w.calls++
+	w.ctx = ctx
+	return nil
+}
+
 // TestBootConvergenceWriterReleasesRecords is the positive side: when the
 // outside writer is wired, boot requests it once, re-reads the pair and only
 // then removes the claim and marker.
@@ -493,6 +541,48 @@ func TestBootConvergenceWriterReleasesRecords(t *testing.T) {
 	}
 	if _, err := os.Lstat(rooted(root, upgradeHandoffPath)); !os.IsNotExist(err) {
 		t.Fatalf("marker survived boot convergence: %v", err)
+	}
+}
+
+// TestBootConvergenceWriterFailureKeepsClaim is the carried negative case from
+// Task 4: a writer that fails (systemd refused the unit, the binary changed, the
+// write was denied) must not fail startup and must not clear the claim. The
+// convergence debt simply survives for the next repair.
+func TestBootConvergenceWriterFailureKeepsClaim(t *testing.T) {
+	root, oldCfg, selfHash, operationID, identity, base := crashWindowFixture(t)
+	adopted, err := adoptCrashWindowClaim(root, oldCfg, selfHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &convergeWriter{t: t, root: root, cfg: oldCfg, failWith: errors.New("systemd unavailable")}
+	runtime, err := NewRuntime(adopted, identity, RuntimeOptions{
+		Root: root, Runner: base,
+		Controller:         &runtimeTestController{candidate: testCandidate(9)},
+		HandoffConvergence: writer,
+	})
+	if err != nil {
+		t.Fatalf("a failing convergence writer failed startup: %v", err)
+	}
+	if writer.calls != 1 {
+		t.Fatalf("convergence writer calls = %d, want 1", writer.calls)
+	}
+	claim, ok, claimErr := readUpgradeClaimFile(root)
+	if claimErr != nil || !ok || claim.OperationID != operationID {
+		t.Fatalf("claim after a failed convergence = %+v, %v, %v", claim, ok, claimErr)
+	}
+	marker, pending, markerErr := runtime.readUpgradeHandoff()
+	if markerErr != nil || !pending || marker.State != handoffRunning {
+		t.Fatalf("marker after a failed convergence = %+v, %v, %v", marker, pending, markerErr)
+	}
+	// The failed writer is retried on the next settlement, and only a real
+	// convergence plus readback may clear the records.
+	writer.failWith = nil
+	runtime.settleHandoffClaim(context.Background())
+	if writer.calls != 2 {
+		t.Fatalf("convergence writer calls = %d, want 2", writer.calls)
+	}
+	if _, err := os.Lstat(rooted(root, upgradeHandoffClaimPath)); !os.IsNotExist(err) {
+		t.Fatalf("claim survived a successful convergence: %v", err)
 	}
 }
 

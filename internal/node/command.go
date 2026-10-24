@@ -228,16 +228,27 @@ func checkOutACL(ctx context.Context, runner CommandRunner, root string, candida
 	return err
 }
 
+// RunOption is one CLI-wired dependency of the installed Agent. The node
+// package cannot import the updater (the updater imports node), so the
+// outside-sandbox convergence writer is injected here instead of constructed.
+type RunOption func(*RuntimeOptions)
+
+// WithHandoffConvergence wires the writer that publishes agent.json after an
+// in-memory crash-window adoption. Nil keeps the claim until the next repair.
+func WithHandoffConvergence(writer HandoffConvergenceWriter) RunOption {
+	return func(opts *RuntimeOptions) { opts.HandoffConvergence = writer }
+}
+
 // RunCommand runs the installed Agent. The hidden command accepts no
 // arguments and uses only fixed production paths.
-func RunCommand(args []string, stderr io.Writer) int {
+func RunCommand(args []string, stderr io.Writer, options ...RunOption) int {
 	if len(args) != 0 {
 		_, _ = io.WriteString(stderr, "USAGE: meshmux __internal-agent\n")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	err := runInstalledAgent(ctx, stderr)
+	err := runInstalledAgent(ctx, stderr, options)
 	if err == nil {
 		return 0
 	}
@@ -287,7 +298,7 @@ type stableError string
 
 func (e stableError) Error() string { return string(e) }
 
-func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
+func runInstalledAgent(ctx context.Context, stderr io.Writer, options []RunOption) error {
 	cfgData, _, err := readPrivateFile(AgentConfigPath)
 	if err != nil {
 		return stableError("AGENT_CONFIG_UNSAFE")
@@ -336,7 +347,7 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
 	if err != nil {
 		return stableError("AGENT_CONTROLLER_UNAVAILABLE")
 	}
-	agentRuntime, err := NewRuntime(cfg, identity, RuntimeOptions{
+	runtimeOpts := RuntimeOptions{
 		Root:       "/",
 		Runner:     ExecRunner{},
 		Controller: controller,
@@ -346,7 +357,11 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer) error {
 		// params. Without this the stage step would stage a stamped row as an
 		// ordinary config change and no upgrade could ever start.
 		StageTargets: controller,
-	})
+	}
+	for _, option := range options {
+		option(&runtimeOpts)
+	}
+	agentRuntime, err := NewRuntime(cfg, identity, runtimeOpts)
 	if err != nil {
 		return err
 	}

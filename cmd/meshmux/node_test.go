@@ -27,11 +27,12 @@ type fakeNodeRunner struct {
 }
 
 type nodeInstallCall struct {
-	cfg            node.Config
-	operationID    string
-	repair         bool
-	code           string
-	nonInteractive bool
+	cfg               node.Config
+	operationID       string
+	repair            bool
+	code              string
+	nonInteractive    bool
+	fromRecordedState bool
 }
 
 func (f *fakeNodeRunner) PreflightNode(context.Context, node.Config, bool) ([]install.Check, []int) {
@@ -64,7 +65,8 @@ func (f *fakeNodeRunner) BuildNodePlanForRoot(_, _ string, cfg node.Config, _ st
 }
 
 func (f *fakeNodeRunner) InstallNode(_ context.Context, cfg node.Config, operationID string, repair bool, code string, opts install.NodeApplyOptions) (install.InstallResult, error) {
-	f.installs = append(f.installs, nodeInstallCall{cfg: cfg, operationID: operationID, repair: repair, code: code, nonInteractive: opts.NonInteractive})
+	f.installs = append(f.installs, nodeInstallCall{cfg: cfg, operationID: operationID, repair: repair, code: code,
+		nonInteractive: opts.NonInteractive, fromRecordedState: opts.FromRecordedState})
 	var err error
 	if len(f.installErrs) >= len(f.installs) {
 		err = f.installErrs[len(f.installs)-1]

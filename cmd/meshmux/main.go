@@ -33,13 +33,19 @@ func main() {
 		os.Exit(webcmd.Run(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-agent" {
-		os.Exit(node.RunCommand(os.Args[2:], os.Stderr))
+		// The convergence writer is process-local: it only enqueues one
+		// transient unit, so it never waits for a lock-taking repair while the
+		// Agent holds the runtime flock (Task 4 carry).
+		os.Exit(node.RunCommand(os.Args[2:], os.Stderr, node.WithHandoffConvergence(update.NewConvergenceWriter())))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update" {
 		os.Exit(runInternalUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update-install" {
 		os.Exit(runInternalUpdateInstall(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-update-converge" {
+		os.Exit(runInternalUpdateConverge(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-agent-version" {
 		os.Exit(runInternalAgentVersion(os.Args[2:], os.Stdout, os.Stderr))
@@ -69,6 +75,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	}
 	if len(args) > 0 && args[0] == "__internal-update-install" {
 		return runInternalUpdateInstall(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-update-converge" {
+		return runInternalUpdateConverge(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "__internal-agent-version" {
 		return runInternalAgentVersion(args[1:], stdout, stderr)
@@ -167,6 +176,27 @@ func runInternalUpdateInstall(args []string, stdout, stderr io.Writer) int {
 		if result.ExitCode > 0 {
 			return result.ExitCode
 		}
+		return 1
+	}
+	return 0
+}
+
+// runInternalUpdateConverge is the transient convergence unit's entry: it
+// rewrites agent.json for the crash-window claim the Agent adopted in memory.
+// It is the only hidden command that writes /etc, and it is reachable only from
+// the fixed systemd-run argv in internal/update/converge.go. One fixed argv, no
+// prompts, no public surface.
+func runInternalUpdateConverge(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-update-converge", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	operationID := flags.String("operation-id", "", "operation ID owning the claim")
+	expectedSHA256 := flags.String("expected-sha256", "", "claimed Agent binary SHA-256")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-update-converge --operation-id HEX32 --expected-sha256 HEX")
+		return 2
+	}
+	if err := install.ConvergeHandoffConfig("/", *operationID, *expectedSHA256); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
