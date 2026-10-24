@@ -201,7 +201,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	lines, credentials, err := s.store.subscriptionDownload(token, s.now())
 	if err != nil {
 		if errors.Is(err, errSubscriptionStoreUnavailable) {
-			s.event(r, "DATABASE_UNAVAILABLE")
+			s.event(r, codeDatabaseUnavailable)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			written = true

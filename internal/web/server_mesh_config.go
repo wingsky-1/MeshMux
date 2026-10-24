@@ -89,7 +89,7 @@ func (app *Server) meshConfigPreflight(record MeshDeviceRecord, now time.Time) (
 	lines, credentials, err := app.store.subscriptionForSubscriber(record.SubscriberID, now)
 	if err != nil {
 		if errors.Is(err, errSubscriptionStoreUnavailable) {
-			return meshConfigPlan{}, errors.New("DATABASE_UNAVAILABLE")
+			return meshConfigPlan{}, errors.New(codeDatabaseUnavailable)
 		}
 		return meshConfigPlan{}, meshError(codeMeshEndpointSubscriberUnavailable,
 			"the bound subscriber cannot serve a mesh config")
@@ -205,7 +205,7 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 		return
 	}
 	if record.Status != mesh.StatusPending {
-		app.fail(w, r, http.StatusConflict, "MESH_DEVICE_NOT_REENROLLABLE",
+		app.fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable,
 			"只有待注册设备可以签发设备配置。", "请刷新页面确认状态；已过期设备需先重新签发一次性 Key。")
 		return
 	}

@@ -1079,37 +1079,35 @@ func failedResult(result protocol.TaskResult, code string) protocol.TaskResult {
 	return result
 }
 
-func stableCode(value string) string {
-	if index := strings.IndexByte(value, ':'); index >= 0 {
-		value = value[:index]
+// stableCode returns code when it is one of the registered runtime codes, and
+// taskFailedCode otherwise. Only the registry decides what reaches a task
+// result: a caller-supplied message, a wrapped error and a free-form value all
+// collapse to taskFailedCode instead of becoming an ad-hoc code.
+func stableCode(code string) string {
+	if isRuntimeCode(code) {
+		return code
 	}
-	var b strings.Builder
-	for _, char := range value {
-		if char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' {
-			b.WriteRune(char)
-		}
-	}
-	code := b.String()
-	if code == "" || code[0] < 'A' || code[0] > 'Z' {
-		return "TASK_FAILED"
-	}
-	if len(code) > 64 {
-		code = code[:64]
-	}
-	return code
+	return taskFailedCode
 }
 
+// errorCode extracts the stable code of err. Only the text before the first
+// colon can name a code, and only a registered one is returned; the rest of the
+// message (a path, a digest, a raw subprocess line) stays out of the contract.
 func errorCode(err error) string {
 	if err == nil {
 		return ""
 	}
-	return stableCode(err.Error())
+	message := err.Error()
+	if index := strings.IndexByte(message, ':'); index > 0 {
+		message = message[:index]
+	}
+	return stableCode(message)
 }
 
 func errorCodeOr(err error, fallback string) string {
 	code := errorCode(err)
-	if code == "" || code == "TASK_FAILED" {
-		return fallback
+	if code == "" || code == taskFailedCode {
+		return stableCode(fallback)
 	}
 	return code
 }

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
@@ -21,7 +20,7 @@ var (
 	// errSubscriptionStoreUnavailable marks a database failure. It is the
 	// only rejection that is not hidden behind a generic 404, because the
 	// operator has to be able to tell a broken database from a bad bearer.
-	errSubscriptionStoreUnavailable = errors.New("DATABASE_UNAVAILABLE")
+	errSubscriptionStoreUnavailable = errors.New(codeDatabaseUnavailable)
 )
 
 // subscriptionDownload resolves one plaintext bearer into the Lines and the
@@ -77,11 +76,16 @@ func publicLine(line subscription.Line) subscription.Line {
 // subscriptionStoreError maps a store error onto the two public outcomes. A
 // database failure is reported separately; everything else is the generic
 // rejection.
+//
+// The database failure is recognised by its code, compared against
+// codeDatabaseUnavailable, and by the sentinel this file returns itself. A
+// message prefix is never matched: the detail half of an error cannot make an
+// ordinary refusal look like an outage or the other way round.
 func subscriptionStoreError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
+	if errors.Is(err, errSubscriptionStoreUnavailable) || errorCodeOf(err) == codeDatabaseUnavailable {
 		return errSubscriptionStoreUnavailable
 	}
 	return errSubscriptionRejected
