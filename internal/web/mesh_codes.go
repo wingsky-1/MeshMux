@@ -141,6 +141,7 @@ var (
 		subscription.CodeMeshHostnameInvalid,
 		subscription.CodeMeshLineInTailnet,
 		subscription.CodeMeshPolicyInvalid,
+		subscription.CodeMeshPurposeUnsupported,
 	)
 )
 

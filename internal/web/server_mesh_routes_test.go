@@ -46,6 +46,60 @@ func routeCallIndex(calls []string, name string) int {
 	return -1
 }
 
+// TestMeshSubnetRouterKeepsTheStockClient pins #113 2-5 for the purpose that
+// actually advertises LAN prefixes. A subnet_router never receives the
+// device-scoped sing-box document: that document is proxy_mesh-only and pins
+// accept_routes=false, so it could not reach an advertised prefix anyway. The
+// page keeps the stock Tailscale client and its join command with the declared
+// prefixes; that client owns its own --accept-routes choice, which the Hub does
+// not set. The exporter's own purpose table is pinned in internal/subscription.
+func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
+	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
+	now := app.now()
+	line := createEdgeNode(t, app.store, now)
+	configureLine(t, app.store, line, "line-a", now)
+	// A subnet_router may be bound to a subscriber; the binding must not turn
+	// it into a proxy+mesh device.
+	sub, _, err := app.store.createSubscriber("alice", []string{line}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.resetCalls()
+	w := b.post("/mesh", url.Values{
+		"display_name": {"nas"}, "purpose": {"subnet_router"}, "platform": {"nas"},
+		"subscriber_id": {sub.ID}, "declared_prefixes": {"192.168.1.0/24"},
+	})
+	requireStatus(t, w, http.StatusOK)
+	body := w.Body.String()
+	if strings.Contains(body, `"accept_routes"`) || strings.Contains(body, "meshmux-ts") {
+		t.Fatalf("subnet_router received the proxy_mesh document: %.600s", body)
+	}
+	if !strings.Contains(body, "--advertise-routes=192.168.1.0/24") {
+		t.Fatalf("subnet_router lost its stock advertise command: %.600s", body)
+	}
+	if fake.callsOf("preauthkeys.create") != 0 {
+		t.Fatalf("subnet_router minted a Headscale pre-auth key: %v", fake.calls)
+	}
+	// The config endpoint refuses the same purpose with a stable code, so an
+	// explicit POST cannot reach the renderer either.
+	devices, err := app.store.listMeshDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("devices = %d", len(devices))
+	}
+	fake.resetCalls()
+	w = b.post("/mesh/config", url.Values{"device_id": {devices[0].ID}})
+	requireStatus(t, w, http.StatusConflict)
+	if !strings.Contains(w.Body.String(), codeMeshEndpointPurposeUnsupported) {
+		t.Fatalf("config refusal lost its code: %.400s", w.Body.String())
+	}
+	if fake.callsOf("preauthkeys.create") != 0 {
+		t.Fatalf("config refusal minted a pre-auth key: %v", fake.calls)
+	}
+}
+
 func TestMeshCreateSubnetRouterRequiresPrefix(t *testing.T) {
 	_, b, _, _ := meshTestApp(t)
 	w := b.post("/mesh", url.Values{

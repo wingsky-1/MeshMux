@@ -102,10 +102,11 @@ PR-9b 只交付按前缀的子网路由声明、批准、撤销批准与观测�
 | B | 核对：同一 `nodes list` 循环按设备记录 `available`/`approved`/`served` 证据；未声明前缀只记事件，任何通过都不会自动批准；单设备失败报 partial，不隐藏其余设备 | [x] `TestMeshReconcileRecordsRouteEvidence`、`TestReconcileMeshRoutesNeverApprovesUntracked` |
 | B | 设备注销：先 `ClearApprovedRoutes` 再 expire/delete 节点；失败保持 `revoking` 可重试 | [x] `TestMeshRevokeClearsApprovedRoutesBeforeDelete` |
 | B | 页面：设备卡直接渲染 approved/available/served 三列、意图徽标、批准/撤销批准、`operation_id` 与最后观测；页面渲染仍只有 `users list` + `nodes list` 两次只读调用 | [x] `TestMeshPageRenderOnlyReadsControlPlane` 口径不变、`TestMeshRouteApproveSendsFullSetAndPreservesUntracked` |
+| B | 客户端配置的用途边界（#113 2-5）：`accept_routes` 不再是与用途无关的字面量——导出器按 `Purpose` 查表并只渲染 `proxy_mesh`，`accept_routes` 在该用途下有意固定 `false` 并在 `FEATURES`/`CLIENT_CAPABILITIES` 声明原因（无 TUN、唯一条 Tailscale 规则只匹配 Tailnet 前缀）；`mesh_only`/`subnet_router`/缺省用途一律以 `EXPORT_MESH_PURPOSE_UNSUPPORTED` 拒绝，继续使用现成 Tailscale 客户端，子网路由设备保留带 `--advertise-routes` 的入网命令 | [x] `TestExportMeshDeviceAcceptRoutesFollowsPurpose`、`TestMeshPurposeProfilesAreClosed`、`TestMeshConfigPurposeReachesTheExporter`、`TestMeshSubnetRouterKeepsTheStockClient`；真实 `sing-box check` 接受该文档 |
 | C | 隔离 Debian 13 VM + 真实 NAS/远程客户端：真实 advertise/approve/readback、`served` 与跨网访问 | [ ] 未含：本切片没有真实 tailnet 客户端、NAS 或远程客户端流量；跨网可达必须由后续真机验收证明 |
 
 - [ ] **未含 C 级跨网可达**：三列只证明 Hub 与 Headscale 对路由集合的记录/readback，不证明 ACL、客户端实际接受路由、NAS 网段可达或公网链路；不得据此声称子网路由已端到端可用。
-- [ ] **客户端配置边界**：9c 已实现待注册 proxy_mesh 设备的一次性 sing-box 单 VPN 配置（Tailscale Endpoint + 代理 selector，无 TUN）；标准订阅仍不含 Mesh，SSID、远程家庭网段与真机导入属 #10/后续 C 级验收。本切片（9b）未做 exit-node 批准或批量批准。
+- [ ] **客户端配置边界**：9c 已实现待注册 proxy_mesh 设备的一次性 sing-box 单 VPN 配置（Tailscale Endpoint + 代理 selector，无 TUN）；标准订阅仍不含 Mesh，SSID、远程家庭网段与真机导入属 #10/后续 C 级验收。本切片（9b）未做 exit-node 批准或批量批准。该文档的 `accept_routes` 按用途固定 `false` 并已声明不支持对端子网路由（见上表 #113 2-5 行）：代理+Mesh 客户端不声称能到达远端 LAN。
 
 NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机的授权、旧身份处置、路由接管与回退设计见 [Mesh 身份迁移](MESH_MIGRATION.zh-CN.md)；9a/9b 的验收结论不变。
 

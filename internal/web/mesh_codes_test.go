@@ -76,6 +76,7 @@ func TestMeshStatusIsChosenFromCodesOnly(t *testing.T) {
 		{mesh.CodeKeyAlreadyActive, http.StatusConflict},
 		{codeMeshEndpointRenderFailed, http.StatusConflict},
 		{subscription.CodeMeshLineInTailnet, http.StatusConflict},
+		{subscription.CodeMeshPurposeUnsupported, http.StatusConflict},
 		{codeMeshRouteApprovalUnconfirmed, http.StatusConflict},
 	}
 	for _, tc := range cases {

@@ -70,6 +70,13 @@ func TestMeshExportTailnetPrefixesMatchDomain(t *testing.T) {
 			subscription.MeshTailnetIPv4Prefix, subscription.MeshTailnetIPv6Prefix,
 			mesh.TailnetIPv4Prefix, mesh.TailnetIPv6Prefix)
 	}
+	// server_mesh_config.go converts the stored purpose to the exporter's own
+	// type, so the two spellings must stay identical.
+	for _, purpose := range []mesh.Purpose{mesh.PurposeProxyMesh, mesh.PurposeMeshOnly, mesh.PurposeSubnetRouter} {
+		if got := subscription.MeshPurpose(purpose); string(got) != string(purpose) {
+			t.Fatalf("subscription purpose %q does not match domain purpose %q", got, purpose)
+		}
+	}
 }
 
 func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
@@ -185,6 +192,38 @@ func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 	}
 	if fake.callsOf("preauthkeys.create") != 0 {
 		t.Fatalf("purpose refusal minted a pre-auth key: %v", fake.calls)
+	}
+}
+
+// TestMeshConfigPurposeReachesTheExporter proves the stored purpose travels
+// into the pure renderer instead of the exporter assuming proxy_mesh (#113
+// 2-5). The 9c document is proxy_mesh-only and states accept_routes=false; a
+// subnet_router keeps the stock Tailscale client, so the same field set with
+// that purpose is refused by the exporter rather than rendered.
+func TestMeshConfigPurposeReachesTheExporter(t *testing.T) {
+	app, _, _, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
+	now := app.now()
+	device, err := app.store.createMeshDevice(meshSpec("nas", mesh.PurposeSubnetRouter, ""), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := subscription.MeshDeviceInput{
+		DeviceID:   device.ID,
+		Hostname:   device.NodeName,
+		Purpose:    subscription.MeshPurpose(device.Purpose),
+		ControlURL: testHeadscaleOrigin,
+		AuthKey:    "hskey-auth-example-once",
+	}
+	if _, err = subscription.NewMeshConfigModel(input); err == nil ||
+		!strings.Contains(err.Error(), subscription.CodeMeshPurposeUnsupported) {
+		t.Fatalf("subnet_router reached the renderer as a proxy document: %v", err)
+	}
+	// The missing-purpose case is the fail-closed counterpart: a caller that
+	// forgets the field cannot silently get the proxy_mesh document.
+	input.Purpose = ""
+	if _, err = subscription.ExportMeshDevice(input); err == nil ||
+		!strings.Contains(err.Error(), subscription.CodeMeshPurposeUnsupported) {
+		t.Fatalf("an input without a purpose rendered a document: %v", err)
 	}
 }
 
