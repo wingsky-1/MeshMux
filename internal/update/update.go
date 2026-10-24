@@ -1,7 +1,8 @@
 // Package update validates a Web-approved target on the target node, fetches
-// the pinned manifest and package, verifies its SHA-256, and hands the verified
-// bytes to the new package's own install: the old binary never installs itself
-// (pull-then-handoff, #11c-1).
+// the pinned manifest and package, verifies its SHA-256, and starts the new
+// package's own install as a transient systemd unit outside the Agent's cgroup:
+// the old binary never installs itself and never restarts the Agent
+// (pull-then-handoff, #11c-1; transient handoff, #11c-2).
 package update
 
 import (
@@ -16,7 +17,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -32,36 +32,40 @@ const DefaultWorkDir = "/var/lib/meshmux-agent/update"
 // the new package; it matches the installer's own preflight floor.
 const requiredSpace = 1 << 30
 
-// systemctlPath is the fixed systemd entry the handoff uses to restart the
-// Agent. No caller or remote request can select another executable.
+// systemctlPath is the fixed systemd entry used for the unit liveness query and
+// no other command. No caller or remote request can select another executable.
 const systemctlPath = "/usr/bin/systemctl"
 
 // Config is one approved update; the manifest body never travels through argv.
 type Config struct {
 	Target, ManifestSHA256, OperationID, WorkDir string
-	FetchManifest                                func(context.Context) ([]byte, error)
+	// PackageSHA256 is the verified package digest the transient unit re-checks
+	// before it installs. Run fills it from the component it verified; it is
+	// never a caller-supplied trust anchor.
+	PackageSHA256 string
+	FetchManifest func(context.Context) ([]byte, error)
 	// CurrentVersion and Releases are the running build and the ordered
 	// release history of the approved manifest. Task 6 supplies the history;
 	// with none the executor can only honour the manifest's version binding.
 	CurrentVersion string
 	Releases       []string
-	// NodeConfig, Space and Readback are the host seams of the handoff. The
-	// defaults read the installed Agent configuration, stat / and hash the
-	// installed executor.
+	// NodeConfig and Space are the host seams of the handoff. The defaults read
+	// the installed Agent configuration and stat /.
 	NodeConfig func() (node.Config, error)
 	Space      func(path string, minimum uint64) error
-	Readback   func() (string, error)
 }
 
 // Result reports what the handoff staged and observed. It never claims the
-// target is installed before ReadbackDigest matched the verified package.
-// A non-nil Result returned with an error is staged-only: VerifiedPath is set
-// only after the digest matched.
+// target is installed: the install runs in a transient unit after this process
+// returns, and applied is the approved chain's readback verdict (spec §4.1),
+// not this receipt. VerifiedPath is set only after the digest matched.
 type Result struct {
-	VerifiedPath   string           `json:"verified_path"`
-	Manifest       upgrade.Manifest `json:"manifest"`
-	BackupPointer  string           `json:"backup_pointer,omitempty"`
-	ReadbackDigest string           `json:"readback_digest,omitempty"`
+	VerifiedPath  string           `json:"verified_path"`
+	Manifest      upgrade.Manifest `json:"manifest"`
+	BackupPointer string           `json:"backup_pointer,omitempty"`
+	// ReadbackDigest is the installed executor digest when a caller observed
+	// it. The transient handoff leaves it empty: the unit installs later.
+	ReadbackDigest string `json:"readback_digest,omitempty"`
 }
 
 // backupPointer is the rollback pointer of one release: it names the release
@@ -87,10 +91,12 @@ var (
 )
 
 // Run validates the approved target, fetches the pinned manifest and package,
-// then hands the verified bytes to the new package's install. The order is
-// fixed: gates before the space check, the space check before the backup
-// pointer, the pointer before any mutation, the new package before the Agent
-// restart, and the readback last.
+// then starts the verified package's install as one transient systemd unit. The
+// order is fixed: gates before the space check, the space check before the
+// backup pointer, the pointer before any mutation, and the unit last. Run
+// returns once the unit is enqueued; it never waits for the install and never
+// claims the target is applied — that verdict is the chain's readback (spec
+// §4.1), which the restarted Agent observes.
 func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, error) {
 	switch {
 	case !targetRE.MatchString(cfg.Target):
@@ -109,9 +115,6 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	}
 	if cfg.Space == nil {
 		cfg.Space = install.DiskAvailable
-	}
-	if cfg.Readback == nil {
-		cfg.Readback = installedDigest
 	}
 	body, err := cfg.FetchManifest(ctx)
 	if err != nil || len(body) == 0 {
@@ -149,11 +152,21 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err := adjacencyGate(cfg); err != nil {
 		return Result{}, err
 	}
+	// The transient unit's fixed argv is validated here, before anything is
+	// fetched or written: an unclean staging directory or an unrepresentable
+	// target is refused while the host is still untouched. The package digest
+	// comes from the component verified above, never from the caller.
+	cfg.PackageSHA256 = c.SHA256
+	argv, err := BuildTransientArgv(cfg)
+	if err != nil {
+		return Result{}, err
+	}
 	// The handoff reuses the recorded Agent configuration. Reading it is a
 	// gate, not a mutation: a host without one is not a Node this executor may
 	// upgrade (a Hub upgrades itself in 11d), so nothing is fetched or written.
-	installed, err := cfg.NodeConfig()
-	if err != nil {
+	// The transient unit re-reads the same file itself, so this process keeps
+	// no copy of it.
+	if _, err := cfg.NodeConfig(); err != nil {
 		return Result{}, fail("AGENT_CONFIG_UNAVAILABLE", "the installed Agent configuration could not be read")
 	}
 	// The backup snapshot and the new package both land on the root
@@ -172,14 +185,9 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 		return result, err
 	}
 	result.BackupPointer = pointer
-	if err := handoff(ctx, installed, cfg.OperationID, path, runner); err != nil {
+	if err := handoff(ctx, argv, runner); err != nil {
 		return result, err
 	}
-	digest, err := cfg.Readback()
-	if err != nil || digest != c.SHA256 {
-		return result, fail("UPDATE_READBACK_MISMATCH", "the installed executor does not match the verified package digest")
-	}
-	result.ReadbackDigest = digest
 	return result, nil
 }
 
@@ -230,20 +238,17 @@ func writeBackupPointer(cfg Config, c upgrade.Component, path string) (string, e
 	return final, nil
 }
 
-// handoff execs the verified package's own install with a fixed argv and then
-// restarts the Agent. The install entry is the private one only: --repair
-// reuses the recorded identity and --non-interactive refuses every prompt, so
-// no stdin is ever read on a Web-driven upgrade.
-func handoff(ctx context.Context, installed node.Config, operationID, path string, runner node.CommandRunner) error {
-	args := []string{"install", string(installed.Role), "--hub", installed.HubURL,
-		"--node", installed.NodeID, "--vless-port", strconv.Itoa(installed.VLESSPort),
-		"--ssh-port", strconv.Itoa(installed.SSHPort), "--operation-id", operationID,
-		"--yes", "--repair", "--non-interactive"}
-	if _, err := runner.Run(ctx, path, args...); err != nil {
-		return fail("UPDATE_INSTALL_FAILED", "the new package's install refused the handoff; the previous release is preserved")
+// handoff starts the verified package's own install as one transient systemd
+// unit and returns as soon as systemd has accepted the job. The unit — not this
+// process — runs install, restarts the Agent and writes its result file, so the
+// restart it performs cannot kill it (spec §4.2). This process never installs,
+// never restarts and never claims the target is applied.
+func handoff(ctx context.Context, argv []string, runner node.CommandRunner) error {
+	if len(argv) == 0 || argv[0] != systemdRunPath {
+		return fail("UPDATE_UNIT_START_FAILED", "the transient unit argv is not the fixed systemd-run command")
 	}
-	if _, err := runner.Run(ctx, systemctlPath, "restart", node.AgentUnit); err != nil {
-		return fail("UPDATE_RESTART_FAILED", "the verified package is installed but the Agent did not restart")
+	if _, err := runner.Run(ctx, argv[0], argv[1:]...); err != nil {
+		return fail("UPDATE_UNIT_START_FAILED", "systemd did not accept the transient install unit; the previous release is untouched")
 	}
 	return nil
 }
@@ -259,16 +264,6 @@ func installedNodeConfig() (node.Config, error) {
 		return node.Config{}, err
 	}
 	return cfg, nil
-}
-
-// installedDigest hashes the installed executor, the readback the handoff
-// compares with the verified package.
-func installedDigest() (string, error) {
-	data, err := os.ReadFile(node.AgentBinaryPath)
-	if err != nil || len(data) == 0 {
-		return "", fail("UPDATE_READBACK_UNAVAILABLE", "the installed executor could not be read")
-	}
-	return hexDigest(data), nil
 }
 
 // validateTarget is the gate for a *target* release, which is by definition not
@@ -320,7 +315,12 @@ func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) 
 	if os.MkdirAll(dir, 0700) != nil {
 		return "", fail("UPDATE_STAGE_FAILED", "the private staging directory could not be created")
 	}
-	final := filepath.Join(dir, "meshmuxd-"+target+"-"+c.Architecture)
+	// The unit's ExecStart and the staged file share one name helper, so the
+	// bytes verified here are exactly the bytes the unit later executes.
+	final, err := transientStagedPath(dir, target, c.Architecture)
+	if err != nil {
+		return "", err
+	}
 	if os.WriteFile(final+".part", data, 0700) != nil {
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be written")
 	}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,9 +40,9 @@ func (r *handoffRunner) Run(_ context.Context, name string, args ...string) ([]b
 }
 
 // TestHandoffBacksUpBeforeMutating is the rollback-pointer property: the
-// pointer that names the release being replaced exists before the new package
-// runs, the handoff execs exactly one fixed argv, restarts the Agent, and
-// returns the digest it read back.
+// pointer that names the release being replaced exists before the transient
+// unit is started, and the handoff starts exactly one fixed systemd-run argv.
+// The install itself runs in the unit, after this process has returned.
 func TestHandoffBacksUpBeforeMutating(t *testing.T) {
 	pkg := []byte("fixture package\n")
 	cfg := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
@@ -54,7 +56,7 @@ func TestHandoffBacksUpBeforeMutating(t *testing.T) {
 		checked = true
 		data, err := os.ReadFile(filepath.Join(cfg.WorkDir, "backup-"+cfg.Target+".json"))
 		if err != nil {
-			t.Fatalf("backup pointer missing before the handoff exec: %v", err)
+			t.Fatalf("backup pointer missing before the transient unit: %v", err)
 		}
 		if err := json.Unmarshal(data, &pointer); err != nil {
 			t.Fatalf("backup pointer is not JSON: %v", err)
@@ -65,23 +67,21 @@ func TestHandoffBacksUpBeforeMutating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
-	want := []string{result.VerifiedPath, "install", "edge", "--hub", "https://hub.example.invalid",
-		"--node", strings.Repeat("a", 32), "--vless-port", "8443", "--ssh-port", "2222",
-		"--operation-id", cfg.OperationID, "--yes", "--repair", "--non-interactive"}
-	if len(runner.calls) != 2 || strings.Join(runner.calls[0], " ") != strings.Join(want, " ") {
-		t.Fatalf("calls = %q, want %q then the Agent restart", runner.calls, want)
-	}
-	if got := runner.calls[1]; len(got) != 3 || got[0] != "/usr/bin/systemctl" ||
-		got[1] != "restart" || got[2] != node.AgentUnit {
-		t.Fatalf("restart argv = %q", got)
+	want := wantTransientArgv(cfg, shaOf(pkg))
+	if len(runner.calls) != 1 || !slices.Equal(runner.calls[0], want) {
+		t.Fatalf("calls = %q, want exactly %q", runner.calls, want)
 	}
 	if pointer.OperationID != cfg.OperationID || pointer.FromVersion != cfg.CurrentVersion ||
 		pointer.Target != cfg.Target || pointer.ManifestSHA256 != cfg.ManifestSHA256 ||
 		pointer.PackageSHA256 != shaOf(pkg) {
 		t.Fatalf("pointer = %+v", pointer)
 	}
-	if result.BackupPointer == "" || result.ReadbackDigest != shaOf(pkg) {
+	if result.BackupPointer == "" || result.VerifiedPath != filepath.Join(cfg.WorkDir, "meshmuxd-"+cfg.Target+"-"+runtime.GOARCH) {
 		t.Fatalf("result = %+v", result)
+	}
+	// The pre-restart process never claims the install happened.
+	if result.ReadbackDigest != "" {
+		t.Fatalf("handoff reported a readback: %+v", result)
 	}
 }
 
@@ -166,17 +166,18 @@ func TestHandoffRefusesNonAdjacentTarget(t *testing.T) {
 	}
 }
 
-// TestHandoffRequiresMatchingReadback is the receipt rule: an Agent that comes
-// back reporting another digest is a failure, never an applied upgrade.
-func TestHandoffRequiresMatchingReadback(t *testing.T) {
+// TestHandoffStartsUnitAndDoesNotClaimApplied is the receipt rule after 11c-2:
+// the pre-restart process starts the unit and returns staged-only. It never
+// reports a readback, because the install has not run yet; applied is the
+// chain's readback verdict on the restarted Agent (spec §4.1).
+func TestHandoffStartsUnitAndDoesNotClaimApplied(t *testing.T) {
 	pkg := []byte("fixture package\n")
 	cfg := fixtureConfig(t, fixtureManifest(t, pkg, shaOf(pkg)))
-	cfg.Readback = func() (string, error) { return strings.Repeat("f", 64), nil }
 	result, err := Run(context.Background(), cfg, &fixtureRunner{})
-	if code := codeOf(err); code != "UPDATE_READBACK_MISMATCH" {
-		t.Fatalf("code = %q, want UPDATE_READBACK_MISMATCH (err %v)", code, err)
+	if err != nil {
+		t.Fatalf("handoff: %v", err)
 	}
-	if result.ReadbackDigest != "" || result.BackupPointer == "" {
+	if result.ReadbackDigest != "" || result.BackupPointer == "" || result.VerifiedPath == "" {
 		t.Fatalf("result = %+v", result)
 	}
 }
