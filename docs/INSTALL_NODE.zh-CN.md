@@ -95,6 +95,7 @@ install out
 
 - 有可用持久 identity 时，repair 不要求旧配对码，也不会重复消费 code。
 - repair 在成功复用 identity 后读取 Hub metadata 和既有 candidate，并重新执行本地检查、文件校验和数据平面恢复。
+- **repair 不把节点拉齐到本次下载的候选。** 它保留已记录的 active candidate 与对应的已校验编译配置：候选的落地属于 Agent 的 `config.apply → config.readback` 链，并由 11c-3 的确认/回退记录锚定；安装器若在 repair 中悄悄换到另一个 revision，这些锚点就会指向宿主并未运行的发行。该决定是写死的，不是遗漏：当下载候选与记录候选不同时，结果以 `installed`、空 `error_code` 结束，并在 `next_action` 中以稳定码 `REPAIR_CANDIDATE_NOT_CONVERGED` 点名保留的 revision 与未应用的候选，`events.jsonl` 同时记 `stage/candidate_not_converged`。要真正换配置，请用 Web 的固定四任务链，而不是 repair。
 - 只有安装器返回稳定 `PAIRING_CODE_REQUIRED` 或 `PAIRING_REQUIRED` 时，CLI 才提示管理员到 Hub Web 重签，并从 stdin 读取新 code；第二次调用继续使用同一个 operation ID。
 - 缺少 identity 的 repair 返回 `IDENTITY_MISSING`，不会把已消费的旧 code 当成可重复凭据。
 - 已有有效 LKG 的 repair 不为了“修布局”而覆盖 LKG；只有候选与已编译 active config 一致且文件权限正确时，LKG 才被视为有效。

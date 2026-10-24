@@ -914,6 +914,119 @@ func TestNodeRepairReusesIdentityAndPreservesLKG(t *testing.T) {
 	}
 }
 
+// TestNodeRepairDeclaresThatItKeepsTheRecordedCandidate pins the repair
+// candidate decision (#113 4-4): the verify tail used to decide silently
+// whether to write the downloaded candidate or keep the recorded one. The
+// decision is now fixed and declared — a repair keeps the recorded candidate,
+// records REPAIR_CANDIDATE_NOT_CONVERGED in the journal, and reports it as
+// next_action while the operation still ends "installed" with no error_code.
+func TestNodeRepairDeclaresThatItKeepsTheRecordedCandidate(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	operationID := strings.Repeat("e", 32)
+	// The Hub offers revision 2 while the host records revision 1: exactly the
+	// divergence a repair must not resolve by itself.
+	offered := node.NewCandidateDocument(node.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 2,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: node.KernelVersion,
+	})
+	recorded := node.NewCandidateDocument(node.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 1,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: node.KernelVersion,
+	})
+	f.opts.Candidate = func(context.Context, node.Config, node.Identity, int64) (node.CandidateDocument, error) {
+		return offered, nil
+	}
+	if err := writeState(f.root, InstallState{
+		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "partial",
+		Node: &f.cfg, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateNodeDirectory(rooted(f.root, nodeAgentStateDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistNodeIdentity(f.root, f.identity); err != nil {
+		t.Fatal(err)
+	}
+	recordedBody, err := jsonMarshal(recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(rooted(f.root, nodeKernelDataDir), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rooted(f.root, node.ActiveCandidatePath), recordedBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := node.CompileCandidate(recorded.Candidate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rooted(f.root, node.ActiveConfigPath), compiled, 0640); err != nil {
+		t.Fatal(err)
+	}
+	compiledHash := sha256.Sum256(compiled)
+	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
+		return node.Readback{
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
+			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
+			ConfigSHA256: hex.EncodeToString(compiledHash[:]), LocalActive: true,
+		}, nil
+	}
+	result, err := InstallNode(context.Background(), f.cfg, operationID, true, "", f.opts)
+	if err != nil || result.Status != "installed" || result.ErrorCode != "" {
+		t.Fatalf("repair = %+v %v, want installed with no error code", result, err)
+	}
+	if !strings.HasPrefix(result.Recovery, repairCandidateNotConverged) ||
+		!strings.Contains(result.Recovery, "revision 1") || !strings.Contains(result.Recovery, "revision 2") {
+		t.Fatalf("repair did not declare the candidate it kept: %q", result.Recovery)
+	}
+	// The recorded candidate is what the host runs: a repair never converges
+	// to the downloaded revision.
+	active, ok := currentNodeCandidate(f.root, f.cfg)
+	if !ok || active.Revision != 1 {
+		t.Fatalf("active candidate = %+v, want the recorded revision 1", active)
+	}
+	journal, err := os.ReadFile(filepath.Join(f.root, "var/lib/meshmux-installer/operations", operationID, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := false
+	for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
+		if line == "" {
+			continue
+		}
+		var event operationEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("journal line %q: %v", line, err)
+		}
+		if event.Stage == "stage" && event.Status == "candidate_not_converged" {
+			declared = true
+			if event.ErrorCode != "" {
+				t.Fatalf("a successful repair recorded an error code: %+v", event)
+			}
+		}
+	}
+	if !declared {
+		t.Fatalf("journal never declared the kept candidate: %s", journal)
+	}
+}
+
+// TestNodeFreshInstallDoesNotDeclareACandidateDecision keeps the notice a
+// repair fact: a fresh install applies exactly the Hub candidate, so its
+// next_action stays empty.
+func TestNodeFreshInstallDoesNotDeclareACandidateDecision(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleEdge)
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err != nil || result.Status != "installed" {
+		t.Fatalf("fresh install = %+v %v", result, err)
+	}
+	if result.Recovery != "" {
+		t.Fatalf("fresh install declared a repair notice: %q", result.Recovery)
+	}
+}
+
 func TestNodeLKGRequiresCanonicalBytes(t *testing.T) {
 	f := makeNodeFixture(t, node.RoleEdge)
 	dir := rooted(f.root, nodeKernelDataDir)
