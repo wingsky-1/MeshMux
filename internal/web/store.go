@@ -15,7 +15,6 @@ import (
 
 const sessionLifetime = 8 * time.Hour
 const idleLifetime = 30 * time.Minute
-const anonymousLifetime = 15 * time.Minute
 
 // The durable global authentication budget: ten attempts per rolling ten
 // minutes, shared by setup, login and password change. The window opens at its
@@ -324,35 +323,11 @@ func (s *store) prepareBootstrap(now time.Time) error {
 	return err
 }
 
-func (s *store) newSession(auth bool, now time.Time) (string, session, error) {
-	token := randomToken()
-	duration := anonymousLifetime
-	if auth {
-		duration = sessionLifetime
-	}
-	sess := session{Hash: tokenHash(token), CSRF: randomToken(), Auth: auth, Expires: now.Add(duration).Unix()}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return "", sess, err
-	}
-	defer tx.Rollback()
-	if _, err = tx.Exec("DELETE FROM sessions WHERE expires<=? OR seen<=?", now.Unix(), now.Add(-idleLifetime).Unix()); err != nil {
-		return "", sess, err
-	}
-	// Bound anonymous sessions even when clients repeatedly discard their cookies.
-	var count int
-	if err = tx.QueryRow("SELECT count(*) FROM sessions WHERE authenticated=0").Scan(&count); err != nil {
-		return "", sess, err
-	}
-	if !auth && count >= 256 {
-		return "", sess, errors.New("SESSION_CAPACITY")
-	}
-	_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,?,?,?)", sess.Hash, sess.CSRF, auth, sess.Expires, now.Unix())
-	if err != nil {
-		return "", sess, err
-	}
-	return token, sess, tx.Commit()
-}
+// newSession is gone: the login and setup forms no longer store an anonymous
+// row (see form_token.go), and the single administrator session is inserted by
+// login in its own transaction. `sessions` therefore only ever holds
+// authenticated rows, so no anonymous flood can fill a cap and lock the
+// administrator out of the page that exists to restore access (#113 3-3).
 
 func (s *store) session(token string, now time.Time) (session, error) {
 	var sess session

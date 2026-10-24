@@ -24,6 +24,7 @@ var csrfPattern = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
 type browser struct {
 	app    *Server
 	cookie *http.Cookie
+	form   *http.Cookie
 	csrf   string
 }
 
@@ -51,6 +52,9 @@ func (b *browser) req(method, path string, form url.Values, headers http.Header)
 	if b.cookie != nil {
 		r.AddCookie(b.cookie)
 	}
+	if b.form != nil {
+		r.AddCookie(b.form)
+	}
 	if method == "POST" {
 		r.Header.Set("Origin", testOrigin)
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -63,6 +67,13 @@ func (b *browser) req(method, path string, form url.Values, headers http.Header)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == b.app.cookieName() {
 			b.cookie = c
+		}
+		if c.Name == b.app.formCookieName() {
+			if c.MaxAge < 0 {
+				b.form = nil
+			} else {
+				b.form = c
+			}
 		}
 	}
 	if m := csrfPattern.FindStringSubmatch(w.Body.String()); len(m) > 1 {
@@ -252,11 +263,17 @@ func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {
 	}
 	token, _ = os.ReadFile(filepath.Join(app.store.dir, "bootstrap.token"))
 	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {"short"}}), 400)
-	// Simulate a second already-open setup tab; its token must become unusable.
+	// Simulate a second already-open setup tab; its form token is still valid,
+	// but the initialization entry is closed and the bootstrap secret is gone,
+	// so it can never create the admin.
 	other := &browser{app: app}
 	requireStatus(t, other.req("GET", "/setup", nil, nil), 200)
 	initialize(t, b)
-	requireStatus(t, other.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 401)
+	w := other.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}})
+	requireStatus(t, w, 403)
+	if !strings.Contains(w.Body.String(), "SETUP_CLOSED") {
+		t.Fatalf("second setup tab was not refused as closed: %.200s", w.Body.String())
+	}
 	// The password slot is taken after the session/form/CSRF checks, so only a
 	// well-formed login is refused while another hash holds it; a forged or
 	// session-less request is refused earlier with its own code.
@@ -290,6 +307,10 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	}
 	defer again.Close()
 	b.app = again
+	// The form token is process-local, so the restart invalidates the open form
+	// (a page reload) while the durable budget survives it. Re-open the page to
+	// show that the persisted limit, not the form, is what refuses.
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
 	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
 	again.now = func() time.Time { return time.Now().Add(11 * time.Minute) }
 	again.cfg.DirectProxy = true
@@ -412,19 +433,7 @@ func TestDatabaseFailureClosedAndHeaders(t *testing.T) {
 	requireStatus(t, b.req("GET", "/api/status", nil, nil), 503)
 }
 
-func TestSessionCapacityAndMigrationRollback(t *testing.T) {
-	app, _ := testApp(t)
-	for range 256 {
-		if _, _, err := app.store.newSession(false, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, _, err := app.store.newSession(false, time.Now()); err == nil {
-		t.Fatal("unbounded anonymous sessions")
-	}
-	if _, _, err := app.store.newSession(false, time.Now().Add(16*time.Minute)); err != nil {
-		t.Fatal("expired rows not reclaimed", err)
-	}
+func TestMigrationRollback(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "broken")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)

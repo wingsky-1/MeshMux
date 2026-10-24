@@ -45,6 +45,10 @@ type Server struct {
 	// database counter on this path would either contend that connection or let
 	// an anonymous flood spend the administrator's login budget.
 	pairing pairLimiter
+	// formKey signs the stateless CSRF token of the unauthenticated login and
+	// setup forms (see form_token.go). It is process-local, so a restart only
+	// invalidates forms that were open across it.
+	formKey []byte
 	// mesh is the narrow Headscale control-plane adapter behind the mesh
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.
@@ -97,7 +101,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 		s.Close()
 		return nil, err
 	}
-	app := &Server{cfg: c, store: s, log: logger, now: time.Now, kdfSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner()}
+	app := &Server{cfg: c, store: s, log: logger, now: time.Now, kdfSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner(), formKey: []byte(randomToken())}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -401,20 +405,19 @@ func (s *Server) authPage(w http.ResponseWriter, r *http.Request, setup bool) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
-			return
-		}
-		token, newSess, e := s.store.newSession(false, s.now())
-		if e != nil {
-			s.fail(w, r, 503, "SESSION_UNAVAILABLE", "暂时无法建立登录会话。", "请稍后重试或检查服务日志。")
-			return
-		}
-		sess = newSess
-		s.cookie(w, token, sess.Expires)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
+		return
 	}
-	s.render(w, r, 200, AuthPage(setup, sess.CSRF, s.cfg.DevHTTP, "", ""))
+	// The unauthenticated form needs a CSRF value, never a stored session. The
+	// double-submit cookie is the only state it adds, so no amount of anonymous
+	// traffic can fill a row cap and take this page away from the administrator
+	// who needs it to get back in.
+	form, ferr := s.formSession(r, s.now())
+	if ferr != nil {
+		form = s.newFormSession(w, s.now())
+	}
+	s.render(w, r, 200, AuthPage(setup, form.CSRF, s.cfg.DevHTTP, "", ""))
 }
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) { s.authPage(w, r, false) }
 func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) { s.authPage(w, r, true) }
@@ -426,7 +429,22 @@ func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session)
 			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
 			return
 		}
-		if err != nil || (auth && !sess.Auth) || (!auth && sess.Auth) {
+		if !auth {
+			// The login and setup forms are CSRF-protected by the stateless
+			// double-submit token, not by a stored session (#113 3-3). They never
+			// needed a row, and requiring one let anonymous traffic fill the
+			// session cap and take the login page away. An authenticated session
+			// still may not post to them.
+			if err == nil && sess.Auth {
+				s.fail(w, r, 401, "SESSION_INVALID", "会话无效或已过期。", "请重新打开登录页面。")
+				return
+			}
+			if sess, err = s.formSession(r, s.now()); err != nil {
+				s.fail(w, r, 401, "SESSION_INVALID", "会话无效或已过期。", "请重新打开登录页面。")
+				return
+			}
+		}
+		if err != nil || (auth && !sess.Auth) {
 			s.fail(w, r, 401, "SESSION_INVALID", "会话无效或已过期。", "请重新打开登录页面。")
 			return
 		}
@@ -590,6 +608,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 		s.event(r, "BOOTSTRAP_FILE_CLEANUP_FAILED")
 	}
 	s.cookie(w, "", 0)
+	s.clearFormCookie(w)
 	s.event(r, "ADMIN_INITIALIZED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -618,7 +637,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec("DELETE FROM sessions WHERE authenticated=1 OR token_hash=?", sess.Hash)
+	// Every row is replaced, including any anonymous row left by a build that
+	// still minted one for the login form. A successful login is the moment the
+	// stored session stops being needed at all.
+	_, err = tx.Exec("DELETE FROM sessions")
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,1,?,?)", tokenHash(token), csrf, expires, s.now().Unix())
 	}
@@ -636,6 +658,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	s.cookie(w, token, expires)
+	// The unauthenticated form token is spent: the session now carries its own
+	// CSRF value, so the double-submit cookie is dropped rather than left to
+	// outlive the form it protected.
+	s.clearFormCookie(w)
 	s.event(r, "LOGIN_SUCCEEDED")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -646,6 +672,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	s.cookie(w, "", 0)
+	s.clearFormCookie(w)
 	s.event(r, "LOGOUT_SUCCEEDED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -697,6 +724,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 		return
 	}
 	s.cookie(w, "", 0)
+	s.clearFormCookie(w)
 	s.event(r, "PASSWORD_CHANGED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
