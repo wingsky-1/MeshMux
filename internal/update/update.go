@@ -28,9 +28,36 @@ import (
 
 const DefaultWorkDir = "/var/lib/meshmux-agent/update"
 
-// requiredSpace is the free space a handoff needs for the backup snapshot and
-// the new package; it matches the installer's own preflight floor.
-const requiredSpace = 1 << 30
+const (
+	// packageSpace is the largest staged package the fetch path accepts
+	// (updatePackageMaxBytes in install_cmd.go).
+	packageSpace = 128 << 20
+	// snapshotSpace bounds one installer snapshot: the Agent binary and the
+	// co-located sing-box kernel (each bounded by packageSpace) plus unit
+	// files, agent.json, the LKG pair and the ledger.
+	snapshotSpace = 256 << 20
+	// spaceHeadroom covers journals, result files, ledger writes and
+	// filesystem slack while the copies below coexist.
+	spaceHeadroom = 128 << 20
+)
+
+// requiredSpace is the free space a handoff needs on the root filesystem,
+// re-derived for 11c-3 (spec §4.14). At the moment of an upgrade the following
+// copies share that filesystem:
+//
+//  1. the staged new package               <= packageSpace  (128 MiB)
+//  2. the installer's snapshot source      <= snapshotSpace (256 MiB)
+//  3. the promoted rollback payload copy   <= snapshotSpace (256 MiB)
+//  4. the N-1 retained generation          <= snapshotSpace (256 MiB)
+//  5. journals, results, ledger and slack  <= spaceHeadroom (128 MiB)
+//
+// N-1 is backupKeepConfirmed. The total is 1024 MiB, so the floor is never
+// weaker than the installer's own 1 GiB preflight (TestSpaceFloorDerivation).
+const requiredSpace = packageSpace + 3*snapshotSpace + spaceHeadroom
+
+// nodeDBSchema is the stored database schema of a Node host. A Node Agent owns
+// no database; a Hub records its own schema when 11d backs up the Web DB.
+const nodeDBSchema int64 = 0
 
 // systemctlPath is the fixed systemd entry used for the unit liveness query and
 // no other command. No caller or remote request can select another executable.
@@ -53,6 +80,12 @@ type Config struct {
 	// the installed Agent configuration and stat /.
 	NodeConfig func() (node.Config, error)
 	Space      func(path string, minimum uint64) error
+	// BackupRoot and BackupSource are the rollback seams. An empty BackupRoot
+	// is the sibling of WorkDir (the spec path for DefaultWorkDir); the source
+	// is the installer-provided snapshot promoted into the 0700 store. 11c-3
+	// Task 4 wires the retained installer snapshot here.
+	BackupRoot   string
+	BackupSource func() (string, error)
 
 	// SelfExecutable and RecordedRole are the seams of the new binary's
 	// install step (RunInstall). Production leaves both empty: the running
@@ -68,9 +101,11 @@ type Config struct {
 // returns, and applied is the approved chain's readback verdict (spec §4.1),
 // not this receipt. VerifiedPath is set only after the digest matched.
 type Result struct {
-	VerifiedPath  string           `json:"verified_path"`
-	Manifest      upgrade.Manifest `json:"manifest"`
-	BackupPointer string           `json:"backup_pointer,omitempty"`
+	VerifiedPath string           `json:"verified_path"`
+	Manifest     upgrade.Manifest `json:"manifest"`
+	// BackupPointer names the verified rollback record of this operation
+	// (upgrade-backups/<op>/record.json), not the legacy per-target pointer.
+	BackupPointer string `json:"backup_pointer,omitempty"`
 	// ReadbackDigest is the installed executor digest when a caller observed
 	// it. The transient handoff leaves it empty: the unit installs later.
 	ReadbackDigest string `json:"readback_digest,omitempty"`
@@ -101,10 +136,10 @@ var (
 // Run validates the approved target, fetches the pinned manifest and package,
 // then starts the verified package's install as one transient systemd unit. The
 // order is fixed: gates before the space check, the space check before the
-// backup pointer, the pointer before any mutation, and the unit last. Run
-// returns once the unit is enqueued; it never waits for the install and never
-// claims the target is applied — that verdict is the chain's readback (spec
-// §4.1), which the restarted Agent observes.
+// rollback record, the record and its readback before the package fetch, and
+// the unit last. Run returns once the unit is enqueued; it never waits for the
+// install and never claims the target is applied — that verdict is the chain's
+// readback (spec §4.1), which the restarted Agent observes.
 func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, error) {
 	switch {
 	case !targetRE.MatchString(cfg.Target):
@@ -173,8 +208,10 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	// gate, not a mutation: a host without one is not a Node this executor may
 	// upgrade (a Hub upgrades itself in 11d), so nothing is fetched or written.
 	// The transient unit re-reads the same file itself, so this process keeps
-	// no copy of it.
-	if _, err := cfg.NodeConfig(); err != nil {
+	// no copy of it. Its recorded Agent digest is the old-binary anchor of the
+	// rollback record.
+	installed, err := cfg.NodeConfig()
+	if err != nil {
 		return Result{}, fail("AGENT_CONFIG_UNAVAILABLE", "the installed Agent configuration could not be read")
 	}
 	// The backup snapshot and the new package both land on the root
@@ -183,16 +220,41 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if err := cfg.Space("/", requiredSpace); err != nil {
 		return Result{}, fail("UPDATE_NO_SPACE", "the handoff needs free space for the backup snapshot and the new package")
 	}
+	// The rollback source is copied and re-read before the package is fetched.
+	// The order is pinned (spec §4.2/§4.4): snapshot copy -> payload digest ->
+	// record -> verify -> fetch -> handoff. A refusal changes nothing on the
+	// installed system; only the private 0700/0600 rollback store may gain a
+	// copy. On a Node the installed package is the Agent binary, so both
+	// from_* anchors name the same recorded artifact (11d supplies the Hub's
+	// separate installer-ledger digest).
+	snapshot := ""
+	if cfg.BackupSource != nil {
+		snapshot, err = cfg.BackupSource()
+		if err != nil {
+			return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
+		}
+	}
+	recordPath, err := WriteBackupRecord(cfg.backupRoot(), BackupSpec{
+		OperationID: cfg.OperationID, FromVersion: cfg.CurrentVersion, TargetVersion: cfg.Target,
+		DBSchema: nodeDBSchema, PolicySchema: upgrade.PolicySchema,
+		ManifestSHA256: cfg.ManifestSHA256, PackageSHA256: cfg.PackageSHA256,
+		FromPackageSHA256: installed.AgentSHA256, FromAgentSHA256: installed.AgentSHA256,
+		SnapshotDir: snapshot,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if _, err := VerifyBackupRecord(cfg.backupRoot(), cfg.OperationID, cfg.CurrentVersion, nodeDBSchema, upgrade.PolicySchema); err != nil {
+		return Result{}, err
+	}
 	path, err := fetchPackage(ctx, cfg.WorkDir, cfg.Target, c)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{VerifiedPath: path, Manifest: m}
-	pointer, err := writeBackupPointer(cfg, c, path)
-	if err != nil {
+	result := Result{VerifiedPath: path, Manifest: m, BackupPointer: recordPath}
+	if _, err := writeBackupPointer(cfg, c, path); err != nil {
 		return result, err
 	}
-	result.BackupPointer = pointer
 	if err := handoff(ctx, argv, runner); err != nil {
 		return result, err
 	}
