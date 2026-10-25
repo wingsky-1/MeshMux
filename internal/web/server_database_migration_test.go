@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/update"
+	"github.com/wingsky-1/MeshMux/internal/backup"
 )
 
 const databaseMigrationApprovePath = "/tasks/db-migration/approve"
@@ -145,14 +145,14 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		mutate func(*update.BackupRecord)
+		mutate func(*backup.Record)
 		write  func(path string)
 		code   string
 		status int
 	}{
-		{"unverified backup", func(r *update.BackupRecord) { r.IntegrityOK = false }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
-		{"no payload files", func(r *update.BackupRecord) { r.PayloadFiles = 0 }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
-		{"payload named elsewhere", func(r *update.BackupRecord) { r.PayloadPath = "/var/tmp/elsewhere" }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
+		{"unverified backup", func(r *backup.Record) { r.IntegrityOK = false }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
+		{"no payload files", func(r *backup.Record) { r.PayloadFiles = 0 }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
+		{"payload named elsewhere", func(r *backup.Record) { r.PayloadPath = "/var/tmp/elsewhere" }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
 		{"empty payload directory", nil, func(path string) {
 			if err := os.Remove(filepath.Join(filepath.Dir(path), databaseBackupPayloadDirName, "meshmux.db")); err != nil {
 				t.Fatal(err)
@@ -163,10 +163,10 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
-		{"foreign operation inside the record", func(r *update.BackupRecord) { r.OperationID = strings.Repeat("f", 32) }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
-		{"no source schema", func(r *update.BackupRecord) { r.DBSchema = 0 }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
-		{"future record schema", func(r *update.BackupRecord) { r.Schema = update.BackupRecordSchema + 1 }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
-		{"not staged", func(r *update.BackupRecord) { r.State = update.BackupStateConfirmed }, nil, "DB_BACKUP_RECORD_NOT_STAGED", http.StatusConflict},
+		{"foreign operation inside the record", func(r *backup.Record) { r.OperationID = strings.Repeat("f", 32) }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
+		{"no source schema", func(r *backup.Record) { r.DBSchema = 0 }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
+		{"future record schema", func(r *backup.Record) { r.Schema = backup.RecordSchema + 1 }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
+		{"not staged", func(r *backup.Record) { r.State = backup.StateConfirmed }, nil, "DB_BACKUP_RECORD_NOT_STAGED", http.StatusConflict},
 		{"unknown future field", nil, func(path string) {
 			if err := os.WriteFile(path, []byte(`{"schema":1,"operation_id":"`+operationID+`","future":true}`), 0600); err != nil {
 				t.Fatal(err)

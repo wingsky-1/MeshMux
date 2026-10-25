@@ -35,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
@@ -579,6 +580,11 @@ func NewRollbackStore() *RollbackStore {
 // write, never before it. A successful revert also blocks confirmation, because
 // its stale install result must never release the pointer the revert depends
 // on.
+//
+// The record write itself is backup.Confirm (the neutral package), which keeps
+// the same order and the same re-verification of the payload before the write.
+// GC and the durable-source refresh stay here: they are this package's timing
+// contract, not the record layer's.
 func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVersion, agentSHA256 string) error {
 	if !opIDRE.MatchString(operationID) {
 		return fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
@@ -593,38 +599,10 @@ func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVer
 	if _, err := os.Lstat(RevertResultPath(s.WorkDir, operationID)); err == nil {
 		return fail("UPDATE_CONFIRM_REFUSED", "the operation was reverted; its rollback record is never confirmed")
 	}
-	opDir := filepath.Join(root, operationID)
-	record, err := readBackupRecord(opDir, operationID)
-	if err != nil {
-		return err
-	}
-	// The anchors come before any state short-circuit: an already-confirmed
-	// record must still answer only the readback it describes, or a stale or
-	// foreign readback could re-confirm it and release generations to GC.
-	if record.TargetVersion != targetVersion || record.PackageSHA256 != agentSHA256 {
-		return fail("UPDATE_BACKUP_MISMATCH", "the readback does not name the record's target release and package")
-	}
-	if record.State == BackupStateConfirmed {
-		// Idempotent success: the GC and the durable-source refresh still run
-		// so a previously failed one is retried by the next accepted readback
-		// (the refresh is a manifest read when the source is already current).
-		s.refreshSource(agentSHA256)
-		return s.gc(root)
-	}
-	if record.State != BackupStateStaged {
-		return fail("UPDATE_CONFIRM_REFUSED", "the rollback record is not a confirmable staged source")
-	}
-	if !record.RollbackComplete() {
-		return fail("UPDATE_BACKUP_CORRUPT", "the rollback record holds nothing to restore")
-	}
-	// Re-read the payload from disk before confirming it: a tampered copy must
-	// never become the N-1 generation.
-	if _, err := VerifyBackupRecord(root, operationID, record.FromVersion, record.DBSchema, record.PolicySchema); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	record.State, record.ConfirmedAt = BackupStateConfirmed, &now
-	if err := writeRecordFile(opDir, record); err != nil {
+	// backup.Confirm re-reads the record, checks the anchors before the
+	// confirmed short-circuit, refuses a non-staged record, re-verifies the
+	// payload and only then writes the confirmed state.
+	if _, err := backup.Confirm(root, operationID, targetVersion, agentSHA256, backup.LayoutPerOp, time.Now().UTC()); err != nil {
 		return err
 	}
 	s.refreshSource(agentSHA256)
