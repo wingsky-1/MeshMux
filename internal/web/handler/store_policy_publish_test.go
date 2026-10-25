@@ -47,9 +47,16 @@ func newPublishFixture(t *testing.T) publishFixture {
 	return publishFixture{store: s, now: now, line: line, lineName: "line-a"}
 }
 
-// activatePolicy creates and activates one policy revision for a layer.
+// activatePolicy creates and activates one revision for a layer. The client
+// layer was closed to writes in Task 6, so its calls insert a legacy revision
+// directly: the preview/gate path still needs a row to read, and this is the
+// only way such a row can exist after the upgrade.
 func (f publishFixture) activatePolicy(t *testing.T, layer store.PolicyLayer, payload, pins string) store.RoutePolicy {
 	t.Helper()
+	if layer == store.PolicyLayerClient {
+		seedLegacyClientPolicyStore(t, f.store, json.RawMessage(payload), f.now)
+		return store.RoutePolicy{Layer: layer, Revision: 1}
+	}
 	if pins == "" {
 		pins = `{}`
 	}

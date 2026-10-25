@@ -2,7 +2,9 @@ package handler
 
 // /policies snapshot for issue #10: rows rendered from each layer's active
 // revision, falling back to the mesh-derived and built-in defaults. Nothing
-// here stores or publishes a policy; writes are 10d-2a and publication 10d-2b.
+// here stores or publishes a policy; server-layer writes are the policy API and
+// publication is 10d-2b. The client layer is read-only since Task 6, so its
+// rows are always a preview of a legacy (or default) revision.
 
 import (
 	"github.com/wingsky-1/MeshMux/internal/web/store"

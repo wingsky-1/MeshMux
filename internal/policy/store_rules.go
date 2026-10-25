@@ -56,9 +56,6 @@ type Store struct{ db *sql.DB }
 // New wraps the caller's database handle.
 func New(db *sql.DB) *Store { return &Store{db: db} }
 
-// DB exposes the wrapped handle for tests that seed the subscription edge.
-func (s *Store) DB() *sql.DB { return s.db }
-
 // dbQuerier is the shared surface of *sql.DB and *sql.Tx the library reads
 // through, so the delete guard can run its check and its delete in one
 // transaction (I1).

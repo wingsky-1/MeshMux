@@ -81,16 +81,6 @@ func (s KeyState) Validate() error {
 	}
 }
 
-// Terminal reports whether the state can never change back into a usable key.
-func (s KeyState) Terminal() bool {
-	switch s {
-	case KeyConsumed, KeyExpired, KeyRevoked:
-		return true
-	default:
-		return false
-	}
-}
-
 // EnrollmentKey is the persisted record of one one-time mesh enrollment key.
 // Only Hash is stored: the secret itself is returned once by
 // NewEnrollmentKey, is never persisted and never logged (D1). The record is

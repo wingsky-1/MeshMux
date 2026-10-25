@@ -63,13 +63,3 @@ var Presets = []Preset{
 		Values:    []string{"dl.example.invalid"},
 	},
 }
-
-// PresetByKey finds one seed entry by stable_key.
-func PresetByKey(key string) (Preset, bool) {
-	for _, p := range Presets {
-		if p.StableKey == key {
-			return p, true
-		}
-	}
-	return Preset{}, false
-}

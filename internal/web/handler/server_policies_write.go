@@ -110,11 +110,12 @@ func policyWriteFailure(err error) (int, string) {
 	}
 	switch code {
 	case "POLICY_OPERATION_REQUIRED", "POLICY_LAYER_INVALID", "POLICY_NAME_INVALID",
-		"POLICY_PAYLOAD_INVALID", "POLICY_PINS_INVALID", compiler.CodePolicyInvalid:
+		"POLICY_PAYLOAD_INVALID", "POLICY_PINS_INVALID", compiler.CodePolicyInvalid,
+		store.CodePolicyPayloadRetired:
 		return http.StatusBadRequest, code
 	case "POLICY_NOT_FOUND":
 		return http.StatusNotFound, code
-	case "POLICY_CONFLICT", "POLICY_STATE_INVALID":
+	case "POLICY_CONFLICT", "POLICY_STATE_INVALID", store.CodePolicyLayerRetired:
 		return http.StatusConflict, code
 	case "DATABASE_UNAVAILABLE":
 		return http.StatusServiceUnavailable, code
@@ -125,7 +126,14 @@ func policyWriteFailure(err error) (int, string) {
 
 func (app *Server) failPolicyWrite(w http.ResponseWriter, r *http.Request, err error) {
 	status, code := policyWriteFailure(err)
-	app.fail(w, r, status, code, "策略写操作未完成。", "请凭操作编号检查服务日志后重试。")
+	switch code {
+	case store.CodePolicyLayerRetired:
+		app.fail(w, r, status, code, "客户端策略层已停写：它不再影响任何订阅。", "请在规则库维护客户端分流；客户端层只保留既有版本的只读预览。")
+	case store.CodePolicyPayloadRetired:
+		app.fail(w, r, status, code, "payload 仍携带已退役的 exceptions 或 ssids 字段。", "请改为 rules 表达同一意图后重试。")
+	default:
+		app.fail(w, r, status, code, "策略写操作未完成。", "请凭操作编号检查服务日志后重试。")
+	}
 }
 
 func (app *Server) writePolicyWrite(w http.ResponseWriter, r *http.Request, status int, body policyWriteResponse) {

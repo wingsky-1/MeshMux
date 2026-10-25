@@ -29,6 +29,18 @@ type outSyncFixture struct {
 //
 // Both nodes start with their initial publication chain already settled, so a
 // test only has to reason about the chain its own action creates.
+// outSyncStatusForTest reads the Out projection through the production
+// NodeCoordinationReadback entry point; the former OutSyncStatus convenience
+// wrapper was removed in Task 6.
+func outSyncStatusForTest(t *testing.T, s *store.Store, outID string, now time.Time) (string, string, error) {
+	t.Helper()
+	readback, err := s.NodeCoordinationReadback(outID, now)
+	if err != nil {
+		return "", "", err
+	}
+	return readback.Allowlist, readback.AllowlistCode, nil
+}
+
 func newOutSyncFixture(t *testing.T) outSyncFixture {
 	t.Helper()
 	s, now := subscriberStoreFixture(t)
@@ -154,7 +166,7 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 	}
 	// The fixture starts from a confirmed pair, so the Out is healthy for the
 	// membership authorization the chain carries.
-	state, code, err := s.OutSyncStatus(out, now)
+	state, code, err := outSyncStatusForTest(t, s, out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +205,7 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 	// previous chain is still in flight, so the republish is deferred and the Out is
 	// never reported healthy on the stale guard; once the chain settles the empty
 	// authorization is published and confirmed.
-	state, _, err = s.OutSyncStatus(out, now)
+	state, _, err = outSyncStatusForTest(t, s, out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +214,7 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 	}
 	settleTasks(t, s, out)
 	confirmChain(t, s, out, now)
-	state, code, err = s.OutSyncStatus(out, now)
+	state, code, err = outSyncStatusForTest(t, s, out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,40 +577,6 @@ func TestOutAllowlist_RetireReclaimsEvenWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestOutAllowlist_OnLineRetiredRefusesLiveLine proves the retire call is not a
-// silent de-authorization: a Line that is still a verifiable source must be
-// revoked first.
-func TestOutAllowlist_OnLineRetiredRefusesLiveLine(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, out, line := f.store, f.now, f.out, f.line
-
-	enableOutForLine(t, s, out, line, now)
-	before := candidateCount(t, s, out)
-	err := s.OnLineRetired(line)
-	if err == nil || !hasErrorCode(err, "LINE_NOT_RETIRED") {
-		t.Fatalf("retire of a live line error = %v, want LINE_NOT_RETIRED", err)
-	}
-	if got := candidateCount(t, s, out); got != before {
-		t.Fatalf("refused retire published a chain: %d -> %d", before, got)
-	}
-	allowed, err := s.DeriveOutAllowlist(out)
-	if err != nil || len(allowed) != 1 {
-		t.Fatalf("refused retire changed the authorization: %v err=%v", allowed, err)
-	}
-	_ = now
-
-	// Retiring an unknown or non-edge node is refused too.
-	if err := s.OnLineRetired(strings.Repeat("d", 32)); err == nil || !hasErrorCode(err, "LINE_NOT_FOUND") {
-		t.Fatalf("unknown line retire error = %v", err)
-	}
-	if err := s.OnLineRetired(out); err == nil || !hasErrorCode(err, "LINE_ROLE_INVALID") {
-		t.Fatalf("out retire error = %v", err)
-	}
-	if err := s.OnLineRetired("line"); err == nil || !hasErrorCode(err, "LINE_ID_INVALID") {
-		t.Fatalf("malformed line retire error = %v", err)
-	}
-}
-
 // TestOutAllowlist_MismatchIsAnExpectedTransition pins the OUT_ACL_SOURCE_MISMATCH
 // handling: the superseded chain is not a terminal failure and the identical
 // snapshot is not retried automatically.
@@ -610,7 +588,7 @@ func TestOutAllowlist_MismatchIsAnExpectedTransition(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code=? WHERE node_id=?`, store.OutAclSourceMismatchCode, out); err != nil {
 		t.Fatal(err)
 	}
-	state, code, err := s.OutSyncStatus(out, now)
+	state, code, err := outSyncStatusForTest(t, s, out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +637,7 @@ func TestOutAllowlist_UnchangedFailureNeedsExplicitRetry(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	state, code, err := s.OutSyncStatus(out, now)
+	state, code, err := outSyncStatusForTest(t, s, out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -755,7 +733,7 @@ func TestOutAllowlist_DualReadbackReportsEachFact(t *testing.T) {
 	s, now, out, line := f.store, f.now, f.out, f.line
 
 	// Direct egress: the final egress follows the Line snapshot alone.
-	direct, err := s.OutEgressReadback(line, now)
+	direct, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,7 +744,7 @@ func TestOutAllowlist_DualReadbackReportsEachFact(t *testing.T) {
 	// The membership authorization is confirmed, so selecting the Out makes the pair
 	// healthy rather than transitional; the four facts are then asserted one by one.
 	enableOutForLine(t, s, out, line, now)
-	pending, err := s.OutEgressReadback(line, now)
+	pending, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -780,7 +758,7 @@ func TestOutAllowlist_DualReadbackReportsEachFact(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirmChain(t, s, line, now)
-	healthy, err := s.OutEgressReadback(line, now)
+	healthy, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,7 +775,7 @@ func TestOutAllowlist_DualReadbackReportsEachFact(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	regressed, err := s.OutEgressReadback(line, now)
+	regressed, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -815,7 +793,7 @@ func TestOutAllowlist_DualReadbackReportsEachFact(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0 WHERE id=?`, line); err != nil {
 		t.Fatal(err)
 	}
-	lineRegressed, err := s.OutEgressReadback(line, now)
+	lineRegressed, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -834,7 +812,7 @@ func TestOutAllowlist_ReadbackUsesOnlyStableCodes(t *testing.T) {
 	s, now, out, line := f.store, f.now, f.out, f.line
 
 	enableOutForLine(t, s, out, line, now)
-	readback, err := s.OutEgressReadback(line, now)
+	readback, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}

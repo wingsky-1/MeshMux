@@ -25,7 +25,7 @@ func drainLineNow(t *testing.T, s *store.Store, nodeID string, now time.Time) er
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := s.DrainSubscriberNodeTx(tx, nodeID, now); err != nil {
+	if err := store.DrainSubscriberNodeIntentTx(tx, nodeID, now, false); err != nil {
 		return err
 	}
 	if err := store.FinalizeDeletingSubscribersTx(tx, nodeID, now); err != nil {
@@ -115,7 +115,7 @@ func TestSubscriberSyncOfflineKeepsIntentAndPublishesAfterReconnect(t *testing.T
 	if got := taskCount(t, s, edge); got != 0 {
 		t.Fatalf("offline prepare enqueued %d tasks", got)
 	}
-	status, code, err := s.SubscriberSyncStatus(alice.ID, now)
+	status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestSubscriberSyncOfflineKeepsIntentAndPublishesAfterReconnect(t *testing.T
 	if len(latest.Document.Users) != 1 {
 		t.Fatalf("published users = %d, want 1", len(latest.Document.Users))
 	}
-	status, code, err = s.SubscriberSyncStatus(alice.ID, now)
+	status, code, err = subscriberSyncStatusForTest(t, s, alice.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestSubscriberSyncAutomaticPollDoesNotRepeatFailedSnapshotAndRetryUsesNewID
 	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='CONFIG_CHECK_FAILED' WHERE node_id=?`, edge); err != nil {
 		t.Fatal(err)
 	}
-	status, code, err := s.SubscriberSyncStatus(alice.ID, now)
+	status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestSubscriberSyncDeletionWaitsForExactReadbackAndKeepsOtherUser(t *testing
 		t.Fatal(err)
 	}
 	confirmLatest(t, s, edge, now)
-	status, code, err := s.SubscriberSyncStatus(alice.ID, now)
+	status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,4 +410,13 @@ func TestSubscriberSyncDeletionWaitsForExactReadbackAndKeepsOtherUser(t *testing
 	if !strings.Contains(string(stored.State), "deleted") {
 		t.Fatal("unreachable")
 	}
+}
+
+// subscriberSyncStatusForTest reads the subscriber summary through the
+// production SubscriberSyncView projection; the former SubscriberSyncStatus
+// wrapper was removed in Task 6.
+func subscriberSyncStatusForTest(t *testing.T, s *store.Store, subscriberID string, now time.Time) (string, string, error) {
+	t.Helper()
+	snapshot, err := s.SubscriberSyncView(subscriberID, now)
+	return snapshot.Status, snapshot.Code, err
 }

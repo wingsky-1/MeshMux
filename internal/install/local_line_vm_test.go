@@ -126,7 +126,7 @@ func testLocalLineVMPostReboot(t *testing.T) {
 		localLineVMFatal(t, hub.OperationID, "post-reboot", "HUB_LEDGER_MISSING",
 			"the Hub ledger is not readable and installed after reboot (exists=%v err=%v)", hubExists, hubErr)
 	}
-	line, lineExists, lineErr := readLocalLineState("/")
+	line, lineExists, lineErr := readStateAt("/", localLineStatePath)
 	if lineErr != nil || !lineExists || line.Status != "installed" {
 		localLineVMFatal(t, line.OperationID, "post-reboot", "LOCAL_LINE_LEDGER_MISSING",
 			"the local-Line ledger is not readable and installed after reboot (exists=%v err=%v)", lineExists, lineErr)

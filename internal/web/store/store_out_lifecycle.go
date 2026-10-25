@@ -30,12 +30,6 @@ import (
 	"time"
 )
 
-// DeleteOut removes one Out from the Hub entirely: node row, dial parameters, link
-// key and the published ACL.
-func (s *Store) DeleteOut(outID string) error {
-	return s.DeleteOutAt(outID, time.Now())
-}
-
 // DeleteOutAt is the request-clock variant used by the Web handler, so the
 // refusal check, the ACL publication and the readback share one timestamp.
 //

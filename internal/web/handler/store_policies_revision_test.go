@@ -9,22 +9,22 @@ import (
 
 func TestRoutePolicyRevisionStateMachine(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
-	clientPayload, serverPayload, pins := policyFixtures()
-	p, err := s.CreateRoutePolicy(store.PolicyLayerClient, "客户端默认策略", clientPayload, nil, "op-create", now)
+	_, serverPayload, pins := policyFixtures()
+	p, err := s.CreateRoutePolicy(store.PolicyLayerServer, "服务端默认策略", serverPayload, pins, "op-create", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ReviseRoutePolicy(p.ID, clientPayload, nil, "", now); err == nil || !strings.Contains(err.Error(), "POLICY_OPERATION_REQUIRED") {
+	if _, err = s.ReviseRoutePolicy(p.ID, serverPayload, pins, "", now); err == nil || !strings.Contains(err.Error(), "POLICY_OPERATION_REQUIRED") {
 		t.Fatalf("anonymous revise accepted: %v", err)
 	}
-	r2, err := s.ReviseRoutePolicy(p.ID, clientPayload, nil, "op-revise", now.Add(time.Second))
+	r2, err := s.ReviseRoutePolicy(p.ID, serverPayload, pins, "op-revise", now.Add(time.Second))
 	if err != nil || r2.Revision != 2 || r2.Status != store.PolicyDraft {
 		t.Fatalf("revise draft: %+v err=%v", r2, err)
 	}
 	if old, err := s.GetRoutePolicy(p.ID, 1); err != nil || old.Status != store.PolicySuperseded {
 		t.Fatalf("old draft not superseded: %+v err=%v", old, err)
 	}
-	if _, err = s.ActiveRoutePolicy(store.PolicyLayerClient); err == nil || !strings.Contains(err.Error(), "POLICY_NOT_FOUND") {
+	if _, err = s.ActiveRoutePolicy(store.PolicyLayerServer); err == nil || !strings.Contains(err.Error(), "POLICY_NOT_FOUND") {
 		t.Fatalf("draft reported active: %v", err)
 	}
 	if _, err = s.ActivateRoutePolicy(p.ID, 2, " ", now); err == nil || !strings.Contains(err.Error(), "POLICY_OPERATION_REQUIRED") {
@@ -34,11 +34,11 @@ func TestRoutePolicyRevisionStateMachine(t *testing.T) {
 	if err != nil || active.Status != store.PolicyActive {
 		t.Fatalf("activate: %+v err=%v", active, err)
 	}
-	r3, err := s.ReviseRoutePolicy(p.ID, clientPayload, nil, "op-revise-active", now.Add(3*time.Second))
+	r3, err := s.ReviseRoutePolicy(p.ID, serverPayload, pins, "op-revise-active", now.Add(3*time.Second))
 	if err != nil || r3.Revision != 3 || r3.Status != store.PolicyActive {
 		t.Fatalf("revise active: %+v err=%v", r3, err)
 	}
-	if active, err = s.ActiveRoutePolicy(store.PolicyLayerClient); err != nil || active.Revision != 3 {
+	if active, err = s.ActiveRoutePolicy(store.PolicyLayerServer); err != nil || active.Revision != 3 {
 		t.Fatalf("revised active not live: %+v err=%v", active, err)
 	}
 	if old, err := s.GetRoutePolicy(p.ID, 2); err != nil || old.Status != store.PolicySuperseded {
@@ -51,10 +51,10 @@ func TestRoutePolicyRevisionStateMachine(t *testing.T) {
 	if err != nil || revoked.Status != store.PolicyRevoked {
 		t.Fatalf("revoke: %+v err=%v", revoked, err)
 	}
-	if _, err = s.ActiveRoutePolicy(store.PolicyLayerClient); err == nil {
+	if _, err = s.ActiveRoutePolicy(store.PolicyLayerServer); err == nil {
 		t.Fatal("revoked policy still active")
 	}
-	if _, err = s.ReviseRoutePolicy(p.ID, clientPayload, nil, "op-too-late", now); err == nil || !strings.Contains(err.Error(), "POLICY_STATE_INVALID") {
+	if _, err = s.ReviseRoutePolicy(p.ID, serverPayload, pins, "op-too-late", now); err == nil || !strings.Contains(err.Error(), "POLICY_STATE_INVALID") {
 		t.Fatalf("revoked chain revived: %v", err)
 	}
 	server, err := s.CreateRoutePolicy(store.PolicyLayerServer, "服务端默认策略", serverPayload, pins, "op-server", now)

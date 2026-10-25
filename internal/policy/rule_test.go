@@ -18,7 +18,7 @@ func TestRuleValidateAcceptsAllSixMatcherKinds(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Fatalf("%s (%s) refused: %v", r.StableKey, r.Kind, err)
 		}
-		if got := r.ToCompilerMatch(); len(got.Domains)+len(got.DomainSuffixes)+len(got.IPCIDRs)+len(got.GeoSite)+len(got.GeoIP)+len(got.RuleSets) != len(r.Values) {
+		if got := r.ToCompilerMatchWith(r.Values); len(got.Domains)+len(got.DomainSuffixes)+len(got.IPCIDRs)+len(got.GeoSite)+len(got.GeoIP)+len(got.RuleSets) != len(r.Values) {
 			t.Fatalf("%s compiler bridge dropped values: %+v", r.StableKey, got)
 		}
 	}
@@ -57,31 +57,6 @@ func TestRuleValidateRefusesBadInput(t *testing.T) {
 	}
 }
 
-func TestValidateRuleSetRefusesShadowingAndDuplicates(t *testing.T) {
-	direct := Rule{StableKey: "a", Name: "A", Action: ActionDirect, Kind: MatcherDomainSuffix, Values: []string{"example.invalid"}}
-	shadow := Rule{StableKey: "b", Name: "B", Action: ActionProxy, Kind: MatcherDomain, Values: []string{"x.example.invalid"}}
-	if err := ValidateRuleSet([]Rule{direct, shadow}); err == nil || !strings.HasPrefix(err.Error(), "RULE_CONFLICT") {
-		t.Fatalf("shadowing pair accepted: %v", err)
-	}
-	dupe := Rule{StableKey: "c", Name: "C", Action: ActionDirect, Kind: MatcherGeoSite, Values: []string{"cn"}}
-	dupe2 := Rule{StableKey: "d", Name: "D", Action: ActionDirect, Kind: MatcherGeoSite, Values: []string{"cn"}}
-	if err := ValidateRuleSet([]Rule{dupe, dupe2}); err == nil || !strings.HasPrefix(err.Error(), "RULE_CONFLICT") {
-		t.Fatalf("duplicate pair accepted: %v", err)
-	}
-	harmless := Rule{StableKey: "e", Name: "E", Action: ActionDirect, Kind: MatcherGeoIP, Values: []string{"cn"}}
-	if err := ValidateRuleSet([]Rule{direct, harmless}); err != nil {
-		t.Fatalf("disjoint pair refused: %v", err)
-	}
-	for _, bad := range [][]Rule{
-		{{StableKey: "x", Name: "X", Action: ActionDirect, Kind: MatcherGeoSite, Values: []string{"bad value!!"}}},
-		{{StableKey: "preset-squat", Name: "X", Action: ActionDirect, Kind: MatcherGeoSite, Values: []string{"cn"}}},
-	} {
-		if err := ValidateRuleSet(bad); err == nil {
-			t.Fatalf("invalid set accepted: %+v", bad)
-		}
-	}
-}
-
 func TestPresetBundleCoversAllSixKinds(t *testing.T) {
 	if PresetBundleVersion < 1 {
 		t.Fatal("preset bundle version must be positive")
@@ -108,11 +83,5 @@ func TestPresetBundleCoversAllSixKinds(t *testing.T) {
 		if seen[kind] == 0 {
 			t.Fatalf("no preset covers matcher kind %q", kind)
 		}
-	}
-	if _, ok := PresetByKey("preset-direct-cn"); !ok {
-		t.Fatal("PresetByKey misses a seeded key")
-	}
-	if _, ok := PresetByKey("no-such-key"); ok {
-		t.Fatal("PresetByKey hits a missing key")
 	}
 }

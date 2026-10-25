@@ -9,6 +9,13 @@
 // passed the kernel gate. Preview findings render "!" for a reminder and "✖"
 // for a blocking refusal.
 //
+// The route-policy write API (server_policies_write.go) keeps the server layer
+// writable and the client layer read-only: since Task 6 every client-layer
+// create/revise/activate/revoke is refused with POLICY_LAYER_RETIRED, and the
+// retired exceptions/ssids payload keys are refused with
+// POLICY_PAYLOAD_RETIRED. The client layer remains a gated preview of its
+// legacy revision, never a subscription input.
+//
 // Dependency direction (compiler-enforced): handler → store and handler →
 // view. Handlers use Store.DB only for the session/auth transactions that
 // moved here untouched; domain writes go through store methods or the policy

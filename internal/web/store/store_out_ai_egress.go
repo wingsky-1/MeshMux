@@ -8,23 +8,21 @@ package store
 //   - no enabled binding: the Line egresses directly, which is a configured
 //     state (the Out-free deployment), not a degradation;
 //   - an enabled binding whose Out is offline, still converging or partially
-//     failed: the AI traffic must not fall back to the Line on its own. The
-//     facts report the Out as unavailable together with the stable reason, so
-//     the decision layer refuses the publication instead of publishing a path
-//     that would leak from the Line address.
+//     failed: the facts report the Out as unavailable together with the stable
+//     reason. The composer/compiler refuses a route that would leak from the
+//     Line address rather than treating the fault as a direct egress.
 //
 // This file only reads. It reuses the T3 derivation (LineOutEgressStatusTx) and
-// the T3 offline window, so the AI decision can never disagree with the Out
-// synchronization or the publish gate. It does not add a ruleset marketplace,
-// multi-Out load balancing or latency probing.
+// the T3 offline window, so the projection can never disagree with the Out
+// synchronization or the publish gate. The former PlanAIEgress decision wrapper
+// was removed in Task 6: the rule library and the subscription composer own the
+// decision, and this projection is their single Out fact source.
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -63,44 +61,4 @@ func (s *Store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, er
 	}
 	defer tx.Rollback()
 	return outEgressFactsTx(tx, lineID, now)
-}
-
-// aiEgressPlan pairs one resolved decision with the facts it was derived from,
-// so a caller can render the reason without re-reading the store.
-type aiEgressPlan struct {
-	Decision route.AIEgressDecision
-	Facts    OutEgressFacts
-}
-
-// planAIEgress resolves one Line's AI egress: it reads the Out facts and asks
-// the route package for the decision, so the Out-missing case stays a
-// configured Line egress and every Out fault stays fail-closed.
-//
-// The request operation id is passed through so an explicit Line fallback is
-// recorded with the deviation instead of being silently taken. A refusal is
-// returned as a *route.BlockedError; the caller reports its code and detail.
-// A nil fetcher selects the production HTTPS fetcher; the seam exists so a
-// caller can resolve the pin from an already verified artifact.
-//
-// The publication path that renders the client document from this decision is
-// deliberately out of #8's scope: this is the selection rule, not the renderer.
-func (s *Store) PlanAIEgress(ctx context.Context, fetch route.RulesetFetcher, lineID string, pin route.RulesetPin, fallbackToLine bool, operationID string, now time.Time) (aiEgressPlan, error) {
-	facts, err := s.OutEgressFacts(lineID, now)
-	if err != nil {
-		return aiEgressPlan{}, err
-	}
-	decision, err := route.DecideAIEgressWithFetcher(ctx, fetch, route.AIEgressRequest{
-		LineID:         facts.LineID,
-		OutID:          facts.OutID,
-		OutConfigured:  facts.Configured,
-		OutAvailable:   facts.Available,
-		OutCode:        facts.Code,
-		Pin:            pin,
-		FallbackToLine: fallbackToLine,
-		OperationID:    operationID,
-	})
-	if err != nil {
-		return aiEgressPlan{Facts: facts}, err
-	}
-	return aiEgressPlan{Decision: decision, Facts: facts}, nil
 }

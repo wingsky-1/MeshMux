@@ -18,10 +18,6 @@ type nodeManagedFile struct {
 	Static bool
 }
 
-func nodeManagedFiles(cfg node.Config, ssh []int, identity node.Identity) (map[string]nodeManagedFile, error) {
-	return nodeManagedFilesForLayout(cfg, ssh, identity, standaloneNodeLayout())
-}
-
 // nodeManagedFilesForLayout renders the fixed managed file set of a Node
 // operation. A co-located Line reuses the Hub's Fail2ban SSH jail instead of
 // installing a second jail for the same SSH listeners, so it never writes

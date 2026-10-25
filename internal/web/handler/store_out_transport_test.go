@@ -91,14 +91,11 @@ func TestSetOutTransportIssuesAndPreservesCredential(t *testing.T) {
 	}
 
 	// List and get projections never carry the credential.
-	transports, err := s.ListOutTransports()
+	transports, err := s.OutPool(time.Now())
 	if err != nil || len(transports) != 1 || transports[0].Server != "out2.example.invalid" {
 		t.Fatalf("list transports = %v err=%v", transports, err)
 	}
-	got, err := s.GetOutTransport(out)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := transports[0]
 	if got.Server != "out2.example.invalid" || got.Port != 8443 {
 		t.Fatalf("get transport wrong: %+v", got)
 	}

@@ -17,6 +17,18 @@ import (
 	"time"
 )
 
+// outTransportConfigured reports whether one Out still has dial parameters.
+// The former GetOutTransport convenience wrapper was removed in Task 6; the row
+// itself is the fact these delete tests care about.
+func outTransportConfigured(t *testing.T, s *store.Store, outID string) bool {
+	t.Helper()
+	var count int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, outID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count > 0
+}
+
 // requireBindingError asserts the shared management error contract:
 // {error_code, operation_id, stage:"web", next_action}.
 func requireBindingError(t *testing.T, w *httptest.ResponseRecorder, status int, code string) {
@@ -271,7 +283,7 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 	if _, err := app.store.GetNodeAt(out.ID, now); err == nil {
 		t.Fatal("the delete left the out node behind")
 	}
-	if _, err := app.store.GetOutTransport(out.ID); err == nil {
+	if outTransportConfigured(t, app.store, out.ID) {
 		t.Fatal("the delete left the dial parameters behind")
 	}
 	if tableExists(t, app.store, "out_settings") {
@@ -342,8 +354,8 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 		t.Fatalf("the refusal does not name the subscription: %.300s", w.Body.String())
 	}
 	// The Out is untouched: its transport, its ACK chain and its selection survive.
-	if _, err := app.store.GetOutTransport(out.ID); err != nil {
-		t.Fatalf("a refused delete removed the transport: %v", err)
+	if !outTransportConfigured(t, app.store, out.ID) {
+		t.Fatal("a refused delete removed the transport")
 	}
 	if subscribers, err := app.store.OutAuthorizedSubscribers(out.ID); err != nil || len(subscribers) != 1 {
 		t.Fatalf("a refused delete dropped the selection: %v err=%v", subscribers, err)
@@ -378,7 +390,7 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 	if _, err := app.store.GetNodeAt(out.ID, now); err == nil {
 		t.Fatal("the delete kept the node row")
 	}
-	if _, err := app.store.GetOutTransport(out.ID); err == nil {
+	if outTransportConfigured(t, app.store, out.ID) {
 		t.Fatal("the delete kept the dial parameters")
 	}
 }
@@ -421,8 +433,8 @@ func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
 	if _, err := app.store.GetNodeAt(out.ID, now); err != nil {
 		t.Fatalf("a refused delete removed the node: %v", err)
 	}
-	if _, err := app.store.GetOutTransport(out.ID); err != nil {
-		t.Fatalf("a refused delete removed the dial parameters: %v", err)
+	if !outTransportConfigured(t, app.store, out.ID) {
+		t.Fatal("a refused delete removed the dial parameters")
 	}
 	if allowed, err := app.store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 {
 		t.Fatalf("a refused delete changed the authorization: %v err=%v", allowed, err)

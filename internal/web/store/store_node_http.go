@@ -25,8 +25,6 @@ package store
 import (
 	"database/sql"
 	"errors"
-	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -67,10 +65,11 @@ func migrateSchema16(s *Store) error {
 	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version == DatabaseSchemaVersion {
-		// A database already at 16 keeps its rows; ensure the additive table is
-		// present so a manually damaged/older fixture converges instead of
-		// failing at the first proxy read.
+	if version >= 16 {
+		// A database already rebuilt (16) or a newer binary's file (17 after the
+		// payload rewrite) keeps its rows; ensure the additive table is present
+		// so a manually damaged/older fixture converges instead of failing at the
+		// first proxy read.
 		_, err := s.DB.Exec(nodeHTTPProxyDDL)
 		return err
 	}
@@ -221,23 +220,6 @@ func httpProxyTx(tx *sql.Tx, nodeID string) (nodedomain.OutEgress, bool, error) 
 		return nodedomain.OutEgress{}, false, errors.New("DATABASE_UNAVAILABLE")
 	}
 	return egress, true, nil
-}
-
-// HTTPProxyEndpoint renders the operator-visible endpoint of one HTTP proxy:
-// host:port only. The URL path, credentials and query never leave the private
-// row, so a list projection cannot leak the stored secret.
-func (s *Store) HTTPProxyEndpoint(nodeID string) (string, error) {
-	egress, err := scanHTTPProxy(s.DB.QueryRow(`SELECT url, username, password FROM node_http_proxy WHERE node_id=?`, nodeID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", errors.New("HTTP_PROXY_NOT_FOUND: unknown http proxy node")
-	}
-	if err != nil {
-		if strings.HasPrefix(err.Error(), "HTTP_PROXY_CORRUPT") {
-			return "", err
-		}
-		return "", errors.New("DATABASE_UNAVAILABLE")
-	}
-	return net.JoinHostPort(egress.Server, strconv.Itoa(egress.Port)), nil
 }
 
 // lineEgressBodyTx resolves one selected egress node into the candidate dial

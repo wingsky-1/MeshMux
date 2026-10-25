@@ -29,6 +29,28 @@ const (
 	policyMaxBytes                 = 64 << 10
 )
 
+// Stable refusals of the post-aggregation policy contract (Task 6).
+//
+// The client layer was the 10b client-intent store. The standard subscription
+// export never read it (the composer renders the client document from the
+// selected Lines and rules), so Task 6 closes it to writes while keeping the
+// table and its reads: a database upgraded from an older release still renders
+// and gates its legacy active revision as a preview, but no new revision can
+// be created, revised, activated or revoked. The rule library is the only
+// write surface for client-side routing now.
+//
+// exceptions and ssids were the two top-level fields of that legacy intent.
+// They were never consumed after the rule library landed; silently dropping
+// them made a write look applied when no byte would change. They are refused
+// explicitly, and schema 17 strips the keys from rows written before this
+// release.
+const (
+	// CodePolicyLayerRetired: the client layer is read-only.
+	CodePolicyLayerRetired = "POLICY_LAYER_RETIRED"
+	// CodePolicyPayloadRetired: the payload still carries exceptions or ssids.
+	CodePolicyPayloadRetired = "POLICY_PAYLOAD_RETIRED"
+)
+
 type RoutePolicy struct {
 	ID, Name    string
 	Layer       PolicyLayer
@@ -41,12 +63,48 @@ type RoutePolicy struct {
 	UpdatedAt   int64
 }
 
+// RoutePolicyPayload is the stored intent of one server revision. The client
+// layer's legacy revisions may still carry exceptions/ssids keys; schema 17
+// strips them, and this struct no longer models them, so a row that somehow
+// escapes the migration is refused by the strict decoder instead of having the
+// fields silently ignored.
 type RoutePolicyPayload struct {
-	Default    compiler.Action `json:"default"`
-	Rules      []compiler.Rule `json:"rules"`
-	Exceptions []string        `json:"exceptions,omitempty"`
-	SSIDs      []string        `json:"ssids,omitempty"`
-	Note       string          `json:"note,omitempty"`
+	Default compiler.Action `json:"default"`
+	Rules   []compiler.Rule `json:"rules"`
+	Note    string          `json:"note,omitempty"`
+}
+
+// retiredPolicyFields are the two top-level keys Task 6 removed. They are
+// detected before the strict decode so the refusal names the retirement
+// instead of reporting a generic unknown field; an empty array or null is
+// refused too, because the key itself is the retired contract.
+var retiredPolicyFields = []string{"exceptions", "ssids"}
+
+// rejectRetiredPolicyFields refuses a payload that still carries a retired
+// key. The check is on the raw object, not on decoded values: a write must not
+// look accepted merely because the value happened to be empty.
+func rejectRetiredPolicyFields(payload []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		// The caller's strict decoder reports the malformed payload.
+		return nil
+	}
+	for _, name := range retiredPolicyFields {
+		if _, present := fields[name]; present {
+			return errors.New(CodePolicyPayloadRetired + ": " + name + " is retired; express the intent as rules")
+		}
+	}
+	return nil
+}
+
+// writablePolicyLayer refuses a write to a read-only layer. Task 6 froze the
+// client layer at the store boundary, not only in the HTTP handler, so every
+// internal caller observes the same one-way door.
+func writablePolicyLayer(layer PolicyLayer) error {
+	if layer == PolicyLayerClient {
+		return errors.New(CodePolicyLayerRetired + ": the client policy layer is read-only; use the rule library")
+	}
+	return nil
 }
 
 func policyTextGuard(label, value string) error {
@@ -69,6 +127,9 @@ func validatePolicy(layer PolicyLayer, name string, payload, pins []byte) error 
 	if layer != PolicyLayerClient && layer != PolicyLayerServer {
 		return errors.New("POLICY_LAYER_INVALID: layer must be client or server")
 	}
+	if err := writablePolicyLayer(layer); err != nil {
+		return err
+	}
 	if name == "" || len([]rune(name)) > 80 {
 		return errors.New("POLICY_NAME_INVALID: use 1-80 characters")
 	}
@@ -77,6 +138,9 @@ func validatePolicy(layer PolicyLayer, name string, payload, pins []byte) error 
 	}
 	if len(payload) == 0 || len(payload) > policyMaxBytes || len(pins) > policyMaxBytes {
 		return errors.New("POLICY_PAYLOAD_INVALID: the intent or pins JSON is missing or too large")
+	}
+	if err := rejectRetiredPolicyFields(payload); err != nil {
+		return err
 	}
 	var intent RoutePolicyPayload
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -177,6 +241,9 @@ func (s *Store) ReviseRoutePolicy(id string, payload, pins json.RawMessage, oper
 	if err != nil {
 		return RoutePolicy{}, err
 	}
+	if err := writablePolicyLayer(latest.Layer); err != nil {
+		return RoutePolicy{}, err
+	}
 	if latest.Status != PolicyDraft && latest.Status != PolicyActive {
 		return RoutePolicy{}, errors.New("POLICY_STATE_INVALID: only a draft or active policy can be revised")
 	}
@@ -222,6 +289,9 @@ func (s *Store) transitionRoutePolicy(id string, revision int64, target PolicySt
 	defer tx.Rollback()
 	latest, err := latestRoutePolicy(tx, id)
 	if err != nil {
+		return RoutePolicy{}, err
+	}
+	if err := writablePolicyLayer(latest.Layer); err != nil {
 		return RoutePolicy{}, err
 	}
 	if latest.Revision != revision || (target == PolicyActive && latest.Status != PolicyDraft) ||
@@ -289,33 +359,6 @@ func (s *Store) GetRoutePolicy(id string, revision int64) (RoutePolicy, error) {
 		return scanRoutePolicy(s.DB.QueryRow(routePolicySelect+` WHERE p.id=? AND p.revision=?`, id, revision))
 	}
 	return latestRoutePolicy(s.DB, id)
-}
-
-func (s *Store) ListRoutePolicies(layer PolicyLayer) ([]RoutePolicy, error) {
-	if layer != "" && layer != PolicyLayerClient && layer != PolicyLayerServer {
-		return nil, errors.New("POLICY_LAYER_INVALID: layer must be client or server")
-	}
-	query, args := routePolicySelect+` WHERE p.revision=(SELECT MAX(revision) FROM route_policies WHERE id=p.id)`, []any{}
-	if layer != "" {
-		query, args = query+` AND p.layer=?`, []any{layer}
-	}
-	rows, err := s.DB.Query(query+` ORDER BY p.layer, p.name, p.id`, args...)
-	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer rows.Close()
-	out := []RoutePolicy{}
-	for rows.Next() {
-		record, err := scanRoutePolicy(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return out, nil
 }
 
 func (s *Store) ActiveRoutePolicy(layer PolicyLayer) (RoutePolicy, error) {

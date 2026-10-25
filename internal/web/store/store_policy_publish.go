@@ -484,6 +484,7 @@ func decodePolicyPins(raw json.RawMessage) (compiler.RuleSetPins, error) {
 var publishRefusalCodes = []string{
 	"POLICY_OPERATION_REQUIRED", "POLICY_PAYLOAD_INVALID", "POLICY_LAYER_INVALID",
 	"POLICY_NOT_FOUND", "POLICY_PINS_INVALID", "POLICY_CORRUPT", "POLICY_SECRET_REFUSED",
+	CodePolicyLayerRetired, CodePolicyPayloadRetired,
 	compiler.CodePolicyInvalid, compiler.CodePolicyConflict, compiler.CodeRulesetUnpinned,
 	route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
 	route.CodeRulesetFetchFailed, route.CodeRulesetPinInvalid,
@@ -515,13 +516,13 @@ func PolicyPublishFailure(err error) (int, string, string) {
 	}
 	status := 422
 	switch code {
-	case "POLICY_OPERATION_REQUIRED", "POLICY_PAYLOAD_INVALID", "POLICY_LAYER_INVALID":
+	case "POLICY_OPERATION_REQUIRED", "POLICY_PAYLOAD_INVALID", "POLICY_LAYER_INVALID", CodePolicyPayloadRetired:
 		status = 400
 	case "POLICY_NOT_FOUND":
 		status = 404
 	case compiler.CodePolicyConflict, route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
 		"OUT_BINDING_INVALID", CodeOutNotAuthorized, CodePublishTasksInProgress,
-		CodePublishRevisionChanged, codePublishCandidateChanged:
+		CodePublishRevisionChanged, codePublishCandidateChanged, CodePolicyLayerRetired:
 		status = 409
 	case codePublishGate, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
 		status = 503

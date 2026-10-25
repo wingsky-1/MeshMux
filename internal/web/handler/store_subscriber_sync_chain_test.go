@@ -167,7 +167,7 @@ func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 			}
 			revision := desiredPublishedRevision(t, s, edge, now)
 			settleChainForRevision(t, s, edge, revision, now)
-			if status, code, err := s.SubscriberSyncStatus(alice.ID, now); err != nil || status != store.SubscriberSyncHealthy || code != "" {
+			if status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now); err != nil || status != store.SubscriberSyncHealthy || code != "" {
 				t.Fatalf("confirmed status = %s/%s err=%v, want healthy", status, code, err)
 			}
 
@@ -211,7 +211,7 @@ func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 			if status, code := chainTaskStatus(t, s, edge, revision, failedKind); status != "failed" || code != failureCode {
 				t.Fatalf("drain rewrote the failed %s task: %s/%s", failedKind, status, code)
 			}
-			if status, code, err := s.SubscriberSyncStatus(alice.ID, now); err != nil || status != store.SubscriberSyncPartial || code != failureCode {
+			if status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now); err != nil || status != store.SubscriberSyncPartial || code != failureCode {
 				t.Fatalf("status after drain = %s/%s err=%v, want partial/%s", status, code, err, failureCode)
 			}
 		})
@@ -249,7 +249,7 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 	}
 	settleChainForRevision(t, s, edge, second, now)
 
-	status, code, err := s.SubscriberSyncStatus(alice.ID, now)
+	status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 	if status, code := chainTaskStatus(t, s, edge, second, protocol.KindConfigReadback); status != "healthy" {
 		t.Fatalf("readback = %s/%s, want healthy", status, code)
 	}
-	status, code, err := s.SubscriberSyncStatus(alice.ID, now)
+	status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -50,7 +50,7 @@ func iniValue(t *testing.T, text, key string) string {
 
 func TestWebJailRendersRealNewlines(t *testing.T) {
 	base := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
-	files, err := CandidateFiles(base, []int{60794})
+	files, err := candidateFiles(base, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestWebJailRendersRealNewlines(t *testing.T) {
 
 	direct := base
 	direct.DirectCaddy = true
-	directFiles, err := CandidateFiles(direct, []int{60794})
+	directFiles, err := candidateFiles(direct, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestWebJailRendersRealNewlines(t *testing.T) {
 }
 
 func TestSSHJailRendersRealNewlines(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794, 60795})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794, 60795}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func webFailregex(t *testing.T, filter string) *regexp.Regexp {
 }
 
 func TestWebFilterFailregexMatchesRealLogs(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestWebFilterFailregexMatchesRealLogs(t *testing.T) {
 }
 
 func TestWebFilterDatepatternAcceptsNanoseconds(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestWebFilterMatchesDeployedReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestWebJailMatchesDeployedReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestPortErrorCodesSurviveCheck(t *testing.T) {
 
 func TestCandidateBoundaries(t *testing.T) {
 	c := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
-	files, err := CandidateFiles(c, []int{60794})
+	files, err := candidateFiles(c, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,10 +406,10 @@ func TestCandidateBoundaries(t *testing.T) {
 		t.Fatal("Web Fail2ban candidates missing")
 	}
 	c.DirectCaddy = false
-	if _, err := CandidateFiles(c, nil); err == nil {
+	if _, err := candidateFiles(c, nil, false); err == nil {
 		t.Fatal("SSH listen port is mandatory")
 	}
-	if _, err := CandidateFiles(Config{"x.example.org\nadmin off", "sub.example.org", "mesh.example.org", false}, []int{22}); err == nil {
+	if _, err := candidateFiles(Config{"x.example.org\nadmin off", "sub.example.org", "mesh.example.org", false}, []int{22}, false); err == nil {
 		t.Fatal("candidate renderer accepted injection")
 	}
 }

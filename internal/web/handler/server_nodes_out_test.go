@@ -68,9 +68,9 @@ func TestOutTransportSetFlow(t *testing.T) {
 	if !strings.Contains(body, "出口地址已保存") || !strings.Contains(body, "out.example.invalid") {
 		t.Fatalf("transport save did not render back: %.300s", body)
 	}
-	transport, err := app.store.GetOutTransport(outID)
-	if err != nil || transport.Server != "out.example.invalid" || transport.Port != 9443 {
-		t.Fatalf("stored transport wrong: %+v err=%v", transport, err)
+	pool, err := app.store.OutPool(app.now())
+	if err != nil || len(pool) != 1 || pool[0].Server != "out.example.invalid" || pool[0].Port != 9443 {
+		t.Fatalf("stored transport wrong: %+v err=%v", pool, err)
 	}
 	storedBody := nodesPageBody(t, b)
 	if !strings.Contains(storedBody, "0 个未配置出口地址") {

@@ -255,11 +255,6 @@ func writeNodeState(root string, layout nodeLayout, state InstallState) error {
 	return writeState(root, state)
 }
 
-// readLocalLineState reads the co-located Line ledger from its fixed path.
-func readLocalLineState(root string) (InstallState, bool, error) {
-	return readStateAt(root, localLineStatePath)
-}
-
 // writeLocalLineState persists the co-located Line ledger to its fixed path.
 func writeLocalLineState(root string, state InstallState) error {
 	if err := ensureDirectory(rooted(root, filepath.Dir(localLineStatePath)), 0700); err != nil {

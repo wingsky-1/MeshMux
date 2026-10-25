@@ -74,10 +74,17 @@ func seedPublishLine(t *testing.T, app *Server) string {
 	return line
 }
 
-// activateViaAPI creates and activates one policy through the write endpoint,
-// so the publish test exercises the same rows an operator would produce.
+// activateViaAPI creates and activates one server policy through the write
+// endpoint, so the publish test exercises the same rows an operator would
+// produce. The client layer has been read-only since Task 6, so a client call
+// seeds a legacy revision directly: that is the only way such a row can exist
+// after the upgrade, and it keeps the preview path under test.
 func activateViaAPI(t *testing.T, b *browser, layer, payload string) {
 	t.Helper()
+	if layer == "client" {
+		seedLegacyClientPolicy(t, b, payload)
+		return
+	}
 	created := policyReceipt(t, postPolicy(t, b, "/policies",
 		fmt.Sprintf(`{"layer":%q,"name":"策略-%s","payload":%s,"operation_id":"op-create"}`, layer, layer, payload)), http.StatusCreated)
 	policyReceipt(t, postPolicy(t, b, "/policies/activate",

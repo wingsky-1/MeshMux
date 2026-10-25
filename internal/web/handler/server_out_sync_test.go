@@ -142,7 +142,7 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	if got := candidateCount(t, app.store, f.lineID); got != 2 {
 		t.Fatalf("line revisions after out confirmation = %d, want 2", got)
 	}
-	state, code, err := app.store.OutSyncStatus(f.outID, now)
+	state, code, err := outSyncStatusForTest(t, app.store, f.outID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 		w = reportJSON(t, app, f.lineToken, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(lineDetail)})
 		requireStatus(t, w, 200)
 	}
-	readback, err := app.store.OutEgressReadback(f.lineID, now)
+	readback, err := app.store.NodeCoordinationReadback(f.lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}

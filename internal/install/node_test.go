@@ -399,7 +399,7 @@ func nodeManagedFilesForTest(t *testing.T, role node.Role) map[string]nodeManage
 		AgentVersion: node.CurrentAgentVersion,
 	}
 	identity := node.Identity{NodeID: cfg.NodeID, IdentityToken: strings.Repeat("A", 43)}
-	files, err := nodeManagedFiles(cfg, []int{2222}, identity)
+	files, err := nodeManagedFilesForLayout(cfg, []int{2222}, identity, standaloneNodeLayout())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +610,7 @@ func TestNodePortConsistencyAndACLReadback(t *testing.T) {
 		}
 	}
 
-	files, err := nodeManagedFiles(f.cfg, []int{2222, 2200}, f.identity)
+	files, err := nodeManagedFilesForLayout(f.cfg, []int{2222, 2200}, f.identity, standaloneNodeLayout())
 	if err != nil {
 		t.Fatal(err)
 	}

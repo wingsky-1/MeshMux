@@ -30,7 +30,7 @@ func TestOutNodesHaveNoPoolLimit(t *testing.T) {
 			t.Fatalf("out %d plan does not own the Out ACL unit: %v", i, plan.Units)
 		}
 		identity := node.Identity{NodeID: id, IdentityToken: strings.Repeat("A", 43)}
-		files, err := nodeManagedFiles(cfg, []int{2222}, identity)
+		files, err := nodeManagedFilesForLayout(cfg, []int{2222}, identity, standaloneNodeLayout())
 		if err != nil {
 			t.Fatalf("out %d render failed: %v", i, err)
 		}

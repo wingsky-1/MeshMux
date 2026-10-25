@@ -171,7 +171,7 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 	s, now, out, line := f.store, f.now, f.out, f.line
 
 	// Direct egress: nothing to retry.
-	direct, err := s.OutEgressReadback(line, now)
+	direct, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0, observed_revision=0, observed_config_sha256='' WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	inflight, err := s.OutEgressReadback(line, now)
+	inflight, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	failed, err := s.OutEgressReadback(line, now)
+	failed, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirmChain(t, s, line, now)
-	healthy, err := s.OutEgressReadback(line, now)
+	healthy, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0 WHERE id=?`, line); err != nil {
 		t.Fatal(err)
 	}
-	unconfirmed, err := s.OutEgressReadback(line, now)
+	unconfirmed, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}

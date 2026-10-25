@@ -386,12 +386,6 @@ func DesiredLineDigestTx(tx *sql.Tx, nodeID string, now time.Time) (string, erro
 	return compiledCandidateHash(candidate)
 }
 
-// drainSubscriberNodeTx reconciles one Line with the currently persisted
-// subscriber intent, without an explicit retry.
-func (s *Store) DrainSubscriberNodeTx(tx *sql.Tx, nodeID string, now time.Time) error {
-	return DrainSubscriberNodeIntentTx(tx, nodeID, now, false)
-}
-
 // DrainSubscriberNodeIntentTx publishes the full desired snapshot when needed.
 //
 // The rules keep the operation bounded:
@@ -701,52 +695,6 @@ func (s *Store) drainSubscriberNode(nodeID string, now time.Time) {
 		return
 	}
 	_ = tx.Commit()
-}
-
-// subscriberSyncStatus reports the subscriber's convergence against every
-// historical Line. It never mutates state, so it is safe to use from the Web
-// projection. The returned code is a stable sanitized code or empty.
-func (s *Store) SubscriberSyncStatus(subscriberID string, now time.Time) (string, string, error) {
-	if err := subscription.ValidateID(subscriberID); err != nil {
-		return SubscriberSyncPending, "SUBSCRIBER_ID_INVALID", nil
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return SubscriberSyncPending, "DATABASE_UNAVAILABLE", errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer tx.Rollback()
-	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
-		return SubscriberSyncPending, SanitizeSubscriberSyncCode(err.Error()), err
-	}
-	lineIDs, err := subscriberHistoricalLineIDsTx(tx, subscriberID)
-	if err != nil {
-		return SubscriberSyncPending, "DATABASE_UNAVAILABLE", err
-	}
-	if len(lineIDs) == 0 {
-		return SubscriberSyncHealthy, "", nil
-	}
-	status := SubscriberSyncHealthy
-	code := ""
-	for _, nodeID := range lineIDs {
-		lineStatus, lineCode, err := SubscriberLineSyncViewTx(tx, nodeID, now)
-		if err != nil {
-			return SubscriberSyncPending, "DATABASE_UNAVAILABLE", err
-		}
-		if lineStatus == SubscriberSyncPartial {
-			status = SubscriberSyncPartial
-			if code == "" {
-				code = lineCode
-			}
-			continue
-		}
-		if lineStatus == SubscriberSyncPending && status != SubscriberSyncPartial {
-			status = SubscriberSyncPending
-			if code == "" {
-				code = lineCode
-			}
-		}
-	}
-	return status, code, nil
 }
 
 // SubscriberLineSyncViewTx evaluates one Line against the persisted desired

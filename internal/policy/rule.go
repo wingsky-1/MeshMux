@@ -2,7 +2,6 @@ package policy
 
 import (
 	"errors"
-	"net/netip"
 	"regexp"
 	"strings"
 
@@ -166,97 +165,4 @@ func (r Rule) ToCompilerMatchWith(values []string) compiler.Match {
 	default:
 		return compiler.Match{RuleSets: values}
 	}
-}
-
-// ToCompilerMatch maps the stored values onto the shared matcher model.
-func (r Rule) ToCompilerMatch() compiler.Match {
-	return r.ToCompilerMatchWith(append([]string(nil), r.Values...))
-}
-
-// ValidateRuleSet refuses a library set that would silently shadow itself:
-// two rules whose matchers can hit the same target with different actions, or
-// the same matcher repeated under one action. Disjoint rules always pass.
-func ValidateRuleSet(rules []Rule) error {
-	for _, r := range rules {
-		if IsPresetKey(r.StableKey) {
-			return errors.New(CodePresetImmutable + ": stable_key " + r.StableKey + " is reserved for the seed bundle")
-		}
-		if err := r.Validate(); err != nil {
-			return err
-		}
-	}
-	for i := range rules {
-		for j := i + 1; j < len(rules); j++ {
-			if reason := rulesOverlap(rules[i], rules[j]); reason != "" {
-				return errors.New(CodeConflict + ": rules " + rules[i].StableKey + " and " + rules[j].StableKey + " " + reason)
-			}
-		}
-	}
-	return nil
-}
-
-// rulesOverlap reports why two matchers collide, or "" when disjoint.
-// Samples are concrete probes in the style of the compiler conflict check so
-// cross-kind shadowing (a domain covered by a suffix) is caught too.
-func rulesOverlap(a, b Rule) string {
-	for _, probe := range matchSamples(b.Kind, b.Values) {
-		if matchProbe(a.Kind, a.Values, probe) {
-			if a.Action == b.Action {
-				return "repeat the same match (" + probe + ")"
-			}
-			return "overlap on " + probe + "; the earlier rule would shadow the later one"
-		}
-	}
-	for _, probe := range matchSamples(a.Kind, a.Values) {
-		if matchProbe(b.Kind, b.Values, probe) {
-			if a.Action == b.Action {
-				return "repeat the same match (" + probe + ")"
-			}
-			return "overlap on " + probe + "; the earlier rule would shadow the later one"
-		}
-	}
-	return ""
-}
-
-func matchSamples(kind MatcherKind, values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		switch kind {
-		case MatcherDomainSuffix:
-			out = append(out, "x."+value)
-		case MatcherIPCIDR:
-			if prefix, err := netip.ParsePrefix(value); err == nil {
-				out = append(out, prefix.Addr().String())
-			}
-		default:
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func matchProbe(kind MatcherKind, values []string, probe string) bool {
-	for _, value := range values {
-		switch kind {
-		case MatcherDomain:
-			if probe == value {
-				return true
-			}
-		case MatcherDomainSuffix:
-			if probe == value || strings.HasSuffix(probe, "."+value) {
-				return true
-			}
-		case MatcherIPCIDR:
-			if addr, err := netip.ParseAddr(probe); err == nil {
-				if prefix, err := netip.ParsePrefix(value); err == nil && prefix.Contains(addr) {
-					return true
-				}
-			}
-		default:
-			if probe == value {
-				return true
-			}
-		}
-	}
-	return false
 }

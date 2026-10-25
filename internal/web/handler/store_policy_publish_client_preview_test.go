@@ -6,8 +6,10 @@ package handler
 //
 //   - the receipt of a client publication never claims that a download follows
 //     the active client revision, and
-//   - changing and publishing the client policy leaves the subscription bytes
-//     byte-identical, even after a server publication is applied.
+//   - publishing a legacy client revision leaves the subscription bytes
+//     byte-identical, even after a server publication is applied. The client
+//     layer is read-only since Task 6, so the fixture seeds a legacy row
+//     directly instead of writing through the retired API.
 
 import (
 	"net/http"
@@ -69,8 +71,9 @@ func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 		t.Fatalf("client-only checks = %+v, want both kernels", receipt.Checks)
 	}
 
-	// A second, different client policy is published and activated. It still
-	// must not move a byte of either download.
+	// A second legacy client revision is seeded (the layer is read-only, so the
+	// fixture is the only writer) and published. It still must not move a byte
+	// of either download.
 	activateViaAPI(t, b, "client",
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["other.example.invalid"]},"action":"proxy"}]}`)
 	second := publishReceipt(t, postPublish(t, b, `{"layer":"client","operation_id":"op-publish-client-2"}`), http.StatusOK)

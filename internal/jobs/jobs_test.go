@@ -5,33 +5,6 @@ import (
 	"testing"
 )
 
-// TestTransitionRejectsIllegalMoves pins the forward-only phase machine.
-func TestTransitionRejectsIllegalMoves(t *testing.T) {
-	legal := [][2]Phase{
-		{PhasePending, PhaseApplying}, {PhasePending, PhaseVerifying}, {PhasePending, PhaseHealthy},
-		{PhasePending, PhasePartial}, {PhasePending, PhaseFailed},
-		{PhaseApplying, PhaseVerifying}, {PhaseApplying, PhaseHealthy}, {PhaseApplying, PhasePartial},
-		{PhaseApplying, PhaseFailed}, {PhaseApplying, PhaseRolledBack},
-		{PhaseVerifying, PhaseHealthy}, {PhaseVerifying, PhasePartial}, {PhaseVerifying, PhaseFailed},
-		{PhaseVerifying, PhaseRolledBack}, {PhaseHealthy, PhaseHealthy}, {PhasePending, PhasePending},
-	}
-	for _, move := range legal {
-		if err := Transition(move[0], move[1]); err != nil {
-			t.Fatalf("%s -> %s rejected: %v", move[0], move[1], err)
-		}
-	}
-	illegal := [][2]Phase{
-		{PhasePending, PhaseRolledBack}, {PhaseApplying, PhasePending}, {PhaseVerifying, PhaseApplying},
-		{PhaseHealthy, PhaseApplying}, {PhaseFailed, PhasePending}, {PhaseRolledBack, PhaseHealthy},
-		{Phase("done"), PhasePending}, {PhasePending, Phase("started")},
-	}
-	for _, move := range illegal {
-		if err := Transition(move[0], move[1]); err == nil {
-			t.Fatalf("%s -> %s accepted", move[0], move[1])
-		}
-	}
-}
-
 // TestOperationIDAndTargetAreMandatory keeps a record from existing without a
 // correlation id or with a target this binary cannot act on.
 func TestOperationIDAndTargetAreMandatory(t *testing.T) {
@@ -61,23 +34,5 @@ func TestOperationIDAndTargetAreMandatory(t *testing.T) {
 		if err := bad.Validate(); err == nil {
 			t.Fatalf("%s accepted", name)
 		}
-	}
-}
-
-// TestRetrySemanticsAreBounded pins retryable phases and the attempt limit.
-func TestRetrySemanticsAreBounded(t *testing.T) {
-	if !Retryable(PhasePartial) || !Retryable(PhaseFailed) {
-		t.Fatal("partial and failed must be retryable")
-	}
-	for _, p := range []Phase{PhasePending, PhaseApplying, PhaseVerifying, PhaseHealthy, PhaseRolledBack} {
-		if Retryable(p) {
-			t.Fatalf("%s must not be retryable", p)
-		}
-	}
-	if next, err := NextAttempt(1); err != nil || next != 2 {
-		t.Fatalf("attempt 1 -> %d err=%v", next, err)
-	}
-	if _, err := NextAttempt(RetryLimit); err == nil || !strings.Contains(err.Error(), "TASK_RETRY_EXHAUSTED") {
-		t.Fatalf("attempt at the limit = %v", err)
 	}
 }

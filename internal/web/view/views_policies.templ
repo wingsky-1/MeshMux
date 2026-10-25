@@ -5,9 +5,11 @@ package view
 // the device and the server layer on the Line.
 //
 // The server fills the snapshot from the active stored revisions, falling
-// back to the read-only mesh model and built-in defaults. Saving is the write
-// API and publication is POST /policies/publish. The page still renders no
-// publish control: a button is added only after the visual draft is approved
+// back to the read-only mesh model and built-in defaults. The server layer is
+// writable through the policy API; the client layer is read-only since Task 6
+// (the rule library is the client-routing write surface) and is rendered only
+// as a preview. Publication is POST /policies/publish. The page still renders
+// no publish control: a button is added only after the visual draft is approved
 // (docs/UX.zh-CN.md 交互安全性), so there is no clickable no-op here.
 templ PoliciesPage(p PageData, v PolicyPageView) {
 	@Document(p.Title) {
@@ -63,7 +65,7 @@ templ PoliciesPage(p PageData, v PolicyPageView) {
 						<section class="panel">
 							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ PolicyPreviewLabel(len(v.Client), v.ClientDefault) }</span></div>
 							<p class="muted">客户端层规则决定设备端是否分流，但当前版本<b>没有消费者</b>：标准订阅下载由固定导出器按 Line 与凭据生成，不读取客户端层，也不包含这些规则；发布客户端层只会渲染文档并交 sing-box / Mihomo 门禁，用于校验策略本身是否可渲染，不生成节点候选、不改变任何订阅字节。</p>
-							<p class="muted">因此本页展示已激活的客户端策略时只作为预览；尚未激活时按默认意图预览。需要真正改变设备流量时，当前版本应使用服务端层。</p>
+							<p class="muted">客户端层自 Task 6 起<b>停写</b>（创建/改版/激活/撤销均返回 <code>POLICY_LAYER_RETIRED</code>）：既有 revision 在这里只读预览，`exceptions`/`ssids` 字段已退役。需要设备侧分流时，请在<b>规则库</b>维护（六种匹配器，暂不含 SSID）；服务端层只决定 Line 的出口。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Client {
 									<li>

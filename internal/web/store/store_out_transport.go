@@ -216,26 +216,6 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 	return OutTransport{OutID: outID, Server: server, Port: port, UpdatedAt: stamp}, nil
 }
 
-// GetOutTransport reads the operator-visible half of one Out's dial
-// parameters. The link key is never returned.
-func (s *Store) GetOutTransport(outID string) (OutTransport, error) {
-	outID = strings.TrimSpace(outID)
-	if !validNodeID(outID) {
-		return OutTransport{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
-	}
-	var transport OutTransport
-	transport.OutID = outID
-	err := s.DB.QueryRow(`SELECT server, port, updated_at FROM out_settings WHERE node_id=?`, outID).
-		Scan(&transport.Server, &transport.Port, &transport.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return OutTransport{}, errors.New("OUT_NOT_CONFIGURED: configure the out transport before selecting the out")
-	}
-	if err != nil {
-		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return transport, nil
-}
-
 // outEgressTx is the single derivation of one Out's dial body for candidate
 // rendering: the configured server/port plus the Hub-issued link key. The
 // boolean is false when the Out has no transport yet; callers render the
@@ -254,29 +234,6 @@ func outEgressTx(tx *sql.Tx, outID string) (nodedomain.OutEgress, bool, error) {
 		return nodedomain.OutEgress{}, false, errors.New("OUT_TRANSPORT_CORRUPT: the stored out transport is invalid")
 	}
 	return egress, true, nil
-}
-
-// ListOutTransports returns the operator-visible dial parameters of every Out
-// that has transport configured, ordered by node id. The credentials are
-// never listed.
-func (s *Store) ListOutTransports() ([]OutTransport, error) {
-	rows, err := s.DB.Query(`SELECT node_id, server, port, updated_at FROM out_settings ORDER BY node_id ASC`)
-	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer rows.Close()
-	out := []OutTransport{}
-	for rows.Next() {
-		var transport OutTransport
-		if err := rows.Scan(&transport.OutID, &transport.Server, &transport.Port, &transport.UpdatedAt); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
-		}
-		out = append(out, transport)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return out, nil
 }
 
 // OutPool lists every enrolled Out node with its dial address and the Lines a

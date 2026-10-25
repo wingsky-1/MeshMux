@@ -95,12 +95,12 @@ func TestHTTPProxyNodeIsExternalAndHasNoAgentState(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("database mode = %o, want 0600", info.Mode().Perm())
 	}
-	endpoint, err := s.HTTPProxyEndpoint(proxy.ID)
+	pool, err := s.OutPool(now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if endpoint != "proxy.example.invalid:8080" {
-		t.Fatalf("endpoint = %q, want host:port only", endpoint)
+	if len(pool) != 1 || pool[0].Server != "proxy.example.invalid" || pool[0].Port != 8080 {
+		t.Fatalf("pool projection = %+v, want host:port only", pool)
 	}
 }
 

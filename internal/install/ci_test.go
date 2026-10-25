@@ -58,11 +58,11 @@ func TestWriteComponentFixtures(t *testing.T) {
 	if dir == "" {
 		t.Skip("MESHMUX_HUB_FIXTURE_DIR is not set: only used by the Debian 13 component integration CI")
 	}
-	files, err := CandidateFiles(Config{
+	files, err := candidateFiles(Config{
 		ManagementDomain:   "admin.example.org",
 		SubscriptionDomain: "sub.example.org",
 		HeadscaleDomain:    "mesh.example.org",
-	}, []int{2222})
+	}, []int{2222}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

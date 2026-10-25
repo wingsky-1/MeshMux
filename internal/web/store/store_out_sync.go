@@ -390,8 +390,11 @@ func (s *Store) OutAuthorizedSubscribers(outID string) ([]string, error) {
 }
 
 // OutMembershipLineIDs returns the Lines one Out authorizes under the membership
-// model. It is the projection the nodes page renders as "which Lines this Out
-// accepts", and it is identical for every Out on one Hub.
+// model. It is a read-only evidence projection: the nodes page renders the
+// selection and the published ACL through other queries, and the result is
+// identical for every Out on one Hub. It remains the explicit way a test (or a
+// future per-Out view) asks "which Lines does this Out accept?" without
+// reimplementing the membership query.
 func (s *Store) OutMembershipLineIDs(outID string) ([]string, error) {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
@@ -409,8 +412,10 @@ func (s *Store) OutMembershipLineIDs(outID string) ([]string, error) {
 }
 
 // DeriveOutAllowlist returns the source list the Hub currently authorizes for one
-// Out. It is the only producer of the Out allowlist; the publication path, the
-// retire path and the Web projection all consume it.
+// Out. It is the read-only public face of the same derivation the publication
+// path consumes through outAuthorizationTx (which serves every Out identically
+// on one Hub); it exists so the Task 5 authorization tests and an operator
+// readback can ask the question without opening a transaction.
 //
 // An empty list is a real answer ("this Out is authorized for nothing") while an
 // unknown or wrong-role Out node is a refusal: an Out that does not exist cannot
@@ -614,14 +619,6 @@ func enabledOutIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
 	  JOIN nodes n ON n.id=o.out_id AND n.role='out'
 	 WHERE l.node_id=?
 	 ORDER BY o.out_id ASC`, lineID)
-}
-
-// outIDsForLineTx returns every Out that may accept a Line. Under the membership
-// model that is the whole pool, including an Out that has not confirmed its current
-// authorization yet: a retired Line has to be removed from the published allowlist
-// of every Out that could still be running the old one.
-func outIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
-	return queryIDsTx(tx, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
 }
 
 // nodeRoleTx reads one node's immutable role, mapping a missing row to a stable
@@ -953,82 +950,6 @@ func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 	return revision, nil
 }
 
-// OnLineRetired reclaims the authorization of a Line at every Out, and republishes each
-// affected Out with the remaining membership.
-//
-// Under Ruling R10 a revoked identity already drops the Line from the derivation, so
-// this is the explicit, bounded way to complete that transition (for example after an
-// operator revoked the identity while an Out was unreachable) without waiting for the
-// next Out event.
-//
-// It is the explicit retire path: a Line whose identity is already revoked (or
-// which never had a verifiable source) is de-authorized at once. A Line that is
-// still a verifiable source is refused, because a bookkeeping call must never
-// silently de-authorize a live Line; that has to be an identity revocation.
-//
-// Republishing is explicit. An in-flight chain or an offline Out defers the change
-// and the caller sees OUT_SYNC_PENDING, never a fabricated success. The derivation
-// already excludes a non-current Line, so a deferred reclaim is fail-closed in the
-// meantime and the next Out or Line event completes it.
-func (s *Store) OnLineRetired(lineID string) error {
-	return s.onLineRetiredAt(lineID, time.Now())
-}
-
-// onLineRetiredAt is the request-clock variant used by the Web layer.
-func (s *Store) onLineRetiredAt(lineID string, now time.Time) error {
-	lineID = strings.TrimSpace(lineID)
-	if err := subscription.ValidateID(lineID); err != nil {
-		return errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer tx.Rollback()
-	var role string
-	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("LINE_NOT_FOUND: unknown line node")
-	}
-	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	if role != "edge" {
-		return errors.New("LINE_ROLE_INVALID: only edge nodes can retire an out authorization")
-	}
-	if _, authorized, err := lineEgressSourceTx(tx, lineID); err != nil {
-		return err
-	} else if authorized {
-		return errors.New("LINE_NOT_RETIRED: revoke the line identity before reclaiming its out authorization")
-	}
-	outs, err := outIDsForLineTx(tx, lineID)
-	if err != nil {
-		return err
-	}
-	pending := false
-	var firstErr error
-	for _, outID := range outs {
-		outcome, err := DrainOutNodeIntentTx(tx, outID, now, true)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if outcome == outDrainDeferred {
-			pending = true
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	if !pending {
-		return firstErr
-	}
-	lineErr := errors.New(CodeOutSyncPending + ": the out authorization change is queued behind an in-flight or offline out; retry the out synchronization")
-	return errors.Join(firstErr, lineErr)
-}
-
 // retryOutSync is the explicit retry and rollback pointer of one Out. It
 // republishes a chain even when the desired authorization did not change, which is
 // exactly what an operator needs after a partial/failed or superseded chain.
@@ -1234,31 +1155,6 @@ func (s *Store) NodeCoordinationReadback(nodeID string, now time.Time) (OutEgres
 		}, nil
 	}
 	return outEgressReadbackTx(tx, nodeID, now)
-}
-
-// outSyncStatus is the read-only projection used by tests and Web code.
-func (s *Store) OutSyncStatus(outID string, now time.Time) (string, string, error) {
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return OutSyncPartial, "DATABASE_UNAVAILABLE", errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer tx.Rollback()
-	return outSyncStatusTx(tx, outID, now)
-}
-
-// OutEgressReadback returns the dual readback of one Line. It is read-only and
-// safe to call while rendering a management response.
-func (s *Store) OutEgressReadback(lineID string, now time.Time) (OutEgressReadback, error) {
-	lineID = strings.TrimSpace(lineID)
-	if err := subscription.ValidateID(lineID); err != nil {
-		return OutEgressReadback{}, errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return OutEgressReadback{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer tx.Rollback()
-	return outEgressReadbackTx(tx, lineID, now)
 }
 
 // OutACLCleanTx reports whether the newest published chain of one Out already

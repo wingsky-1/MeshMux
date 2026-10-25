@@ -144,8 +144,8 @@ func TestCustomRuleCRUDAndRevisionChain(t *testing.T) {
 }
 
 func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
-	s := New(openPolicyTestDB(t))
-	db := s.DB()
+	db := openPolicyTestDB(t)
+	s := New(db)
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
@@ -191,8 +191,8 @@ func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 }
 
 func TestUsedByFailClosedOnUnknownEdgeShape(t *testing.T) {
-	s := New(openPolicyTestDB(t))
-	db := s.DB()
+	db := openPolicyTestDB(t)
+	s := New(db)
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
@@ -214,8 +214,8 @@ func TestUsedByFailClosedOnUnknownEdgeShape(t *testing.T) {
 }
 
 func TestUsedByCountsOrphanEdgeRows(t *testing.T) {
-	s := New(openPolicyTestDB(t))
-	db := s.DB()
+	db := openPolicyTestDB(t)
+	s := New(db)
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)

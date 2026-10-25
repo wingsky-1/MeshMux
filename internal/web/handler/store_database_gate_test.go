@@ -212,15 +212,8 @@ func TestSchemaVersionConfirmedAfterStart(t *testing.T) {
 		Scan(&storedVersion, &storedSchema, &confirmedAt); err != nil {
 		t.Fatalf("last-good row missing: %v", err)
 	}
-	stored, ok, err := s.LastGoodDatabaseVersion()
-	if err != nil || !ok {
-		t.Fatalf("last-good readback: ok=%v err=%v", ok, err)
-	}
 	if storedVersion != node.CurrentAgentVersion || storedSchema != store.DatabaseSchemaVersion || confirmedAt <= 0 {
 		t.Fatalf("last-good row = %q/%d/%d", storedVersion, storedSchema, confirmedAt)
-	}
-	if stored.Version != storedVersion || stored.Schema != int(storedSchema) || stored.ConfirmedAt.Unix() != confirmedAt {
-		t.Fatalf("typed readback = %+v", stored)
 	}
 	var rows int
 	if err := s.DB.QueryRow(`SELECT count(*) FROM database_versions`).Scan(&rows); err != nil || rows != 1 {

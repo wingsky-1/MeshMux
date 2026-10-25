@@ -218,11 +218,6 @@ type ComposeDocuments struct {
 	ContentID   string
 }
 
-// Empty reports whether no document was assembled.
-func (d ComposeDocuments) Empty() bool {
-	return len(d.SingBox) == 0 && len(d.Mihomo) == 0 && len(d.LineRoutes) == 0
-}
-
 // ComposeSubscription assembles one subscription from its recorded selection.
 //
 // The four inputs are the four wizard groups. A blocking diagnostic always

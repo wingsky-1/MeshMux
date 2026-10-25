@@ -50,7 +50,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 - 预置规则不可写：任何创建/修改/删除预置规则（`stable_key` 命中预置种子）的写请求以 `RULE_PRESET_IMMUTABLE` 拒绝。规则库动作只有直连/代理/拒绝；匹配只有六种（域名/域名后缀/IP 段/GeoSite/GeoIP/规则集），无 SSID（`compiler.Match.SSIDs` 能力保留但规则库暂不上架，见计划 Task 6 Keep 项）。
 - 预置随版本迁移替换：新版本预置以新 `version` 种子插入（`(stable_key, version)` 唯一），不原地改旧行。存量订阅停留在旧版本语义并标注“可升级”，不自动变、不静默变；运营者显式迁移才产生新 revision。
 - 规则被引用后改 match/action：只能产生新 revision，旧订阅不受影响、下载字节不变，除非运营者显式迁移订阅到新 revision。
-- `route_policies` 表保留，server 层语义 1.0 保留；client 层写入在 Task 6 停写（表保留、可读），与本规则库不双写。
+- `route_policies` 表保留，server 层语义 1.0 保留；client 层写入已在 Task 6 停写（`POLICY_LAYER_RETIRED`；表保留、可读，只作既有 revision 的预览），与本规则库不双写。`exceptions`/`ssids` 顶层字段显式拒绝（`POLICY_PAYLOAD_RETIRED`），schema 17 重写存量 payload 删除这两个从未被消费的键；`default`/`rules`/`note` 与 `policy_schema=8` 不变。
 
 ### 6. 版本与 schema 冻结
 

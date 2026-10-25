@@ -43,7 +43,7 @@ func caddyVhost(t *testing.T, caddyfile, host string) string {
 // and every other path stays a plain 404. The management hostname must not
 // grow the download routes, and the Headscale hostname must stay untouched.
 func TestSubscriptionVhostProxiesOnlySubscriptionPath(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestSubscriptionVhostProxiesOnlySubscriptionPath(t *testing.T) {
 // The header is only meaningful on the management host, which Caddy sets
 // itself from the transport peer.
 func TestSubscriptionVhostDropsClientSuppliedClientIP(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestSubscriptionVhostDropsClientSuppliedClientIP(t *testing.T) {
 // its own hostname. Caddy preserves the Host header by default; an explicit
 // rewrite could drop a non-default port, so the renderer must not add one.
 func TestSubscriptionVhostKeepsRequestHost(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestSubscriptionVhostKeepsRequestHost(t *testing.T) {
 // TestSubscriptionVhostHasNoAccessLog keeps the subscription host free of
 // request logging: a logged download URL would leak the bearer token.
 func TestSubscriptionVhostHasNoAccessLog(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestSubscriptionVhostHasNoAccessLog(t *testing.T) {
 // service must receive the exact subscription origin so the two fixed
 // download routes are served on the dedicated hostname only.
 func TestWebUnitCarriesSubscriptionOrigin(t *testing.T) {
-	files, err := CandidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794})
+	files, err := candidateFiles(Config{"console.example.org", "sub.example.org", "mesh.example.org", false}, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

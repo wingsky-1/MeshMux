@@ -23,6 +23,7 @@ package store
 // select the Out renders in any Out state.
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -123,10 +124,16 @@ func activePolicyIntentOf(record RoutePolicy, err error) (RoutePolicy, RoutePoli
 	return record, intent, err
 }
 
-// decodeActivePolicyIntent is the one decoder of a stored active payload.
+// decodeActivePolicyIntent is the one decoder of a stored active payload. It
+// is strict: schema 17 rewrote every legacy payload, so an unknown key means
+// the row escaped the migration or was written by hand, and silently ignoring
+// it would resurrect the retired exceptions/ssids behaviour. Either way the
+// answer is POLICY_CORRUPT, never a partial intent.
 func decodeActivePolicyIntent(record RoutePolicy) (RoutePolicyPayload, error) {
 	var intent RoutePolicyPayload
-	if err := json.Unmarshal(record.Payload, &intent); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&intent); err != nil {
 		return RoutePolicyPayload{}, errors.New("POLICY_CORRUPT: the active payload is not valid intent JSON")
 	}
 	return intent, nil
@@ -134,8 +141,8 @@ func decodeActivePolicyIntent(record RoutePolicy) (RoutePolicyPayload, error) {
 
 // outEgressFactsTx is the transaction-scoped Out projection of one Line. It is
 // the single derivation both the read-only OutEgressFacts projection and the
-// route resolver use, so the publish gate, the AI decision and an implicit
-// route publication can never disagree about whether the Out is usable.
+// route resolver use, so the publish gate, the composer and an implicit route
+// publication can never disagree about whether the Out is usable.
 func outEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)

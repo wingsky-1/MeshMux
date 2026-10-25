@@ -52,11 +52,13 @@ const (
 	// selection snapshot), Task 5 adds version 14 (drop out_bindings now that the
 	// Out authorization is node membership) and version 15 (narrow the candidate
 	// immutability trigger so a node can be deleted); Task 8 adds version 16
-	// (the external HTTP proxy node role and the private node_http_proxy table).
-	// Version 11 stays reserved for 11d, whose migration leg runs ahead of
-	// migrateSchema12 when it merges. A newer file is refused instead of opened
-	// for writes; a database is never downgraded in place.
-	DatabaseSchemaVersion = 16
+	// (the external HTTP proxy node role and the private node_http_proxy table);
+	// Task 6 adds version 17 (strip the retired exceptions/ssids keys from
+	// stored route policy payloads). Version 11 stays reserved for 11d, whose
+	// migration leg runs ahead of migrateSchema12 when it merges. A newer file
+	// is refused instead of opened for writes; a database is never downgraded
+	// in place.
+	DatabaseSchemaVersion = 17
 
 	// The Hub database backup is independent of the node rollback store
 	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to
@@ -74,12 +76,6 @@ const (
 var DatabaseBackupOperationPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 // databaseVersion is the last-known-good pair of the Hub database.
-type databaseVersion struct {
-	Version     string
-	Schema      int
-	ConfirmedAt time.Time
-}
-
 // migrateSchema10 adds the single last-known-good row. It is purely additive:
 // no existing table, row or index changes, so a rollback only needs to drop the
 // table and set user_version back. IF NOT EXISTS keeps the migration replayable
@@ -123,24 +119,6 @@ func (s *Store) confirmDatabaseVersion(now time.Time) error {
 		return errors.New("SCHEMA_CONFIRM_FAILED: the last-good database version could not be recorded")
 	}
 	return nil
-}
-
-// lastGoodDatabaseVersion reads the confirmed row. An absent row is honest: the
-// database was never confirmed by a started binary, which is not the same as a
-// row naming an empty release.
-func (s *Store) LastGoodDatabaseVersion() (databaseVersion, bool, error) {
-	var out databaseVersion
-	var confirmed int64
-	err := s.DB.QueryRow(`SELECT last_good_version, last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
-		Scan(&out.Version, &out.Schema, &confirmed)
-	if errors.Is(err, sql.ErrNoRows) {
-		return databaseVersion{}, false, nil
-	}
-	if err != nil {
-		return databaseVersion{}, false, errors.New("DATABASE_UNAVAILABLE")
-	}
-	out.ConfirmedAt = time.Unix(confirmed, 0).UTC()
-	return out, true, nil
 }
 
 // schemaTooNew builds the refusal for a database written by a newer binary. The

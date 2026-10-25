@@ -8,12 +8,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/mesh"
 )
 
-// CandidateFiles returns deterministic, UNAPPLIED configurations for Phase B.
-// All interpolation comes from Config.Validate(), never remote user input.
-func CandidateFiles(c Config, ssh []int) (map[string]string, error) {
-	return candidateFiles(c, ssh, false)
-}
-
 // candidateFiles permits internal TLS only to the isolated systemd integration
 // test; no public CLI option can enable it.
 func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, error) {

@@ -210,7 +210,7 @@ func TestComposeSubscriptionRemindsRecordedNetwork(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
 	network := []ComposeNetwork{{DeviceID: "33333333333333333333333333333333", DisplayName: "iPad"}}
 	documents, diagnostics := ComposeSubscription(lines, nil, nil, network)
-	if documents.Empty() {
+	if len(documents.SingBox) == 0 && len(documents.Mihomo) == 0 && len(documents.LineRoutes) == 0 {
 		t.Fatal("a recorded network blocked the artifact")
 	}
 	if !hasReminder(diagnostics, "COMPOSE_NETWORK_RECORDED_ONLY") {
@@ -222,7 +222,7 @@ func TestComposeSubscriptionRemindsRecordedNetwork(t *testing.T) {
 // means nothing to assemble.
 func TestComposeSubscriptionRejectsEmptySelection(t *testing.T) {
 	documents, diagnostics := ComposeSubscription(nil, nil, nil, nil)
-	if !documents.Empty() {
+	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 || len(documents.LineRoutes) != 0 {
 		t.Fatal("an empty selection produced a document")
 	}
 	if !hasBlocking(diagnostics, "COMPOSE_NO_LINES") {

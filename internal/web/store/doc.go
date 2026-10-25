@@ -25,4 +25,13 @@
 // Shared record types (Node, RoutePolicy, MeshDeviceRecord, OutAuthorizationPreview,
 // subscriber snapshots, upgrade targets) and their stable error codes are defined
 // here and consumed by handler and view. store never imports handler, view or web.
+//
+// Policy layers (Task 6): route_policies keeps its immutable server revision
+// chain and its append-only events. The client layer is read-only — create,
+// revise, activate and revoke are refused with POLICY_LAYER_RETIRED — because the
+// standard subscription export never consumed it; existing revisions remain
+// readable and are rendered only as a gated preview. Payloads carry
+// default/rules/note; the retired top-level exceptions/ssids keys are refused
+// with POLICY_PAYLOAD_RETIRED, and schema 17 rewrites stored payloads that
+// predate the retirement.
 package store

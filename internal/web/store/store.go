@@ -147,6 +147,9 @@ func (s *Store) Migrate() error {
 	if err := migrateSchema16(s); err != nil {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
+	if err := migrateSchema17(s); err != nil {
+		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+	}
 	return nil
 }
 
