@@ -1,7 +1,7 @@
-# 11d Hub 自升级执行设计（第 5 稿 r5 修订，送审）
+# 11d Hub 自升级执行设计（第 6 稿 r6 修订，送审）
 
 所属：#11 v1.0.0 Web 统一升级，7 段串行之第 6 段（11c-3 已合入 main，基线 `f82f84c`）。
-状态：设计送审。第 1 稿两份评审均为 NEEDS-REWORK；第 2 稿重做执行基座（§5.1）、对账与确认（§5.4/§5.5）、属主与恢复（§5.7）、manifest 信任链（§5.8），并把 co-located Line 重钉纳入范围（§5.6）。第 3 稿按 NEEDS-REWORK-2 修 MF-1（目标 manifest 门）、MF-2（from_package 真实来源）、MF-3（重钉/双 ledger 预检）、B8（GC 只收 confirmed）及 N1–N7。第 4 稿按最终签收补 MF-3 第 4 个 pin（Line ledger `state.Node.AgentVersion/AgentSHA256`，四处写集全成或全败）并钉死 `from_package_sha256` 读路径（Web 以 `buildinfo.Digest()` 落值、root dispatcher 用 0600/0700 ledger 核对，不给 Web ledger 读权）。**第 5 稿按 owner D1 把 Hub 备份从扁平单槽改为 per-op + `keep=2`（confirmed-only GC），删除 flat 恢复机制；旧二进制的 `SCHEMA_TOO_NEW` 指针保留为“per-op 提交后原子写入的 flat latest 副本”，只作存在性指针、11d 从不读取。** **r5 修正三项**：①保留并收窄 producer 互斥（`LockFlatSlot` 改名 `LockBackupProduce`，只罩 `Busy → generation → WriteOp(backing_up)` 查后写，§5.2/§5.12）；②GC 与指针刷新解耦（confirm 无条件 `keep=2`、显式清理 `keep≥2`，刷新失败只记 `HUB_BACKUP_POINTER_STALE`，绝不跳过 GC，§5.2.1/§5.5）；③补齐 §5.12 的删除清单（`revert.go:605`、flat 绑定的 store/gate 测试与四个 helper），并显式保留 `command_test.go:179` 的扁平指针 fixture。** 11e（兼容矩阵内容）与 C 级 VM/真机验收（归 #12）不在本文范围；本文只消费 11c-3 已冻结的备份/确认/回退接口，不重定义其中任何语义。
+状态：设计送审。第 1 稿两份评审均为 NEEDS-REWORK；第 2 稿重做执行基座（§5.1）、对账与确认（§5.4/§5.5）、属主与恢复（§5.7）、manifest 信任链（§5.8），并把 co-located Line 重钉纳入范围（§5.6）。第 3 稿按 NEEDS-REWORK-2 修 MF-1（目标 manifest 门）、MF-2（from_package 真实来源）、MF-3（重钉/双 ledger 预检）、B8（GC 只收 confirmed）及 N1–N7。第 4 稿按最终签收补 MF-3 第 4 个 pin（Line ledger `state.Node.AgentVersion/AgentSHA256`，四处写集全成或全败）并钉死 `from_package_sha256` 读路径（Web 以 `buildinfo.Digest()` 落值、root dispatcher 用 0600/0700 ledger 核对，不给 Web ledger 读权）。**第 5 稿按 owner D1 把 Hub 备份从扁平单槽改为 per-op + `keep=2`（confirmed-only GC），删除 flat 恢复机制；旧二进制的 `SCHEMA_TOO_NEW` 指针保留为“per-op 提交后原子写入的 flat latest 副本”，只作存在性指针、11d 从不读取。** **r5 修正三项**：①保留并收窄 producer 互斥（`LockFlatSlot` 改名 `LockBackupProduce`，只罩 `Busy → generation → WriteOp(backing_up)` 查后写，§5.2/§5.12）；②GC 与指针刷新解耦（confirm 无条件 `keep=2`、显式清理 `keep≥2`，刷新失败只记 `HUB_BACKUP_POINTER_STALE`，绝不跳过 GC，§5.2.1/§5.5）；③补齐 §5.12 的删除清单（`revert.go:605`、flat 绑定的 store/gate 测试与四个 helper），并显式保留 `command_test.go:179` 的扁平指针 fixture。** 11e（兼容矩阵内容）与 C 级 VM/真机验收（归 #12）不在本文范围；本文只消费 11c-3 已冻结的备份/确认/回退接口，不重定义其中任何语义。**r6（owner D3）**：彻底删除 `hub_upgrade_operations` 镜像表——它今天只写不读，且是唯一迫使 schema 10→11 的原因，bump 之后 in-place downgrade 随即失效。journal 文件是唯一操作记录，`user_version` 保持 **10**，后续迁移必须纯加法（C11、§5.5）；Task 7 文档须写明 `mixedVersionGate` 的运维后果（§5.12）。
 
 ## 1. 背景与意图
 
@@ -9,7 +9,7 @@
 
 1. Hub 自己不能升级：今天只能手工停服、改 `--data-dir`、换二进制，Web 统一升级在 Hub 断链。
 2. 有写者没消费者：`POST /tasks/db-migration/approve` 让操作员“从 Hub 自升级的备份记录复制 `operation_id`”，却没有代码写这份记录；`database_versions` 没有生产读消费者；`server_upgrade_check.go` 仍 pin 自己运行的版本。
-3. 顺序无机制保证：新 Hub 才懂新记录/新 schema，先升 Line/Out 会让旧 Hub 读不懂回执。
+3. 顺序无机制保证：新 Hub 才懂新记录与 op journal 的语义（11d 不 bump schema，但记录/回执仍随发行版前移），先升 Line/Out 会让旧 Hub 读不懂回执。
 
 还有一条第 1 稿漏掉的硬事实：**Hub 与 co-located Line 共用 `/usr/local/libexec/meshmuxd`**，Line 的 `/etc/meshmux/agent.json`、Line ledger 的 `shared_binaries.meshmuxd` 与 `state.Node.AgentVersion/AgentSHA256`、以及 Hub ledger 的 `shared_binaries.meshmuxd` 都钉住这个二进制。换 Hub 二进制必然触碰 Line，`SHARED_BINARY_MISMATCH` preflight 会拒绝 Line 启动；Line ledger 的 `state.Node` 还会在后续 fixed argv `--from-recorded-state` 与 `agent.json` 比对时触发 `CONFIG_CONFLICT`。11d 必须把“换 Hub”做成一次协调重钉，或显式 fail-closed。
 
@@ -18,7 +18,7 @@
 1. Hub 自升级闭环：预升级备份 → root 预置目标 manifest → 已校验 staged 包 → 换二进制 + Line 重钉 → 重启 → 启动身份回读确认，失败可恢复。
 2. **Hub 先升**：Hub 确认后才允许为 Line/Out pin 更新的目标（§5.8）。
 3. 执行与浏览器/页面连接无关：交接后由 PID 1 托管，页面只读磁盘 op journal。
-4. 重启后可查询：op journal 随 data-dir 携带；result 文件固定在 data-dir 之外（§5.9，N3），天然跨 schema、跨 data-dir 存活；DB 表是 schema 11 内的镜像（§5.5）。
+4. 重启后可查询：op journal 随 data-dir 携带；result 文件固定在 data-dir 之外（§5.9，N3），天然跨 schema、跨 data-dir 存活；journal 是唯一操作记录，**不设 DB 镜像表**，任何 schema 版本下都可读（§5.5，D3）。
 5. 恢复可用：停机前校验 → 停 Web → 换回旧二进制 → 新 0700 目录 → 翻 data-dir → `/healthz` 200 → 只读身份核对。
 6. 消费 11c-3 的备份记录、确认位、`database_versions`、`SCHEMA_TOO_NEW` 与空间规则；不新增公开 CLI、不新增 protocol kind。
 
@@ -43,7 +43,7 @@
 - **C8 `SCHEMA_TOO_NEW`**：只 `lstat` 扁平指针路径 `<data-dir>/database-backup/record.json` 的存在性，不解析未来 schema；不原地降级。该文件是 per-op 记录发布后写入的 flat latest 副本（§5.2.1），只保证旧二进制的存在性检查仍能命中；11d 不以它作恢复源。
 - **C9 不可逆位在记录上**：`irreversible_approved` 只有 `POST /tasks/db-migration/approve` 一个写者（session + 精确 Origin + CSRF + 字面值 `irreversible_confirm=1` + `operation_id`），且只写 `<data-dir>/database-backup/<op32hex>/record.json` 这一份被应用的 per-op 记录；扁平指针副本只按字节复制 per-op 记录（confirm 时可能因此带上该位），11d 从不在其上做授权判断，旧 approve 也不因它获权。破坏性步骤前必须读位并重验载荷（staged/confirmed + `integrity_ok` + 非空私有 payload + `PayloadSHA256`）；审批是 metadata-only，恢复必须在副本上重跑 `integrity_check`。
 - **C10 分级 revert**：停机前完成全部校验 → 停 Web → 换回旧二进制 → 恢复到**新** 0700 目录 → `integrity_check` → 翻 `--data-dir`（drop-in）→ `/healthz` 200 → 旧目录保留到确认。中途失败 = 终态 + 人工指引，原目录不动。
-- **C11 in-place down-migration**：只在新表为空且无新 binary 确认写时允许。**11d 显式把 schema 10 → 11**，升级后 `hub_upgrade_operations` 立即可有行，"新表为空"永不成立；因此 11d 的 op 一律只能 restore，不得 DROP 表降级。
+- **C11 in-place down-migration**：11c-3 的判据仍是“新表为空且无新 binary 确认写时允许”；**11d 不新增表、不 bump schema**：`user_version` 保持 **10**，不实现 10→11 迁移（`migrateSchema11` 与 `hub_upgrade_operations` DDL 整体删除，§5.5），op 状态只在 journal。因此升级与 restore 前后 DB 同为 schema 10，“新表为空”恒成立，in-place downgrade 始终可用（扁平指针与 `SCHEMA_TOO_NEW` 只作旧二进制诊断，C8）。**后续迁移必须保持纯加法**（只加表/列/索引，不改不删既有 schema）；任何破坏性变更都会让 in-place downgrade 失效，须单独 owner 决定。
 - **C12 确认是回读的副作用**：锚比较在 `confirmed` 短路**之前**；已被 revert 的操作永不确认；没有 `confirmUpgrade` 平行裁决。
 - **C13 LKG 回退**：重发 LKG 的 candidate revision 走既有 four-task 链（`resurrect-after-delete` 是接受的固有语义，文档须写明）。
 - **C14 空间下限重推导**：Node 的 1024 MiB 常量不覆盖 Hub DB 载荷（§5.9）。
@@ -179,19 +179,11 @@ DirectoryNotEmpty=/run/meshmux-hub/requests
 
 ### 5.5 Apply、journal、对账与确认
 
-**op journal 是权威，DB 表是镜像。** 恢复会把 DB 带回 schema 10（`hub_upgrade_operations` 不存在），所以 op 状态必须跨 schema 与 data-dir 存活：
+**op journal 是唯一操作记录，没有 DB 镜像表（owner D3）。** 恢复会把 DB 带回升级前的同一 schema，而 op 事实必须跨 schema 与 data-dir 存活，所以状态只落文件：
 
 - `<data-dir>/hub-upgrade/ops/<op32hex>.json`（0600，schema 1）：`operation_id`、`kind`、`state`、`target_version`、`from_version`、`manifest_sha256`、`package_sha256`、`db_schema`、`backup_generation`、`error_code`、`updated_at`。Web 写；恢复时随 `hub-upgrade/` 带入新 data-dir。`backup_generation` 在 `backing_up` 时分配为“现有可读 journal op 的最大值 + 1”（首个为 1；失败/回滚不回收编号，GC 不重编号），是 journal-backed 的“最新”判定依据（§5.2）；记录本身仍无此字段（C2 冻结），关联只靠 `operation_id`。
-- `hub_upgrade_operations`（schema 11，纯加法）是镜像，供 SQL 查询：同名列 + `detail`/`created_at`/`updated_at`。锚字段与记录同源，写入时断言与冻结记录相等；dispatcher 只读 journal 与记录，从不读 DB。
 
-```
-hub_upgrade_operations(
-  operation_id TEXT PRIMARY KEY, target_version TEXT NOT NULL, from_version TEXT NOT NULL,
-  state TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '',
-  manifest_sha256 TEXT NOT NULL, package_sha256 TEXT NOT NULL, db_schema INTEGER NOT NULL,
-  backup_generation INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-)
-```
+**为什么删除 `hub_upgrade_operations`**：该表今天只写不读，没有 SQL 消费者；它又是唯一迫使 schema 10→11 的原因，而一旦 bump，“新表为空”永不成立、in-place downgrade 随之失效（C11）。journal 文件随 data-dir 存活、不依赖 `user_version`，restore 路径**不打开 DB 就能读 op**（跨 schema 可读是特性，§5.7），因此整段删除：表 DDL、`migrateSchema11`、`upsert`/`list` 写读端，以及“镜像写失败不阻塞 confirm”的语义。代价只是失去 SQL 排序/过滤——`GET /tasks` 直接解析 ≤ 数十份 JSON；单飞与“最新”判定本来就必须 journal-backed（§5.2），不存在第二真相。dispatcher 只读 journal 与记录，从不读 DB。
 
 不复用 `agent_tasks`（`node_id` 外键、Agent 协议语义、单飞判定与 allowlist 都会被污染），也不复用候选修订链。
 
@@ -213,7 +205,7 @@ hub_upgrade_operations(
 
 上表所有 “result” 都指固定路径 `/var/lib/meshmux-installer/hub-upgrade/results/<op32hex>.json`（§5.9 N3），**不是** `<data-dir>/hub-upgrade/results/`；读端只接受该常量路径，且只把它当进度提示（C21）。
 
-**`confirmed` 判定（唯一）**：`buildinfo.Version == journal.target_version && buildinfo.Digest() == journal.package_sha256`。`from_*` 只用于恢复/重钉核对，**永不**与升级后的运行值比较（升级后 running 就是 target，`from_*` 必然不等）。判定只在启动对账执行；定时器只推进状态与超时，不确认。确认时调用 11c-3 既有 finalize 把**该 op 的 per-op 记录**置 `confirmed`（语义不改），并写 DB 镜像；随后按 §5.2.1 刷新扁平指针副本，**无论刷新成功与否都执行 `backup.GC(root, 2)`**（confirmed-only；staged/failed 与最新两代永不入选）。刷新失败只记 `HUB_BACKUP_POINTER_STALE`，**不跳过 GC**：指针目标要么是刚确认的这一代（最新 confirmed，在 `keep=2` 内），要么是最新 staged（永不入选），要么（刷新失败且指针滞后）是更老的 confirmed，而 11d 从不读该副本，回收它只让旧二进制的提示短暂失效，不影响任何恢复源（§5.2.1）。`RequireBackupDir`/`VerifyBackupRecord`/`readBackupRecord` 固定解析 `<root>/<op32hex>/record.json`，**不再接受 layout 参数**；11c-3 的 Node 路径与 11d 的 Hub 路径因此是同一条读路径（原 N5 的 flat/per-op 双布局分叉删除）。`reverted` 终态不被后续启动覆盖（C12）。
+**`confirmed` 判定（唯一）**：`buildinfo.Version == journal.target_version && buildinfo.Digest() == journal.package_sha256`。`from_*` 只用于恢复/重钉核对，**永不**与升级后的运行值比较（升级后 running 就是 target，`from_*` 必然不等）。判定只在启动对账执行；定时器只推进状态与超时，不确认。确认时调用 11c-3 既有 finalize 把**该 op 的 per-op 记录**置 `confirmed`（语义不改，也不写任何 DB 行）；随后按 §5.2.1 刷新扁平指针副本，**无论刷新成功与否都执行 `backup.GC(root, 2)`**（confirmed-only；staged/failed 与最新两代永不入选）。刷新失败只记 `HUB_BACKUP_POINTER_STALE`，**不跳过 GC**：指针目标要么是刚确认的这一代（最新 confirmed，在 `keep=2` 内），要么是最新 staged（永不入选），要么（刷新失败且指针滞后）是更老的 confirmed，而 11d 从不读该副本，回收它只让旧二进制的提示短暂失效，不影响任何恢复源（§5.2.1）。`RequireBackupDir`/`VerifyBackupRecord`/`readBackupRecord` 固定解析 `<root>/<op32hex>/record.json`，**不再接受 layout 参数**；11c-3 的 Node 路径与 11d 的 Hub 路径因此是同一条读路径（原 N5 的 flat/per-op 双布局分叉删除）。`reverted` 终态不被后续启动覆盖（C12）。
 
 **重启后查询**：`GET /tasks` 的 Hub 区块读 journal + result；无内存依赖。
 
@@ -260,7 +252,7 @@ hub_upgrade_operations(
 
 - 新建目录、恢复库、携带的 `database-backup/` 与 `hub-upgrade/` 全部 `chown -R meshmux:meshmux`。
 - **携带记录的限制**：`database-backup/<op32hex>/record.json` 与扁平指针副本都按字节原样保留（C2），其 `payload_path` 仍指旧 data-dir，且其 state 不能代表恢复后事实；因此只可作 `SCHEMA_TOO_NEW` 的 existence-only 指引（实际命中的是扁平指针副本），**per-op 记录也不得作为下一次恢复源**。启动对账见到 result `restored` 时写 `hub-upgrade/restored.json` 标记并把 journal 置 `reverted`（终态）；读取端见到标记即拒绝把任何携带记录当 rollback source，新 staged 记录落盘时清除标记。
-- 恢复后 DB 是 schema 10，op 镜像消失；op 事实来自 journal（随目录携带）+ result（固定 root 路径，§5.9 N3，不经 data-dir），UI 读它们。
+- 恢复后 DB 仍是 schema 10（11d 不 bump schema，C11），没有镜像表需要和解；op 事实只来自 journal（随目录携带）+ result（固定 root 路径，§5.9 N3，不经 data-dir），UI 直接读它们。**restore 全程不打开 DB 读 op**——这正是删除镜像表的收益（D3）：journal 的文件格式与 `user_version` 无关，恢复到任一 schema 都读得懂。
 - 中途失败 = 终态 + 人工指引，原目录不动，Web 保持 down；不自动重试。若二进制/pin 已改，先换回再落 `partial`。
 - 二进制回退只对“加法迁移”的库成立（C11）；11d 自己的 op 永远走这条 restore。
 - **LKG 语义适用范围**：11c-3 的“重发 LKG candidate revision”是 Line/Out 的回退机制，11d 原样保留；Hub 没有 candidate revision 链，只有 restore 一条路，不得把 four-task 链套到 Hub。
@@ -344,7 +336,7 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 
 页面显示记录状态（state、`from_version`、`db_schema`、payload 文件数、`integrity_ok`）、不可逆警告、恢复入口、op id 与 result 阶段；`/tasks` 摘要里的“当前记录”与单飞判定同源（journal 最高 `backup_generation`，§5.2），**不扫 `database-backup/` 目录**；approve/apply 则按表单/journal 的 `operation_id` 精确读 per-op 记录。不可逆时 apply 前要求先写确认位并显示当前位值。**修悬空文案**：备份回执的 `operation_id` 就是 `POST /tasks/db-migration/approve` 需要的 `backup_operation_id`，`server_database_migration.go` 的提示改指本页（路由/写入语义不动，只改记录路径）。apply 在读位时**只读该 operation_id 的 per-op 记录**（不取“最新”、不扫目录、不读扁平副本），并重验 `verifyDatabaseBackupPayload`，不满足即 `IRREVERSIBLE_CONFIRM_REQUIRED`，无 flag/环境变量绕过。
 
-### 5.12 实现任务改写（Task 1/3/4/5，按已落地分支核对）
+### 5.12 实现任务改写（Task 1/3/4/5/7，按已落地分支核对）
 
 **删除清单（完整；除下表“显式保留”外，其余 flat 代码/测试一并删除）**
 
@@ -371,7 +363,9 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 - **Task 3 测试**：删 `TestReadFlatReturnsTheSlotWithoutAnOperationID` 与所有 flat 路径/单槽断言；新增 `TestBackupPublishesPerOpThenPointer`、`TestBackupPointerFailureKeepsBackedUp`、`TestLatestIsJournalBacked`、`TestBackupProduceSerialized`；`TestBackupNeverCollectsBeforeConfirm` 保留并断言 `GC` 未被调用。
 - **Task 4（`feat/11d-4-dispatch`）**：`dispatch.go` 的记录读取改为 `backup.Read(filepath.Join(request.DataDir, DatabaseBackupDir), request.OperationID, cfg.RecordOwner)`；删除“flat 读会跑 `recoverFlatSlot`、跨进程锁不覆盖”的注释。**dispatcher 不获取 `LockBackupProduce`**（它不写 journal，也不参与单飞判定；per-op 记录只经 rename 替换，11c-3 Node 路径已证明无锁读安全）。请求/结果/argv/ledger 逻辑不变；记录必须与 journal 同一 `operation_id`。
 - **Task 4 测试**：`TestDispatchReadsMeshmuxOwnedRecord` 改 per-op；新增 `TestDispatchReadsRequestedOperation`（plant 更新 op 目录不影响选择）、`TestDispatchReadDoesNotWriteDataDir`（无 trash/orphan/恢复副作用）、`TestDispatchNeverTakesProduceLock`（持锁时 dispatcher 读仍能完成，证明无共享锁）；删 `ReadFlat` fixture 与 `LockFlatSlot` 引用。
-- **Task 5（确认）**：`backup.Confirm(root, op, target, pkg, now)` 后按 §5.2.1 刷新扁平指针，**无论刷新成败都** `backup.GC(root, 2)`（失败只记 `HUB_BACKUP_POINTER_STALE`，不跳过 GC；§5.2.1/§5.5）。GC 只收 `confirmed`、最新两代保留、staged/failed 不动；Hub 的显式清理入口拒绝 `keep<2`（`internal/backup.GC` 保持参数化，Node `keep=1` 不变）。DB 镜像 `backup_generation` 与 journal 同值。
+- **Task 5（确认）**：`backup.Confirm(root, op, target, pkg, now)` 后按 §5.2.1 刷新扁平指针，**无论刷新成败都** `backup.GC(root, 2)`（失败只记 `HUB_BACKUP_POINTER_STALE`，不跳过 GC；§5.2.1/§5.5）。GC 只收 `confirmed`、最新两代保留、staged/failed 不动；Hub 的显式清理入口拒绝 `keep<2`（`internal/backup.GC` 保持参数化，Node `keep=1` 不变）。**不写 DB**：`backup_generation` 等 op 字段只在 journal（D3）。
+- **Task 7（文档）**：必须写明 `mixedVersionGate` 的运维后果——Hub 升到 target 后，co-located Line 若仍报旧 `AgentVersion`（未重启或未完成 §5.6 重钉），携带 resolved route 的 v3 发布会被拒为 `UPGRADE_AGENT_INCOMPATIBLE`；先把 Line 的共享二进制与四处 pin 对齐再发布，不得把它当故障绕过或强推旧目标。
+- **不做（r6，owner D3）**：不新增 `migrateSchema11`、`hub_upgrade_operations` DDL、`upsert`/`list` 写读端，也不做任何 schema 迁移；store-open 的 `user_version` 保持 10（§5.5、C11）。op 状态只落 `hub-upgrade/ops/<op32hex>.json`，确认只改 per-op 记录。
 
 ## 6. 测试计划（B 级，fixture-friendly）
 
@@ -384,8 +378,8 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 5. **身份回读矩阵**（管理面 + 定时器）与 `HUB_DIGEST_UNAVAILABLE`（`/proc/self/exe` 不可读）。
 6. **`SCHEMA_TOO_NEW` 端到端**：子进程 + 高 `user_version` fixture，断言退出码、稳定码、detail 只含**扁平指针路径** `<data-dir>/database-backup/record.json`；无指针时退回 “no verified database backup record exists at …”。同时断言 `schemaTooNew` 不解析指针、不检查 per-op 目录即可返回。
 7. **不可逆矩阵**：manifest `database_migration` 缺省/`irreversible`；无位拒绝、有位通过、位在但载荷被删拒绝；`IRREVERSIBLE_CONFIRM_REQUIRED` 零变更；位只写在 `<op>/record.json`，修改 flat 副本的位不影响 apply。
-8. **恢复**：`PayloadSHA256` 不符 → 停机前拒绝；schema 10 副本 + schema 11 执行体 → `CONFIG_CONFLICT` 在**停机前**返回（不误报）；旧包缺失 → `HUB_RESTORE_BINARY_MISSING`；happy path 含 drop-in 翻转、chown、`database-backup/<op>/`+扁平指针+`hub-upgrade/` 携带、`restored.json` 生效；恢复源只从 journal 的 op id 解析。
-9. **op journal**：非法迁移拒绝；终止态不被覆盖；恢复后 DB 无表而 journal 仍可读、单飞仍生效；`backup_generation` 为 max+1、失败不回收编号、GC 不重编号；最新 per-op 由 journal 决定（planted 新目录/新 mtime 不改写“最新”）。
+8. **恢复**：`PayloadSHA256` 不符 → 停机前拒绝；schema 10 副本 + 更高 schema 执行体（模拟未来 bump）→ `CONFIG_CONFLICT` 在**停机前**返回（不误报）；旧包缺失 → `HUB_RESTORE_BINARY_MISSING`；happy path 含 drop-in 翻转、chown、`database-backup/<op>/`+扁平指针+`hub-upgrade/` 携带、`restored.json` 生效；恢复源只从 journal 的 op id 解析（DB 无镜像表，恢复后 `user_version` 仍为 10）。
+9. **op journal**：非法迁移拒绝；终止态不被覆盖；恢复后 DB 仍为 schema 10（无新增表）而 journal 仍可读、单飞仍生效；**store-open 不执行任何 10→11 迁移，`user_version` 保持 10（`migrateSchema11`/表 DDL 不存在）**；`backup_generation` 为 max+1、失败不回收编号、GC 不重编号；最新 per-op 由 journal 决定（planted 新目录/新 mtime 不改写“最新”）。
 10. **argv 字节 pin**：`__internal-hub-dispatch`/`-update`/`-restore` 全 argv 逐字节；非法 target/digest/op 拒绝。
 11. **R-SURFACE**：`systemd-analyze verify` 三个单元文件（service/path/tmpfiles）；单元文件 root:root 0644；`.path` 含 `After=systemd-tmpfiles-setup.service`；meshmux 不能写 `/etc/systemd/system`（planted drop-in 必须 EACCES/EROFS）与 `/var/lib/meshmux-installer/upgrade`；伪造 `data_dir` 的请求被拒（不等于当前 `--data-dir`）；请求文件为符号链接被拒；未知 target 的请求 → `MANIFEST_UNAVAILABLE` 且**未 exec**；staged 字节 ≠ manifest 摘要 → 未 exec；校验后换字节（TOCTOU）→ exec 副本仍拒绝；`.path` 缺失时 `queued` 超时成 `HUB_HANDOFF_TIMEOUT`；>1 个请求 → `HUB_HANDOFF_BUSY` 且目录被 drain（path 能重新武装）；restore 请求校验的是 `from_agent_sha256` 而非 target；dispatcher 按请求 op id 读记录（plant 一个更新的 op 目录不改变所选记录），且读路径**不写** data-dir（无 trash/orphan 副作用）、**不获取** `LockBackupProduce`（持锁时 dispatch 读仍完成，`LockFlatSlot` 名字不再存在）。
 12. **对账**：`queued` 超时、`applying` 30min 孤儿、`restarting` 且 running==from → `HUB_UPGRADE_NOT_APPLIED`、确认要求 version 与 digest 同时等于 target/`package_sha256`。
@@ -431,5 +425,4 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 ## 9. 开放问题（不阻塞，最多 3）
 
 1. **Q1 精确写集**：是否只需 `/run/meshmux-hub /usr/local/libexec /var/lib/meshmux /var/lib/meshmux-installer /etc/meshmux /etc/systemd/system`？若还需 journal 目录或其它路径，用 `systemd-analyze verify` 与真机 `EROFS` 证据补齐并同步改单元。
-2. **Q2 恢复后的 journal/镜像和解**：schema 10 期间只有 journal，下一次升级重建表时是“按 journal 回填”还是“只保留最近一代”？本文要求回填最近一代以保证 UI 连续，具体规则随 11e 定。
-3. **Q3 中立包时机**：现在就抽 `internal/backup`（零成本预防），还是等 confirmer 真需要反向导入时再抽（届时要保证 JSON 字节不变）。
+2. **Q3 中立包时机**：现在就抽 `internal/backup`（零成本预防），还是等 confirmer 真需要反向导入时再抽（届时要保证 JSON 字节不变）。
