@@ -48,7 +48,12 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 	case strings.HasPrefix(err.Error(), store.CodeOutReferenced):
 		return 409, store.CodeOutReferenced, "该 Out 仍被订阅选中。", "请在订阅向导中先解除这些订阅的 Out 选择，再删除出口。"
 	case strings.HasPrefix(err.Error(), store.CodeOutSyncPending):
-		return 202, store.CodeOutSyncPending, "路由已清理，主机 ACL 等待下发。", "Out 上线后会自动完成；也可在节点页重试。"
+		// The only caller that reaches this mapping is the non-delete release path
+		// (outUnbindPage -> RetryOutSync), where the Out itself survives and only the
+		// host's empty-guard publication is deferred. It is NOT a delete outcome: a
+		// delete that cannot prove the empty guard is a 409 refusal with nothing
+		// destroyed, handled before this switch in both delete handlers.
+		return 202, store.CodeOutSyncPending, "主机 ACL 的空授权下发待同步。", "Out 上线后会自动完成；也可在节点页重试。"
 	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
 		return 400, "OUT_BINDING_INVALID", "Out 参数不正确。", "请检查 Out 标识后重试。"
 	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
@@ -60,20 +65,24 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 
 // outBindingAPIRetired answers the two deleted routes with one stable code and the
 // replacement action, so an old client cannot mistake the refusal for a typo.
+//
+// Both routes edited the binding that no longer exists. The authorization itself is
+// node membership (Ruling R10), which no request can edit; what the operator configures
+// through the wizard is which egress a client document names.
 func (s *Server) outBindingAPIRetired(w http.ResponseWriter, r *http.Request, _ session) {
 	s.fail(w, r, http.StatusGone, CodeBindingAPIRetired,
-		"该接口已移除：Out 授权改由订阅选择派生。",
-		"请在订阅用户页的向导中为该订阅选择或取消 Out；服务端 ACL 会随订阅自动重算。")
+		"该接口已移除：Out 授权来自节点成员（纳管即互通），不再由绑定或订阅写入。",
+		"若要让客户端走该 Out，请在订阅向导中选择它；若要让某条 Line 不再被 Out 接受，请吊销该 Line 身份。")
 }
 
-// outDelete removes one Out from the routing model and clears its ACL.
+// outDelete removes one Out entirely: its ACL is brought back to default-deny, then the
+// node row, the dial address and the Hub-issued link key are deleted (Ruling R9).
 //
 // The delete is a management action with the same session + CSRF boundary as every
-// other mutation. Success means the route is gone and the empty authorization was
-// published; a host cleanup that could not be delivered is reported as
-// OUT_SYNC_PENDING instead of a fabricated success. The node identity and its dial
-// address are deliberately untouched: deleting the route is not revoking the host,
-// and the operator can select the same Out again.
+// other mutation. Success means the host proved the empty authorization and the node is
+// gone. A delete that cannot reach that state is refused with nothing destroyed — it is
+// never reported as a partial success, because once the row disappears there is nothing
+// left to retry from.
 func (s *Server) outDelete(w http.ResponseWriter, r *http.Request, _ session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))

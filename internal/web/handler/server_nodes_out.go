@@ -2,10 +2,11 @@ package handler
 
 // The nodes-page Out actions and the read-only Out preview.
 //
-// After Task 5 the Out authorization is derived from the subscription edges, so
-// this file no longer edits a binding. It keeps the two operations the nodes page
-// really owns — the dial address and the delete — and answers the read-only
-// preview from the same projection the wizard uses.
+// Out authorization is node membership (Ruling R10): every enrolled Line is accepted
+// by every enrolled Out, and a subscription edit never touches the ACL. This file
+// therefore owns only the dial address and the delete (Ruling R9, which removes the
+// node, its dial address and its link key), and answers the read-only preview from the
+// same membership projection the rest of the Hub reads.
 
 import (
 	"encoding/json"
@@ -42,14 +43,15 @@ func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess se
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "Out 出口地址已保存为 " + transport.Server + "。"})
 }
 
-// outUnbindPage releases the Lines an Out serves by removing the Out choice from
-// the subscriptions that selected it.
+// outUnbindPage releases the Lines an Out serves by removing the Out choice from the
+// subscriptions that selected it.
 //
-// This is the HTML twin of the retired JSON unbind endpoint, but it does not
-// silently mutate subscriptions: an Out with a live reference has to be migrated by
-// the operator, and the page names the subscriptions so the action is explicit. An
-// Out no subscription selects is already unbound, so the call is an idempotent
-// no-op that republishes nothing.
+// This is the HTML twin of the retired JSON unbind endpoint, but it does not silently
+// mutate subscriptions: an Out with a live reference has to be migrated by the operator,
+// and the page names the subscriptions so the action is explicit. Under Ruling R10 the
+// release changes only which egress the client document names — the ACL is node
+// membership and is untouched — so an Out no subscription selects is already unbound and
+// this call is an idempotent no-op that publishes nothing.
 func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
@@ -87,10 +89,13 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess sess
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }
 
-// outDeletePage removes one Out from the routing model with an explicit used-by
-// confirm. The first POST names the Out and re-renders the page with the impacted
-// Lines; only a second POST with confirm=1 deletes. The node identity is untouched:
-// deleting the route is not revoking the host.
+// outDeletePage removes one Out entirely with an explicit used-by confirm. The first
+// POST names the Out and re-renders the page with the impacted Lines; only a second
+// POST with confirm=1 deletes.
+//
+// Deleting is not revoking the host: the identity is untouched, but the routing model,
+// the dial parameters and the link key are all gone (Ruling R9), so a later use means
+// enrolling the Out again.
 func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
@@ -114,25 +119,37 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 	}
 	if err := s.store.DeleteOutAt(outID, now); err != nil {
 		if errors.Is(err, store.ErrOutCleanupPending) {
+			// Nothing was destroyed (Ruling R9). The JSON endpoint answers the same way:
+			// a deferral is a refusal, because once the node row is gone there is nothing
+			// left to retry from. Reporting "route deleted" here would be a lie.
 			s.event(r, store.CodeOutSyncPending)
-			s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "路由已删除，主机清理待同步（OUT_SYNC_PENDING）：Out 上线后自动完成。"})
+			s.fail(w, r, 409, store.CodeOutSyncPending,
+				"删除未执行：该 Out 尚未确认清空授权（可能离线，或仍有未完成的链）。",
+				"请确认该 Out 在线并等待当前链结束后重试；本次未删除任何内容。")
 			return
 		}
 		status, code, message, next := outBindingFailure(err)
+		if code == store.CodeOutReferenced {
+			if names := outReferencedSubscribers(err.Error()); names != "" {
+				message = "该 Out 仍被订阅选中：" + names + "。"
+			}
+		}
 		s.fail(w, r, status, code, message, next)
 		return
 	}
 	s.event(r, "OUT_DELETED")
-	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "出口已删除；订阅未选中它，因此没有任何 Line 需要恢复直连。"})
+	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "出口已彻底删除：节点行、出口地址与 link key 均已清除；引用过它的 Line 路由已按 fail-closed 重算。"})
 }
 
 // outPreview is a read-only projection. It goes through the mutation wrapper only
 // to require the same session + CSRF boundary as every management POST; it never
 // writes a row.
 //
-// The projection answers "which Lines would this Out serve if the operator selected
-// it", derived from the same subscription edges the allowlist uses. A proposal is
-// never reported as an established path: nothing has been published for it yet.
+// The projection answers "which enrolled Lines does this Out accept, and which sources
+// would the Agent be told to allow", derived from node membership (Ruling R10). A
+// subscription that selects the Out is reported only as a used-by name for the delete
+// guard; it never contributes a source. A single-Line projection is never reported as
+// an established path: nothing has been published for it yet.
 func (s *Server) outPreview(w http.ResponseWriter, r *http.Request, _ session) {
 	preview, err := s.store.PreviewOutAuthorization(
 		strings.TrimSpace(r.PostForm.Get("out_id")),

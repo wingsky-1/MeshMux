@@ -90,12 +90,17 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	// the node now would strand that chain: no result could be recorded for it, and the
 	// host would keep whatever ACL it last applied. The operator retries after it
 	// settles (the same bounded rule the rest of the Out synchronization uses).
+	//
+	// The refusal is joined with ErrOutCleanupPending so every caller classifies it the
+	// same way as the offline/deferred case: a refusal that deleted nothing, never a
+	// half-success. Without the sentinel the handler fell through to the generic mapping,
+	// which used to answer 202 "route cleaned" for a delete that destroyed nothing.
 	unfinished, err := subscriberLineUnfinishedTasksTx(tx, outID)
 	if err != nil {
 		return err
 	}
 	if unfinished != 0 {
-		return errors.New(CodeOutSyncPending + ": the out still has an unfinished chain; retry after it settles")
+		return errors.Join(errors.New(CodeOutSyncPending+": the out still has an unfinished chain; retry after it settles"), ErrOutCleanupPending)
 	}
 	// Publish the explicit empty authorization before the node is gone. An Out that
 	// never published a chain has no host state to clear.

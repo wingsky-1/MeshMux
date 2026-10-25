@@ -113,11 +113,12 @@ type OutTransport struct {
 // selection datasource the wizard consumes; it carries no credential, no link key
 // and no allowlist.
 //
-// LineIDs is plural because the authorization is derived from the subscription
-// edges (Task 5): one Out may be selected by several subscriptions serving
-// different Lines, and the pool has to show all of them. Enabled is true when at
-// least one active subscription serves at least one Line through this Out, which is
-// exactly the condition under which it authorizes a source.
+// LineIDs is plural because one Out may be selected by several subscriptions
+// serving different Lines, and the pool has to show all of them. Enabled is true
+// when at least one active subscription serves at least one Line through this Out;
+// it is a wizard/UI signal only — it does NOT authorize anything. The source
+// authorization is node membership (Ruling R10): every enrolled Line is accepted by
+// every enrolled Out regardless of any selection.
 type OutPoolEntry struct {
 	OutID               string   `json:"out_id"`
 	DisplayName         string   `json:"display_name"`

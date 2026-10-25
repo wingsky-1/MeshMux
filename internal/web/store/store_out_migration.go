@@ -14,13 +14,13 @@ package store
 // Both legs run inside the single Migrate transaction, so a database that starts
 // at 4 never observes a state in which the binding table is the only
 // authorization source: the version that drops the table is the version whose code
-// derives the allowlist from the subscription edges. That is what makes the switch
-// atomic instead of a two-release migration with an authorization window.
+// derives the allowlist without it. That is what makes the switch atomic instead of a
+// two-release migration with an authorization window.
 //
-// The drop is irreversible by design and is declared as such for the 11d gate: the
-// relation it stored is reconstructed from subscription_lines/subscription_outs,
-// which schema 13 already provides, and no operator-entered data is lost — the
-// binding only ever mirrored a choice the subscription now owns.
+// The drop is irreversible by design and is declared as such for the 11d gate. No
+// operator-entered data is lost: the binding row only ever mirrored a relation the Hub
+// now owns outright, and the authorization is node membership (Ruling R10) — every
+// enrolled Line is accepted by every enrolled Out, with no per-relation record needed.
 
 import (
 	"database/sql"
@@ -53,11 +53,11 @@ PRAGMA user_version=5;
 // migrateSchema14 drops the Out binding table and its index.
 //
 // It is the only destructive migration of the aggregation rebuild and it is
-// irreversible: the authorization the table represented is derived from the
-// subscription edges from this version on. Dropping the table together with the
-// code that read it is what makes the switch atomic — an older binary refuses the
-// newer file (SCHEMA_TOO_NEW) instead of reading a table that no longer exists, and
-// a newer binary never looks at a table it does not read.
+// irreversible: from this version on the authorization is node membership (Ruling R10),
+// which needs no table at all. Dropping the table together with the code that read it is
+// what makes the switch atomic — an older binary refuses the newer file
+// (SCHEMA_TOO_NEW) instead of reading a table that no longer exists, and a newer binary
+// never looks at a table it does not read.
 //
 // The DDL is idempotent so a replay (a fixture that starts from a pre-14 file whose
 // table was already dropped by hand) cannot fail on its own earlier write.
@@ -85,6 +85,15 @@ PRAGMA user_version=14;
 // a cascade from the parent delete runs after the parent row is gone. A direct
 // `DELETE FROM node_candidates` for a live node is still refused, and an UPDATE is
 // still refused unconditionally.
+//
+// ORDERING ASSUMPTION: the WHEN clause relies on SQLite removing the parent row before
+// it runs the ON DELETE CASCADE children. That is what SQLite does (the parent DELETE
+// is applied, then the FK action fires per child), and it was verified against this
+// exact schema with an isolated probe: a direct child DELETE aborts with
+// CANDIDATE_IMMUTABLE while `DELETE FROM nodes` succeeds and leaves no candidate rows.
+// If a future SQLite version ever ran cascade children first, this trigger would abort
+// the parent delete again — the delete path's own test (Ruling R9) is what would catch
+// it, not a silent data loss.
 func migrateSchema15(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 DROP TRIGGER IF EXISTS node_candidates_immutable_delete;

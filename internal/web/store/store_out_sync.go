@@ -280,18 +280,25 @@ func lineEgressSourceTx(tx *sql.Tx, lineID string) (string, bool, error) {
 	return source, true, nil
 }
 
-// OutAuthorizedLineIDsTx returns the Lines one Out authorizes under the node
-// membership model (Ruling R10): every enrolled Line that currently holds a
-// pairing identity, in node-id order.
+// OutAuthorizedLineIDsTx returns the Lines an Out authorizes under the node
+// membership model (Ruling R10): every enrolled Line that currently holds a pairing
+// identity, in node-id order.
+//
+// The result is IDENTICAL for every Out on one Hub, which is why the outID argument is
+// accepted but not used: the call sites that ask "what does this Out accept" keep the
+// Out in the signature so the question stays explicit at the call site, while the
+// answer comes from the membership set alone. A future per-Out policy (1.1) can start
+// using the argument without changing a single caller.
 //
 // Membership, not subscription, is the authorization source. A Line becomes a
-// permitted source of every Out the moment its identity is issued, and it stops
-// being one when its node row or its identity goes away. The subscription that a
-// subscriber later builds selects which egress the *client document* names; it
-// does not decide whether the data plane accepts the Line.
+// permitted source of every Out the moment its identity is issued, and it stops being
+// one when its node row or its identity goes away. The subscription that a subscriber
+// later builds selects which egress the *client document* names; it does not decide
+// whether the data plane accepts the Line.
 //
 // The order is canonical so a caller can compare two derivations byte for byte.
 func OutAuthorizedLineIDsTx(tx *sql.Tx, outID string) ([]string, error) {
+	_ = outID // identical for every Out; see the contract above.
 	rows, err := tx.Query(`SELECT n.id
 	  FROM nodes n
 	 WHERE n.role='edge'

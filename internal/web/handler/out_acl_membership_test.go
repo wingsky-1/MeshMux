@@ -487,6 +487,75 @@ func TestOutAuthorization_SubscriptionNeverTouchesTheACL(t *testing.T) {
 	}
 }
 
+// TestOutAuthorization_PoolDrainIsLifecycleOnly is the I2 regression: the pool-wide
+// reconcile is O(Out) by design, so it must be reachable from *node lifecycle* events
+// only. A subscription edit must never reach it, and the events that do have to be the
+// ones that actually change the membership set.
+//
+// It pins the contract from the outside (revision counts per event), because that is
+// what an operator observes; the call-site list itself is documented on
+// RepublishOutAuthorizations and booked as O(Out) work for Task 6 / 1.1.
+func TestOutAuthorization_PoolDrainIsLifecycleOnly(t *testing.T) {
+	f := newOutSyncFixture(t)
+	s, now, out, line := f.store, f.now, f.out, f.line
+
+	settleAndRepublishOuts(t, s, now)
+	confirmChain(t, s, out, now)
+	baseline := candidateCount(t, s, out)
+
+	// Subscription events: no pool drain, so the Out keeps its revision.
+	subscriberID := testSubscriberForLine(t, s, line, now)
+	selectOut(t, s, subscriberID, out, []string{line}, now)
+	if got := candidateCount(t, s, out); got != baseline {
+		t.Fatalf("selecting the out drained the pool: %d -> %d", baseline, got)
+	}
+	if _, err := s.SetSubscriberState(subscriberID, "paused", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := candidateCount(t, s, out); got != baseline {
+		t.Fatalf("pausing a subscriber drained the pool: %d -> %d", baseline, got)
+	}
+
+	// Lifecycle event 1: a Line's transport address changes, which changes the source
+	// an Out authorizes. This must reach the pool.
+	settings := testLine(line, "line-a")
+	settings.Server = "198.51.100.9"
+	settings.ServerName = "line.example.invalid"
+	if _, err := s.SetLine(settings, now); err != nil {
+		t.Fatal(err)
+	}
+	settleTasks(t, s, out)
+	afterAddress := candidateCount(t, s, out)
+	if afterAddress <= baseline {
+		t.Fatalf("an address change did not republish the out: %d -> %d", baseline, afterAddress)
+	}
+	allowed, err := s.DeriveOutAllowlist(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allowed) != 1 || allowed[0] != "198.51.100.9/32" {
+		t.Fatalf("the address change did not reach the acl: %v", allowed)
+	}
+
+	// Lifecycle event 2: an identity revocation removes a member. The drain either
+	// publishes immediately or defers behind the settled chain, but the derived set must
+	// never keep the revoked source.
+	if err := s.RevokeIdentity(line, now); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 0 {
+		t.Fatalf("the revocation did not drop the source: %v err=%v", allowed, err)
+	}
+	settleTasks(t, s, out)
+	s.RepublishOutAuthorizations(now)
+	settleTasks(t, s, out)
+	confirmChain(t, s, out, now)
+	published, chainJSON := publishedAllowlist(t, s, out)
+	if len(published) != 0 {
+		t.Fatalf("the revocation never reached the published chain: %v (%s)", published, chainJSON)
+	}
+}
+
 // TestOutAuthorization_EnrollmentAddsEveryLine is the positive half of R10 ①②: a Line
 // enrolled after the Out exists joins every Out's allowlist, and an Out enrolled after
 // the Lines exist starts with all of them.

@@ -1,16 +1,18 @@
 package handler
 
-// AI double-hop end-to-end fixture (Task 5, ADR-0008 §3).
+// AI double-hop end-to-end fixture (Task 5, ADR-0008 §3; Ruling R10).
 //
-// This is the acceptance evidence the authorization migration owes: the Hub
-// derives the Out allowlist from the subscription edges, the Line renders a real
-// Shadowsocks hop to the selected Out, and an AI-domain request really traverses
-// Line -> Out on the pinned kernel.
+// This is the acceptance evidence the authorization migration owes. The Hub authorizes
+// the Line at the Out because both are enrolled members (Ruling R10: node membership, not
+// a subscription), the Line renders a real Shadowsocks hop to the Out its route selects,
+// and an AI-domain request really traverses Line -> Out on the pinned kernel.
 //
 // What the fixture proves, and with which evidence level:
 //
-//   - The Hub derived exactly the Line's address from the subscription edges and
-//     published it in the Out chain (Hub-side proof: derived set == published set).
+//   - The Hub derived exactly the Line's address from the enrollment set and published it
+//     in the Out chain (Hub-side proof: derived set == published set). The subscription
+//     created by the fixture only makes the Line's route name the Out; it contributes no
+//     source, and the assertion below states that explicitly.
 //   - The rendered nft guard is accepted and installed by the real kernel
 //     nftables parser inside a private network namespace (concept proof: it is a
 //     private namespace, not the host's ruleset, so no host state changes).
@@ -78,20 +80,21 @@ const doubleHopBudget = 90 * time.Second
 
 // doubleHopFixture holds one running AI double-hop topology.
 type doubleHopFixture struct {
-	t          *testing.T
-	ctx        context.Context
-	binary     string
-	dir        string
-	store      *store.Store
-	lineID     string
-	outID      string
-	lineKey    string // the Out's SS link key, read from the private table
-	linePort   int
-	outPort    int
-	socksPort  int
-	targetPort int
-	handshake  int
-	uuid       string
+	t            *testing.T
+	ctx          context.Context
+	binary       string
+	dir          string
+	store        *store.Store
+	lineID       string
+	outID        string
+	subscriberID string
+	lineKey      string // the Out's SS link key, read from the private table
+	linePort     int
+	outPort      int
+	socksPort    int
+	targetPort   int
+	handshake    int
+	uuid         string
 }
 
 // newDoubleHopFixture builds the Hub state and the isolated targets, then returns
@@ -320,6 +323,9 @@ func (f *doubleHopFixture) buildHubState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The subscription only makes this Line's route name the Out (Ruling R10): the ACL
+	// authorization below comes from enrollment, which is why the E2E asserts that
+	// dropping this selection leaves the guard untouched.
 	if _, err := s.SaveSubscriptionSelection(sub.ID, store.SelectionSpec{
 		LineIDs: []string{line.ID}, OutID: out.ID,
 	}, now); err != nil {
@@ -329,7 +335,24 @@ func (f *doubleHopFixture) buildHubState(t *testing.T) {
 		sub.ID, line.ID).Scan(&f.uuid); err != nil {
 		t.Fatal(err)
 	}
-	f.lineID, f.outID = line.ID, out.ID
+	f.lineID, f.outID, f.subscriberID = line.ID, out.ID, sub.ID
+}
+
+// dropOutSelection removes the Out from the fixture subscription while keeping the Line
+// selected, so the caller can prove the ACL does not depend on it.
+func (f *doubleHopFixture) dropOutSelection() error {
+	_, err := f.store.SaveSubscriptionSelection(f.subscriberID, store.SelectionSpec{
+		LineIDs: []string{f.lineID},
+	}, time.Now())
+	return err
+}
+
+// restoreOutSelection re-selects the Out, restoring the route the fixture renders.
+func (f *doubleHopFixture) restoreOutSelection() error {
+	_, err := f.store.SaveSubscriptionSelection(f.subscriberID, store.SelectionSpec{
+		LineIDs: []string{f.lineID}, OutID: f.outID,
+	}, time.Now())
+	return err
 }
 
 // derivedAllowlist reads the authorization the Hub publishes for the Out.
@@ -631,16 +654,37 @@ func socksGetDomain(t *testing.T, proxyPort int, domain string, targetPort int) 
 func TestOutAuthorization_AIDoubleHopEndToEnd(t *testing.T) {
 	fixture := newDoubleHopFixture(t)
 
-	// 1. The Hub derived exactly the Line's address from the subscription edge, and
-	//    published it in the Out chain. This is the authorization the data plane
+	// 1. The Hub derived exactly the Line's address from the enrollment set (Ruling R10),
+	//    and published it in the Out chain. This is the authorization the data plane
 	//    below is expected to match.
 	allowed := fixture.derivedAllowlist(t)
 	if len(allowed) != 1 || allowed[0] != "127.0.0.1/32" {
-		t.Fatalf("derived allowlist = %v, want the line address from the subscription edge", allowed)
+		t.Fatalf("derived allowlist = %v, want the line address from the enrollment set", allowed)
 	}
 	// The publish itself is pinned by the store tests; a pending chain must not fail
 	// the data-plane fixture, so the error is deliberately ignored here.
 	_ = fixture.store.RetryOutSync(fixture.outID, time.Now())
+
+	// 1b. The subscription is not an ACL input: dropping it leaves the authorized set —
+	//     and therefore the guard the Agent is told to apply — byte-identical. This is the
+	//     Ruling R10 assertion that the E2E itself carries, so the fixture cannot be read
+	//     as "a subscription drove the ACL".
+	//
+	//     The selection pinned outside this comparison is the one the fixture uses to
+	//     build its route; it is restored right after, before any document is rendered.
+	if err := fixture.dropOutSelection(); err != nil {
+		t.Fatalf("drop the fixture's out selection: %v", err)
+	}
+	withoutSelection := fixture.derivedAllowlist(t)
+	if len(withoutSelection) != len(allowed) || withoutSelection[0] != allowed[0] {
+		t.Fatalf("dropping the subscription changed the ACL: %v != %v", withoutSelection, allowed)
+	}
+	if got := fixture.renderedACL(t, withoutSelection); !bytes.Equal(got, fixture.renderedACL(t, allowed)) {
+		t.Fatal("dropping the subscription changed the rendered guard")
+	}
+	if err := fixture.restoreOutSelection(); err != nil {
+		t.Fatalf("restore the fixture's out selection: %v", err)
+	}
 
 	// 2. The rendered nft guard is the exact bytes the Agent would apply, and the
 	//    real nftables parser accepts and installs it in a private network namespace.
