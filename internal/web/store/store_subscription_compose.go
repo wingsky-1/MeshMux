@@ -158,7 +158,7 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 		return SubscriptionDraft{}, err
 	}
 	outID := strings.TrimSpace(spec.OutID)
-	if outID != "" && !validBindingNodeID(outID) {
+	if outID != "" && !validNodeID(outID) {
 		return SubscriptionDraft{}, errors.New(CodeSelectionInvalid + ": out_id must be 32 lowercase hex characters")
 	}
 
@@ -383,6 +383,10 @@ func (s *Store) SaveSubscriptionDraft(draft SubscriptionDraft, artifactID string
 	if err = tx.Commit(); err != nil {
 		return "", errors.New("DATABASE_UNAVAILABLE")
 	}
+	// The save ends here on purpose (Ruling R10): a subscription selection is not an
+	// ACL input, so it must not republish any Out. The Line's own publication is
+	// driven by the caller's PrepareSubscriberSync, and the Out allowlist follows
+	// node lifecycle events only.
 	return bearer, nil
 }
 

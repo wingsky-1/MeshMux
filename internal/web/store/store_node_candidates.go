@@ -217,6 +217,49 @@ func publishCandidateTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now
 	return tasks, nil
 }
 
+// insertCandidateWithAllowlistTx publishes one candidate whose task chain carries an
+// explicitly supplied allowlist.
+//
+// It exists for the delete path (Ruling R9): the last chain an Out ever publishes must
+// authorize NOTHING, and the ordinary publication derives the current membership — which
+// still includes every Line while the node row exists. Passing the empty set is the only
+// way to express "this host must end in default-deny", and it goes through the same
+// four-task chain, the same params envelope and the same immutability as every other
+// revision, so the Agent cannot tell the two apart.
+//
+// The allowlist is not derived here: a caller that cannot name the set explicitly must use
+// publishCandidateTx.
+func insertCandidateWithAllowlistTx(tx *sql.Tx, nodeID string, candidate node.Candidate, allowed []string, now time.Time) error {
+	if err := InsertCandidateTx(tx, candidate, now.Unix()); err != nil {
+		return err
+	}
+	if allowed == nil {
+		allowed = []string{}
+	}
+	params, err := json.Marshal(struct {
+		Revision       int64    `json:"revision"`
+		AllowedSources []string `json:"allowed_sources"`
+	}{Revision: candidate.Revision, AllowedSources: allowed})
+	if err != nil {
+		return errors.New("CANDIDATE_RENDER_FAILED")
+	}
+	taskRevision, err := taskRevisionAfter(tx, nodeID)
+	if err != nil {
+		return err
+	}
+	for _, kind := range protocol.PublicationKinds {
+		task, err := NewFixedTask(nodeID, kind, params, taskRevision)
+		if err != nil {
+			return err
+		}
+		if err := enqueueTaskTx(tx, task, now); err != nil {
+			return err
+		}
+		taskRevision++
+	}
+	return nil
+}
+
 // reconcileNode publishes one immutable revision and the fixed four task chain
 // in a single transaction. Callers cannot supply kinds or params.
 //

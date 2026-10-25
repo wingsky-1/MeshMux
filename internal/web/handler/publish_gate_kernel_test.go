@@ -111,11 +111,12 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	out := pairedStoreNode(t, direct.store, "out", direct.now)
 	markLineOnline(t, direct.store, out, direct.now)
 	configureOut(t, direct.store, out, direct.now)
-	if err := direct.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: direct.line, Enabled: true}, direct.now); err != nil {
-		t.Fatal(err)
-	}
+	// Enrollment publishes the Out guard (Ruling R10); the selection only routes the
+	// Line through it.
+	direct.store.RepublishOutAuthorizations(direct.now)
 	settleTasks(t, direct.store, out)
 	confirmChain(t, direct.store, out, direct.now)
+	enableOutForLine(t, direct.store, out, direct.line, direct.now)
 	direct.activatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
 

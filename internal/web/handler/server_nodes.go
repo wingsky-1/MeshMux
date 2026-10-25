@@ -238,8 +238,8 @@ func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess sess
 	data.ByLine = make(map[string][]store.OutPoolEntry)
 	for _, entry := range pool {
 		data.ByOut[entry.OutID] = entry
-		if entry.LineID != "" {
-			data.ByLine[entry.LineID] = append(data.ByLine[entry.LineID], entry)
+		for _, lineID := range entry.LineIDs {
+			data.ByLine[lineID] = append(data.ByLine[lineID], entry)
 		}
 	}
 	s.render(w, r, 200, view.NodesPage(view.PageData{Title: "代理节点", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP}, nodes, data, created, action, code, s.cfg.Origin, s.cfg.InstallArtifact))

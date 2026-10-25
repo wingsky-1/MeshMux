@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
 	"net/http"
 	"net/url"
 	"strings"
@@ -96,9 +95,7 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 		t.Fatalf("absent state missing: %.400s", w.Body.String())
 	}
 
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: f.out, LineID: f.line, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, f.store, f.out, f.line, f.now)
 	confirmChain(t, f.store, f.out, f.now)
 	markLineOnline(t, f.store, f.line, f.now)
 	if err := prepareSubscriberSyncForLine(f.store, f.line, f.now); err != nil {

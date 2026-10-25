@@ -135,14 +135,14 @@ func lineCandidateUsersTx(tx *sql.Tx, nodeID string) ([]node.VLESSUser, error) {
 	return users, nil
 }
 
-// attachLineOutEgressTx attaches the Hub-issued Out dial body to a
-// configured Line candidate when an enabled binding exists. The first enabled
-// Out in node-id order wins, so one Line never renders two endpoints while
-// the 1.0 model carries a single "out" tag. A bound Out without configured
-// transport leaves the egress unattached: the route still renders the
-// fail-closed block stub, and enabling such a binding is refused by
-// SetOutBinding, so this only happens for bindings stored before the
-// transport existed.
+// attachLineOutEgressTx attaches the Hub-issued Out dial body to a configured Line
+// candidate when a subscription selected an Out for that Line (Task 5: the edge is
+// the authorization, there is no binding row). The first Out in node-id order wins,
+// so one Line never renders two endpoints while the 1.0 same-Line rule carries a
+// single "out" tag. An Out without configured transport leaves the egress
+// unattached: the route still renders the fail-closed block stub, and selecting such
+// an Out is refused by validateSelectionOutTx, so this only happens for an Out whose
+// transport was removed after it was selected (SetOutTransport never deletes).
 func attachLineOutEgressTx(tx *sql.Tx, nodeID string, candidate *node.Candidate) error {
 	outs, err := enabledOutIDsForLineTx(tx, nodeID)
 	if err != nil {

@@ -258,6 +258,10 @@ func (s *Store) SetSubscriberState(id string, state subscription.State, now time
 		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
 	}
 	sub.State = state
+	// A subscriber state change is NOT an ACL event (Ruling R10): the data plane
+	// authorizes Line membership, so pausing or resuming a subscription changes only
+	// which egress its client document names. The Line publication fan-out below the
+	// handler boundary carries that; the Out allowlist is untouched.
 	return sub, nil
 }
 
@@ -353,6 +357,10 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 	if err = tx.Commit(); err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
+	// The Line set of a subscription does not change the ACL (Ruling R10): a Line is
+	// authorized at every Out by membership, so dropping or adding it here only
+	// changes the client document the subscriber downloads. The Out pool is
+	// reconciled by the node lifecycle instead.
 	return credentials, nil
 }
 

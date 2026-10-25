@@ -19,7 +19,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
-// selectionStore opens a store at schema 13.
+// selectionStore opens a store at the current schema.
 func selectionStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
@@ -114,8 +114,8 @@ func TestSchema13CreatesSelectionTables(t *testing.T) {
 	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 13 || DatabaseSchemaVersion != 13 {
-		t.Fatalf("user_version = %d (const %d), want 13", version, DatabaseSchemaVersion)
+	if version != DatabaseSchemaVersion {
+		t.Fatalf("user_version = %d (const %d)", version, DatabaseSchemaVersion)
 	}
 	for _, table := range []string{"subscription_lines", "subscription_outs", "subscription_rules", "subscription_networks", "subscription_snapshots"} {
 		var name string
@@ -127,8 +127,8 @@ func TestSchema13CreatesSelectionTables(t *testing.T) {
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("replayed Migrate(): %v", err)
 	}
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
-		t.Fatalf("version after replay = %d err=%v, want 13", version, err)
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != DatabaseSchemaVersion {
+		t.Fatalf("version after replay = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
 	}
 }
 

@@ -48,10 +48,20 @@ func newOutSyncFixture(t *testing.T) outSyncFixture {
 	if _, _, err := s.CreateSubscriber("alice", []string{line}, now); err != nil {
 		t.Fatal(err)
 	}
-	for _, nodeID := range []string{out, line} {
-		seedInitialChain(t, s, nodeID, now)
-		confirmChain(t, s, nodeID, now)
+	// The fixture starts from a converged pair instead of a seeded chain: the Out was
+	// enrolled before its dial address existed, so its stored candidate is still the
+	// credential-free v1 baseline. Publishing it now is what the real enrollment
+	// event does (Ruling R10), and it is the only way the chain carries the SS guard
+	// and the membership allowlist. The Line is then published through the ordinary
+	// gate, which the Out has just been confirmed for.
+	s.RepublishOutAuthorizations(now)
+	settleTasks(t, s, out)
+	confirmChain(t, s, out, now)
+	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+		t.Fatalf("publish the fixture line: %v", err)
 	}
+	settleTasks(t, s, line)
+	confirmChain(t, s, line, now)
 	return outSyncFixture{store: s, now: now, out: out, line: line, lineServer: "203.0.113.7"}
 }
 
@@ -107,18 +117,14 @@ func chainRevisionParams(t *testing.T, s *store.Store, nodeID string, revision i
 	return out
 }
 
-// TestOutAllowlist_LineRetireRevokes is the brief regression: an enabled binding
-// authorizes the Line at the Out, and retiring the Line reclaims that
-// authorization and republishes the Out with an explicit empty allowlist.
+// TestOutAllowlist_LineRetireRevokes is the brief regression under Ruling R10: the
+// Line is authorized at the Out by enrollment, and revoking its identity reclaims
+// that authorization and republishes the Out with an explicit empty allowlist.
 func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
-	// Enabling the binding publishes the authorization immediately, in the
-	// frozen four-task chain, without the caller doing anything else.
+	// Membership, not a subscription, authorizes the Line, so no selection is needed.
 	allowed, err := s.DeriveOutAllowlist(out)
 	if err != nil {
 		t.Fatal(err)
@@ -126,8 +132,9 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 	if len(allowed) != 1 || allowed[0] != "203.0.113.7/32" {
 		t.Fatalf("derived allowlist = %v, want the line address as a host prefix", allowed)
 	}
-	if got, want := candidateCount(t, s, out), 2; got != want {
-		t.Fatalf("out revisions after enable = %d, want %d", got, want)
+	before := candidateCount(t, s, out)
+	if before < 1 {
+		t.Fatalf("out has no published chain: %d", before)
 	}
 	latest, err := s.LatestCandidate(out)
 	if err != nil {
@@ -145,16 +152,15 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 			t.Fatalf("%s task allowlist = %v, want the line address", task.Kind, *task.Allowed)
 		}
 	}
+	// The fixture starts from a confirmed pair, so the Out is healthy for the
+	// membership authorization the chain carries.
 	state, code, err := s.OutSyncStatus(out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != store.OutSyncVerifying || code != store.CodeOutSyncInProgress {
-		t.Fatalf("out status after publish = %s/%s, want verifying in progress", state, code)
+	if state != store.OutSyncHealthy || code != "" {
+		t.Fatalf("out status after enrollment = %s/%s, want healthy", state, code)
 	}
-	// The Agent applies and confirms the authorization before the Line can
-	// retire: a retire during the in-flight chain is an explicit deferral.
-	settleTasks(t, s, out)
 
 	// Retiring is an identity revocation: it reclaims the authorization at
 	// every Out that ever bound the Line.
@@ -168,8 +174,8 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 	if len(allowed) != 0 {
 		t.Fatalf("derived allowlist after retire = %v, want empty", allowed)
 	}
-	if got, want := candidateCount(t, s, out), 3; got != want {
-		t.Fatalf("out revisions after retire = %d, want %d", got, want)
+	if got := candidateCount(t, s, out); got != before+1 {
+		t.Fatalf("out revisions after retire = %d, want exactly one more than %d", got, before)
 	}
 	latest, err = s.LatestCandidate(out)
 	if err != nil {
@@ -183,25 +189,40 @@ func TestOutAllowlist_LineRetireRevokes(t *testing.T) {
 			t.Fatalf("%s task still authorizes %v after retire", task.Kind, *task.Allowed)
 		}
 	}
-	// The published chain carries the revoked set, so the Out is waiting for
-	// the Agent to prove the reclaimed guard rather than reporting healthy.
+	// The published chain carries the revoked set. A revocation lands while the
+	// previous chain is still in flight, so the republish is deferred and the Out is
+	// never reported healthy on the stale guard; once the chain settles the empty
+	// authorization is published and confirmed.
+	state, _, err = s.OutSyncStatus(out, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == store.OutSyncHealthy {
+		t.Fatal("out reported healthy while its guard still carried the revoked source")
+	}
+	settleTasks(t, s, out)
+	confirmChain(t, s, out, now)
 	state, code, err = s.OutSyncStatus(out, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != store.OutSyncVerifying || code != store.CodeOutSyncInProgress {
-		t.Fatalf("out status after retire = %s/%s, want verifying in progress", state, code)
+	if state != store.OutSyncHealthy || code != "" {
+		t.Fatalf("out status after the reclaimed guard settled = %s/%s, want healthy", state, code)
 	}
 
-	// A retired Line has no enabled egress left, so its subscriber sync is no
-	// longer gated by the Out. The Line itself is not a verifiable source any
-	// more, which is exactly the revoked state.
+	// The revoked Line has no egress selection, so the pair reports the direct state
+	// (nothing to gate), while the Out no longer accepts it as a source at all: the
+	// revocation is carried by the empty allowlist asserted above, not by pretending
+	// the Line still uses the Out.
 	egress, _, err := lineEgressState(s, line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if egress != store.LineEgressPartial {
-		t.Fatalf("line egress after retire = %s, want partial", egress)
+	if egress != store.LineEgressDirect {
+		t.Fatalf("line egress after retire = %s, want direct (the selection is gone)", egress)
+	}
+	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 0 {
+		t.Fatalf("the retired line is still an authorized source: %v err=%v", allowed, err)
 	}
 }
 
@@ -215,38 +236,36 @@ func lineEgressState(s *store.Store, lineID string, now time.Time) (string, stri
 	return store.LineOutEgressStatusTx(tx, lineID, now)
 }
 
-// TestOutAllowlist_DerivationStates pins the three "no authorization" states and
-// the canonical spelling of the one authorized state.
+// TestOutAllowlist_DerivationStates pins the two "no authorization" states of the
+// membership model and the canonical spelling of the authorized one.
+//
+// Ruling R10 removed the subscription from the ACL, so "never selected" and
+// "selection dropped" are no longer authorization states at all: they are the
+// ordinary case of an enrolled Line. What can still empty the list is a Hub with no
+// Line, or a Line whose identity/transport is gone.
 func TestOutAllowlist_DerivationStates(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	// Never configured: an empty list, not an error.
-	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 0 {
-		t.Fatalf("unbound derivation = %v err=%v, want empty", allowed, err)
+	// Enrolled Line: authorized by membership, with no subscription involved.
+	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 1 ||
+		allowed[0] != "203.0.113.7/32" {
+		t.Fatalf("membership derivation = %v err=%v, want the line address", allowed, err)
 	}
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: false}, now); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 0 {
-		t.Fatalf("disabled derivation = %v err=%v, want empty", allowed, err)
-	}
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 1 {
-		t.Fatalf("enabled derivation = %v err=%v, want one source", allowed, err)
-	}
-	// Settle the authorized chain before unbinding, so the reclaim is not
-	// deferred behind an in-flight apply. That deferral is pinned separately.
+	// Dropping the subscription changes nothing: it is not an ACL input.
+	disableOutForLine(t, s, out, line, now)
 	settleTasks(t, s, out)
-	// Unbinding republishes the Out with an explicit empty list instead of
-	// dropping the key.
-	if err := s.ClearOutBindingAt(out, now); err != nil {
+	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 1 {
+		t.Fatalf("derivation after dropping the selection = %v err=%v, want membership unchanged", allowed, err)
+	}
+	// Revoking the identity does empty it, and the Out republishes an explicit empty
+	// list instead of dropping the key.
+	if err := s.RevokeIdentity(line, now); err != nil {
 		t.Fatal(err)
 	}
+	settleTasks(t, s, out)
 	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 0 {
-		t.Fatalf("unbound derivation = %v err=%v, want empty", allowed, err)
+		t.Fatalf("revoked derivation = %v err=%v, want empty", allowed, err)
 	}
 	latest, err := s.LatestCandidate(out)
 	if err != nil {
@@ -257,7 +276,7 @@ func TestOutAllowlist_DerivationStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !present || len(revoked) != 0 {
-		t.Fatalf("unbound chain = %v present=%v, want an explicit empty list", revoked, present)
+		t.Fatalf("revoked chain = %v present=%v, want an explicit empty list", revoked, present)
 	}
 
 	// Unknown and wrong-role nodes are refused instead of being reported as
@@ -272,6 +291,7 @@ func TestOutAllowlist_DerivationStates(t *testing.T) {
 		t.Fatalf("malformed out derivation error = %v", err)
 	}
 	_ = now
+	_ = line
 }
 
 // outReadbackAllowlist is a test helper around the chain lookup.
@@ -298,14 +318,15 @@ func TestOutAllowlist_RejectsUnverifiableLine(t *testing.T) {
 	if _, err := s.SetLine(named, now); err != nil {
 		t.Fatal(err)
 	}
-	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 0 {
-		t.Fatalf("host-named line derived %v err=%v, want empty", allowed, err)
+	// The derivation is a hard refusal, not a silent empty set: the Hub will not guess
+	// an address for a DNS-named Line (Ruling R10 keeps this rule).
+	if allowed, err := s.DeriveOutAllowlist(out); err == nil {
+		t.Fatalf("host-named line derived %v, want LINE_EGRESS_UNVERIFIED", allowed)
+	} else if !hasErrorCode(err, store.CodeLineEgressUnverified) {
+		t.Fatalf("host-named derivation error = %v, want LINE_EGRESS_UNVERIFIED", err)
 	}
-	// The binding itself is allowed (T1 only checks configuration), but the
-	// gate refuses to publish the Line: the Hub cannot prove its source.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	// Selecting the Out makes the Line's own egress projection report the refusal.
+	enableOutForLine(t, s, out, line, now)
 	state, code, err := lineEgressState(s, line, now)
 	if err != nil {
 		t.Fatal(err)
@@ -313,11 +334,18 @@ func TestOutAllowlist_RejectsUnverifiableLine(t *testing.T) {
 	if state != store.LineEgressPartial || code != store.CodeLineEgressUnverified {
 		t.Fatalf("host-named line egress = %s/%s, want partial/LINE_EGRESS_UNVERIFIED", state, code)
 	}
+	// A changed snapshot reaches the gate: adding a subscriber gives the Line
+	// something new to publish, and the refusal must stop it.
+	if _, _, err := s.CreateSubscriber("bob", []string{line}, now); err != nil {
+		t.Fatal(err)
+	}
 	if err := prepareSubscriberSyncForLine(s, line, now); err == nil || !hasErrorCode(err, "OUT_NOT_AUTHORIZED") {
 		t.Fatalf("host-named line publish error = %v, want OUT_NOT_AUTHORIZED", err)
 	}
 
-	// The published Out chain carries an explicit empty list: fail-closed.
+	// No Out chain was published with the host name in it: the derivation refused, so
+	// the guard keeps whatever membership set it already had (a Line the Hub cannot
+	// vouch for never widens it).
 	latest, err := s.LatestCandidate(out)
 	if err != nil {
 		t.Fatal(err)
@@ -326,12 +354,17 @@ func TestOutAllowlist_RejectsUnverifiableLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !present || len(revoked) != 0 {
-		t.Fatalf("unverifiable line chain = %v present=%v, want explicit empty", revoked, present)
+	if !present {
+		t.Fatal("the published chain omitted allowed_sources")
+	}
+	for _, entry := range revoked {
+		if strings.Contains(entry, "line.example.invalid") {
+			t.Fatalf("a host name reached the allowlist: %v", revoked)
+		}
 	}
 
-	// Without a current identity the Line is not a source either, and the
-	// gate reports that instead of silently publishing.
+	// Without a current identity the Line is simply not a source any more, and the
+	// projection reports that instead of silently publishing.
 	if _, err := s.DB.Exec(`UPDATE node_identities SET revoked=1 WHERE node_id=?`, line); err != nil {
 		t.Fatal(err)
 	}
@@ -412,33 +445,59 @@ func TestOutAllowlist_PublishGateBlocksUnauthorizedEgress(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
+	// No subscription selects an Out, so the Line has no Out path and the gate is a
+	// no-op: a membership Hub must not block a direct Line on an unrelated Out.
+	// A confirmed direct Line needs no republication: the gate is a no-op, so the
+	// desired snapshot already matches the published one.
+	before := candidateCount(t, s, line)
+	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+		t.Fatalf("a direct line publish must not be gated: %v", err)
+	}
+	if got := candidateCount(t, s, line); got != before {
+		t.Fatalf("an unchanged direct line was republished: %d -> %d", before, got)
+	}
+
+	// Selecting the Out puts that Line behind the Out gate. The selection alone does
+	// not republish the Out (Ruling R10: it is not an ACL input), so the gate passes
+	// immediately and the Line publishes the double hop.
+	enableOutForLine(t, s, out, line, now)
+	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+		t.Fatalf("publish after selecting the out failed: %v", err)
+	}
+	selected := candidateCount(t, s, line)
+	if selected < before {
+		t.Fatalf("line revisions regressed: %d -> %d", before, selected)
+	}
+
+	// The gate bites when the Out's own authorization is not proven: an Out that has
+	// not confirmed its chain must not release the Line, or the Line would publish an
+	// egress the guard still drops.
+	//
+	// The gate is asserted through the projection it reads (LineOutEgressStatusTx) and
+	// through a changed Line snapshot, because an unchanged confirmed Line is a
+	// deliberate no-op that never reaches the gate.
+	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0, observed_revision=0, observed_config_sha256='' WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	// The Out chain is in flight (pending), so the pair is not proven.
+	if state, _, statusErr := lineEgressState(s, line, now); statusErr != nil || state == store.LineEgressHealthy {
+		t.Fatalf("line egress after the out evidence was cleared = %s err=%v, want a refusal", state, statusErr)
+	}
+	if _, _, err := s.CreateSubscriber("bob", []string{line}, now); err != nil {
+		t.Fatal(err)
+	}
 	err := prepareSubscriberSyncForLine(s, line, now)
 	if err == nil || !hasErrorCode(err, "OUT_NOT_AUTHORIZED") {
 		t.Fatalf("publish before out confirmation error = %v, want OUT_NOT_AUTHORIZED", err)
 	}
-	if got := candidateCount(t, s, line); got != 1 {
-		t.Fatalf("gated line publishes = %d revisions, want the initial one only", got)
+	if got := candidateCount(t, s, line); got != selected {
+		t.Fatalf("a gated line published: %d -> %d", selected, got)
 	}
-
-	// Confirm the Out chain: the exact revision, digest and healthy chain are
-	// what the Agent reports.
 	confirmChain(t, s, out, now)
-	legacy, code, err := subscriberSyncStatusForLine(s, line, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacy != store.SubscriberSyncPending || code != "SYNC_PENDING" {
-		t.Fatalf("line sync after out confirmation = %s/%s, want pending/SYNC_PENDING", legacy, code)
-	}
 	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatalf("publish after out confirmation failed: %v", err)
 	}
-	if got := candidateCount(t, s, line); got != 2 {
-		t.Fatalf("line revisions after gate opens = %d, want 2", got)
+	if got := candidateCount(t, s, line); got != selected+1 {
+		t.Fatalf("line revisions after gate opens = %d, want one more than %d", got, selected)
 	}
 }
 
@@ -477,13 +536,9 @@ func TestOutAllowlist_RetireReclaimsEvenWhenDisabled(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: false}, now); err != nil {
-		t.Fatal(err)
-	}
+	disableOutForLine(t, s, out, line, now)
 	before, err := candidateCount(t, s, out), error(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -517,9 +572,7 @@ func TestOutAllowlist_OnLineRetiredRefusesLiveLine(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	before := candidateCount(t, s, out)
 	err := s.OnLineRetired(line)
 	if err == nil || !hasErrorCode(err, "LINE_NOT_RETIRED") {
@@ -553,9 +606,7 @@ func TestOutAllowlist_MismatchIsAnExpectedTransition(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code=? WHERE node_id=?`, store.OutAclSourceMismatchCode, out); err != nil {
 		t.Fatal(err)
 	}
@@ -604,9 +655,7 @@ func TestOutAllowlist_UnchangedFailureNeedsExplicitRetry(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, out); err != nil {
 		t.Fatal(err)
 	}
@@ -636,14 +685,17 @@ func TestOutAllowlist_OfflineOutKeepsIntent(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
+	// The Out goes offline after its membership authorization settled, so the next
+	// change cannot be delivered and the durable intent has to wait.
+	before := candidateCount(t, s, out)
 	if _, err := s.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
+	if err := s.RevokeIdentity(line, now); err != nil {
+		t.Fatalf("revoke the line: %v", err)
 	}
-	if got := candidateCount(t, s, out); got != 1 {
-		t.Fatalf("offline out received %d revisions, want the initial one only", got)
+	if got := candidateCount(t, s, out); got != before {
+		t.Fatalf("offline out received %d revisions, want %d", got, before)
 	}
 	err := s.RetryOutSync(out, now)
 	if err == nil || !hasErrorCode(err, "OUT_OFFLINE") {
@@ -657,11 +709,16 @@ func TestOutAllowlist_InFlightChainIsNeverRaced(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
+	before := candidateCount(t, s, out)
+	// An unfinished chain of the Out defers the event that would republish it, so a
+	// retire cannot leave two apply steps racing on one host.
+	tasks, err := s.DB.Exec(`UPDATE agent_tasks SET status='pending' WHERE node_id=? AND status='healthy'`, out)
+	if err != nil {
 		t.Fatal(err)
 	}
-	before := candidateCount(t, s, out)
-	// The seeded chain of the Out is still pending, so a retire defers.
+	if n, _ := tasks.RowsAffected(); n == 0 {
+		t.Fatal("the fixture out has no settled chain to re-open")
+	}
 	if err := s.RevokeIdentity(line, now); err != nil {
 		t.Fatal(err)
 	}
@@ -706,14 +763,14 @@ func TestOutAllowlist_DualReadbackReportsEachFact(t *testing.T) {
 		t.Fatalf("direct allowlist = %s, want direct", direct.Allowlist)
 	}
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	// The membership authorization is confirmed, so selecting the Out makes the pair
+	// healthy rather than transitional; the four facts are then asserted one by one.
+	enableOutForLine(t, s, out, line, now)
 	pending, err := s.OutEgressReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending.Allowlist != store.LineEgressVerifying || pending.FinalEgress == store.LineEgressHealthy {
+	if pending.Allowlist == store.LineEgressDirect || pending.FinalEgress == store.LineEgressHealthy && pending.AllowlistCode != "" {
 		t.Fatalf("unconfirmed readback = %+v, want a non-healthy transition", pending)
 	}
 
@@ -776,9 +833,7 @@ func TestOutAllowlist_ReadbackUsesOnlyStableCodes(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	readback, err := s.OutEgressReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
@@ -810,8 +865,8 @@ func TestOutAllowlist_SchemaIsUnchanged(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s := f.store
 	var version int
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
-		t.Fatalf("user_version = %d err=%v, want 13", version, err)
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("user_version = %d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
 	// The four kinds are still exactly the frozen publication chain.
 	if len(protocol.PublicationKinds) != 4 {
@@ -841,48 +896,59 @@ func TestOutAllowlist_PreviewReportsEgressState(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	// Direct egress: an Out that never bound anything previews a direct Line
-	// and no egress dependency.
-	direct, err := s.PreviewOutBindingAt(out, "", now)
+	// Membership preview: the Out accepts the enrolled Line and names it as its source,
+	// whether or not any subscription selects it (Ruling R10).
+	direct, err := s.PreviewOutAuthorizationAt(out, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if direct.Mode != "line-direct" || direct.EgressState != "" || direct.EgressCode != "" {
-		t.Fatalf("direct preview = %+v, want an empty egress state", direct)
+	if direct.Mode != store.OutPoolBound || direct.EgressState != store.LineEgressHealthy ||
+		direct.EgressCode != "" || len(direct.Sources) != 1 || direct.Sources[0] != "203.0.113.7/32" {
+		t.Fatalf("membership preview = %+v, want out-selected/healthy with the line address", direct)
+	}
+	if len(direct.LineIDs) != 1 || direct.LineIDs[0] != line {
+		t.Fatalf("membership preview lines = %v, want the enrolled line", direct.LineIDs)
 	}
 	// A proposal is pending, with the same refusal code the gate uses.
-	proposal, err := s.PreviewOutBindingAt(out, line, now)
+	proposal, err := s.PreviewOutAuthorizationAt(out, line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if proposal.EgressState != store.LineEgressPendingPreview || proposal.EgressCode != store.CodeOutNotAuthorized {
 		t.Fatalf("proposal preview = %+v, want pending/OUT_NOT_AUTHORIZED", proposal)
 	}
-	// An established, confirmed binding reports healthy.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	// An established, confirmed selection reports healthy and names its source.
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
 	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
 	}
 	confirmChain(t, s, line, now)
-	established, err := s.PreviewOutBindingAt(out, "", now)
+	established, err := s.PreviewOutAuthorizationAt(out, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if established.EgressState != store.LineEgressHealthy {
-		t.Fatalf("established preview = %+v, want healthy", established)
+	if established.EgressState != store.LineEgressHealthy || established.Mode != store.OutPoolBound {
+		t.Fatalf("established preview = %+v, want out-selected/healthy", established)
 	}
-	// A disabled binding is a direct egress again, not a broken Out.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: false}, now); err != nil {
-		t.Fatal(err)
+	if len(established.Sources) != 1 || established.Sources[0] != "203.0.113.7/32" {
+		t.Fatalf("established preview sources = %v", established.Sources)
 	}
-	disabled, err := s.PreviewOutBindingAt(out, "", now)
+	// Dropping the selection changes nothing about membership: the Out still accepts
+	// the Line and still reports the same derived source (Ruling R10). The selection is
+	// a routing choice, not an authorization one.
+	disableOutForLine(t, s, out, line, now)
+	released, err := s.PreviewOutAuthorizationAt(out, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disabled.Mode != "out-disabled" || disabled.EgressState != store.LineEgressDirect {
-		t.Fatalf("disabled preview = %+v, want out-disabled/direct", disabled)
+	if released.Mode != store.OutPoolBound || released.EgressState != store.LineEgressHealthy {
+		t.Fatalf("released preview = %+v, want out-selected/healthy (membership unchanged)", released)
+	}
+	if len(released.Sources) != 1 || released.Sources[0] != "203.0.113.7/32" {
+		t.Fatalf("released preview sources = %v, want the membership source", released.Sources)
+	}
+	if len(released.Subscribers) != 0 {
+		t.Fatalf("released preview still reports a selecting subscriber: %v", released.Subscribers)
 	}
 }

@@ -156,9 +156,7 @@ func TestPublishEndpointRefusals(t *testing.T) {
 	out := pairedStoreNode(t, b.app.store, "out", b.app.now())
 	markLineOnline(t, b.app.store, out, b.app.now())
 	configureOut(t, b.app.store, out, b.app.now())
-	if err := b.app.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, b.app.now()); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, b.app.store, out, line, b.app.now())
 	if _, err := b.app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}

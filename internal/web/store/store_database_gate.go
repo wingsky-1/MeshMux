@@ -48,11 +48,14 @@ var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is no
 const (
 	// DatabaseSchemaVersion is the storage schema this binary owns. Task 3 of
 	// the subscription aggregation rebuild adds version 12 (rule library +
-	// preset seeds) and Task 4 adds version 13 (subscription edge tables +
-	// selection snapshot); version 11 stays reserved for 11d, whose migration
-	// leg runs ahead of migrateSchema12 when it merges. A newer file is refused
-	// instead of opened for writes; a database is never downgraded in place.
-	DatabaseSchemaVersion = 13
+	// preset seeds), Task 4 adds version 13 (subscription edge tables +
+	// selection snapshot), Task 5 adds version 14 (drop out_bindings now that the
+	// Out authorization is node membership) and version 15 (narrow the candidate
+	// immutability trigger so a node can be deleted); version 11 stays reserved for
+	// 11d, whose migration leg runs ahead of migrateSchema12 when it merges. A newer
+	// file is refused instead of opened for writes; a database is never downgraded
+	// in place.
+	DatabaseSchemaVersion = 15
 
 	// The Hub database backup is independent of the node rollback store
 	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to

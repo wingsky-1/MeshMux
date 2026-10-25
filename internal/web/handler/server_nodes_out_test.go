@@ -96,50 +96,60 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	configureOut(t, app.store, outID, now)
 	markLineOnline(t, app.store, lineID, now)
 	markLineOnline(t, app.store, outID, now)
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: outID, LineID: lineID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, app.store, outID, lineID, now)
 	settleTasks(t, app.store, outID)
 	confirmChain(t, app.store, outID, now)
 
 	body := nodesPageBody(t, b)
-	if !strings.Contains(body, "1 个已绑定") || !strings.Contains(body, lineID) {
-		t.Fatalf("bound state not shown on nodes page: %.500s", body)
+	if !strings.Contains(body, "1 个被订阅选中") || !strings.Contains(body, lineID) {
+		t.Fatalf("selected state not shown on nodes page: %.500s", body)
 	}
 
-	// First POST: no deletion, only the used-by confirm.
+	// First POST: no deletion, only the used-by confirm. The Line is named
+	// because the subscription selects the Out for it.
 	w := b.post("/nodes/out-delete", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
 	body = w.Body.String()
-	if !strings.Contains(body, "确认删除出口") || !strings.Contains(body, lineID) || !strings.Contains(body, "恢复直连") {
+	if !strings.Contains(body, "确认删除出口") || !strings.Contains(body, lineID) {
 		t.Fatalf("delete confirm does not name the used-by Line: %.500s", body)
 	}
-	if _, err := app.store.GetOutBinding(outID); err != nil {
-		t.Fatalf("unconfirmed delete removed the binding: %v", err)
+	if tables := tableExists(t, app.store, "out_bindings"); tables {
+		t.Fatal("the nodes page still projects a binding table the schema dropped")
 	}
 
-	// Confirmed POST: the route is gone and the Line is direct again.
+	// A confirmed delete is refused while a subscription still selects the Out:
+	// the operator has to migrate the subscription first, and the refusal names
+	// it. This is the same protection the retired /nodes/out/bind pair used to
+	// provide, now enforced by the edge itself.
 	w = b.post("/nodes/out-delete", url.Values{"out_id": {outID}, "confirm": {"1"}})
-	requireStatus(t, w, 200)
-	if !strings.Contains(w.Body.String(), "出口已删除") {
-		t.Fatalf("delete success notice missing: %.300s", w.Body.String())
-	}
-	if _, err := app.store.GetOutBinding(outID); err == nil {
-		t.Fatal("confirmed delete kept the binding")
+	requireStatus(t, w, 409)
+	if !strings.Contains(w.Body.String(), store.CodeOutReferenced) {
+		t.Fatalf("delete of a selected out = %.300s", w.Body.String())
 	}
 
-	// Unbind path: bind again, then release through the page.
-	configureOut(t, app.store, outID, now)
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: outID, LineID: lineID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
+	// Unbind path: the page reports the live reference instead of silently
+	// rewriting a subscription the operator did not open.
+	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	requireStatus(t, w, 409)
+	if !strings.Contains(w.Body.String(), store.CodeOutReferenced) {
+		t.Fatalf("unbind of a selected out = %.300s", w.Body.String())
 	}
+
+	// Once the subscription stops selecting it, the release action succeeds: the ACL
+	// is republished as an explicit empty authorization.
+	clearOutForLine(t, app.store, lineID, now)
 	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
-	if !strings.Contains(w.Body.String(), "已解绑") {
+	if !strings.Contains(w.Body.String(), "已解除") {
 		t.Fatalf("unbind notice missing: %.300s", w.Body.String())
 	}
-	stored, err := app.store.GetOutBinding(outID)
-	if err != nil || stored.LineID != "" || stored.Enabled {
-		t.Fatalf("unbind did not release the Line: %+v err=%v", stored, err)
+	if subscribers, err := app.store.OutAuthorizedSubscribers(outID); err != nil || len(subscribers) != 0 {
+		t.Fatalf("unbind kept the out selected: %v err=%v", subscribers, err)
+	}
+	// Membership is untouched by the release: the Line is still an enrolled source,
+	// so the Out still accepts it (Ruling R10).
+	members, err := app.store.OutMembershipLineIDs(outID)
+	if err != nil || len(members) != 1 || members[0] != lineID {
+		t.Fatalf("release changed the membership set: %v err=%v", members, err)
 	}
 }

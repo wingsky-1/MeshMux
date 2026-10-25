@@ -322,6 +322,14 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 		if err = tx.Commit(); err != nil {
 			return "", errors.New("DATABASE_UNAVAILABLE")
 		}
+		// Enrollment is the ACL event (Ruling R10): this node just became a member.
+		// A Line joining a Hub is added to every Out's allowlist, and an Out joining
+		// is given every Line that already exists. Both directions are the same
+		// reconciliation because the derivation is the membership set.
+		//
+		// It runs after the commit and never fails the pairing: the issued identity is
+		// durable, and the next Out event completes a deferred publication.
+		s.RepublishOutAuthorizations(now)
 		return token, nil
 	}
 	// Diagnose the failure without leaking whether the node exists beyond
@@ -454,19 +462,17 @@ func (s *Store) RevokeIdentity(nodeID string, now time.Time) error {
 	if err = tx.Commit(); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
-	// Revoking a Line identity retires its egress authorization: the Hub can no
-	// longer vouch for the source address, so every Out that serves the Line has
-	// to be republished with the remaining sources. Revoking an Out has no such
-	// consequence, so only an edge node triggers the reclaim.
+	// Revoking an identity removes a member from the ACL (Ruling R10): the Hub can no
+	// longer vouch for the Line's source address, so every Out has to republish the
+	// remaining membership. Revoking an Out has no ACL consequence of its own — it is
+	// the receiving side — but the pool is reconciled either way, so a revoked Out
+	// also stops being a candidate egress for the publish gate.
 	//
-	// A failure here does not undo the revocation (which is already recorded and
-	// is itself the security boundary): the derivation excludes a revoked Line
-	// from every allowlist, so the state stays honest and the next Out or Line
-	// event retries the republish.
-	var role string
-	if err := s.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role); err == nil && role == "edge" {
-		s.reclaimRetiredLine(nodeID, now)
-	}
+	// A failure here does not undo the revocation (which is already recorded and is
+	// itself the security boundary): the derivation excludes a revoked Line from every
+	// allowlist, so the state stays honest and the next Out or Line event retries the
+	// republish.
+	s.RepublishOutAuthorizations(now)
 	return nil
 }
 

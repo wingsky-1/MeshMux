@@ -60,8 +60,8 @@ func TestRoutePolicyCreateReadAndGuards(t *testing.T) {
 func TestSchemaV8MigrationReplays(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	var version int
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
-		t.Fatalf("schema version %d err=%v, want 13", version, err)
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("schema version %d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
 	clientPayload, _, _ := policyFixtures()
 	if _, err := s.CreateRoutePolicy(store.PolicyLayerClient, "迁移前策略", clientPayload, nil, "op-before", now); err != nil {
@@ -73,13 +73,13 @@ func TestSchemaV8MigrationReplays(t *testing.T) {
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("replay schema 8: %v", err)
 	}
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
-		t.Fatalf("replayed version %d err=%v, want 13", version, err)
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("replayed version %d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
 	if policies, err := s.ListRoutePolicies(""); err != nil || len(policies) != 0 {
 		t.Fatalf("replayed tables not empty: %d err=%v", len(policies), err)
 	}
-	if _, err := s.DB.Exec(`PRAGMA user_version=14`); err != nil {
+	if _, err := s.DB.Exec(`PRAGMA user_version=16`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

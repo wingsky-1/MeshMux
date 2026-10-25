@@ -35,7 +35,8 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 - 1.0.0 只允许单订阅单 Out：`MAX_OUTS_PER_SUBSCRIPTION = 1` 常量，`subscription_outs` 表在 1.0 以唯一约束强制单条（Out 池本身不限个数，Task 2）。
 - 同一 Line 的所有订阅必须选同一个 Out：创建/修改订阅时若与同一 Line 下已有订阅的 Out 选择不一致，拒绝后选（返回稳定错误码，UI 显式提示），绝不静默混用。这是 1.0 约束，1.1 按用户条件解除。
 - 订阅选了 Out 但其 Line 内核 route 未生效时：预期拒绝创建（出冲突）或明确标注“待生效”，绝不静默生成缺 Out 路由的配置。
-- 授权派生方向（Task 5）：服务端 Out 入站 ACL 与 Line→Out 双跳允许清单从 `out_bindings` 边表改为按订阅边推导——`outAllowedSources(outID)` = 选中该 Out 的活跃订阅所涉 Line IP 并集；无订阅选中则默认拒绝。切换与旧表删除在同一 PR 内原子完成，不留授权空窗。
+- 授权派生方向（Task 5，**Ruling R10 修订**）：服务端 Out 入站 ACL 与 Line→Out 双跳允许清单不再来自 `out_bindings`，也**不再**按订阅边推导，而是**节点成员制**——`outAllowedSources(outID)` = 所有持有当前配对身份的 Line 地址并集。Line 纳管成功即加入所有 Out 的 allowlist，Out 纳管成功即为全部现存 Line 生成 allowlist；Line/Out 删除或身份吊销即从相关 allowlist 移除；无成员即默认拒绝。订阅的创建/改选/状态变更**完全不碰 ACL**，也不再触发池级重算。切换与旧表删除在同一 PR 内原子完成，不留授权空窗。
+- Out 删除语义（**Ruling R9**）：删除即彻底删除——先清空 ACL 并等待主机确认，再删除节点行、`out_settings`（出口地址与 link key）及候选/任务；被活跃订阅引用、Out 离线或仍有未完成链时拒绝（不删除任何内容）。
 
 ### 4. Out / Mesh 边界：1.0 记录不执行
 
@@ -60,7 +61,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 
 - 组装器是纯函数 `ComposeSubscription(lines, outs, rules, network) → (docs, diagnostics)`（`internal/subscription/compose.go`）：同输入同字节；geo/ruleset 双内核校验；mihomo 缺席时降级（不静默跳过必需门禁）。
 - 预览 fail-fast 四层校验：输入提醒（`!`）/ 保存严格校验 / 组装冲突 / out 槽位非空与内核门禁（`✖` 阻断）。
-- 服务端 Out 路由与 ACL 派生在 Task 5 切换前仍走现有 `out_bindings` 路径；切换后按 §3 订阅边派生，同一 PR 内完成替换。
+- 服务端 Out 路由与 ACL 派生已由 Task 5 按 §3 订阅边派生；`out_bindings` 表与读写路径在同一变更内删除（schema 14），不留授权空窗。
 
 ## 后果
 

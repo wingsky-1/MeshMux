@@ -83,8 +83,8 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 	if err = s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
-		t.Fatalf("user_version=%d err=%v, want 13", version, err)
+	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("user_version=%d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
 	for _, table := range []string{"mesh_routes", "mesh_route_events"} {
 		var count int
@@ -110,7 +110,7 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 	}
 
 	// The guard moved with the migration.
-	if _, err = s.DB.Exec(`PRAGMA user_version=14`); err != nil {
+	if _, err = s.DB.Exec(`PRAGMA user_version=16`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

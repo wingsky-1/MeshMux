@@ -312,17 +312,13 @@ func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	app.event(r, "LINE_SETTINGS_SAVED")
-	// The transport is durable and it is also the Out authorization source: a
-	// bound Out authorizes the Line by the address stored here, so a changed
-	// address has to be republished at every Out that serves this Line. Without
-	// this step the Out would keep accepting the old source while denying the
-	// new one, which is exactly the stale-accept case the allowlist must never
-	// leave behind.
-	//
-	// This runs before the subscriber fan-out: the Line's own publication is
-	// gated on the Out confirming the new authorization, so the Out has to be
-	// given its chance first.
-	app.store.DrainOutsForLine(nodeID, app.now())
+	// The store already republished the Out pool for the changed address: under the
+	// membership model (Ruling R10) a Line's transport address is the source the Out
+	// observes, so SetLine owns that reconciliation in its own transaction boundary.
+	// The Line itself is then published through the caller's own fan-out below, and
+	// its route is gated on the Out that carries it — so the Out reconciliation must
+	// stay ahead of this point, which it is.
+	_ = nodeID
 	// Every subscriber that ever held a credential on this Line now has a stale
 	// snapshot and has to republish it, so each one is queued here. setLine
 	// already committed its own transaction, and the subscriber IDs are

@@ -1,6 +1,14 @@
 package handler
 
+// The nodes-page Out actions and the read-only Out preview.
+//
+// After Task 5 the Out authorization is derived from the subscription edges, so
+// this file no longer edits a binding. It keeps the two operations the nodes page
+// really owns — the dial address and the delete — and answers the read-only
+// preview from the same projection the wizard uses.
+
 import (
+	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/web/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
@@ -8,19 +16,9 @@ import (
 	"strings"
 )
 
-// The nodes-page Out actions (Task 2): the operator-facing HTML mutations
-// behind the Out pool strip and the per-card transport/binding state. They
-// wrap the same store calls as the JSON out-binding API and re-render the
-// nodes page, so an operator never has to leave the list to configure the
-// Out access path.
-//
-// The binding itself stays API-owned: creating a binding is the Task 4
-// subscription wizard's job, so this page only configures the dial address,
-// unbinds and deletes with an explicit used-by confirm.
-
-// outTransportSet stores the dial address of one Out node. The port is taken
-// from the node record itself, so it always matches the VLESS port by
-// construction; only the server address comes from the form.
+// outTransportSet stores the dial address of one Out node. The port is taken from
+// the node record itself, so it always matches the VLESS port by construction; only
+// the server address comes from the form.
 func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
@@ -44,24 +42,55 @@ func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess se
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "Out 出口地址已保存为 " + transport.Server + "。"})
 }
 
-// outUnbindPage clears the Line of one Out and preserves the audit row. The
-// released Line falls back to direct on its next convergence.
+// outUnbindPage releases the Lines an Out serves by removing the Out choice from
+// the subscriptions that selected it.
+//
+// This is the HTML twin of the retired JSON unbind endpoint, but it does not
+// silently mutate subscriptions: an Out with a live reference has to be migrated by
+// the operator, and the page names the subscriptions so the action is explicit. An
+// Out no subscription selects is already unbound, so the call is an idempotent
+// no-op that republishes nothing.
 func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
-	if err := s.store.ClearOutBindingAt(outID, now); err != nil {
+	usedBy, err := s.store.OutAuthorizedSubscribers(outID)
+	if err != nil {
 		status, code, message, next := outBindingFailure(err)
 		s.fail(w, r, status, code, message, next)
 		return
 	}
+	if len(usedBy) > 0 {
+		s.event(r, store.CodeOutReferenced)
+		s.fail(w, r, 409, store.CodeOutReferenced,
+			"该 Out 仍被订阅选中："+strings.Join(usedBy, "、")+"。",
+			"请在订阅向导中取消这些订阅的 Out 选择；ACL 会随订阅自动重算。")
+		return
+	}
+	// Nothing selects it: republish the empty guard so a host that still carries
+	// the last authorization is brought back to default-deny. The drain is a no-op
+	// when the newest chain already names the empty set, and a chain still in
+	// flight defers the republish — the intent is already durable and the next Out
+	// event completes it, so the page reports the pending state instead of an error
+	// the operator cannot fix.
+	retryErr := s.store.RetryOutSync(outID, now)
+	if retryErr != nil && !strings.HasPrefix(retryErr.Error(), store.CodeOutSyncPending) {
+		status, code, message, next := outBindingFailure(retryErr)
+		s.fail(w, r, status, code, message, next)
+		return
+	}
 	s.event(r, "OUT_UNBOUND")
-	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "已解绑，该 Out 不再服务任何 Line。"})
+	notice := "已解除：没有任何订阅选中该 Out，ACL 已按空授权重算。"
+	if retryErr != nil {
+		s.event(r, store.CodeOutSyncPending)
+		notice = "已解除：没有任何订阅选中该 Out；主机 ACL 的空授权下发待同步（OUT_SYNC_PENDING），Out 上线后自动完成。"
+	}
+	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }
 
-// outDeletePage removes one Out from the routing model with an explicit
-// used-by confirm. The first POST names the Out and re-renders the page with
-// the impacted Line; only a second POST with confirm=1 deletes. The node
-// identity is untouched: deleting the route is not revoking the host.
+// outDeletePage removes one Out from the routing model with an explicit used-by
+// confirm. The first POST names the Out and re-renders the page with the impacted
+// Lines; only a second POST with confirm=1 deletes. The node identity is untouched:
+// deleting the route is not revoking the host.
 func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
@@ -94,7 +123,31 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 		return
 	}
 	s.event(r, "OUT_DELETED")
-	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "出口已删除，关联 Line 已恢复直连。"})
+	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "出口已删除；订阅未选中它，因此没有任何 Line 需要恢复直连。"})
+}
+
+// outPreview is a read-only projection. It goes through the mutation wrapper only
+// to require the same session + CSRF boundary as every management POST; it never
+// writes a row.
+//
+// The projection answers "which Lines would this Out serve if the operator selected
+// it", derived from the same subscription edges the allowlist uses. A proposal is
+// never reported as an established path: nothing has been published for it yet.
+func (s *Server) outPreview(w http.ResponseWriter, r *http.Request, _ session) {
+	preview, err := s.store.PreviewOutAuthorization(
+		strings.TrimSpace(r.PostForm.Get("out_id")),
+		strings.TrimSpace(r.PostForm.Get("line_id")),
+	)
+	if err != nil {
+		status, code, message, next := outBindingFailure(err)
+		s.fail(w, r, status, code, message, next)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		store.OutAuthorizationPreview
+		OperationID string `json:"operation_id"`
+	}{OutAuthorizationPreview: preview, OperationID: operation(r)})
 }
 
 // outTransportFailure maps one transport-store refusal onto the stable HTTP

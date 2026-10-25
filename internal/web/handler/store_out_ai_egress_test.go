@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
 	"strings"
 	"testing"
 
@@ -64,9 +63,7 @@ func TestAIRuleset_FailClosedOnOutOffline(t *testing.T) {
 	}
 
 	// Bind and confirm the Out: the AI path is available.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
 	markLineOnline(t, s, line, now)
 	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
@@ -151,9 +148,10 @@ func TestAIRuleset_FactsRejectNonLineIDs(t *testing.T) {
 	if _, err := s.OutEgressFacts("nope", now); err == nil || !hasErrorCode(err, "LINE_ID_INVALID") {
 		t.Fatalf("facts of a malformed id = %v, want LINE_ID_INVALID", err)
 	}
-	// An Out-bound Line that is still converging is reported as unavailable
+	// An Out-bound Line whose guard has not been confirmed is reported as unavailable
 	// with the transition code, never as available.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
+	enableOutForLine(t, s, out, line, now)
+	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0, observed_revision=0, observed_config_sha256='' WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
 	facts, err := s.OutEgressFacts(line, now)

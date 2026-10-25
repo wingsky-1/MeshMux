@@ -118,18 +118,21 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/nodes/{nodeID}/reissue-pairing", app.mutation(app.nodesReissue, true))
 	r.Post("/nodes/{nodeID}/revoke", app.mutation(app.nodesRevoke, true))
 	r.Post("/nodes/{nodeID}/revoke-identity", app.mutation(app.nodesRevoke, true))
-	// Out binding management. Preview is read-only but keeps the same
-	// session + CSRF boundary because it is a management POST.
-	// The Out binding endpoints are a JSON management API whose paths live under
-	// /nodes. They are marked as JSON here, at registration, so the error writer
-	// never has to recognise their path.
-	r.Post("/nodes/out/bind", jsonAPI(app.mutation(app.outBind, true)))
-	r.Post("/nodes/out/unbind", jsonAPI(app.mutation(app.outUnbind, true)))
+	// Out management. The binding endpoints are gone with the binding table
+	// (Task 5): selecting an Out is a subscription edit. Their paths stay
+	// registered and answer one stable "retired" code, so an old client learns
+	// where the action moved instead of reading a bare 404 as a typo.
+	// Delete is still an Out lifecycle action, not a subscription choice.
+	// These are a JSON management API whose paths live under /nodes; they are
+	// marked as JSON here, at registration, so the error writer never has to
+	// recognise their path.
+	r.Post("/nodes/out/bind", jsonAPI(app.mutation(app.outBindingAPIRetired, true)))
+	r.Post("/nodes/out/unbind", jsonAPI(app.mutation(app.outBindingAPIRetired, true)))
 	r.Post("/nodes/out/delete", jsonAPI(app.mutation(app.outDelete, true)))
 	r.Post("/nodes/out/preview", jsonAPI(app.mutation(app.outPreview, true)))
-	// The nodes-page Out actions are the HTML twins of the transport, unbind
-	// and delete mutations above: same store calls, same session + CSRF
-	// boundary, but they re-render the list instead of answering JSON.
+	// The nodes-page Out actions are the HTML twins of the transport and delete
+	// mutations above: same store calls, same session + CSRF boundary, but they
+	// re-render the list instead of answering JSON.
 	r.Post("/nodes/out-transport", app.mutation(app.outTransportSet, true))
 	r.Post("/nodes/out-unbind", app.mutation(app.outUnbindPage, true))
 	r.Post("/nodes/out-delete", app.mutation(app.outDeletePage, true))

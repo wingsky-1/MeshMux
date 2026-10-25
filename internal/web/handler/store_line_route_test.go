@@ -121,9 +121,7 @@ func TestLineRouteDerivationFollowsLiveIntent(t *testing.T) {
 
 	// The policy selects the Out and the Out is authorized: the route names it.
 	activateServerPolicy(t, f, outServerPolicy)
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
 	got, err := deriveRoute()
 	if err != nil {
@@ -135,9 +133,7 @@ func TestLineRouteDerivationFollowsLiveIntent(t *testing.T) {
 
 	// The Out is unbound while the policy still selects it: fail-closed, never a
 	// stale "out" reference and never a silent direct render.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: false}, now); err != nil {
-		t.Fatal(err)
-	}
+	disableOutForLine(t, s, out, line, now)
 	if _, err := deriveRoute(); err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
 		t.Fatalf("route without the Out = %v, want OUT_BINDING_INVALID", err)
 	}
@@ -174,9 +170,7 @@ func TestSubscriberSyncRedrivesRouteInsteadOfCarryingTheOldOne(t *testing.T) {
 	s, now, line, out := f.store, f.now, f.line, f.out
 
 	activateServerPolicy(t, f, outServerPolicy)
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
 	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
@@ -199,9 +193,7 @@ func TestSubscriberSyncRedrivesRouteInsteadOfCarryingTheOldOne(t *testing.T) {
 	// The Out is unbound while the policy still selects it: the publication fails
 	// closed, stores nothing and names the conflict, so the stale "out" route is
 	// not refreshed under a new revision either.
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: false}, now); err != nil {
-		t.Fatal(err)
-	}
+	disableOutForLine(t, s, out, line, now)
 	err := prepareSubscriberSyncForLine(s, line, now)
 	if err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
 		t.Fatalf("publication while the policy still selects the unbound Out = %v, want OUT_BINDING_INVALID", err)
@@ -240,16 +232,18 @@ func TestSubscriberSyncRedrivesRouteInsteadOfCarryingTheOldOne(t *testing.T) {
 }
 
 // TestSubscriberSyncFailsClosedWhenTheOutIsDeleted covers the delete path: the
-// binding row is gone, so the same policy that named the Out can no longer be
-// rendered and no revision is stored.
+// subscription selection is what authorizes the Out, so a deleted Out with no
+// selection left cannot render the policy that names it and no revision is stored.
+//
+// The delete itself is refused while the selection exists (a live subscription is a
+// live egress), so the fixture releases the selection first — the same migration the
+// refusal asks the operator for — and then deletes the Out.
 func TestSubscriberSyncFailsClosedWhenTheOutIsDeleted(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, line, out := f.store, f.now, f.line, f.out
 
 	activateServerPolicy(t, f, outServerPolicy)
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
 	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
@@ -257,6 +251,13 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsDeleted(t *testing.T) {
 	confirmChain(t, s, line, now)
 	revisions := candidateCount(t, s, line)
 
+	// A live reference refuses the delete and changes nothing: the Out is still the
+	// authorized egress, so this is not the fail-closed state yet.
+	if err := s.DeleteOutAt(out, now); err == nil || !hasErrorCode(err, store.CodeOutReferenced) {
+		t.Fatalf("delete of a selected out = %v, want %s", err, store.CodeOutReferenced)
+	}
+	clearOutForLine(t, s, line, now)
+	settleTasks(t, s, out)
 	if err := s.DeleteOutAt(out, now); err != nil {
 		t.Fatalf("delete out: %v", err)
 	}
@@ -277,9 +278,7 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsOffline(t *testing.T) {
 	s, now, line, out := f.store, f.now, f.line, f.out
 
 	activateServerPolicy(t, f, outServerPolicy)
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	confirmChain(t, s, out, now)
 	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
@@ -405,9 +404,19 @@ func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 	out := pairedStoreNode(t, app.store, "out", now)
 	markLineOnline(t, app.store, out, now)
 	configureOut(t, app.store, out, now)
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: nodeID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
+	// Enrollment publishes the Out guard (Ruling R10); the fixture settles and confirms
+	// it so the offline state below is the only reason for the refusal.
+	app.store.RepublishOutAuthorizations(now)
+	settleTasks(t, app.store, out)
+	confirmChain(t, app.store, out, now)
+	enableOutForLine(t, app.store, out, nodeID, now)
+	// Selecting the Out makes the Line route through it; the Line's own chain has to
+	// settle before the approval can be judged on the Out state alone.
+	if err := app.store.PrepareSubscriberSync(nodeSubscriberID(t, app.store, nodeID), now); err != nil {
+		t.Fatalf("publish the line: %v", err)
 	}
+	settleTasks(t, app.store, nodeID)
+	confirmChain(t, app.store, nodeID, now)
 	created, err := app.store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
 		json.RawMessage(outServerPolicy), nil, "op-upgrade-policy", now)
 	if err != nil {

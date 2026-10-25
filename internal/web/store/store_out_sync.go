@@ -3,18 +3,38 @@ package store
 // Out synchronization coordinates the optional Out node with the Lines that are
 // allowed to use it as an egress.
 //
-// There is exactly one authorization source: the Lines the Hub has enrolled,
-// paired and configured with a literal egress address. An Out never infers its
-// own allowlist, and the managed nft table is never its own expectation. The Hub
-// derives the source list from the stored Line, publishes it in the frozen
-// four-task chain, and treats a healthy readback of a task that carried exactly
-// that list as the only proof that the Out data plane matches the authorization.
+// There is exactly one authorization source (Ruling R10): node membership. An Out
+// authorizes the union of the transport addresses of every enrolled Line that holds a
+// current pairing identity, and nothing else can authorize a source:
 //
-// The same asymmetry as the subscriber synchronization applies: a Line whose Out
-// path is not authorized and confirmed yet is not published, because publishing
-// it would hand clients an egress that drops them. A retired Line is removed from
-// the Out allowlist and the Out is republished; until that chain is confirmed the
-// pair reports a transition, never healthy.
+//	outAllowedSources(out) =
+//	    { line_settings.server of L | L is an edge node with exactly one
+//	                                  non-revoked identity }
+//
+// Membership is symmetric and lifecycle-driven: a Line that enrolls joins every Out,
+// an Out that enrolls starts with every existing Line, and a deletion or a revoked
+// identity removes the source. A Hub with no member Line authorizes nothing, which is
+// the fail-closed default-deny state the Agent applies.
+//
+// A subscription is deliberately NOT part of this: it selects which egress a client
+// document names, so creating, editing, pausing or deleting one must never republish
+// an Out. That separation is what keeps the data plane stable while subscriptions
+// churn, and it is asserted directly (`TestOutAuthorization_SubscriptionNeverTouchesTheACL`).
+//
+// The stored binding table that used to carry the relation is gone
+// (migrateSchema14), so there is no second source of truth a Line could be authorized
+// from, and no window in which the Hub has no authorization at all: the schema version
+// that drops the table is the version whose code performs this derivation.
+//
+// The Hub derives the source list from the enrolled Lines, publishes it in the frozen
+// four-task chain, and treats a healthy readback of a task that carried exactly that
+// list as the only proof that the Out data plane matches the authorization.
+//
+// The same asymmetry as the subscriber synchronization applies: a Line whose own Out
+// selection is not authorized and confirmed yet is not published, because publishing it
+// would hand clients an egress that drops them. A retired Line or a revoked identity is
+// removed from the Out allowlist and the Out is republished; until that chain is
+// confirmed the pair reports a transition, never healthy.
 //
 // Evidence levels are deliberately narrow:
 //   - "the Hub authorized this source" is proven by the immutable candidate and
@@ -36,6 +56,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,9 +65,10 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
-// maxOutAllowlistSources mirrors the frozen protocol and Agent bound. One Out is
-// bound to at most one Line today, so this is a defensive ceiling that keeps the
-// derived list inside the same bounded envelope the Agent accepts.
+// maxOutAllowlistSources mirrors the frozen protocol and Agent bound. One Line is
+// served by at most one Out under the 1.0 same-Line rule, and one Out may be
+// selected by several subscriptions, so this is a defensive ceiling that keeps
+// the derived list inside the same bounded envelope the Agent accepts.
 const maxOutAllowlistSources = 256
 
 // The Out authorization states the Hub can prove.
@@ -60,19 +82,23 @@ const (
 	// OutSyncPending: the desired authorization has not been published yet.
 	OutSyncPending = "pending"
 	// OutSyncPartial: the last chain ended in a terminal failure, or the Hub
-	// cannot authorize the bound Line at all.
+	// cannot authorize a selected Line at all.
 	OutSyncPartial = "partial"
 )
 
-// The Line egress states derived from the binding plus the Out authorization.
+// The Line egress states derived from the subscription selection plus the Out
+// authorization.
 const (
-	// LineEgressDirect: no enabled Out binding, the Line egresses directly.
+	// LineEgressDirect: no active subscription selects a configured Out for this
+	// Line, so its clients egress directly. This is a routing state, not an ACL
+	// state: the Line is still an authorized source at every Out (Ruling R10).
 	LineEgressDirect = "direct"
-	// LineEgressHealthy: every bound Out authorized this Line and confirmed it.
+	// LineEgressHealthy: every Out selected for this Line authorized it and
+	// confirmed it.
 	LineEgressHealthy = "healthy"
 	// LineEgressVerifying: the authorization is being applied or read back.
 	LineEgressVerifying = "verifying"
-	// LineEgressPartial: a bound Out cannot authorize this Line.
+	// LineEgressPartial: an Out selected for this Line cannot authorize it.
 	LineEgressPartial = "partial"
 )
 
@@ -87,12 +113,17 @@ const (
 	// CodeLineEgressUnverified marks a configured Line whose transport address
 	// is a host name: the Hub has no proof of the source address the Out sees.
 	CodeLineEgressUnverified = "LINE_EGRESS_UNVERIFIED"
-	// CodeLineNotAuthorized marks a bound Line without a current paired
+	// CodeLineNotAuthorized marks a selected Line without a current paired
 	// identity (never paired, reissuing, or revoked).
 	CodeLineNotAuthorized = "LINE_NOT_AUTHORIZED"
 	// CodeOutSyncInProgress and CodeOutSyncPending are the transition codes.
 	CodeOutSyncInProgress = "OUT_SYNC_IN_PROGRESS"
 	CodeOutSyncPending    = "OUT_SYNC_PENDING"
+	// CodeOutNotAuthorized is the single refusal code of a publication that
+	// depends on an Out authorization the Hub cannot vouch for yet. The publish
+	// gate and every projection report it, so an operator never reads "preview
+	// says fine, publish says no".
+	CodeOutNotAuthorized = "OUT_NOT_AUTHORIZED"
 )
 
 // outDrainOutcome classifies what one Out drain attempt did. It lets the retire
@@ -157,7 +188,7 @@ type OutEgressReadback struct {
 	RetryPending bool `json:"retry_pending"`
 }
 
-// outAllowlistSource canonicalizes one authorized source. It accepts only a
+// OutAllowlistSource canonicalizes one authorized source. It accepts only a
 // literal address or an already aligned CIDR, so the value the Hub publishes is
 // exactly the value the Agent renders: the Agent masks an unmasked prefix
 // silently, which would authorize a wider network than the Hub named.
@@ -191,35 +222,10 @@ func OutAllowlistSource(raw string) (string, error) {
 	return netip.PrefixFrom(addr, addr.BitLen()).String(), nil
 }
 
-// outBindingTx is the transaction-scoped projection of GetOutBinding with the
-// same three states, so the publication path never opens a second connection.
-//
-// A missing row is folded into the zero binding (no authorization), which is the
-// deliberate T1 contract: "never configured" must not be an error here. Every
-// other read failure, including DATABASE_UNAVAILABLE, propagates, so an
-// unreadable binding is never mistaken for "no Out".
-func outBindingTx(tx *sql.Tx, outID string) (OutBinding, error) {
-	if !validBindingNodeID(outID) {
-		return OutBinding{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
-	}
-	binding := OutBinding{OutID: outID}
-	var (
-		lineID  sql.NullString
-		enabled int
-	)
-	err := tx.QueryRow(`SELECT line_id, enabled, updated_at FROM out_bindings WHERE out_id=?`, outID).
-		Scan(&lineID, &enabled, &binding.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return binding, nil
-	}
-	if err != nil {
-		return OutBinding{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	if lineID.Valid {
-		binding.LineID = lineID.String
-	}
-	binding.Enabled = enabled == 1
-	return binding, nil
+// validNodeID accepts exactly the canonical node identity shape that the rest of
+// the domain uses (32 lowercase hex characters).
+func validNodeID(id string) bool {
+	return subscription.ValidateID(id) == nil
 }
 
 // lineEgressSourceTx reports whether one Line is a verifiable source for an Out
@@ -274,57 +280,132 @@ func lineEgressSourceTx(tx *sql.Tx, lineID string) (string, bool, error) {
 	return source, true, nil
 }
 
+// OutAuthorizedLineIDsTx returns the Lines one Out authorizes under the node
+// membership model (Ruling R10): every enrolled Line that currently holds a
+// pairing identity, in node-id order.
+//
+// Membership, not subscription, is the authorization source. A Line becomes a
+// permitted source of every Out the moment its identity is issued, and it stops
+// being one when its node row or its identity goes away. The subscription that a
+// subscriber later builds selects which egress the *client document* names; it
+// does not decide whether the data plane accepts the Line.
+//
+// The order is canonical so a caller can compare two derivations byte for byte.
+func OutAuthorizedLineIDsTx(tx *sql.Tx, outID string) ([]string, error) {
+	rows, err := tx.Query(`SELECT n.id
+	  FROM nodes n
+	 WHERE n.role='edge'
+	 ORDER BY n.id ASC`)
+	if err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, errors.New("DATABASE_UNAVAILABLE")
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	return ids, nil
+}
+
 // outAuthorizationTx is the single derivation of an Out's authorization.
 //
-// Only an enabled binding to a verifiable Line contributes a source. A disabled,
-// unbound or never configured Out derives an explicit empty list: the Out stays
-// default-deny, which is the fail-closed state, and the caller publishes that
-// empty list instead of omitting the key.
+// It is the only producer of the Out allowlist: the publication path, the retire
+// path, the publish gate and the Web projection all consume it.
 //
-// The derivation is the reason a transient removal is safe: a Line whose
-// identity is being reissued is not verifiable, so an Out event during that
-// window republishes an empty allowlist (fail-closed) and the Line's own
-// post-reissue event restores it. Both states are explicit and self-healing;
-// neither claims the pair is healthy while the source is unproven.
+// Under Ruling R10 the source is node membership: every enrolled Line that holds a
+// current pairing identity is permitted at every Out by default. Consequences:
 //
-// The two interfaces agree by construction: GetOutBinding reports a missing row
-// as OUT_BINDING_NOT_FOUND so an operator never mistakes "never configured" for
-// "deliberately direct", while this derivation folds exactly that one code into
-// the empty authorization. Every other read failure propagates, so an
-// unreadable binding is never published as "no Out".
+//   - an Out enrolled into a Hub with N Lines starts with all N addresses, and a
+//     Line that enrolls later is added to every Out; neither needs a subscription;
+//   - a deleted node row, a revoked identity or a removed Line transport drops the
+//     source on the next Out event, and the republish is fail-closed in between;
+//   - a subscription edit never changes this list, so it never republishes an Out.
+//
+// A Line the Hub cannot vouch for still contributes nothing: no current identity
+// means no address (the Hub holds no proof the Out will observe that source), and a
+// DNS-named transport is a hard refusal instead of a guessed address.
 func outAuthorizationTx(tx *sql.Tx, outID string) ([]string, error) {
-	binding, err := outBindingTx(tx, outID)
+	lineIDs, err := OutAuthorizedLineIDsTx(tx, outID)
 	if err != nil {
 		return nil, err
 	}
-	allowed := []string{}
-	if !binding.Enabled || binding.LineID == "" {
-		return allowed, nil
+	sources := make([]string, 0, len(lineIDs))
+	seen := make(map[string]struct{}, len(lineIDs))
+	for _, lineID := range lineIDs {
+		source, authorized, err := lineEgressSourceTx(tx, lineID)
+		if err != nil {
+			return nil, err
+		}
+		if !authorized {
+			// A Line that lost its identity or its transport contributes
+			// nothing; it must never be replaced by a guessed address.
+			continue
+		}
+		if _, duplicate := seen[source]; duplicate {
+			continue
+		}
+		seen[source] = struct{}{}
+		sources = append(sources, source)
 	}
-	source, authorized, err := lineEgressSourceTx(tx, binding.LineID)
-	if err != nil {
-		return nil, err
-	}
-	if !authorized {
-		return allowed, nil
-	}
-	if len(allowed) >= maxOutAllowlistSources {
+	if len(sources) > maxOutAllowlistSources {
 		return nil, errors.New("OUT_ALLOWLIST_INVALID: too many authorized sources")
 	}
-	return append(allowed, source), nil
+	// The published order must not depend on insertion order, or an unchanged
+	// authorization would be republished as a change.
+	sort.Strings(sources)
+	return sources, nil
+}
+
+// OutAuthorizedSubscribers names the subscriptions that select one Out, ordered by
+// display name. It is a *selection* projection for the delete guard (a subscription
+// naming an Out must be migrated before that Out disappears), not an authorization
+// input. It never returns a credential or a token.
+func (s *Store) OutAuthorizedSubscribers(outID string) ([]string, error) {
+	outID = strings.TrimSpace(outID)
+	if !validNodeID(outID) {
+		return nil, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+	}
+	return s.selectionUsedBy(`SELECT s.display_name FROM subscription_outs o
+	  JOIN subscribers s ON s.id=o.subscriber_id
+	 WHERE o.out_id=? ORDER BY s.display_name, s.id`, outID)
+}
+
+// OutMembershipLineIDs returns the Lines one Out authorizes under the membership
+// model. It is the projection the nodes page renders as "which Lines this Out
+// accepts", and it is identical for every Out on one Hub.
+func (s *Store) OutMembershipLineIDs(outID string) ([]string, error) {
+	outID = strings.TrimSpace(outID)
+	if !validNodeID(outID) {
+		return nil, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer tx.Rollback()
+	if err := requireOutRoleTx(tx, outID); err != nil {
+		return nil, err
+	}
+	return OutAuthorizedLineIDsTx(tx, outID)
 }
 
 // DeriveOutAllowlist returns the source list the Hub currently authorizes for one
 // Out. It is the only producer of the Out allowlist; the publication path, the
 // retire path and the Web projection all consume it.
 //
-// Three states fold into an empty allowlist because none of them authorizes a
-// source: no binding row, an unbound row and a disabled row. A missing binding is
-// not an error, but an unknown or wrong-role Out node is: an Out that does not
-// exist cannot be "authorized for nothing".
+// An empty list is a real answer ("this Out is authorized for nothing") while an
+// unknown or wrong-role Out node is a refusal: an Out that does not exist cannot
+// be "authorized for nothing".
 func (s *Store) DeriveOutAllowlist(outID string) ([]string, error) {
 	outID = strings.TrimSpace(outID)
-	if !validBindingNodeID(outID) {
+	if !validNodeID(outID) {
 		return nil, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
 	}
 	tx, err := s.DB.Begin()
@@ -484,27 +565,71 @@ func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 	return out, nil
 }
 
-// enabledOutIDsForLineTx returns the enabled Outs whose egress depends on one
-// Line.
-func enabledOutIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
-	return queryIDsTx(tx, `SELECT out_id FROM out_bindings WHERE line_id=? AND enabled=1 ORDER BY out_id ASC`, lineID)
-}
-
-// outIDsForLineTx returns every Out that ever bound this Line, including a row
-// whose egress is currently disabled. A retired Line has to be removed from the
-// published allowlist even when the binding was disabled afterwards, because the
-// Out host may still run the ACL of the last enabled state.
-func outIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
-	return queryIDsTx(tx, `SELECT out_id FROM out_bindings WHERE line_id=? ORDER BY out_id ASC`, lineID)
-}
-
-// LineOutEgressStatusTx reports whether a Line may use its bound Out path.
+// enabledOutIDsForLineTx returns the Outs a Line's own route may egress through.
 //
-// A Line with no enabled binding egresses directly and is unaffected. With a
-// binding, the Line must itself be a verifiable source and every bound Out has to
-// authorize it and prove it: the Hub refuses to publish the Line while the Out
-// path would drop its traffic, and the Web projection shows the same state
-// instead of a false healthy.
+// This is the *routing* question, not the ACL question, and Ruling R10 changed only
+// the latter: the data plane authorizes Line membership, while a Line still renders
+// exactly one "out" egress — the Out its section of the policy (and the subscription
+// that carries it) selected. Keeping this query selection-driven is what stops an
+// unrelated Out elsewhere in the pool from gating this Line's publication or being
+// named in its candidate.
+//
+// The ACL derivation never reads this function: it reads OutAuthorizedLineIDsTx
+// (membership), so a subscription edit cannot change what any Out accepts.
+func enabledOutIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
+	return queryIDsTx(tx, `SELECT DISTINCT o.out_id
+	  FROM subscription_outs o
+	  JOIN subscribers s ON s.id=o.subscriber_id AND s.state='active'
+	  JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
+	 WHERE l.node_id=?
+	 ORDER BY o.out_id ASC`, lineID)
+}
+
+// outIDsForLineTx returns every Out that may accept a Line. Under the membership
+// model that is the whole pool, including an Out that has not confirmed its current
+// authorization yet: a retired Line has to be removed from the published allowlist
+// of every Out that could still be running the old one.
+func outIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
+	return queryIDsTx(tx, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
+}
+
+// nodeRoleTx reads one node's immutable role, mapping a missing row to a stable
+// refusal.
+func nodeRoleTx(tx *sql.Tx, nodeID string) (string, error) {
+	var role string
+	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("NODE_NOT_FOUND: unknown node")
+	}
+	if err != nil {
+		return "", errors.New("DATABASE_UNAVAILABLE")
+	}
+	return role, nil
+}
+
+// requireOutRoleTx refuses a node that is not an Out, so a projection cannot report
+// a Line node as "an Out that authorizes nothing".
+func requireOutRoleTx(tx *sql.Tx, outID string) error {
+	role, err := nodeRoleTx(tx, outID)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
+			return errors.New("OUT_NOT_FOUND: unknown out node")
+		}
+		return err
+	}
+	if role != "out" {
+		return errors.New("OUT_ROLE_INVALID: only out nodes carry a source authorization")
+	}
+	return nil
+}
+
+// LineOutEgressStatusTx reports whether a Line may use its selected Out path.
+//
+// A Line that no active subscription pairs with an Out egresses directly and is
+// unaffected. With a selection, the Line must itself be a verifiable source and the
+// selected Out has to have confirmed the membership authorization: the Hub refuses to
+// publish the Line while the Out path would drop its traffic, and the Web projection
+// shows the same state instead of a false healthy.
 func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
 	outs, err := enabledOutIDsForLineTx(tx, lineID)
 	if err != nil {
@@ -545,7 +670,8 @@ func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, st
 //
 // Publishing it would hand clients an egress that drops them, and reporting it
 // healthy would claim a path the Out never confirmed. The gate is a no-op for a
-// Line without an enabled binding, so an Out-free deployment is unchanged.
+// Line that no active subscription pairs with an Out, so an Out-free deployment is
+// unchanged.
 func lineOutPublishGateTx(tx *sql.Tx, lineID string, now time.Time) error {
 	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
@@ -677,7 +803,7 @@ func firstStableCode(values ...string) string {
 	return ""
 }
 
-// drainOutNodeIntentTx reconciles one Out with the currently persisted
+// drainOutNodeIntentTx reconciles one Out with the currently derived
 // authorization.
 //
 // The rules mirror the subscriber drain and keep the operation bounded:
@@ -775,7 +901,7 @@ func outPublishedAuthorizationTx(tx *sql.Tx, outID string, revision int64, diges
 	return present && node.SameACLSourceSet(published, desired), nil
 }
 
-// nextCandidateRevisionTx returns the next immutable revision of one node.
+// NextCandidateRevisionTx returns the next immutable revision of one node.
 func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 	var revision int64
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
@@ -784,18 +910,23 @@ func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 	return revision, nil
 }
 
-// OnLineRetired reclaims the authorization of a Line at every Out that ever bound
-// it and republishes each affected Out with the remaining sources.
+// OnLineRetired reclaims the authorization of a Line at every Out, and republishes each
+// affected Out with the remaining membership.
+//
+// Under Ruling R10 a revoked identity already drops the Line from the derivation, so
+// this is the explicit, bounded way to complete that transition (for example after an
+// operator revoked the identity while an Out was unreachable) without waiting for the
+// next Out event.
 //
 // It is the explicit retire path: a Line whose identity is already revoked (or
 // which never had a verifiable source) is de-authorized at once. A Line that is
 // still a verifiable source is refused, because a bookkeeping call must never
 // silently de-authorize a live Line; that has to be an identity revocation.
 //
-// Republishing is explicit. An in-flight chain or an offline Out defers the
-// change and the caller sees OUT_SYNC_PENDING, never a fabricated success. The
-// derivation already excludes a non-current Line, so a deferred reclaim is
-// fail-closed in the meantime and the next Out or Line event completes it.
+// Republishing is explicit. An in-flight chain or an offline Out defers the change
+// and the caller sees OUT_SYNC_PENDING, never a fabricated success. The derivation
+// already excludes a non-current Line, so a deferred reclaim is fail-closed in the
+// meantime and the next Out or Line event completes it.
 func (s *Store) OnLineRetired(lineID string) error {
 	return s.onLineRetiredAt(lineID, time.Now())
 }
@@ -861,7 +992,7 @@ func (s *Store) onLineRetiredAt(lineID string, now time.Time) error {
 // Automatic polls never call it.
 func (s *Store) RetryOutSync(outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
-	if !validBindingNodeID(outID) {
+	if !validNodeID(outID) {
 		return errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
 	}
 	tx, err := s.DB.Begin()
@@ -896,15 +1027,17 @@ func (s *Store) drainOutNode(outID string, now time.Time) {
 	_ = tx.Commit()
 }
 
-// outIDsForLine reads the bound Outs in their own statement so no transaction is
-// held open while the per-Out drain begins its own.
+// outIDsForLine reads the Out pool in its own statement so no transaction is held
+// open while the per-Out drain begins its own. Under the membership model every Out
+// may accept every Line, so a Line event has to reach all of them.
 func (s *Store) outIDsForLine(lineID string) ([]string, error) {
-	return storeIDs(s.DB, `SELECT out_id FROM out_bindings WHERE line_id=? ORDER BY out_id ASC`, lineID)
+	return storeIDs(s.DB, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
 }
 
-// lineIDsForOut reads the bound Lines in their own statement.
+// lineIDsForOut reads the enrolled Lines in their own statement. An Out event
+// releases every Line that the Out may be authorizing, which is the whole pool.
 func (s *Store) lineIDsForOut(outID string) ([]string, error) {
-	return storeIDs(s.DB, `SELECT line_id FROM out_bindings WHERE out_id=? AND line_id IS NOT NULL ORDER BY line_id ASC`, outID)
+	return storeIDs(s.DB, `SELECT id FROM nodes WHERE role='edge' ORDER BY id ASC`)
 }
 
 // storeIDs runs one bounded identifier query and closes its rows before the
@@ -931,7 +1064,7 @@ func storeIDs(db *sql.DB, query string, args ...any) ([]string, error) {
 
 // drainOutsForLine is the "Line event" half of the coordination: a Line that just
 // became verifiable, or whose snapshot was just confirmed, authorizes itself at
-// every Out that serves it.
+// every Out a subscription paired it with.
 func (s *Store) DrainOutsForLine(lineID string, now time.Time) {
 	outs, err := s.outIDsForLine(lineID)
 	if err != nil {
@@ -959,7 +1092,7 @@ func (s *Store) drainLinesForOut(outID string, now time.Time) {
 // The direction is what makes the coordination bidirectional:
 //   - an Out event (heartbeat, poll, result) republishes its authorization and
 //     then lets the Lines it serves be published;
-//   - a Line event first gives every bound Out the chance to authorize the Line,
+//   - a Line event first gives every paired Out the chance to authorize the Line,
 //     then publishes the Line itself if the gate now passes.
 //
 // Each step owns its own transaction, so nothing nests on the single-connection
@@ -979,6 +1112,51 @@ func (s *Store) drainNodeCoordination(nodeID string, now time.Time) {
 	}
 	s.DrainOutsForLine(nodeID, now)
 	s.drainSubscriberNode(nodeID, now)
+}
+
+// RepublishOutAuthorizations reconciles the whole Out pool with the current node
+// membership.
+//
+// It is a *node lifecycle* primitive (Ruling R10): a Line or Out enrolling, losing
+// its identity or being deleted changes the membership set, and every Out has to
+// converge on the new list. A subscription edit deliberately does NOT call it — a
+// subscription selects the client's egress, it does not authorize a source, so
+// touching the ACL on a subscription change would be a second, unrelated truth.
+//
+// Each drain is a no-op unless that Out's derived list actually changed, so the
+// call is safe to make after any lifecycle event. It runs after the caller's
+// transaction committed and never fails it: the durable node state is the intent,
+// so a deferred or failed publication is completed by the next Out event.
+func (s *Store) RepublishOutAuthorizations(now time.Time) {
+	outIDs, err := storeIDs(s.DB, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
+	if err != nil {
+		return
+	}
+	for _, outID := range outIDs {
+		s.drainOutNode(outID, now)
+	}
+}
+
+// RepublishLineAuthorizations re-derives and republishes every Line whose route may
+// name an Out that no longer exists.
+//
+// It is the Line-side twin of RepublishOutAuthorizations and exists for the same kind
+// of event: a node lifecycle change (Ruling R9 delete). Deleting an Out must not turn
+// the Lines that used it into silent direct egress, so each Line is drained through
+// the ordinary publication chain, where the compiler refuses an Out reference the Hub
+// cannot justify (OUT_BINDING_INVALID) and an unavailable Out fails closed
+// (OUT_OFFLINE_FAIL_CLOSED). A Line with no such policy publishes normally.
+//
+// Each drain owns its own transaction and never fails the caller: the delete is
+// already durable, and the refusal is visible in the Line's own sync state.
+func (s *Store) RepublishLineAuthorizations(now time.Time) {
+	lineIDs, err := storeIDs(s.DB, `SELECT id FROM nodes WHERE role='edge' ORDER BY id ASC`)
+	if err != nil {
+		return
+	}
+	for _, lineID := range lineIDs {
+		s.drainSubscriberNode(lineID, now)
+	}
 }
 
 // nodeCoordinationReadback reports the readback state of one node for the audit
@@ -1015,7 +1193,7 @@ func (s *Store) NodeCoordinationReadback(nodeID string, now time.Time) (OutEgres
 	return outEgressReadbackTx(tx, nodeID, now)
 }
 
-// outSyncStatus is the read-only projection used by tests and future Web code.
+// outSyncStatus is the read-only projection used by tests and Web code.
 func (s *Store) OutSyncStatus(outID string, now time.Time) (string, string, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -1040,9 +1218,21 @@ func (s *Store) OutEgressReadback(lineID string, now time.Time) (OutEgressReadba
 	return outEgressReadbackTx(tx, lineID, now)
 }
 
-// reclaimRetiredLine revokes the Out authorization of a Line that just lost its
-// identity. It never fails the caller: the identity revocation has already been
-// recorded, and a deferred reclaim is retried by the next Out or Line event.
-func (s *Store) reclaimRetiredLine(lineID string, now time.Time) error {
-	return s.onLineRetiredAt(lineID, now)
+// OutACLCleanTx reports whether the newest published chain of one Out already
+// names an explicit empty authorization, and whether the node confirmed that
+// exact revision. "Clean" needs the key present and empty: an omitted key means
+// "no Hub expectation" and would hide a stale guard behind a shape-only check.
+func OutACLCleanTx(tx *sql.Tx, outID string, revision int64, digest string) (bool, bool, error) {
+	allowed, present, err := OutReadbackAllowlistTx(tx, outID, revision)
+	if err != nil {
+		return false, false, err
+	}
+	if !present || len(allowed) != 0 {
+		return false, false, nil
+	}
+	confirmed, err := subscriberLineReadbackConfirmedTx(tx, outID, revision, digest)
+	if err != nil {
+		return false, false, err
+	}
+	return true, confirmed, nil
 }

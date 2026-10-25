@@ -104,6 +104,12 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	if err = tx.Commit(); err != nil {
 		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
 	}
+	// The stored address IS the authorized source (Ruling R10: membership authorizes a
+	// Line, and its transport address is what the Out observes). A changed address is
+	// therefore a membership change: leaving the old one accepted would authorize a
+	// host the Hub no longer owns, and omitting the new one would drop a live Line.
+	// Every Out republishes, each a no-op unless its derived list changed.
+	s.RepublishOutAuthorizations(now)
 	return line, nil
 }
 

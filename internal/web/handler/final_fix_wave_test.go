@@ -54,9 +54,7 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 	settleTasks(t, app.store, line.ID)
 	confirmChain(t, app.store, line.ID, now)
 
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: out.ID, LineID: line.ID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, app.store, out.ID, line.ID, now)
 	settleTasks(t, app.store, out.ID)
 	confirmChain(t, app.store, out.ID, now)
 	if allowed, err := app.store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 || allowed[0] != "203.0.113.7/32" {
@@ -105,9 +103,11 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 	}
 }
 
-// TestLineSaveWithoutBindingKeepsOutFreeDeployment is the I1 guard rail: the new
-// Out fan-out must not create an Out chain when no Out is bound.
-func TestLineSaveWithoutBindingKeepsOutFreeDeployment(t *testing.T) {
+// TestLineSaveRepublishesEveryOutOnTheNewAddress pins Ruling R10 for a transport
+// change: a Line's stored address is the source an Out observes, so a changed address
+// has to reach every Out — not only the ones a subscription selected, because the ACL
+// is membership.
+func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 	app, _ := testApp(t)
 	b := &browser{app: app}
 	initialize(t, b)
@@ -136,11 +136,22 @@ func TestLineSaveWithoutBindingKeepsOutFreeDeployment(t *testing.T) {
 	})
 	require2xx(t, w)
 
-	if got := candidateCount(t, app.store, out.ID); got != before {
-		t.Fatalf("unbound out received %d revisions (was %d): the fan-out must only touch bound outs", got, before)
+	if got := candidateCount(t, app.store, out.ID); got != before+1 {
+		t.Fatalf("out revisions after the address change = %d, want exactly one more than %d", got, before)
 	}
-	if allowed, err := app.store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 0 {
-		t.Fatalf("unbound out authorization = %v err=%v, want empty", allowed, err)
+	allowed, err := app.store.DeriveOutAllowlist(out.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allowed) != 1 || allowed[0] != "198.51.100.9/32" {
+		t.Fatalf("out authorization = %v, want the new line address", allowed)
+	}
+	for _, stale := range []string{"203.0.113.7/32"} {
+		for _, entry := range allowed {
+			if entry == stale {
+				t.Fatalf("the retired source is still authorized: %v", allowed)
+			}
+		}
 	}
 }
 
@@ -168,10 +179,12 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 		t.Fatalf("direct egress reported retry_pending: %+v", direct)
 	}
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
+	enableOutForLine(t, s, out, line, now)
+	// In flight: the selected Out has no confirmed evidence, so the pair is a
+	// transition. Retry must stay false while a chain is still applying.
+	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0, observed_revision=0, observed_config_sha256='' WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	// In flight: a chain exists and has not settled. Retry must stay false.
 	inflight, err := s.OutEgressReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
@@ -245,9 +258,17 @@ func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
 	app := f.app
 	now := time.Now()
 
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: f.outID, LineID: f.lineID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
+	// The Out is a member and its guard is confirmed (Ruling R10: enrollment publishes
+	// it), and the Line routes through it because the subscription selected it.
+	app.store.RepublishOutAuthorizations(now)
+	settleTasks(t, app.store, f.outID)
+	confirmChain(t, app.store, f.outID, now)
+	enableOutForLine(t, app.store, f.outID, f.lineID, now)
+	if err := app.store.PrepareSubscriberSync(f.subscriberIDForTest(t), now); err != nil {
+		t.Fatalf("publish the line: %v", err)
 	}
+	settleTasks(t, app.store, f.lineID)
+	confirmChain(t, app.store, f.lineID, now)
 	// Fail the Out chain, then heartbeat: the readback event must carry
 	// retry_pending=true together with the stable failure code.
 	if _, err := app.store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, f.outID); err != nil {
@@ -313,9 +334,7 @@ func TestReissueDisablesOutAuthorization(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, out, line := f.store, f.now, f.out, f.line
 
-	if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	settleTasks(t, s, out)
 	confirmChain(t, s, out, now)
 	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 1 {

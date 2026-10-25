@@ -145,11 +145,13 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	out := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, out, f.now)
 	configureOut(t, f.store, out, f.now)
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: f.line, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	// The Out's authorization is node membership (Ruling R10), so enrollment is what
+	// publishes its guard; the fixture reproduces that event instead of relying on a
+	// subscription edit to trigger a republication.
+	f.store.RepublishOutAuthorizations(f.now)
 	settleTasks(t, f.store, out)
 	confirmChain(t, f.store, out, f.now)
+	enableOutForLine(t, f.store, out, f.line, f.now)
 	f.activatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
 
@@ -182,15 +184,11 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 
 	// State 3: the Out is unhealthy. The publication fails closed and stores
 	// nothing, and no kernel check runs on a document that must not exist.
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: f.line, Enabled: false}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	disableOutForLine(t, f.store, out, f.line, f.now)
 	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: f.line, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, f.store, out, f.line, f.now)
 	settleTasks(t, f.store, out)
 	verifier = &fixturePublishVerifier{}
 	candidatesBefore := candidateCount(t, f.store, f.line)
@@ -213,9 +211,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 	out := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, out, f.now)
 	configureOut(t, f.store, out, f.now)
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: f.line, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, f.store, out, f.line, f.now)
 	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
@@ -262,11 +258,12 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	healthy := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, healthy, f.now)
 	configureOut(t, f.store, healthy, f.now)
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: healthy, LineID: f.line, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	// Enrollment publishes the Out's membership guard (Ruling R10); the selection only
+	// makes the Line route through it.
+	f.store.RepublishOutAuthorizations(f.now)
 	settleTasks(t, f.store, healthy)
 	confirmChain(t, f.store, healthy, f.now)
+	enableOutForLine(t, f.store, healthy, f.line, f.now)
 
 	// The second Line has a bound Out that stopped reporting: its own state is
 	// fail-closed, which must not be replaced by the healthy Line's "out".
@@ -278,13 +275,18 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	if _, err := f.store.SetLine(settings, f.now); err != nil {
 		t.Fatal(err)
 	}
+	// A new Line is a membership change (Ruling R10), so the healthy Out republished
+	// its guard: the fixture settles that chain before asserting states, exactly as a
+	// reachable Out would.
+	settleTasks(t, f.store, healthy)
+	confirmChain(t, f.store, healthy, f.now)
 	markLineOnline(t, f.store, second, f.now)
 	offline := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, offline, f.now)
 	configureOut(t, f.store, offline, f.now)
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: offline, LineID: second, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	// The offline Out never confirms its guard, so its Line's own state is the
+	// fail-closed one the aggregate has to report.
+	enableOutForLine(t, f.store, offline, second, f.now)
 	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
 		t.Fatal(err)
 	}
@@ -325,11 +327,12 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	healthy := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, healthy, f.now)
 	configureOut(t, f.store, healthy, f.now)
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: healthy, LineID: f.line, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	// Enrollment publishes the Out's membership guard (Ruling R10); the selection only
+	// makes the Line route through it.
+	f.store.RepublishOutAuthorizations(f.now)
 	settleTasks(t, f.store, healthy)
 	confirmChain(t, f.store, healthy, f.now)
+	enableOutForLine(t, f.store, healthy, f.line, f.now)
 
 	second := pairedStoreNode(t, f.store, "edge", f.now)
 	settings := testLine(second, "line-b")
@@ -339,13 +342,18 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	if _, err := f.store.SetLine(settings, f.now); err != nil {
 		t.Fatal(err)
 	}
+	// A new Line is a membership change (Ruling R10), so the healthy Out republished
+	// its guard: the fixture settles that chain before asserting states, exactly as a
+	// reachable Out would.
+	settleTasks(t, f.store, healthy)
+	confirmChain(t, f.store, healthy, f.now)
 	markLineOnline(t, f.store, second, f.now)
 	offline := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, offline, f.now)
 	configureOut(t, f.store, offline, f.now)
-	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: offline, LineID: second, Enabled: true}, f.now); err != nil {
-		t.Fatal(err)
-	}
+	// The offline Out never confirms its guard, so its Line's own state is the
+	// fail-closed one the aggregate has to report.
+	enableOutForLine(t, f.store, offline, second, f.now)
 	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
 		t.Fatal(err)
 	}

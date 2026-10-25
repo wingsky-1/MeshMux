@@ -12,11 +12,11 @@ package subscription
 // kinds and the same canonical value rules; compose_drift_test.go compares both
 // so they cannot silently diverge.
 //
-// Composition never executes anything. A selected Out is recorded and rendered
-// into the Line route fragment (the double-hop egress the Line publishes), but
-// the server-side authorization stays on the existing out_bindings path until
-// Task 5 switches it. A selected mesh device is recorded only: the standard
-// subscription never grows a Tailscale endpoint.
+// Composition never executes anything. A selected Out is recorded and rendered into
+// the Line route fragment (the double-hop egress the Line publishes); it is a routing
+// choice for the client document, not an authorization (Ruling R10: the Out allowlist
+// is node membership, and a subscription edit never touches it). A selected mesh device
+// is recorded only: the standard subscription never grows a Tailscale endpoint.
 
 import (
 	"crypto/sha256"

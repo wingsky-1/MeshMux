@@ -151,9 +151,7 @@ func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
 	// End to end: the migrated key reaches the published Line candidate and
 	// renders the SS out body (migration -> store -> kernel bytes).
 	configureOut(t, s, out, now)
-	if err := s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, out, line, now)
 	target, err := s.PublishTarget(line,
 		json.RawMessage(`{"rules":[{"domain":["chat.example.invalid"],"outbound":"out"}],"final":"direct"}`),
 		true, "healthy", "")
@@ -186,10 +184,13 @@ func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
 	t.Fatal("published Line candidate declares no out outbound")
 }
 
-// TestOutPoolListsTransportAndBinding is the Task 2 pool datasource: every
-// enrolled Out appears with its transport and binding state, and an Out pool
-// of several Outs is allowed (no singleton limit).
-func TestOutPoolListsTransportAndBinding(t *testing.T) {
+// TestOutPoolListsTransportAndSelection is the pool datasource: every enrolled Out
+// appears with its dial address and the Lines a subscription selects it for, and an
+// Out pool of several Outs is allowed (no singleton limit).
+//
+// The selection is read from the subscription edges, so a pool entry and the ACL
+// derivation cannot disagree about which Lines an Out serves.
+func TestOutPoolListsTransportAndSelection(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	line := pairedStoreNode(t, s, "edge", now)
 	configureLine(t, s, line, "line-pool", now)
@@ -199,9 +200,7 @@ func TestOutPoolListsTransportAndBinding(t *testing.T) {
 	markLineOnline(t, s, line, now)
 	markLineOnline(t, s, outA, now)
 
-	if err := s.SetOutBinding(store.OutBinding{OutID: outA, LineID: line, Enabled: true}); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, s, outA, line, now)
 
 	pool, err := s.OutPool(now)
 	if err != nil {
@@ -214,44 +213,51 @@ func TestOutPoolListsTransportAndBinding(t *testing.T) {
 	for _, entry := range pool {
 		byID[entry.OutID] = entry
 	}
-	bound := byID[outA]
-	if !bound.TransportConfigured || bound.LineID != line || !bound.Enabled {
-		t.Fatalf("bound out entry wrong: %+v", bound)
+	selected := byID[outA]
+	if !selected.TransportConfigured || len(selected.LineIDs) != 1 || selected.LineIDs[0] != line || !selected.Enabled {
+		t.Fatalf("selected out entry wrong: %+v", selected)
 	}
-	if bound.Server != "out.example.invalid" || bound.Port == 0 {
-		t.Fatalf("bound out entry has no dial address: %+v", bound)
+	if selected.Server != "out.example.invalid" || selected.Port == 0 {
+		t.Fatalf("selected out entry has no dial address: %+v", selected)
 	}
-	unbound := byID[outB]
-	if unbound.TransportConfigured || unbound.LineID != "" || unbound.Enabled {
-		t.Fatalf("unbound out entry wrong: %+v", unbound)
+	unselected := byID[outB]
+	if unselected.TransportConfigured || len(unselected.LineIDs) != 0 || unselected.Enabled {
+		t.Fatalf("unselected out entry wrong: %+v", unselected)
 	}
 }
 
-// TestOutBindingEnableRequiresOutTransport closes the endpoint gap: enabling
-// a binding whose Out has no dial address is refused, because the Line would
-// otherwise render a block stub while the Out gate reports healthy.
-func TestOutBindingEnableRequiresOutTransport(t *testing.T) {
+// TestOutSelectionRequiresOutTransport closes the endpoint gap: an Out without a
+// dial address cannot be selected, because the Line would otherwise render a block
+// stub while the Out gate reports healthy. The refusal happens at the subscription
+// edge, which is the only authorization source now.
+func TestOutSelectionRequiresOutTransport(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	out := pairedStoreNode(t, s, "out", now)
 	line := pairedStoreNode(t, s, "edge", now)
 	configureLine(t, s, line, "line-egress", now)
+	subscriberID := testSubscriberForLine(t, s, line, now)
 
-	err := s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true})
+	_, err := s.SaveSubscriptionSelection(subscriberID, store.SelectionSpec{
+		LineIDs: []string{line}, OutID: out,
+	}, now)
 	if err == nil || !hasErrorCode(err, "OUT_NOT_CONFIGURED") {
-		t.Fatalf("enable without out transport = %v, want OUT_NOT_CONFIGURED", err)
+		t.Fatalf("select an out without transport = %v, want OUT_NOT_CONFIGURED", err)
 	}
-	if _, err := s.PreviewOutBinding(out, line); err == nil || !hasErrorCode(err, "OUT_NOT_CONFIGURED") {
-		t.Fatalf("proposal preview error = %v, want OUT_NOT_CONFIGURED", err)
+	// The refused save wrote nothing: no subscription selects the Out.
+	if subscribers, selErr := s.OutAuthorizedSubscribers(out); selErr != nil || len(subscribers) != 0 {
+		t.Fatalf("a refused selection was recorded: %v err=%v", subscribers, selErr)
 	}
 	configureOut(t, s, out, now)
-	if err := s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
-		t.Fatalf("enable with out transport rejected: %v", err)
+	if _, err := s.SaveSubscriptionSelection(subscriberID, store.SelectionSpec{
+		LineIDs: []string{line}, OutID: out,
+	}, now); err != nil {
+		t.Fatalf("select an out with transport rejected: %v", err)
 	}
-	preview, err := s.PreviewOutBinding(out, line)
+	preview, err := s.PreviewOutAuthorizationAt(out, line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Mode != "out-bound" {
-		t.Fatalf("proposal preview after transport = %+v, want out-bound", preview)
+	if preview.Mode != store.OutPoolBound && preview.Mode != store.OutPoolLineDirect {
+		t.Fatalf("proposal preview after transport = %+v", preview)
 	}
 }

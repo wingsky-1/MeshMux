@@ -108,19 +108,26 @@ type OutTransport struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// OutPoolEntry is one Out of the Task 2 pool: the node identity, its dial
-// parameters when configured, and its current binding. It is the selection
-// datasource Task 4 consumes; it carries no credential and no allowlist.
+// OutPoolEntry is one Out of the pool: the node identity, its dial parameters
+// when configured, and the Lines a subscription selects it for. It is the
+// selection datasource the wizard consumes; it carries no credential, no link key
+// and no allowlist.
+//
+// LineIDs is plural because the authorization is derived from the subscription
+// edges (Task 5): one Out may be selected by several subscriptions serving
+// different Lines, and the pool has to show all of them. Enabled is true when at
+// least one active subscription serves at least one Line through this Out, which is
+// exactly the condition under which it authorizes a source.
 type OutPoolEntry struct {
-	OutID               string `json:"out_id"`
-	DisplayName         string `json:"display_name"`
-	VlessPort           int    `json:"vless_port"`
-	Online              bool   `json:"online"`
-	TransportConfigured bool   `json:"transport_configured"`
-	Server              string `json:"server,omitempty"`
-	Port                int    `json:"port,omitempty"`
-	LineID              string `json:"line_id,omitempty"`
-	Enabled             bool   `json:"enabled"`
+	OutID               string   `json:"out_id"`
+	DisplayName         string   `json:"display_name"`
+	VlessPort           int      `json:"vless_port"`
+	Online              bool     `json:"online"`
+	TransportConfigured bool     `json:"transport_configured"`
+	Server              string   `json:"server,omitempty"`
+	Port                int      `json:"port,omitempty"`
+	LineIDs             []string `json:"line_ids,omitempty"`
+	Enabled             bool     `json:"enabled"`
 }
 
 // SetOutTransport stores the dial address of one Out node. The node must
@@ -132,7 +139,7 @@ type OutPoolEntry struct {
 // the key now.
 func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
-	if !validBindingNodeID(outID) {
+	if !validNodeID(outID) {
 		return OutTransport{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
 	}
 	server = strings.ToLower(strings.TrimSpace(server))
@@ -205,7 +212,7 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 // parameters. The link key is never returned.
 func (s *Store) GetOutTransport(outID string) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
-	if !validBindingNodeID(outID) {
+	if !validNodeID(outID) {
 		return OutTransport{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
 	}
 	var transport OutTransport
@@ -213,7 +220,7 @@ func (s *Store) GetOutTransport(outID string) (OutTransport, error) {
 	err := s.DB.QueryRow(`SELECT server, port, updated_at FROM out_settings WHERE node_id=?`, outID).
 		Scan(&transport.Server, &transport.Port, &transport.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return OutTransport{}, errors.New("OUT_NOT_CONFIGURED: configure the out transport before enabling an out binding")
+		return OutTransport{}, errors.New("OUT_NOT_CONFIGURED: configure the out transport before selecting the out")
 	}
 	if err != nil {
 		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
@@ -264,52 +271,76 @@ func (s *Store) ListOutTransports() ([]OutTransport, error) {
 	return out, nil
 }
 
-// OutPool lists every enrolled Out node with its transport and binding state
-// at one clock. It never returns a key: the link key stays in the
-// private table and only enters the bound Line candidates and the Out's own
-// v4 document.
+// OutPool lists every enrolled Out node with its dial address and the Lines a
+// subscription selects it for, at one clock. It never returns a key: the link key
+// stays in the private table and only enters the paired Line candidates and the
+// Out's own v4 document.
+//
+// The selection is read through the subscription edges, so the pool and the ACL
+// derivation cannot disagree about which Lines an Out serves. A subscriber that is
+// not active contributes no Line: it is not served by any Out, which is the same
+// rule the allowlist applies.
 func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
 	rows, err := s.DB.Query(`
 SELECT n.id, n.display_name, n.vless_port, n.status, n.last_heartbeat,
- s.server, s.port, b.line_id, b.enabled
+ o2.server, o2.port, l.node_id, b.state
 FROM nodes n
-LEFT JOIN out_settings s ON s.node_id=n.id
-LEFT JOIN out_bindings b ON b.out_id=n.id
+LEFT JOIN out_settings o2 ON o2.node_id=n.id
+LEFT JOIN subscription_outs o ON o.out_id=n.id
+LEFT JOIN subscribers b ON b.id=o.subscriber_id
+LEFT JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
 WHERE n.role='out'
-ORDER BY n.created_at ASC, n.id ASC`)
+ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 	if err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
 	defer rows.Close()
-	out := []OutPoolEntry{}
+	byOut := map[string]*OutPoolEntry{}
+	order := []string{}
 	for rows.Next() {
 		var (
-			entry    OutPoolEntry
+			outID    string
+			name     string
+			vless    int
 			status   string
 			lastBeat int64
 			server   sql.NullString
 			port     sql.NullInt64
 			lineID   sql.NullString
-			enabled  sql.NullInt64
+			state    sql.NullString
 		)
-		if err := rows.Scan(&entry.OutID, &entry.DisplayName, &entry.VlessPort, &status, &lastBeat,
-			&server, &port, &lineID, &enabled); err != nil {
+		if err := rows.Scan(&outID, &name, &vless, &status, &lastBeat,
+			&server, &port, &lineID, &state); err != nil {
 			return nil, errors.New("DATABASE_UNAVAILABLE")
 		}
-		entry.Online = status != "pending" && lastBeat != 0 && now.Sub(time.Unix(lastBeat, 0)) <= OfflineAfter
-		entry.TransportConfigured = server.Valid && port.Valid
-		if entry.TransportConfigured {
-			entry.Server = server.String
-			entry.Port = int(port.Int64)
+		entry, seen := byOut[outID]
+		if !seen {
+			entry = &OutPoolEntry{
+				OutID:       outID,
+				DisplayName: name,
+				VlessPort:   vless,
+				Online:      status != "pending" && lastBeat != 0 && now.Sub(time.Unix(lastBeat, 0)) <= OfflineAfter,
+				LineIDs:     []string{},
+			}
+			entry.TransportConfigured = server.Valid && port.Valid
+			if entry.TransportConfigured {
+				entry.Server = server.String
+				entry.Port = int(port.Int64)
+			}
+			byOut[outID] = entry
+			order = append(order, outID)
 		}
-		if lineID.Valid {
-			entry.LineID = lineID.String
+		if lineID.Valid && state.Valid && state.String == "active" {
+			entry.LineIDs = append(entry.LineIDs, lineID.String)
+			entry.Enabled = true
 		}
-		entry.Enabled = enabled.Valid && enabled.Int64 == 1
-		out = append(out, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	out := make([]OutPoolEntry, 0, len(order))
+	for _, outID := range order {
+		out = append(out, *byOut[outID])
 	}
 	return out, nil
 }

@@ -106,14 +106,14 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	f := newPairedWebOutSyncApp(t)
 	app, now := f.app, time.Now()
 
-	// Bind and let the heartbeat publish the Out authorization.
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: f.outID, LineID: f.lineID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	// The Out's authorization is node membership (Ruling R10), so the heartbeat
+	// reconciles the pair rather than a subscription edit: it republishes the Out when
+	// the membership list is not yet the published one.
 	w := heartbeatJSON(t, app, f.outToken)
 	requireStatus(t, w, 200)
-	if got := candidateCount(t, app.store, f.outID); got != 2 {
-		t.Fatalf("out revisions after heartbeat = %d, want 2", got)
+	settled := candidateCount(t, app.store, f.outID)
+	if settled < 1 {
+		t.Fatalf("out has no published chain: %d", settled)
 	}
 
 	// Report the Out chain healthy: the result event must release the Line.
@@ -169,10 +169,14 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if readback.Allowlist != store.LineEgressHealthy || readback.Inbound != store.SubscriberSyncHealthy ||
-		readback.FinalEgress != store.LineEgressHealthy || !readback.Reality ||
+	// No subscription selects the Out, so the Line itself egresses directly
+	// (Ruling R10: the ACL is membership, the route is the selection). The dual
+	// readback must still prove the Line half, and must not claim an Out path it does
+	// not have.
+	if readback.Allowlist != store.LineEgressDirect || readback.Inbound != store.SubscriberSyncHealthy ||
+		readback.FinalEgress != store.SubscriberSyncHealthy || !readback.Reality ||
 		readback.ConfirmedRevision != lineCandidate.Revision {
-		t.Fatalf("dual readback after both confirmations = %+v, want a healthy pair", readback)
+		t.Fatalf("dual readback after both confirmations = %+v, want a healthy direct pair", readback)
 	}
 
 	// A further heartbeat after convergence changes nothing: the drain is
@@ -191,9 +195,7 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	f := newPairedWebOutSyncApp(t)
 	app, now := f.app, time.Now()
 
-	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: f.outID, LineID: f.lineID, Enabled: true}, now); err != nil {
-		t.Fatal(err)
-	}
+	enableOutForLine(t, app.store, f.outID, f.lineID, now)
 	settleTasks(t, app.store, f.outID)
 	confirmChain(t, app.store, f.outID, now)
 	allowed, err := app.store.DeriveOutAllowlist(f.outID)

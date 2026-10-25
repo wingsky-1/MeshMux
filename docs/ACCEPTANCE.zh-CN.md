@@ -151,6 +151,23 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | B | used-by 互锁：被订阅引用的规则删除由规则库拒绝并列出订阅名；被订阅选择的 Out 删除被拒；组网设备引用可查 | [x] `TestRuleDeleteRefusedWithSubscriptionName`、`TestSelectionUsedByNames`、`TestWizardMeshGroupRefusesRevokedDevice` |
 | C | 真实 `sing-box check` 组合产物、真实双跳流量、Mihomo 固定版本门禁 | [x] 单测内真实 `sing-box 1.14.3` 通过（`TestWizardGateUsesRealSingBox`、`TestComposeSubscriptionRulesReachBothDocuments`，需 `MESHMUX_SINGBOX_TEST_BINARY`）；[ ] 真实双跳流量与 Mihomo 固定版本实测未含 |
 
+## 订阅聚合重构（Task 5：授权迁移 —— 按订阅边派生 Out ACL）
+
+本节登记“删除 `out_bindings` + 派生替代”的同 PR 原子切换证据。**C 级真机（现网 VPS、公网入口、客户端 App）仍未含**，只到 C-（真实内核 + loopback 拓扑）。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | 单一授权源（**Ruling R10：节点成员制**）：`DeriveOutAllowlist(out)` = 所有持有当前配对身份的 Line 地址并集；Line/Out 纳管即互通，身份吊销或删除即移除；无成员 = 显式空集（默认拒绝），不是省略键、不是错误 | [x] `TestOutAuthorization_DerivationIsNodeMembership`、`TestOutAuthorization_EnrollmentAddsEveryLine`、`TestOutAuthorization_EmptyMembershipIsDefaultDeny` |
+| B | 订阅与 ACL 解耦：订阅创建/改选/暂停/恢复**不改变**派生集合、**不重发** Out 链、链参数逐字节不变 | [x] `TestOutAuthorization_SubscriptionNeverTouchesTheACL`（5 种变更逐项比对派生 + 修订数 + 链参数） |
+| B | 迁移前后 ACL 字节一致：对“成员/吊销/传输移除/订阅选中/取消选中/暂停/删除”七种状态，派生 allowlist 与渲染 nft 字节与旧绑定派生的等价集合逐字节相同 | [x] `TestOutAuthorization_MigratedACLMatchesBindingBytes`（7 个子用例，含 `node.SameACLSourceSet` + `node.CompileACL` 字节比对） |
+| B | 空成员拒绝：没有可授权 Line 时 Out 链携带 `[]`，渲染出的 nft 只有两条 drop 规则、无 accept；Line 自身仍是直连（`direct`）且不被 Out 门禁阻塞 | [x] `TestOutAuthorization_EmptyMembershipIsDefaultDeny` |
+| B | **Out 彻底删除（Ruling R9）**：先清空 ACL 并读回，再删节点行 + `out_settings`（地址/link key）+ 候选/任务；被订阅引用时拒绝并列出订阅名；离线或链条在途时拒绝（409，本次不删任何内容）；删除后引用过它的 Line 按 fail-closed 重算 | [x] `TestOutDeleteManagementAPICleansTheRoute`、`TestOutDeleteRefusesALiveSubscriptionReference`、`TestOutDeleteRefusesWhenTheHostCannotDropItsGuard`、`TestOutAuthorization_BindingTableIsGone` |
+| B | 表与读写路径删除：schema 14 删除 `out_bindings` 与索引；`/nodes/out/bind`、`/nodes/out/unbind` 返回 `OUT_BINDING_API_RETIRED`（410）并指向上位替代动作；`out_settings`/订阅边表保留 | [x] `TestOutAuthorization_BindingTableIsGone`、`TestOutBindingEndpointsAreRetired`、`TestOutPoolListsTransportAndSelection` |
+| B | 服务端 Line 路由读派生结果：发布门禁、双读回、`OutEgressFacts`、AI 决策、节点页投影全部一致；选择 Out 只改客户端路由（不触发 Out 重发），被订阅引用的 Out 删除被拒（`OUT_REFERENCED_BY_SUBSCRIPTIONS` 并列出订阅名） | [x] `TestOutAuthorization_SelectingTheOutAuthorizesAndPublishes`、`TestOutAuthorization_DroppingTheSelectionKeepsTheACL`、`TestOutPreviewDerivesFromTheSubscription`、`TestSubscriberSyncFailsClosedWhenTheOutIsDeleted` |
+| B | 无法验证的源 fail-closed：DNS 名 Line 不能进 allowlist（`LINE_EGRESS_UNVERIFIED`），派生报错而不是猜地址；派生顺序与选择顺序无关（链参数可比对） | [x] `TestOutAuthorization_UnverifiableLineFailsClosed`、`TestOutAuthorization_SourceOrderIsByteStable` |
+| C- | 真实 sing-box 1.14.3 双跳：Out（SS 入站 `2022-blake3-aes-128-gcm`）+ Line（VLESS/REALITY 入站 + SS 出站 + AI 域名 route）+ 客户端 SOCKS，AI 域名请求真实走 Line→Out 到目标；两侧日志分别归属 `inbound/vless`→`outbound/shadowsocks[out]` 与 `inbound/shadowsocks`→`outbound/direct[direct]`；派生 guard 由真实 nftables 解析并安装到私有 netns | [x] `TestOutAuthorization_AIDoubleHopEndToEnd`（需 `MESHMUX_SINGBOX_TEST_BINARY`，loopback-only）；nft 在无 `CAP_NET_ADMIN`/netns 时显式 skip |
+| C | 现网 VPS 双跳、公网入口、客户端 App 实际可用、Out 故障时的真实流量 drop | [ ] 未含；归 #12（`必须完成的真实用户闭环` 第 3/5 项） |
+
 - [ ] **未含 C 级结论**：本节不证明任何真实流量、真机导入或现网发布成功；`queued` 回执不是已应用。#10 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 第 3/5/7 项）由 #12 采集。
 
 ## v1.0.0 必须完成的真实用户闭环
