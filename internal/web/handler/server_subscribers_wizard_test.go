@@ -11,9 +11,11 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -396,6 +398,108 @@ func TestWizardSelectionRestoresSavedChoice(t *testing.T) {
 	}
 	if len(selection.Rules) != 1 || selection.Rules[0].StableKey != "preset-direct-cn" {
 		t.Fatalf("selection rules = %+v", selection.Rules)
+	}
+}
+
+// TestWizardSelectionPositionsAreStable proves one checkbox set always yields
+// exactly one selection. r.PostForm is a map, so before the fix the dense
+// positions came from Go's randomized map order: the same submission could store
+// a different selection_json, a different snapshot id and a different rule order
+// (the composer keeps input order), breaking "same choice, same bytes".
+func TestWizardSelectionPositionsAreStable(t *testing.T) {
+	app, b, _ := wizardApp(t)
+	lineA := wizardLine(t, app, "hk-01")
+	lineB := wizardLine(t, app, "hk-02")
+	deviceID := wizardDeviceID(t, app)
+	seedActivePolicyPins(t, app)
+
+	fields := url.Values{
+		"display_name":             {"alice"},
+		"line_" + lineA:            {"1"},
+		"line_" + lineB:            {"1"},
+		"device_" + deviceID:       {"1"},
+		"rule_preset-proxy-ai@1":   {"1"},
+		"rule_preset-direct-cn@1":  {"1"},
+		"rule_preset-reject-ads@1": {"1"},
+	}
+	// 1. The parser itself must be order-free: the same form renders the same
+	//    spec every time, in sorted field-name order.
+	var first store.SelectionSpec
+	for iteration := 0; iteration < 20; iteration++ {
+		r := httptest.NewRequest("POST", testOrigin+"/subscribers/wizard/preview", strings.NewReader(fields.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		spec, _, err := readWizardSelection(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if iteration == 0 {
+			first = spec
+			continue
+		}
+		if !reflect.DeepEqual(spec, first) {
+			t.Fatalf("iteration %d: spec = %+v, want %+v", iteration, spec, first)
+		}
+	}
+	if len(first.LineIDs) != 2 || first.LineIDs[0] >= first.LineIDs[1] {
+		t.Fatalf("line ids = %q, want ascending sorted order", first.LineIDs)
+	}
+	wantRules := []string{"preset-direct-cn", "preset-proxy-ai", "preset-reject-ads"}
+	for index, want := range wantRules {
+		if first.Rules[index].StableKey != want {
+			t.Fatalf("rule %d = %q, want %q (sorted field-name order)", index, first.Rules[index].StableKey, want)
+		}
+	}
+
+	// 2. End to end: repeated saves of the same set store the same positions and
+	//    compose byte-identical documents.
+	w := b.post("/subscribers/wizard/save", fields)
+	require2xx(t, w)
+	subs, err := app.store.ListSubscribers()
+	if err != nil || len(subs) != 1 {
+		t.Fatalf("subscribers = %d err=%v", len(subs), err)
+	}
+	subID := subs[0].ID
+	firstSelection, saved, err := app.store.SubscriptionSelection(subID)
+	if err != nil || !saved {
+		t.Fatalf("selection saved=%v err=%v", saved, err)
+	}
+	firstDocuments, firstArtifact, err := app.store.SubscriptionArtifact(subID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for iteration := 0; iteration < 5; iteration++ {
+		repeat := url.Values{}
+		for key, values := range fields {
+			repeat[key] = values
+		}
+		delete(repeat, "display_name")
+		repeat.Set("subscriber_id", subID)
+		w = b.post("/subscribers/wizard/save", repeat)
+		require2xx(t, w)
+		selection, _, err := app.store.SubscriptionSelection(subID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(selection.Lines, firstSelection.Lines) {
+			t.Fatalf("iteration %d: line positions = %+v, want %+v", iteration, selection.Lines, firstSelection.Lines)
+		}
+		if !reflect.DeepEqual(selection.Rules, firstSelection.Rules) {
+			t.Fatalf("iteration %d: rule positions = %+v, want %+v", iteration, selection.Rules, firstSelection.Rules)
+		}
+		if !reflect.DeepEqual(selection.Networks, firstSelection.Networks) {
+			t.Fatalf("iteration %d: device positions = %+v, want %+v", iteration, selection.Networks, firstSelection.Networks)
+		}
+		documents, artifactID, err := app.store.SubscriptionArtifact(subID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if artifactID != firstArtifact || string(documents.SingBox) != string(firstDocuments.SingBox) ||
+			string(documents.Mihomo) != string(firstDocuments.Mihomo) {
+			t.Fatalf("iteration %d: the recomposed artifact changed for the same checkbox set", iteration)
+		}
 	}
 }
 

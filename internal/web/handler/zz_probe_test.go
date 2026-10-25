@@ -10,7 +10,10 @@ import (
 // returns only the newest version per key, so latest[key] == rule.Version.
 func TestProbeUpgradeHintIsDead(t *testing.T) {
 	app, b, _ := wizardApp(t)
-	lineID := wizardLine(t, app, "hk-01")
+	// R1: the fixture Line is unused by this probe; keep creating it so the
+	// scenario still has one Line, but discard the value so the package compiles
+	// (the committed probe failed vet with "declared and not used").
+	_ = wizardLine(t, app, "hk-01")
 	require2xx(t, b.post("/rules", url.Values{
 		"stable_key": {"my-cn"}, "name": {"我的直连"},
 		"action": {"direct"}, "matcher_kind": {"domain"}, "values": {"a.example.invalid"},

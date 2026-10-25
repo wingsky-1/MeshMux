@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -345,7 +346,19 @@ func readWizardSelection(r *http.Request) (store.SelectionSpec, string, error) {
 			return spec, "", errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
 		}
 	}
-	for key, values := range r.PostForm {
+	// r.PostForm is a map, so a direct range would make the dense positions —
+	// and therefore the snapshot identity and the rendered rule order — depend
+	// on Go's randomized map iteration. Sorting the field names first makes one
+	// checkbox set always produce exactly one selection: positions follow the
+	// sorted `line_*` / `device_*` / `rule_*` names, so a repeated submission of
+	// the same set is byte-identical.
+	keys := make([]string, 0, len(r.PostForm))
+	for key := range r.PostForm {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		values := r.PostForm[key]
 		if len(values) != 1 || values[0] != "1" {
 			continue
 		}
@@ -363,7 +376,8 @@ func readWizardSelection(r *http.Request) (store.SelectionSpec, string, error) {
 			spec.NetworkIDs = append(spec.NetworkIDs, deviceID)
 		}
 	}
-	for key, values := range r.PostForm {
+	for _, key := range keys {
+		values := r.PostForm[key]
 		if len(values) != 1 || values[0] != "1" {
 			continue
 		}
@@ -382,8 +396,8 @@ func readWizardSelection(r *http.Request) (store.SelectionSpec, string, error) {
 		spec.Rules = append(spec.Rules, store.RuleRevision{StableKey: stableKey, Version: version})
 	}
 	// The mutation boundary rejects repeated fields, so the four groups use
-	// distinct prefixes and the order is the form order, not map order. The
-	// store assigns dense positions; the composer sorts by Line order.
+	// distinct prefixes. The order is the sorted field-name order decided above,
+	// never map order; the store assigns dense positions from that same order.
 	return spec, strings.TrimSpace(r.PostForm.Get("display_name")), nil
 }
 
