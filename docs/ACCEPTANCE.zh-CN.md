@@ -144,20 +144,41 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 
 | 能力（spec） | B 级证据 | 边界 |
 | --- | --- | --- |
-| per-op 备份、`keep=2`、指针与单飞（§5.2/§5.2.1） | `TestBackupPublishesPerOpThenPointer`、`TestBackupSingleFlight`、`TestLatestIsJournalBacked`、`TestGCKeepTwoConfirmed`、`TestGCNeverCollectsNewestOrStaged`、`TestConfirmCollectsConfirmedBeyondTwo`、`TestConfirmPointerFailureStillCollects`、`TestHubCleanupRejectsKeepBelowTwo` | 记录/载荷为临时目录 fixture；VACUUM 在测试 SQLite 上执行，非生产负载 |
+| per-op 备份、`keep=2`、指针与单飞（§5.2/§5.2.1） | `TestBackupPublishesPerOpThenPointer`、`TestBackupSingleFlight`、`TestLatestIsJournalBacked`、`TestGCKeepTwoConfirmed`、`TestGCNeverCollectsNewestOrStaged`、`TestConfirmCollectsConfirmedBeyondTwo`、`TestConfirmPointerFailureStillCollects`、`TestHubCleanupRejectsKeepBelowTwo` | 记录/载荷为临时目录 fixture；VACUUM 在测试 SQLite 上执行，非生产负载。指针刷新失败只记 `HUB_BACKUP_POINTER_STALE`；已发布但未 fsync 记 `HUB_BACKUP_POINTER_UNFLUSHED`，两者都不回滚确认/GC |
 | 交接、对账、确认（§5.5） | `TestHandoffOrder`、`TestReconcileRestoredMarker`、`TestReconcileClaimSwappingNewBinary`、`TestReconcileClaimOldBinaryInert`、`TestApplyReceipt`、`TestNoSchema11`、`TestReadbackComparesVerifyingOpTarget` | `user_version` 固定 10；无 `hub_upgrade_operations` 表 |
 | 版本绑定、pre-flight、Line 四 pin、claim（§5.6） | `TestUpdateVersionMismatchZeroWrite`、`TestUpdatePreflightTrial`、`TestApplyPrecheckNeedsFourPins`、`TestLineRepinAllOrNothing`、`TestClaimWrittenBeforeSwap`、`TestApplyResultBeforeRestart` | 通过 fixture ledger/agent.json 证明写集；未执行真实 `systemctl restart` |
 | restore（§5.7） | `TestRestoreHappyPath`、`TestRestoreAcceptsStagedSource`、`TestRestoreRefusesPayloadDigestMismatch`、`TestRestoreRefusesForeignSchemaCopy`、`TestRestoreMissingOldPackage`、`TestRestoreRefusesCarriedRecordAsSource`、`TestRestoreUnitShapeInvalid`、`TestRestoreSecondRequestBusy`、`TestRestoreSpaceCheck`、`TestRestoreConsoleInvocation` | 副本为 fixture SQLite；`/healthz` 由注入 Probe 代表；chown 在测试 uid 下为同主 no-op |
 | 不可逆 UX 与悬空文案（§5.11） | `TestHubUpgradePage`、`TestHubUpgradePageOffersHandoffForBackedUp`、`TestApproveHintPointsToHubUpgrade`、`TestRestoreReceipt`、`TestRestoreSecondRequestBusy`、`TestRestoreRejectsCarriedRecord` | 页面只渲染；不可逆确认位形状与拒绝路径有测试，真实迁移执行仍属目标版本 |
 | D2 单元、watchdog、启动守卫、回滚禁 `.path` | `TestWebUnitWatchdogAndStartLimit`、`TestWatchdogHeartbeat`、`TestBootGuardStopsCrashLoop`、`TestRollbackDisablesHubDispatchPath`、`TestHubRuntimeDirsDeclaredWritable` | `systemd-analyze verify` 与真实 `WatchdogSec` kill 在 CI/VM 覆盖；本机跳过时如实记 skip |
 
+### T7 文档收口（stable codes 与 spec 偏差）
+
+- **LOSSY 位置**：`lossy=true` 与 `snapshot_at` 只存在于 `hub-upgrade/restored.json`（schema 1）和 `/tasks` 的 Hub 区块。**result schema 1 没有 `lossy` 字段**，不得声称 result 显示 LOSSY。
+- **标记清除时机**：由**下一次对账 pass**（`internal/hubupgrade/reconcile.go` 的 `clearSupersededMarker`，约 609-640 行）在见到新的已提交备份（journal `backed_up` 且 per-op 记录 `staged|confirmed` 可读）时清除；不是 backup producer 在提交瞬间清除。Web 停机期间标记会保留，这是有意的。
+- **§5.5 偏差（记录在 T7 文档，不回写 spec）**：`HUB_BACKUP_STAGE_FAILED` 时 journal 保持 `backed_up`，不是 `failed`；只有 per-op 记录与载荷可复用、同一 `operation_id` 可重试。spec §5.5 的“任意失败 → 终态”不覆盖“尚未触碰主机、可安全重试”的暂存失败。
+- **指针稳定码**：`HUB_BACKUP_POINTER_STALE`（未发布新指针）与 `HUB_BACKUP_POINTER_UNFLUSHED`（已发布但未 fsync）都只记录、不回滚确认与 GC。
+- **活动数据目录**：恢复后的 `--data-dir` 是 `<原-data-dir>/restore-<op>-<unix>`；删除原目录会删除活动数据库（详见下方恢复警告）。
+
 ### 记录字节冻结的“替换等价”措辞（T1r carry）
 
 T1r 删除 layout 后，`TestRecordByteCompatNodeAndHub` 不再比较同一目录下两种布局产生的两份文件；它用同一 `Spec`、`Now` 和 operation id，在两个 root 分别以 `PayloadTree` / `PayloadSingleDB` 写入，再比较两份 `record.json` 的字节。这是**替换等价**：唯一编码器 + 相同输入 ⇒ 相同字节。旧稿“同一路径出现两份逐字节相同的记录”的措辞与 per-op 布局不再成立，后续文档不得把它当作证据。
 
+### root 控制台恢复：执行前摘要（强制）
+
+在执行旧包前，root **必须先**从该操作的 per-op 记录读取 `from_agent_sha256`，并用 `sha256sum -c` 核对旧包字节。安装器只显式安装 `ca-certificates`/`fail2ban`/`nftables`（见 `internal/install/apply_shared.go`）；`grep`/`sha256sum`/`printf` 属于 Debian essential/coreutils，不能假设 `jq` 或 `python3` 一定存在。下列是固定形式（无新工具依赖）：
+
+```sh
+RECORD="<data-dir>/database-backup/<op32hex>/record.json"
+FROM_SHA="$(grep -o '"from_agent_sha256":[[:space:]]*"[0-9a-f]\{64\}"' "$RECORD" | grep -o '[0-9a-f]\{64\}')"
+[ "${#FROM_SHA}" -eq 64 ] || { echo "record has no from_agent_sha256" >&2; exit 1; }
+printf '%s  %s\n' "$FROM_SHA" "<data-dir>/upgrade/meshmuxd-<from_version>-<arch>" | sha256sum -c -
+```
+
+摘要不符时**不要执行 restore**：执行体自己的 `/proc/self/exe` 自检发生在 exec 之后，无法保护 exec 本身；这与 RAUC/Mender 的 verify-then-exec 纪律、以及 dispatcher “边复制边哈希到 root-only `exec-<op>`” 的纪律一致——执行前摘要才是信任锚。若跳过此步，执行体仍会以 `HUB_RESTORE_DIGEST_MISMATCH`/`HUB_RESTORE_BINARY_MISSING` 拒绝，但坏字节已经获得一次 exec。
+
 ### root 控制台恢复 argv（逐字节）
 
-下列 argv 由 root 直接执行，**不经 Web、不经请求目录**；`<...>` 由 journal/记录取值，执行体自身再校验 `/proc/self/exe` 摘要与旧包摘要。`--restore-dir` 必须是 `<data-dir>/restore-<op32hex>-<unix>`（执行体拒绝其它形状）。执行前提：journal 为 `failed`/`partial`/`verifying`，无待消费请求，`restored.json` 不存在。
+下列 argv 由 root 直接执行，**不经 Web、不经请求目录**；`<...>` 由 journal/记录取值，执行体自身再校验 `/proc/self/exe` 摘要与旧包摘要。`--restore-dir` 必须是 `<data-dir>/restore-<op32hex>-<unix>`（执行体拒绝其它形状）。执行前提：journal 为 `failed`/`partial`/`verifying`，无待消费请求，`restored.json` 不存在，**且上面的执行前摘要已通过**。
 
 <!-- hub-restore-console:start -->
 ```sh
@@ -166,6 +187,8 @@ T1r 删除 layout 后，`TestRecordByteCompatNodeAndHub` 不再比较同一目�
 <!-- hub-restore-console:end -->
 
 从记录取值的对应关系：`from_version` = `record.from_version`，`from_agent_sha256` = `record.from_agent_sha256`（旧包摘要），`op32hex` = `journal.operation_id`，`data-dir` = 当前 Web 单元的 `--data-dir`，`unix` = 当前时间。**root 可直接运行，但 argv 中的摘要与路径必须与记录一致**；不一致会在停机前以 `HUB_RESTORE_BINARY_MISSING`/`HUB_RESTORE_DIGEST_MISMATCH`/`CONFIG_CONFLICT` 拒绝。
+
+**恢复后的活动目录警告**：成功恢复后 Web 的 `--data-dir` 是 `<原-data-dir>/restore-<op32hex>-<unix>`，它仍在原 data-dir 内部。确认前不要删除原目录；确认后若直接删除原目录，会连同活动目录与正在使用的数据库一起删除。先把新目录移出并更新 drop-in（或确认不再需要旧目录后再整体清理），不要把“旧的失败目录”当成可随手删除的垃圾。
 
 ### root 投递恢复请求（无 Web 的替代路径）
 
@@ -185,6 +208,7 @@ mv /run/meshmux-hub/staging/<op32hex>.json /run/meshmux-hub/requests/<op32hex>.j
 
 - claim 在换二进制**之前**写 `swapping`，四处 pin 全成后才置 `repinned` 并删除；`swapping` + running==target 的启动对账立即给 `HUB_SHARED_BINARY_REPIN_INCOMPLETE`，`swapping` + running==from 保持普通超时/`NOT_APPLIED`，`repinned` 惰性。restore 在 pin 还原后删除 claim；删除失败只留惰性残骸，不改变恢复事实。
 - `BootGuard` 在 `/run/meshmux-hub/boot/boot-attempts.json` 记录同一版本 10 分钟内未达健康的启动；已有三次时下一次启动以 `HUB_UPGRADE_BOOT_CRASH_LOOP` 退出，`Listen` 成功后 `ClearBootAttempts` 清空。`StartLimitIntervalSec=300`/`StartLimitBurst=3` 是 systemd 侧的第二道闸。文件损坏按“无记录”重置，守卫不可用不阻止 Web 启动（可用性硬化，不是授权）。
+- **systemd 会先于 BootGuard 挡住快速循环**：快速 crash loop 在 300s 内触发 `StartLimitBurst=3` 后，第 4 次启动会被 systemd 直接拒绝，二进制根本不运行，所以 `HUB_UPGRADE_BOOT_CRASH_LOOP` 通常只在**慢速/人工启动**（超出窗口或手动 `systemctl start`）时出现。这与 Kubernetes `CrashLoopBackOff` 的行业分工一致：快速循环由编排器/服务管理器的限流器观察并退避，进程内守卫补充“同一版本连续不健康”的语义，不能替代 systemd。**确定性拒绝也会消耗启动预算**：`SCHEMA_TOO_NEW` 在 BootGuard 之后发生并写入 `boot-attempts.json`；坏 flag 在 `parseConfig` 阶段即退出、不进入 BootGuard，但 systemd 的 `StartLimitBurst` 仍计一次启动。两者都不会自行恢复；不要重启循环，先修原因。恢复步骤按阻塞者选择：systemd 已限流 → `systemctl reset-failed meshmux-web.service`（必要时再 `systemctl start meshmux-web.service`）；启动能进入二进制但被 BootGuard 拒绝 → 删除 `/run/meshmux-hub/boot/boot-attempts.json`（一次干净的慢启动/人工修复后使用）；重启主机会清空 `/run` 并重置计数。
 
 ### 安装回滚与请求/result 目录
 

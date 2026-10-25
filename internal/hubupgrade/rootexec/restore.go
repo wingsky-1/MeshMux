@@ -122,6 +122,12 @@ func RunRestore(ctx context.Context, cfg RestoreConfig, runner node.CommandRunne
 		runner = node.ExecRunner{}
 	}
 
+	// Verify-then-exec, the trust discipline RAUC and Mender use for update
+	// payloads: the dispatcher already hashed these bytes while copying them
+	// into a root-only exec-<op>, and this check names the image that actually
+	// runs. A self-check performed after exec cannot protect the exec itself,
+	// which is why ACCEPTANCE makes the pre-exec `sha256sum -c` of the staged
+	// old package mandatory for the console path.
 	self, err := buildinfo.Digest()
 	if err != nil {
 		return fail(codeRestoreDigest, "the running executable digest is unavailable")
