@@ -43,7 +43,7 @@ v2 候选携带的用户 UUID 与 REALITY 私钥属节点秘密：只经已认�
 
 Node 安装先执行配置校验和真实 preflight，再展示 plan；未通过精确确认或 `--yes`，不进入 apply。即使 `--yes` 也不能绕过 Debian 13、root 和失败检查。`--plan` 不消费 code、不调用安装事务、不写宿主。`--repair` 优先复用私有 identity，只有安装器明确要求 pairing 时才提示重新签发 code。
 
-Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，锁只在事务期间持有，不是常驻服务锁。Agent 离线或控制平面失联不会自动停止独立 kernel；恢复只尝试已有有效 LKG，恢复后必须严格 readback，失败保持 `partial` 而不是成功。
+Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，锁只在事务期间持有，不是常驻服务锁。Agent 启动等待该锁的上界是 60s（与安装器无人值守窗口一致），超过即以稳定码 `RUNTIME_LOCK_TIMEOUT` 退出，由 systemd 重启重试，而不是无限挂起；首启 bootstrap readback 的瞬时重试同样有界（复用 `agentLockTimeout` 预算且可取消），因此启动持锁时间有上界。Agent 离线或控制平面失联不会自动停止独立 kernel；恢复只尝试已有有效 LKG，恢复后必须严格 readback，失败保持 `partial` 而不是成功。
 
 ## 阶段一已实现边界
 

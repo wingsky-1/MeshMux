@@ -142,7 +142,7 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 
 `InstallState.ManagedFiles` 记录的是本次 MeshMux 静态受管文件的 SHA-256；identity、active candidate、active config 和 runtime LKG 属于受保护的动态路径，不作为普通静态 ledger 项。已有第三方文件、symlink、未经 ledger 记录的非 MeshMux 路径、其他 nftables 表都不会被自动接管。
 
-`runtime.lock` 只在动态写事务期间持有，不伴随 Agent 进程生命周期。Agent 离线不会自动停止独立运行的 `meshmux-sing-box.service`，也不会以“离线”为由删除 identity、candidate 或配置。
+`runtime.lock` 只在动态写事务期间持有，不伴随 Agent 进程生命周期。Agent 离线不会自动停止独立运行的 `meshmux-sing-box.service`，也不会以“离线”为由删除 identity、candidate 或配置。Agent 启动对该锁的等待有 60s 上界：超过后以稳定码 `RUNTIME_LOCK_TIMEOUT` 退出，由 systemd 重启重试；首启 bootstrap readback 的瞬时重试同样有界且可取消，预算复用 `agentLockTimeout`。
 
 ## partial、failed 与有限恢复
 

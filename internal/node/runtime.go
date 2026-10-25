@@ -53,6 +53,15 @@ type RuntimeOptions struct {
 	// LockTimeout bounds one poll-cycle wait for the shared runtime lock. Zero
 	// means agentLockTimeout (5s, spec §4.9); tests set a shorter bound.
 	LockTimeout time.Duration
+	// StartupLockTimeout bounds the startup wait for that same lock. Zero means
+	// runtimeStartupLockTimeout (60s, the installer's own unattended window);
+	// tests set a shorter bound.
+	StartupLockTimeout time.Duration
+	// BootstrapReadbackTimeout bounds the whole startup readback retry, which
+	// runs while the runtime lock is held. Zero means agentLockTimeout (5s), so
+	// startup holds the lock no longer than one contended poll cycle; tests set
+	// a shorter bound.
+	BootstrapReadbackTimeout time.Duration
 	// StageTargets reports the release the Hub stamped onto a pending
 	// config.stage row (#11b). It is optional: without it every stage row is an
 	// ordinary config stage, which is the pre-upgrade behaviour.
@@ -88,6 +97,7 @@ type Runtime struct {
 	logger              *slog.Logger
 	pollInterval        time.Duration
 	lockTimeout         time.Duration
+	bootstrapTimeout    time.Duration
 	stageTargets        StageTargetSource
 	handoffConvergence  HandoffConvergenceWriter
 	upgradeConfirmation UpgradeConfirmer
@@ -191,8 +201,17 @@ func emptyRuntimeState(cfg Config) runtimeState {
 }
 
 // NewRuntime validates all fixed paths and recovers an interrupted apply before
-// returning a runtime that can execute new tasks.
+// returning a runtime that can execute new tasks. It uses a background lifetime:
+// callers that own a shutdown signal should use NewRuntimeContext.
 func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, error) {
+	return NewRuntimeContext(context.Background(), cfg, identity, opts)
+}
+
+// NewRuntimeContext is NewRuntime with the caller's lifetime attached to it. The
+// startup wait for the shared runtime lock and the bootstrap readback retry both
+// stop when ctx ends, so a stop request during startup is not delayed by the
+// bounded lock wait or by a kernel that never becomes ready.
+func NewRuntimeContext(ctx context.Context, cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, error) {
 	if err := cfg.ValidateInstalled(); err != nil {
 		return nil, err
 	}
@@ -209,7 +228,13 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 	if release, ok := KernelReleaseFor(runtime.GOARCH); !ok || root == "/" && cfg.KernelSHA256 != release.BinarySHA256 {
 		return nil, errors.New("KERNEL_RELEASE_MISMATCH")
 	}
-	lock, err := acquireRuntimeLock(context.Background(), root, true, 0)
+	// Startup has no next poll to be redelivered on, so its lock wait is bounded
+	// by the installer's own unattended window and expires as
+	// RUNTIME_LOCK_TIMEOUT instead of waiting forever (spec §4.9 / D7).
+	if opts.StartupLockTimeout <= 0 {
+		opts.StartupLockTimeout = runtimeStartupLockTimeout
+	}
+	lock, err := acquireStartupRuntimeLock(ctx, root, opts.StartupLockTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +254,12 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 	if opts.LockTimeout <= 0 {
 		opts.LockTimeout = agentLockTimeout
 	}
+	// The bootstrap readback runs while the startup lock is held: its whole
+	// retry reuses the per-cycle lock budget, so a starting kernel costs the
+	// shared lock one contended poll cycle and no more.
+	if opts.BootstrapReadbackTimeout <= 0 {
+		opts.BootstrapReadbackTimeout = agentLockTimeout
+	}
 	r := &Runtime{
 		cfg:                 cfg,
 		identity:            identity,
@@ -239,6 +270,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 		logger:              opts.Logger,
 		pollInterval:        defaultPollInterval(opts.PollInterval),
 		lockTimeout:         opts.LockTimeout,
+		bootstrapTimeout:    opts.BootstrapReadbackTimeout,
 		stageTargets:        opts.StageTargets,
 		handoffConvergence:  opts.HandoffConvergence,
 		upgradeConfirmation: opts.UpgradeConfirmation,
@@ -258,7 +290,7 @@ func NewRuntime(cfg Config, identity Identity, opts RuntimeOptions) (*Runtime, e
 	if err := r.reconcileHandoffOnBoot(); err != nil {
 		return nil, err
 	}
-	state, err := r.loadOrInitializeState()
+	state, err := r.loadOrInitializeState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -303,12 +335,12 @@ func (r *Runtime) ensureLayout() error {
 	return nil
 }
 
-func (r *Runtime) loadOrInitializeState() (runtimeState, error) {
+func (r *Runtime) loadOrInitializeState(ctx context.Context) (runtimeState, error) {
 	path := rooted(r.root, RuntimeStatePath)
 	data, _, err := readRuntimeStateFile(path)
 	if os.IsNotExist(err) {
 		state := emptyRuntimeState(r.cfg)
-		if err := r.bootstrapLKG(&state); err != nil {
+		if err := r.bootstrapLKG(ctx, &state); err != nil {
 			return state, err
 		}
 		if err := r.saveState(&state); err != nil {
@@ -338,7 +370,7 @@ func (r *Runtime) loadOrInitializeState() (runtimeState, error) {
 	return state, nil
 }
 
-func (r *Runtime) bootstrapLKG(state *runtimeState) error {
+func (r *Runtime) bootstrapLKG(ctx context.Context, state *runtimeState) error {
 	candidateData, _, err := readRegularFile(rooted(r.root, ActiveCandidatePath), true)
 	if err != nil {
 		return errors.New("BOOTSTRAP_CANDIDATE_UNAVAILABLE")
@@ -370,17 +402,11 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	// proves only the guard shape and both drops; the real authorization
 	// arrives with the next Hub task and is recorded in state.json there.
 	// The kernel may still be starting (systemd runs Agent and kernel
-	// concurrently with no ordering between them). Poll a bounded number of
-	// times for startup-transient signals; anything deterministic fails fast
-	// so a broken data plane is never mistaken for a slow one.
-	var readback Readback
-	for i := 0; ; i++ {
-		readback, err = r.readbackFor(context.Background(), r.cfg.Role, document.Candidate(), sha256Hex(configData), aclExpectation{})
-		if err == nil || !TransientReadback(err) || i >= 29 {
-			break
-		}
-		time.Sleep(2 * time.Second)
-	}
+	// concurrently with no ordering between them). Poll for
+	// startup-transient signals inside one bounded, cancellable budget;
+	// anything deterministic fails fast so a broken data plane is never
+	// mistaken for a slow one.
+	readback, err := r.bootstrapReadback(ctx, document.Candidate(), sha256Hex(configData))
 	if err != nil {
 		return err
 	}
@@ -389,6 +415,58 @@ func (r *Runtime) bootstrapLKG(state *runtimeState) error {
 	state.LKG = append([]byte(nil), configData...)
 	state.LKGDigest = readback.ConfigSHA256
 	return nil
+}
+
+// bootstrapRetryInterval is the pause between startup readback attempts. The
+// whole retry shares one bounded budget (BootstrapReadbackTimeout, agentLockTimeout
+// by default), so the interval only decides how many chances fit inside it.
+const bootstrapRetryInterval = 500 * time.Millisecond
+
+// bootstrapReadback retries the first live readback while the failure still
+// looks startup-transient. It is bounded and cancellable on purpose: the
+// startup lock is held across it, so a slow kernel must cost the shared lock one
+// agentLockTimeout budget at most (the same bound a contended poll cycle gets),
+// and a stop request ends the wait at once instead of sleeping through it.
+func (r *Runtime) bootstrapReadback(ctx context.Context, candidate Candidate, configHash string) (Readback, error) {
+	budget := r.bootstrapTimeout
+	if budget <= 0 {
+		budget = agentLockTimeout
+	}
+	retryCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	var lastTransient error
+	for {
+		readback, err := r.readbackFor(retryCtx, r.cfg.Role, candidate, configHash, aclExpectation{})
+		if err == nil {
+			return readback, nil
+		}
+		if ctx.Err() != nil {
+			return Readback{}, errors.New("REQUEST_CANCELLED")
+		}
+		if !TransientReadback(err) {
+			// The budget may have cut a live readback short (a killed systemctl
+			// or ss). The last startup-transient signal is still the honest
+			// verdict; a deterministic failure is reported as itself.
+			if retryCtx.Err() != nil && lastTransient != nil {
+				return Readback{}, lastTransient
+			}
+			return readback, err
+		}
+		lastTransient = err
+		if retryCtx.Err() != nil {
+			return Readback{}, lastTransient
+		}
+		timer := time.NewTimer(bootstrapRetryInterval)
+		select {
+		case <-retryCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return Readback{}, errors.New("REQUEST_CANCELLED")
+			}
+			return Readback{}, lastTransient
+		case <-timer.C:
+		}
+	}
 }
 
 func (r *Runtime) persistState(state *runtimeState) error {
