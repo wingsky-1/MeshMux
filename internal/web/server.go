@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a-h/templ"
@@ -65,6 +66,28 @@ type Server struct {
 	// it nil so the fixed GitHub releases endpoint is read; tests inject a
 	// deterministic tag without a network. It never approves anything.
 	releaseSource func(context.Context) (string, error)
+	// identity is the read-only Hub identity snapshot of #11d (spec §5.4). It
+	// is refreshed by one bounded 30s ticker started in New and stopped in
+	// Close; a page reads it without touching the database. identityMu guards
+	// the snapshot and the refresher handles.
+	identityMu       sync.RWMutex
+	identity         hubIdentitySnapshot
+	identityCancel   context.CancelFunc
+	identityDone     chan struct{}
+	identityInterval time.Duration
+	// opTarget is the read-only journal seam for the identity readback. Task 2
+	// leaves it nil (no journal yet); Task 5 wires it. It is a field rather
+	// than a parameter so the ticker and a page render compare against the
+	// same source. Task 5 must inject it before startHubIdentityRefresh starts
+	// the refresher: the goroutine reads the field every tick, so assigning it
+	// afterwards would both race and leave published snapshots uncompared.
+	opTarget opTargetFunc
+	// digest is the running executable's SHA-256, computed at most once and
+	// only when a verifying operation needs it. It is read-only identity, not
+	// a pin.
+	digestOnce sync.Once
+	digest     string
+	digestErr  error
 }
 
 type requestKey int
@@ -76,7 +99,16 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
-	return newServer(c, logger)
+	app, err := newServer(c, logger)
+	if err != nil {
+		return nil, err
+	}
+	// The read-only identity refresher of #11d (spec §5.4) runs for the life of
+	// the process and stops in Close. Observation never depends on a browser
+	// request, and the refresher never gates /healthz and never writes: the
+	// confirmed row was written once, by openStore, before this point.
+	app.startHubIdentityRefresh(context.Background())
+	return app, nil
 }
 
 func sanitizeInstallArtifact(c Config) Config {
@@ -219,7 +251,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	return app, nil
 }
 
-func (s *Server) Close() error          { return s.store.Close() }
+func (s *Server) Close() error {
+	s.stopHubIdentityRefresh()
+	return s.store.Close()
+}
 func (s *Server) Handler() http.Handler { return s.handler }
 
 func (s *Server) boundary(next http.Handler) http.Handler {

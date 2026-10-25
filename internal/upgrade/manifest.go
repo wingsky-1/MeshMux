@@ -83,7 +83,7 @@ func ForArch(architecture string) (Manifest, error) {
 	if !ok {
 		return Manifest{}, errors.New("MANIFEST_ARCH_INVALID: no pinned release for this architecture")
 	}
-	m := Manifest{Schema: Schema, Version: node.CurrentAgentVersion, Architecture: architecture,
+	m := Manifest{Schema: Schema, Version: node.CurrentAgentVersion(), Architecture: architecture,
 		PolicySchema: PolicySchema, Components: components}
 	return m, m.Validate()
 }
@@ -92,7 +92,7 @@ func ForArch(architecture string) (Manifest, error) {
 // is projected through ForArch, so each embedded table is byte-identical to the
 // single-arch document the approval pins.
 func ForArchSet() (ManifestSet, error) {
-	set := ManifestSet{Schema: SetSchema, Version: node.CurrentAgentVersion, PolicySchema: PolicySchema,
+	set := ManifestSet{Schema: SetSchema, Version: node.CurrentAgentVersion(), PolicySchema: PolicySchema,
 		Manifests: make(map[string]Manifest, len(supportedArchitectures))}
 	for _, architecture := range supportedArchitectures {
 		m, err := ForArch(architecture)

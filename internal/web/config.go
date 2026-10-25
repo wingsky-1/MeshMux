@@ -127,7 +127,7 @@ func (c Config) Validate(uid int) error {
 		if a.Path == "" || !filepath.IsAbs(a.Path) || filepath.Clean(a.Path) != a.Path {
 			return errors.New("INSTALL_ARTIFACT_INVALID: use one absolute executable path")
 		}
-		if a.Version != node.CurrentAgentVersion || !artifactSHA256.MatchString(a.SHA256) {
+		if a.Version != node.CurrentAgentVersion() || !artifactSHA256.MatchString(a.SHA256) {
 			return errors.New("INSTALL_ARTIFACT_INVALID: version or digest is not pinned")
 		}
 		if _, ok := node.KernelReleaseFor(a.Architecture); !ok {

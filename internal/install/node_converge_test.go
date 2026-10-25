@@ -71,9 +71,9 @@ func TestConvergeHandoffConfigPublishesClaimedPair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if written.AgentSHA256 != f.newSHA256 || written.AgentVersion != node.CurrentAgentVersion {
+	if written.AgentSHA256 != f.newSHA256 || written.AgentVersion != node.CurrentAgentVersion() {
 		t.Fatalf("written pair = %q/%q, want %q/%q", written.AgentVersion, written.AgentSHA256,
-			node.CurrentAgentVersion, f.newSHA256)
+			node.CurrentAgentVersion(), f.newSHA256)
 	}
 	if written.HubURL != f.cfg.HubURL || written.NodeID != f.cfg.NodeID || written.Role != f.cfg.Role ||
 		written.VLESSPort != f.cfg.VLESSPort || written.SSHPort != f.cfg.SSHPort ||

@@ -1286,7 +1286,7 @@ func verifyAgentBinary(ctx context.Context, opts NodeApplyOptions, stagedPath, s
 	if err != nil {
 		return errors.New("AGENT_VERSION_PROBE_FAILED")
 	}
-	if strings.TrimSpace(string(out)) != node.CurrentAgentVersion {
+	if strings.TrimSpace(string(out)) != node.CurrentAgentVersion() {
 		return errors.New("AGENT_VERSION_MISMATCH")
 	}
 	return nil
@@ -1309,7 +1309,7 @@ func verifyNodeInstall(ctx context.Context, cfg node.Config, runner CommandRunne
 }
 
 func nodeComponents(artifacts []Artifact) []Component {
-	out := []Component{{Name: "MeshMux Agent", Version: node.CurrentAgentVersion, Distribution: "same executable as installer; SHA-256 verified"}}
+	out := []Component{{Name: "MeshMux Agent", Version: node.CurrentAgentVersion(), Distribution: "same executable as installer; SHA-256 verified"}}
 	for _, a := range artifacts {
 		out = append(out, Component{Name: a.Component, Version: a.Version, Distribution: "pinned official GitHub archive; archive and binary SHA-256 verified"})
 	}

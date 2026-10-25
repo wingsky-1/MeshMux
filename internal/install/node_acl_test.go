@@ -308,7 +308,7 @@ func TestNodeRepairPreservesAuthorizedACL(t *testing.T) {
 	}
 	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
 		return node.Readback{
-			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 7,
 			ConfigSHA256: digest, LocalActive: true, OutDefaultDeny: true,
@@ -446,11 +446,11 @@ func TestNodeInstallAssertUsesObservedDefaultDeny(t *testing.T) {
 	cfg := node.Config{
 		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
 		Role: node.RoleOut, VLESSPort: 8443, SSHPort: 2222,
-		AgentVersion: node.CurrentAgentVersion,
+		AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256:  strings.Repeat("b", 64), KernelSHA256: strings.Repeat("c", 64),
 	}
 	rb := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 		KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
 		ConfigSHA256: strings.Repeat("d", 64), LocalActive: true,

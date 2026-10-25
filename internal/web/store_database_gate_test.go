@@ -215,7 +215,7 @@ func TestSchemaVersionConfirmedAfterStart(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("last-good readback: ok=%v err=%v", ok, err)
 	}
-	if storedVersion != node.CurrentAgentVersion || storedSchema != databaseSchemaVersion || confirmedAt <= 0 {
+	if storedVersion != node.CurrentAgentVersion() || storedSchema != databaseSchemaVersion || confirmedAt <= 0 {
 		t.Fatalf("last-good row = %q/%d/%d", storedVersion, storedSchema, confirmedAt)
 	}
 	if stored.Version != storedVersion || stored.Schema != int(storedSchema) || stored.ConfirmedAt.Unix() != confirmedAt {

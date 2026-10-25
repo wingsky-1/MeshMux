@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/headscale"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
@@ -20,7 +21,7 @@ func TestForArchPinsEveryComponent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", arch, err)
 		}
-		if m.Schema != Schema || m.Version != node.CurrentAgentVersion || m.Architecture != arch || m.PolicySchema != 8 {
+		if m.Schema != Schema || m.Version != node.CurrentAgentVersion() || m.Architecture != arch || m.PolicySchema != 8 {
 			t.Fatalf("%s: header = %+v", arch, m)
 		}
 		want := map[string]string{"caddy": "2.11.7", "headscale": headscale.HeadscaleVersion,
@@ -187,7 +188,7 @@ func TestForArchSetCarriesBothPinnedTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.Schema != SetSchema || set.Version != node.CurrentAgentVersion || set.PolicySchema != PolicySchema {
+	if set.Schema != SetSchema || set.Version != node.CurrentAgentVersion() || set.PolicySchema != PolicySchema {
 		t.Fatalf("set header = %+v", set)
 	}
 	if err := set.Validate(); err != nil {
@@ -274,5 +275,49 @@ func TestManifestSetValidateRejectsTampering(t *testing.T) {
 		if err := set.Validate(); err == nil || !strings.Contains(err.Error(), tc.code) {
 			t.Fatalf("%s: err = %v, want %s", tc.name, err, tc.code)
 		}
+	}
+}
+
+// TestVersionSingleSource pins N7 of #11d spec §5.3: the release manifest
+// projection, node.CurrentAgentVersion and buildinfo.Version are one value, not
+// three copies that happen to agree. Saving and restoring the injected version
+// moves both projections together; there is no second assignment site a caller
+// could forget. It must not run in parallel: it mutates the process-wide build
+// identity.
+func TestVersionSingleSource(t *testing.T) {
+	original := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = original })
+	for _, version := range []string{"1.0.0", "1.4.2", "2.0.0-rc.1"} {
+		buildinfo.Version = version
+		if got := node.CurrentAgentVersion(); got != version {
+			t.Fatalf("node.CurrentAgentVersion() = %q, want %q", got, version)
+		}
+		m, err := ForArch("amd64")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Version != version {
+			t.Fatalf("ForArch version = %q, want %q", m.Version, version)
+		}
+		set, err := ForArchSet()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if set.Version != version || set.Manifests["arm64"].Version != version {
+			t.Fatalf("ForArchSet versions = %q/%q, want %q", set.Version, set.Manifests["arm64"].Version, version)
+		}
+		// The version is inside the canonical JSON, so a version injection
+		// moves every manifest digest. Nothing may pin a digest across versions.
+		body, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(body, []byte(`"version":"`+version+`"`)) {
+			t.Fatalf("canonical manifest does not carry the injected version: %s", body)
+		}
+	}
+	buildinfo.Version = original
+	if got := node.CurrentAgentVersion(); got != original {
+		t.Fatalf("restored version = %q, want %q", got, original)
 	}
 }

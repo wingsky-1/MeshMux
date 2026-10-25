@@ -204,7 +204,7 @@ func TestReportResultUsesInjectedClock(t *testing.T) {
 		t.Fatal("missing amd64 kernel release")
 	}
 	evidence := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: release.Version,
 		KernelSHA256: release.BinarySHA256, ActiveRevision: latest.Revision,
 		ConfigSHA256: latest.ConfigSHA256, LocalActive: true,
