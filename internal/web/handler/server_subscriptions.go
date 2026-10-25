@@ -199,9 +199,29 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		written = true
 		return
 	}
-	lines, credentials, err := s.store.SubscriptionDownload(token, s.now())
-	if err != nil {
+	// The convergence gate runs first: an unconverged Line refuses the download
+	// even when an artifact was approved. The Lines and credentials themselves
+	// are not read here, because the artifact is the single source of bytes.
+	if _, _, err := s.store.SubscriptionDownload(token, s.now()); err != nil {
 		if errors.Is(err, store.ErrSubscriptionStoreUnavailable) {
+			s.event(r, store.CodeDatabaseUnavailable)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			written = true
+			return
+		}
+		s.event(r, "SUBSCRIPTION_DOWNLOAD_REJECTED")
+		s.subscriptionNotFound(w, r)
+		written = true
+		return
+	}
+	// The approved artifact is the download's single source of truth for a
+	// subscription that went through the wizard: the bytes are re-derived from
+	// the saved selection and must match the digest that passed the kernel
+	// gate. A subscription without a snapshot keeps the historical export.
+	approvedSingBox, approvedMihomo, artifactErr := s.store.SubscriptionArtifactDownload(token, s.now())
+	if artifactErr != nil {
+		if errors.Is(artifactErr, store.ErrSubscriptionStoreUnavailable) {
 			s.event(r, store.CodeDatabaseUnavailable)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -216,18 +236,24 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	var (
 		body        []byte
 		contentType string
+		renderErr   error
 	)
 	switch format {
 	case subscriptionSingBoxFormat:
-		body, err = subscription.ExportSingBox(lines, credentials)
+		body = approvedSingBox
 		contentType = "application/json; charset=utf-8"
 	case subscriptionMihomoFormat:
-		body, err = subscription.ExportMihomo(lines, credentials)
+		body = approvedMihomo
 		contentType = "text/yaml; charset=utf-8"
 	default:
-		err = errors.New("SUBSCRIPTION_FORMAT_INVALID")
+		renderErr = errors.New("SUBSCRIPTION_FORMAT_INVALID")
 	}
-	if err != nil {
+	if len(body) == 0 {
+		// A zero-length document is never a valid artifact; falling back to the
+		// legacy export here would hide the failure.
+		renderErr = errors.New("SUBSCRIPTION_ARTIFACT_EMPTY")
+	}
+	if renderErr != nil {
 		s.event(r, "SUBSCRIPTION_EXPORT_INVALID")
 		s.subscriptionNotFound(w, r)
 		written = true

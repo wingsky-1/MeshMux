@@ -127,6 +127,16 @@ func (s *Store) CreateSubscriber(displayName string, lineIDs []string, now time.
 		sub.ID, sub.DisplayName, string(sub.State), now.Unix(), now.Unix()); err != nil {
 		return subscription.Subscriber{}, "", errors.New("SUBSCRIBER_CREATE_FAILED")
 	}
+	// The edge table is the reference source the wizard, the used-by graph and
+	// the implicit recompute read. The credential stays the materialized
+	// VLESS identity; both are written in this one transaction so they can
+	// never disagree about which Lines the subscriber selected.
+	for position, nodeID := range selected {
+		if _, err = tx.Exec(`INSERT INTO subscription_lines(subscriber_id, node_id, position, line_revision, created_at) VALUES(?,?,?,0,?)`,
+			sub.ID, nodeID, position, now.Unix()); err != nil {
+			return subscription.Subscriber{}, "", errors.New(CodeSelectionInvalid + ": the line selection was not stored")
+		}
+	}
 	for _, nodeID := range selected {
 		credential, cErr := subscription.NewCredential(sub.ID, nodeID)
 		if cErr != nil {
@@ -257,6 +267,12 @@ func (s *Store) SetSubscriberState(id string, state subscription.State, now time
 // receives a fresh credential; a Line that is dropped is only deactivated so
 // its UUID stays auditable and can never be handed out twice.
 //
+// The reference edge table is rewritten in the same transaction, so the
+// used-by graph and the implicit recompute can never disagree with the
+// credentials. Rules, Out and devices are untouched: this legacy form only
+// edits the Line group, and a save through the wizard is the path that edits
+// all four groups together.
+//
 // Policy: re-selecting a previously dropped Line reuses its original UUID
 // instead of minting a new one. The UUID never leaves this subscriber, so the
 // reuse cannot collide with another user. The accepted trade-off is that a
@@ -319,6 +335,12 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 		}
 		credentials = append(credentials, credential)
 	}
+	// The edge table is rewritten with the same selection: the wizard, the
+	// used-by graph and the implicit recompute read it, so it must never lag
+	// behind the credentials this call just changed.
+	if err := rewriteLineEdgesTx(tx, subscriberID, selected, now.Unix()); err != nil {
+		return nil, err
+	}
 	dropped, err := deactivateDroppedCredentials(tx, subscriberID, keep, now.Unix())
 	if err != nil {
 		return nil, err
@@ -332,6 +354,28 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
 	return credentials, nil
+}
+
+// rewriteLineEdgesTx replaces the Line group of one subscriber's edge table and
+// bumps the snapshot version. The other three groups stay as they are: this is
+// the legacy Line-only form, not the wizard.
+func rewriteLineEdgesTx(tx *sql.Tx, subscriberID string, lineIDs []string, now int64) error {
+	if _, err := tx.Exec(`DELETE FROM subscription_lines WHERE subscriber_id=?`, subscriberID); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	for position, nodeID := range lineIDs {
+		if _, err := tx.Exec(`INSERT INTO subscription_lines(subscriber_id, node_id, position, line_revision, created_at) VALUES(?,?,?,0,?)`,
+			subscriberID, nodeID, position, now); err != nil {
+			return errors.New(CodeSelectionInvalid + ": the line selection was not stored")
+		}
+	}
+	// A snapshot that exists describes the selection it was approved with, so
+	// the Line change clears the approval: the download refuses it until the
+	// wizard saves the new selection.
+	if _, err := tx.Exec(`UPDATE subscription_snapshots SET artifact_id='', artifact_approved=0, artifact_at=0, updated_at=? WHERE subscriber_id=?`, now, subscriberID); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	return nil
 }
 
 // deactivateDroppedCredentials marks credentials of lines that are no longer

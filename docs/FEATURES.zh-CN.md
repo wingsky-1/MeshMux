@@ -44,6 +44,7 @@
 
 ## 不变量与质量底线
 
+- **订阅聚合（Task 4，schema 13）**：订阅是纯函数产物——`ComposeSubscription(lines, outs, rules, network)` 对同一选择永远输出相同字节，并给出一个内容摘要；选择存 `subscription_lines`/`subscription_outs`/`subscription_rules`/`subscription_networks` 四张边表（`position` 组内唯一，1.0 单订阅最多 1 个 Out），`subscription_snapshots` 只存选择+版本+排序与已批准产物摘要，**不存字节**。`/subscribers/wizard` 四分组向导：预览只提醒（`!`）不写入，保存时组装冲突、Out 槽位与内核门禁不过即阻断（`✖`）且不写入任何选择；sing-box 门禁必需，Mihomo 仅在已安装固定版本时执行（缺席显示跳过提醒，不静默通过）。下载按快照重新组装并与已批准摘要比对，摘要不一致或从未批准即拒绝；未走过向导的存量订阅保持原导出路径。同一 Line 上的订阅必须选同一 Out，后选冲突返回 `SUBSCRIPTION_OUT_CONFLICT` 并列出既有订阅名；删除被订阅引用的 Out 被拒（`OUT_REFERENCED_BY_SUBSCRIPTIONS`），被引用规则删除由规则库拒绝并列出订阅名。
 - **Subscriber ≠ Mesh Device ≠ VLESS Credential**，订阅用户和 Mesh 设备可分别创建/删除。
 - Out 可选，且 AI 规则可明确选择 Line 直出；配置了 Out 时该 Out 故障默认 fail-closed（`OUT_OFFLINE_FAIL_CLOSED`），不会静默直出；回退 Line 必须是管理员显式 opt-in 并带 `operation_id` 审计。#8 已把 Out ACL 的 `policy accept` 边界修正为空授权默认拒绝 + 仅授权源可用（`internal/node/render.go`、`internal/node/runtime_readback.go`、`internal/install/node_acl_test.go` 等隔离测试）。仿真证据为隔离单测；真实证据为 L2 privileged 容器 `nft -f` apply 与 `nft -j` readback（[hub-components 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)，head `9495730`、tree `5720b86`，amd64 实得 PASS；无 `CAP_NET_ADMIN` 显式 SKIP）与 L3 VM readback（[hub-vm 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)）。AI 双跳实际流量（已移交 #10）与客户端可用仍缺。
 - 编辑路由或删除用户前生成可审阅配置，失败不能报告完成。

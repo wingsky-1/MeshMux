@@ -20,8 +20,8 @@ func TestSchema12RuleLibraryAndPresetSeeds(t *testing.T) {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != DatabaseSchemaVersion || DatabaseSchemaVersion != 12 {
-		t.Fatalf("user_version = %d, want 12", version)
+	if version != DatabaseSchemaVersion || DatabaseSchemaVersion != 13 {
+		t.Fatalf("user_version = %d, want 13", version)
 	}
 	lib := policy.New(s.DB)
 	presets, err := lib.ListRules("preset")
@@ -78,8 +78,8 @@ func TestSchema12MigrationRecoversFromSeedFailure(t *testing.T) {
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("replay Migrate(): %v", err)
 	}
-	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 12 {
-		t.Fatalf("version after replay = %d err=%v, want 12", version, err)
+	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 13 {
+		t.Fatalf("version after replay = %d err=%v, want 13", version, err)
 	}
 	if presets, err := policy.New(s.DB).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
 		t.Fatalf("presets after replay = %d %v, want %d", len(presets), err, len(policy.Presets))
@@ -104,8 +104,8 @@ func TestSchema11MirrorBackfill(t *testing.T) {
 		t.Fatalf("Migrate() after mirror drop: %v", err)
 	}
 	var version int
-	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 12 {
-		t.Fatalf("version after backfill = %d err=%v, want 12", version, err)
+	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 13 {
+		t.Fatalf("version after backfill = %d err=%v, want 13", version, err)
 	}
 	var mirror string
 	if err := s.DB.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='hub_upgrade_operations'`).Scan(&mirror); err != nil {
@@ -124,8 +124,8 @@ func TestSchema11MirrorBackfill(t *testing.T) {
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM hub_upgrade_operations WHERE operation_id='op11d'`).Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("11d mirror rows after migration = %d err=%v, want 1", rows, err)
 	}
-	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 12 {
-		t.Fatalf("version after 11→12 = %d err=%v, want 12", version, err)
+	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 13 {
+		t.Fatalf("version after 11→12 = %d err=%v, want 13", version, err)
 	}
 	if presets, err := policy.New(s.DB).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
 		t.Fatalf("presets after 11→12 = %d %v, want %d", len(presets), err, len(policy.Presets))

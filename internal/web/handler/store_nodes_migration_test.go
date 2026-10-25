@@ -77,8 +77,8 @@ PRAGMA user_version=1;
 	if err = s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 12 {
-		t.Fatalf("user_version = %d, want 12", version)
+	if version != 13 {
+		t.Fatalf("user_version = %d, want 13", version)
 	}
 	adminHash, err := s.AdminHash()
 	if err != nil {

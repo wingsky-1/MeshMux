@@ -51,11 +51,20 @@ func SanitizeSubscriberSyncCode(raw string) string {
 	return code
 }
 
-// subscriberHistoricalLineIDsTx returns every Line that ever carried a
-// credential of the subscriber. A dropped Line still has to remove the
-// historical UUID from its snapshot, so it is included.
+// subscriberHistoricalLineIDsTx returns every Line the subscriber references
+// now plus every Line that ever carried a credential of it.
+//
+// The reference source is the Task-4 edge table: the subscription selection is
+// what the Line has to serve. The credential table is unioned in because a
+// dropped Line still has to remove the historical UUID from its snapshot, so a
+// deactivated credential can never stay authorized. Both reads are in the
+// caller's transaction, so a half-applied selection cannot be observed.
 func subscriberHistoricalLineIDsTx(tx *sql.Tx, subscriberID string) ([]string, error) {
-	rows, err := tx.Query(`SELECT DISTINCT node_id FROM proxy_credentials WHERE subscriber_id=? ORDER BY node_id`, subscriberID)
+	rows, err := tx.Query(`SELECT node_id FROM (
+	  SELECT node_id FROM subscription_lines WHERE subscriber_id=?
+	  UNION
+	  SELECT node_id FROM proxy_credentials WHERE subscriber_id=?
+	) ORDER BY node_id`, subscriberID, subscriberID)
 	if err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}

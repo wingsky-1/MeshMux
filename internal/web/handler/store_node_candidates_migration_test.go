@@ -56,7 +56,7 @@ INSERT INTO agent_tasks VALUES('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','aaaaaaaaaaaaa
 	}
 	defer s.Close()
 	var version int
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 12 {
+	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
 		t.Fatalf("user_version=%d err=%v", version, err)
 	}
 	n, err := s.GetNodeAt("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", time.Now())

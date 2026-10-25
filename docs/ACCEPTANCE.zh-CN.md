@@ -136,6 +136,21 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | C | 真机 sing-box / Mihomo 导入、iOS/Android 单 VPN、SSID 现场行为、客户端实际可用 | [ ] 未含：只有渲染与 `check -c`/`-t` 门禁；归 #12（同第 5 项） |
 | C | 真实 Line 上的路由发布/readback/回退（含 Web 发布真实策略） | [ ] 未含：只有候选事务与 Agent recover/LKG 复用；归 #12（同第 2/7 项） |
 
+## 订阅聚合重构（Task 4：组装 + 预览 + 快照 + 互锁）
+
+本节只登记源码与隔离自动化证据；不证明现网安装、真实双跳流量或客户端可用。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | 纯函数组装：`subscription.ComposeSubscription(lines, outs, rules, network)` 同输入同字节；返回内容摘要；两份客户端文档（sing-box JSON / Mihomo YAML）与每 Line 服务端 route 片段 | [x] `internal/subscription/compose_test.go`（`TestComposeSubscriptionIsByteDeterministic` 等） |
+| B | 规则双内核：同一规则选择在 sing-box route 与 Mihomo rules 都出现；geo/ruleset 未 pin 为 `COMPOSE_RULESET_UNPINNED`；重复/重叠规则分别 `COMPOSE_RULE_DUPLICATE`/`COMPOSE_RULE_CONFLICT` | [x] `TestComposeSubscriptionRulesReachBothDocuments`（真实 `sing-box check` 通过）、`TestComposeSubscriptionRefusesUnpinnedRuleSet`、`TestComposeSubscriptionDuplicateRuleIsBlocking`、`TestComposeSubscriptionRejectsOverlappingRules` |
+| B | Out 约束：1.0 单订阅最多 1 个 Out（`COMPOSE_OUT_LIMIT`）；选 Out 后无代理规则即 `COMPOSE_OUT_WITHOUT_PROXY_RULE`；同一 Line 上既有订阅的 Out 选择不一致即 `SUBSCRIPTION_OUT_CONFLICT` 并列出订阅名 | [x] `TestComposeSubscriptionRefusesSecondOut`、`TestWizardSaveRefusesBlockingPreviewWithoutWriting`、`TestWizardSaveRefusesOutConflictWithExistingSubscription`、`TestSaveSubscriptionSelectionRefusesSecondOutAndOutConflict` |
+| B | 边表 + 快照：schema 13 的 `subscription_lines/outs/rules/networks`（`position` 组内唯一）与 `subscription_snapshots`（选择+版本+排序+已批准摘要，不存字节）；`proxy_credentials` 仍为凭据具现；保留 Line 沿用 UUID | [x] `TestSchema13CreatesSelectionTables`、`TestSaveSubscriptionSelectionWritesEdgesAndSnapshot`、`TestSaveSubscriptionSelectionKeepsCredentialPerLine`、`TestWizardSaveKeepsExistingCredentialOnReSave` |
+| B | 预览 fail-fast 四层：输入 `!` 不阻断、保存严格校验、组装冲突、Out 槽位与内核门禁 `✖` 阻断且**不写入**；Mihomo 缺席为跳过提醒，Mihomo 拒绝为阻断 | [x] `TestWizardPreviewWritesNothingAndRemindsOnRecordedGroups`、`TestWizardSaveRefusesGateFailure`、`TestMihomoAbsentDegradesWithoutBlocking`、`TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary` |
+| B | 下载门禁：按快照重新组装并与已批准摘要比对，漂移 `SUBSCRIPTION_ARTIFACT_DRIFT`、未批准 `SUBSCRIPTION_ARTIFACT_NOT_APPROVED`；未走过向导的存量订阅保持原导出路径 | [x] `TestApproveSubscriptionSelectionRecordsArtifactAndRefusesDrift`、`TestApproveSubscriptionSelectionRefusesUnapprovedAndFailedGate`、`TestDownloadRefusesDriftedOrUnapprovedArtifact` |
+| B | used-by 互锁：被订阅引用的规则删除由规则库拒绝并列出订阅名；被订阅选择的 Out 删除被拒；组网设备引用可查 | [x] `TestRuleDeleteRefusedWithSubscriptionName`、`TestSelectionUsedByNames`、`TestWizardMeshGroupRefusesRevokedDevice` |
+| C | 真实 `sing-box check` 组合产物、真实双跳流量、Mihomo 固定版本门禁 | [x] 单测内真实 `sing-box 1.14.3` 通过（`TestWizardGateUsesRealSingBox`、`TestComposeSubscriptionRulesReachBothDocuments`，需 `MESHMUX_SINGBOX_TEST_BINARY`）；[ ] 真实双跳流量与 Mihomo 固定版本实测未含 |
+
 - [ ] **未含 C 级结论**：本节不证明任何真实流量、真机导入或现网发布成功；`queued` 回执不是已应用。#10 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 第 3/5/7 项）由 #12 采集。
 
 ## v1.0.0 必须完成的真实用户闭环

@@ -17,25 +17,22 @@ func rulesLibraryApp(t *testing.T) *browser {
 	return b
 }
 
-// seedRuleSubscriber inserts the minimal Task-4-shaped reference edge the
-// used-by block and the delete guard share: a subscribers row plus the
-// subscription_rules side table (same contract as internal/policy tests).
+// seedRuleSubscriber inserts the reference edge the used-by block and the
+// delete guard share: a subscribers row plus a subscription_rules row. The
+// table belongs to Task 4 and exists at schema 13; the columns are the Task-3
+// contract (subscriber_id, rule_stable_key, rule_version, position) plus the
+// Task-4 created_at.
 func seedRuleSubscriber(t *testing.T, b *browser, subscriberID, subscriberName, stableKey string, version int) {
 	t.Helper()
 	db := b.app.store.DB
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscription_rules(
-	  subscriber_id TEXT NOT NULL, rule_stable_key TEXT NOT NULL, rule_version INTEGER NOT NULL,
-	  position INTEGER NOT NULL, UNIQUE(subscriber_id, position))`); err != nil {
-		t.Fatal(err)
-	}
 	now := b.app.now().Unix()
 	if _, err := db.Exec(`INSERT INTO subscribers(id, display_name, state, revision, created_at, updated_at)
 	  VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, subscriberID, subscriberName, "active", 1, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO subscription_rules(subscriber_id, rule_stable_key, rule_version, position)
-	  VALUES(?,?,?,COALESCE((SELECT MAX(position)+1 FROM subscription_rules WHERE subscriber_id=?),0))`,
-		subscriberID, stableKey, version, subscriberID); err != nil {
+	if _, err := db.Exec(`INSERT INTO subscription_rules(subscriber_id, rule_stable_key, rule_version, position, created_at)
+	  VALUES(?,?,?,COALESCE((SELECT MAX(position)+1 FROM subscription_rules WHERE subscriber_id=?),0),?)`,
+		subscriberID, stableKey, version, subscriberID, now); err != nil {
 		t.Fatal(err)
 	}
 }

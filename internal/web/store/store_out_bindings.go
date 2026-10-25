@@ -304,6 +304,20 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	if role != "out" {
 		return errors.New("OUT_ROLE_INVALID: only out nodes can carry an out binding")
 	}
+	// A subscription that selects this Out is a live reference: deleting the
+	// routing model would leave that subscription naming an egress the Hub no
+	// longer knows. The used-by list names the subscriptions, so the operator
+	// can migrate them first.
+	// The read must share the delete's transaction: the store runs on a single
+	// connection, so a second DB-level query here would wait on the open
+	// transaction forever.
+	usedBy, err := outUsedByTx(tx, outID)
+	if err != nil {
+		return err
+	}
+	if len(usedBy) > 0 {
+		return errors.New(CodeOutReferenced + ": out " + outID + " is still selected by " + strings.Join(usedBy, "、") + "; migrate those subscriptions first")
+	}
 	// The Lines are read before the route disappears: after the delete there is
 	// no row left to tell which Lines have to be released from the Out gate.
 	lines, err := queryIDsTx(tx, `SELECT line_id FROM out_bindings

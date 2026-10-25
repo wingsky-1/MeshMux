@@ -3,6 +3,12 @@
 // checks), session authentication (login/setup/logout/password, CSRF, login
 // budget, KDF guard) and every management/agent handler.
 //
+// The subscription wizard (server_subscribers_wizard.go) is the only writer of
+// a subscription selection: four groups (Lines, Out, rules, mesh devices), a
+// preview that writes nothing, and a save that persists only an artifact which
+// passed the kernel gate. Preview findings render "!" for a reminder and "✖"
+// for a blocking refusal.
+//
 // Dependency direction (compiler-enforced): handler → store and handler →
 // view. Handlers use Store.DB only for the session/auth transactions that
 // moved here untouched; domain writes go through store methods or the policy

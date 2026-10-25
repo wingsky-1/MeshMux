@@ -32,6 +32,7 @@ import (
 // with the real subscriber page for the same path.
 func (app *Server) registerSubscriberRoutes(r chi.Router) {
 	r.Get("/subscribers", app.authenticated(app.subscribersPage))
+	r.Get("/subscribers/wizard", app.authenticated(app.subscribersWizard))
 	r.Post("/subscribers", app.mutation(app.subscribersCreate, true))
 	r.Post("/subscribers/rename", app.mutation(app.subscribersRename, true))
 	r.Post("/subscribers/state", app.mutation(app.subscribersState, true))
@@ -39,6 +40,7 @@ func (app *Server) registerSubscriberRoutes(r chi.Router) {
 	r.Post("/subscribers/token/rotate", app.mutation(app.subscribersRotateToken, true))
 	r.Post("/subscribers/token/revoke", app.mutation(app.subscribersRevokeToken, true))
 	r.Post("/subscribers/sync", app.mutation(app.subscribersSync, true))
+	app.registerSubscriptionWizardRoutes(r)
 	r.Get("/api/subscribers", app.authenticated(app.subscribersAPI))
 	r.Post("/lines", app.mutation(app.linesSave, true))
 }

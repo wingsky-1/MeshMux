@@ -846,7 +846,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 
 	// Rebuild the database in its schema-3 shape: the subscription tables do
 	// not exist yet and the version is 3.
-	if _, err = s.DB.Exec(`DROP TABLE route_policy_events; DROP TABLE route_policies; DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
+	if _, err = s.DB.Exec(`DROP TABLE subscription_snapshots; DROP TABLE subscription_networks; DROP TABLE subscription_rules; DROP TABLE subscription_outs; DROP TABLE subscription_lines; DROP TABLE route_policy_events; DROP TABLE route_policies; DROP TABLE policy_rules; DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; DROP TABLE out_settings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -864,8 +864,8 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 12 {
-		t.Fatalf("user_version = %d, want 12", version)
+	if version != 13 {
+		t.Fatalf("user_version = %d, want 13", version)
 	}
 	after, err := s.GetNodeAt(edge, now)
 	if err != nil {
@@ -927,7 +927,7 @@ func TestSchemaV4MigrationRollsBackOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(`DROP TABLE route_policy_events; DROP TABLE route_policies; DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
+	if _, err = tx.Exec(`DROP TABLE subscription_snapshots; DROP TABLE subscription_networks; DROP TABLE subscription_rules; DROP TABLE subscription_outs; DROP TABLE subscription_lines; DROP TABLE route_policy_events; DROP TABLE route_policies; DROP TABLE policy_rules; DROP TABLE mesh_route_events; DROP TABLE mesh_routes; DROP TABLE mesh_enrollment_keys; DROP TABLE mesh_devices; DROP TABLE out_bindings; DROP TABLE out_settings; DROP TABLE subscribers; DROP TABLE proxy_credentials; DROP TABLE subscription_tokens; DROP TABLE line_settings; PRAGMA user_version=3;`); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}

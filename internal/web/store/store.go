@@ -240,6 +240,12 @@ func (s *Store) Migrate() error {
 		}
 		version = 12
 	}
+	if version == 12 {
+		if err = migrateSchema13(tx); err != nil {
+			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+		}
+		version = 13
+	}
 	// The 11d-reserved leg backfill (C2) runs on every open after the version
 	// chain, like the Out transport table below: a database that already sits
 	// at 12 keeps the 11d mirror table it would otherwise have skipped

@@ -611,8 +611,8 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	if err = s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 12 {
-		t.Fatalf("user_version=%d err=%v, want 12", version, err)
+	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
+		t.Fatalf("user_version=%d err=%v, want 13", version, err)
 	}
 	var tables int
 	if err = s.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='out_bindings'`).Scan(&tables); err != nil || tables != 1 {
@@ -634,7 +634,7 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	}
 
 	// The schema guard moved with the migration.
-	if _, err = s.DB.Exec(`PRAGMA user_version=13`); err != nil {
+	if _, err = s.DB.Exec(`PRAGMA user_version=14`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {
