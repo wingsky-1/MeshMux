@@ -298,6 +298,9 @@ func TestWriteRequestStagesOutsideWatchedDir(t *testing.T) {
 	if err := os.Mkdir(requestDir, 0730); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(requestDir, 0730); err != nil {
+		t.Fatal(err)
+	}
 	path, err := WriteRequest(requestDir, Request{
 		Schema: RequestSchema, Kind: KindUpdate, OperationID: testRequestOp, DataDir: "/var/lib/meshmux",
 	})
@@ -379,6 +382,9 @@ func TestOpenRequestDirPinsShape(t *testing.T) {
 func TestReadRequestAtRefusesSymlinkInDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "requests")
 	if err := os.Mkdir(dir, 0730); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0730); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(t.TempDir(), "real.json")
