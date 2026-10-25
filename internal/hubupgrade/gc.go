@@ -15,10 +15,11 @@ package hubupgrade
 // pointer and keeps KeepConfirmed=1.
 //
 // CleanupConfirmed has no pointer parameter and never reads one: a pointer
-// refresh failure can only ever add a HUB_BACKUP_POINTER_STALE log line, and the
-// collector still runs (spec §5.2.1: refresh and GC are decoupled, and the
-// pointer target is safe because a fresh staged record is never a candidate and
-// the newest two confirmed generations are retained).
+// refresh failure can only ever add a pointer log line
+// (HUB_BACKUP_POINTER_STALE / HUB_BACKUP_POINTER_UNFLUSHED), and the collector
+// still runs (spec §5.2.1: refresh and GC are decoupled, and the pointer target is
+// safe because a fresh staged record is never a candidate and the newest two
+// confirmed generations are retained).
 
 import (
 	"os"
@@ -28,6 +29,11 @@ import (
 
 // minHubKeep is the Hub's GC floor (spec §5.2.1).
 const minHubKeep = 2
+
+// collectGenerations is the collector seam of CleanupConfirmed. Production is
+// backup.GC; a test replaces it to prove that the producer never collects
+// anything (B8) without reading this package's source.
+var collectGenerations = backup.GC
 
 // CleanupConfirmed collects confirmed generations beyond keep. keep < 2 is a
 // parameter error and removes nothing; otherwise it is exactly backup.GC on the
@@ -43,5 +49,5 @@ func CleanupConfirmed(dataDir string, keep int) ([]string, error) {
 	if _, err := os.Lstat(root); os.IsNotExist(err) {
 		return nil, nil
 	}
-	return backup.GC(root, keep)
+	return collectGenerations(root, keep)
 }

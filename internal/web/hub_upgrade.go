@@ -68,7 +68,9 @@ func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request,
 		Space:          hubupgrade.CheckFreeSpace,
 		PublishPointer: hubupgrade.PublishFlatPointer,
 		Log: func(code, operationID string) {
-			// Allowlisted fields only: a stable code and the operation id.
+			// Allowlisted fields only: a stable code and the operation id. The
+			// code is either HUB_BACKUP_POINTER_STALE (nothing new published) or
+			// HUB_BACKUP_POINTER_UNFLUSHED (published but not fsynced).
 			app.log.Info("web_event", "operation_id", operation(r), "backup_operation_id", operationID, "stage", "hub_backup", "error_code", code)
 		},
 	})

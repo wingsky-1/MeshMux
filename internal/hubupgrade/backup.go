@@ -24,8 +24,10 @@ package hubupgrade
 //     staged record;
 //  7. the journal advances to backed_up with the generation and the real schema;
 //  8. the flat existence-only pointer is refreshed (spec §5.2.1). A pointer
-//     failure only records HUB_BACKUP_POINTER_STALE: the operation stays
-//     backed_up because the per-operation record is the authority.
+//     failure is non-fatal and logged with its own code — HUB_BACKUP_POINTER_STALE
+//     when nothing new was published, HUB_BACKUP_POINTER_UNFLUSHED when the copy
+//     was renamed but its directory could not be flushed — because the operation
+//     stays backed_up either way: the per-operation record is the authority.
 //
 // No step calls backup.GC. GC only ever considers confirmed generations, and a
 // fresh staged backup is the rollback source the next restore needs, so the
@@ -75,8 +77,8 @@ type BackupConfig struct {
 	// per-operation commit. Nil means PublishFlatPointer; a test injects a
 	// failing or ordering-asserting replacement. It is never a Web input.
 	PublishPointer func(root, operationID string) error
-	// Log receives one stable code per non-fatal condition (today only
-	// HUB_BACKUP_POINTER_STALE). It must not be used for secrets.
+	// Log receives one stable code per non-fatal condition (HUB_BACKUP_POINTER_STALE
+	// or HUB_BACKUP_POINTER_UNFLUSHED). It must not be used for secrets.
 	Log func(code, operationID string)
 
 	// manifestOwner is the expected account of the root manifest directory.
@@ -134,6 +136,16 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 		return BackupReceipt{}, err
 	}
 
+	// The operation document is built before the lock so a post-lock journal
+	// read failure can still fail it: a journal entry left non-terminal would
+	// block every later backup until Task 5's 30-minute orphan timeout.
+	op := Op{
+		Schema: OpSchema, OperationID: operationID, Kind: KindUpdate, State: StateBackingUp,
+		TargetVersion: cfg.Target, FromVersion: fromVersion,
+		ManifestSHA256: target.SHA256, PackageSHA256: target.Package.SHA256,
+		UpdatedAt: cfg.now(),
+	}
+
 	// Check-then-act: the Busy read, the generation read and the backing_up
 	// write are one critical section, and the journal is re-read inside it.
 	unlock := LockBackupProduce()
@@ -146,13 +158,8 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 		generation, err = nextBackupGeneration(cfg.DataDir)
 	}
 	if err == nil {
-		now := cfg.now()
-		op := Op{
-			Schema: OpSchema, OperationID: operationID, Kind: KindUpdate, State: StateBackingUp,
-			TargetVersion: cfg.Target, FromVersion: buildinfo.Version,
-			ManifestSHA256: target.SHA256, PackageSHA256: target.Package.SHA256,
-			BackupGeneration: generation, UpdatedAt: now,
-		}
+		op.BackupGeneration = generation
+		op.UpdatedAt = cfg.now()
 		err = WriteOp(cfg.DataDir, op)
 	}
 	unlock()
@@ -160,13 +167,21 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 		return BackupReceipt{}, err
 	}
 
-	op, ok, err := ReadOp(cfg.DataDir, operationID, os.Geteuid())
+	stored, ok, err := readJournalOp(cfg.DataDir, operationID, os.Geteuid())
 	if err != nil || !ok {
 		if err == nil {
 			err = fail("HUB_BACKUP_JOURNAL_FAILED", "the operation journal entry disappeared")
 		}
+		// The backing_up document was just published, so this read failing
+		// means the journal became unreadable: fail the operation from the
+		// in-memory copy instead of leaving a non-terminal entry behind.
+		if failed, advanceErr := Advance(op, StateFailed, "HUB_BACKUP_JOURNAL_FAILED"); advanceErr == nil {
+			failed.UpdatedAt = cfg.now()
+			_ = WriteOp(cfg.DataDir, failed)
+		}
 		return BackupReceipt{}, backupJournalError(err)
 	}
+	op = stored
 	var opDir string
 	failWith := func(code string) (BackupReceipt, error) {
 		// Every failure path clears this operation's scratch copy and leaves
@@ -176,6 +191,7 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 		// committed record is never removed here — it is a valid restore source
 		// even when the journal transition failed.
 		discardUncommittedOperation(opDir)
+		discardEmptyUpgradeDir(cfg.DataDir)
 		if next, advanceErr := Advance(op, StateFailed, code); advanceErr == nil {
 			next.UpdatedAt = cfg.now()
 			_ = WriteOp(cfg.DataDir, next)
@@ -259,14 +275,16 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 	}
 
 	// The pointer is refreshed after the per-operation commit and after
-	// backed_up, so its failure can never be mistaken for a failed backup.
+	// backed_up, so its failure can never be mistaken for a failed backup. The
+	// two failure codes are distinct: stale means nothing new was published,
+	// unflushed means the rename happened but may not survive power loss.
 	publish := cfg.PublishPointer
 	if publish == nil {
 		publish = PublishFlatPointer
 	}
 	if err := publish(root, operationID); err != nil {
 		if cfg.Log != nil {
-			cfg.Log("HUB_BACKUP_POINTER_STALE", operationID)
+			cfg.Log(pointerLogCode(err), operationID)
 		}
 	}
 
@@ -395,6 +413,37 @@ func stageRunningBinary(dataDir, version, digest string) (string, error) {
 		return "", fail("HUB_BACKUP_BINARY_STAGE_FAILED", "the staged old package does not match the running digest")
 	}
 	return final, nil
+}
+
+// readJournalOp is the producer's post-lock journal read. Production reads the
+// journal; the seam exists so a test can prove that a failure here still leaves a
+// terminal journal entry instead of a non-terminal one that blocks later backups
+// until Task 5's orphan timeout.
+var readJournalOp = ReadOp
+
+// pointerLogCode is the one mapping from a pointer failure to the stable code the
+// producer logs. A publisher that does not carry this package's code (a test
+// seam) is reported as stale: it published nothing this package can vouch for.
+func pointerLogCode(err error) string {
+	switch codeOf(err) {
+	case codePointerUnflushed:
+		return codePointerUnflushed
+	default:
+		return codePointerStale
+	}
+}
+
+// discardEmptyUpgradeDir removes the package directory when a failed stage left
+// it empty. It never removes a staged package: an existing old-package copy is a
+// restore source even when this attempt failed. Only a directory with no entries
+// at all is dropped, so a failed first backup leaves no empty upgrade/ behind.
+func discardEmptyUpgradeDir(dataDir string) {
+	dir := filepath.Join(dataDir, UpgradeDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		return
+	}
+	_ = os.Remove(dir)
 }
 
 // discardUncommittedOperation removes an operation directory that holds no

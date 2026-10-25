@@ -405,7 +405,7 @@ func payloadMatchesRecord(record Record, payloadPath string, owner int) bool {
 // state-agnostic metadata read: unknown fields and trailing data are refused, the
 // private-file rule is enforced, and the record must belong to the operation.
 func ReadRecord(dir, operationID string, expectedOwner int) (Record, error) {
-	record, err := readRecordFile(dir, expectedOwner)
+	_, record, err := readRecordFileBytes(dir, expectedOwner)
 	if err != nil {
 		return Record{}, err
 	}
@@ -415,33 +415,52 @@ func ReadRecord(dir, operationID string, expectedOwner int) (Record, error) {
 	return record, nil
 }
 
-// readRecordFile parses the record of one holding directory; ReadRecord adds
-// the operation-identity check.
-func readRecordFile(dir string, expectedOwner int) (Record, error) {
+// ReadRecordBytes returns the exact on-disk bytes of one record after the same
+// private-file rule, size bound, strict decode and operation-identity check as
+// ReadRecord. It is the read for a caller that must republish the record
+// verbatim (the Hub's flat pointer): the bytes are proven to be a record this
+// package accepts, and a symlink, a loose mode or a foreign owner is refused
+// before a single byte is copied.
+func ReadRecordBytes(dir, operationID string, expectedOwner int) ([]byte, error) {
+	body, record, err := readRecordFileBytes(dir, expectedOwner)
+	if err != nil {
+		return nil, err
+	}
+	if record.OperationID != operationID {
+		return nil, fail(CodeCorrupt, "the rollback record does not belong to this operation")
+	}
+	return body, nil
+}
+
+// readRecordFileBytes is the one read path of a record file: it returns both the
+// exact bytes and their decoded form, so a byte-republishing caller and a
+// metadata caller can never disagree about what is acceptable. ReadRecord and
+// ReadRecordBytes add the operation-identity check.
+func readRecordFileBytes(dir string, expectedOwner int) ([]byte, Record, error) {
 	path := filepath.Join(dir, RecordName)
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return Record{}, fail(CodeMissing, "no verified rollback record exists")
+		return nil, Record{}, fail(CodeMissing, "no verified rollback record exists")
 	}
 	if err != nil {
-		return Record{}, fail(CodeMissing, "the rollback record could not be read")
+		return nil, Record{}, fail(CodeMissing, "the rollback record could not be read")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 ||
 		!ownedBy(expectedOwner, info) || info.Size() > RecordMaxBytes {
-		return Record{}, fail(CodeCorrupt, "the rollback record is not a private 0600 file")
+		return nil, Record{}, fail(CodeCorrupt, "the rollback record is not a private 0600 file")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Record{}, fail(CodeCorrupt, "the rollback record could not be read")
+		return nil, Record{}, fail(CodeCorrupt, "the rollback record could not be read")
 	}
 	record, err := decodeRecord(data)
 	if err != nil {
-		return Record{}, err
+		return nil, Record{}, err
 	}
 	if record.Schema != RecordSchema {
-		return Record{}, fail(CodeCorrupt, "the rollback record does not carry this schema")
+		return nil, Record{}, fail(CodeCorrupt, "the rollback record does not carry this schema")
 	}
-	return record, nil
+	return data, record, nil
 }
 
 // decodeRecord is the strict decoder of the frozen schema: unknown fields and

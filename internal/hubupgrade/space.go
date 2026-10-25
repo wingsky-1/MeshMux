@@ -1,14 +1,18 @@
 package hubupgrade
 
 // Space derivation of #11d (spec §5.9, C14). The Node constant is not reused:
-// the Hub adds a database copy and a restore directory to the package and
-// snapshot terms, so the floor is re-derived here.
+// the Hub adds database copies and a restore directory to the package terms, so
+// the floor is re-derived here.
 //
-//	hubRequiredSpace = 128 MiB (target package) + 2 x dbSize (VACUUM copy and
-//	                   the previous generation) + 128 MiB (old package) +
-//	                   dbSize (restore directory) + 256 MiB (journal, result,
-//	                   exec copy and slack)
+//	hubRequiredSpace = 128 MiB (target package) + 3 x dbSize (the staged copy
+//	                   plus the two confirmed generations keep=2 retains) +
+//	                   128 MiB (old package) + dbSize (restore directory) +
+//	                   256 MiB (journal, result, exec copy and slack)
 //	hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)
+//
+// Four database copies are live at the peak of one upgrade, not three: the
+// staged copy, the two confirmed generations, and the restore directory. The
+// flat single-slot assumption ("one previous generation") is gone (D1).
 //
 // The 1 GiB term is the installer's own preflight floor, so this gate can never
 // be weaker than the check the installer already performed.
@@ -32,13 +36,14 @@ const (
 )
 
 // RequiredSpace is the free bytes one Hub upgrade needs with a database of
-// dbSize. It is monotonic in dbSize; the three copies of the database are the
-// VACUUM copy, the previous generation and the restore directory.
+// dbSize. It is monotonic in dbSize; the four copies of the database are the
+// staged copy, the two confirmed generations keep=2 retains, and the restore
+// directory (spec §5.9).
 func RequiredSpace(dbSize uint64) uint64 {
-	if dbSize > (math.MaxUint64-restoreHeadroom-targetPackageSpace-oldPackageSpace)/3 {
+	if dbSize > (math.MaxUint64-restoreHeadroom-targetPackageSpace-oldPackageSpace)/4 {
 		return math.MaxUint64
 	}
-	return targetPackageSpace + oldPackageSpace + restoreHeadroom + 3*dbSize
+	return targetPackageSpace + oldPackageSpace + restoreHeadroom + 4*dbSize
 }
 
 // Floor raises the requirement to the installer's 1 GiB preflight floor.

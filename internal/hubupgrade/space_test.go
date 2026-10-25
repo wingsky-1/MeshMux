@@ -1,22 +1,27 @@
 package hubupgrade
 
-// Space-derivation tests of #11d Task 3 (spec §5.9, C14). The Hub backup is
+// Space-derivation tests of #11d Task 3r (spec §5.9, C14). The Hub backup is
 // larger than the Node constant, so the floor is re-derived here and pinned:
-// target package + two database copies + the staged old binary + restore
-// headroom, raised to the installer's 1 GiB preflight.
+// target package + four database copies (staged + two confirmed + restore) +
+// the staged old binary + restore headroom, raised to the installer's 1 GiB
+// preflight. The flat single-slot "one previous generation" term is gone (D1).
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
 
 func TestBackupSpaceFloor(t *testing.T) {
 	const mib = uint64(1 << 20)
+	// 128 MiB target + 128 MiB old package + 256 MiB headroom, no database.
 	if got, want := RequiredSpace(0), uint64(512)*mib; got != want {
 		t.Fatalf("RequiredSpace(0) = %d, want %d", got, want)
 	}
 	db := uint64(37) * mib
-	want := uint64(128)*mib + 2*db + uint64(128)*mib + db + uint64(256)*mib
+	// 3xdbSize of backup generations (staged + two confirmed) plus the restore
+	// copy = 4xdbSize in total.
+	want := uint64(128)*mib + 3*db + uint64(128)*mib + db + uint64(256)*mib
 	if got := RequiredSpace(db); got != want {
 		t.Fatalf("RequiredSpace(%d) = %d, want %d", db, got, want)
 	}
@@ -32,6 +37,22 @@ func TestBackupSpaceFloor(t *testing.T) {
 	}
 	if RequiredSpace(1) <= RequiredSpace(0) {
 		t.Fatal("the database term is missing")
+	}
+	// The database term is exactly 4 copies: three backup generations plus the
+	// restore directory (spec §5.9). A 3-copy formula would pass the growth
+	// check above but under-count one dbSize of the peak.
+	if got, want := RequiredSpace(db)-RequiredSpace(0), 4*db; got != want {
+		t.Fatalf("database term = %d, want 4x%dx%d", got, db, 4)
+	}
+	// The overflow guard divides by the same 4, so a size just under the limit
+	// still computes a finite value and one above it saturates.
+	headroom := uint64(128+128)*mib + uint64(256)*mib
+	limit := (math.MaxUint64 - headroom) / 4
+	if got := RequiredSpace(limit); got == math.MaxUint64 {
+		t.Fatalf("RequiredSpace(%d) saturated although it still fits", limit)
+	}
+	if got := RequiredSpace(limit + 1); got != math.MaxUint64 {
+		t.Fatalf("RequiredSpace(%d) = %d, want saturation", limit+1, got)
 	}
 }
 

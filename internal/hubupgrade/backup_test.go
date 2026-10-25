@@ -612,18 +612,23 @@ func TestBackupNeverCollectsBeforeConfirm(t *testing.T) {
 	}
 	f.intCheck = func(string) error { seenOld("integrity"); return nil }
 
+	// The producer must not call the collector at all. The seam is the check: a
+	// source grep would pass on a renamed helper or a copy of the call.
+	calls := 0
+	old := collectGenerations
+	collectGenerations = func(root string, keep int) ([]string, error) {
+		calls++
+		return old(root, keep)
+	}
+	defer func() { collectGenerations = old }()
+
 	_, record := f.run(t)
 	if record.OperationID == oldOp || record.State != backup.StateStaged {
 		t.Fatalf("new record: %+v", record)
 	}
 	seenOld("after the backup")
-	// The producer must not call the collector at all.
-	source, err := os.ReadFile("backup.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(source), "backup.GC(") {
-		t.Fatal("the backup producer calls backup.GC")
+	if calls != 0 {
+		t.Fatalf("the producer called the collector %d times", calls)
 	}
 }
 
@@ -793,5 +798,108 @@ func TestBackupUnreadableJournalFailsClosed(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(f.dataDir, UpgradeDir)); !os.IsNotExist(err) {
 		t.Fatal("a failed journal read staged a binary")
+	}
+}
+
+// TestBackupPostLockJournalFailureFailsTerminal pins the fix for a non-terminal
+// leak: the backing_up document is published, so a journal read that fails right
+// after the lock must still leave a terminal entry. Otherwise every later backup
+// is HUB_UPGRADE_BUSY until Task 5's 30-minute orphan timeout.
+func TestBackupPostLockJournalFailureFailsTerminal(t *testing.T) {
+	f := newHubBackupFixture(t)
+	old := readJournalOp
+	failNext := true
+	readJournalOp = func(dataDir, operationID string, expectedOwner int) (Op, bool, error) {
+		if failNext {
+			failNext = false
+			return Op{}, false, fail("HUB_UPGRADE_JOURNAL_CORRUPT", "injected unreadable journal")
+		}
+		return old(dataDir, operationID, expectedOwner)
+	}
+	defer func() { readJournalOp = old }()
+
+	if _, err := CreateBackup(context.Background(), f.config()); err == nil || codeOf(err) != "HUB_BACKUP_JOURNAL_FAILED" {
+		t.Fatalf("post-lock journal failure = %v, want HUB_BACKUP_JOURNAL_FAILED", err)
+	}
+	// The journal must not be left non-terminal: a later backup has to proceed.
+	ops, err := ListOps(f.dataDir, os.Geteuid())
+	if err != nil || len(ops) != 1 {
+		t.Fatalf("journal ops = %d, %v; want exactly one", len(ops), err)
+	}
+	if ops[0].State != StateFailed || ops[0].ErrorCode != "HUB_BACKUP_JOURNAL_FAILED" {
+		t.Fatalf("journal entry after the failure = %+v; want failed/HUB_BACKUP_JOURNAL_FAILED", ops[0])
+	}
+	if _, busy, err := Busy(f.dataDir, os.Geteuid()); err != nil || busy {
+		t.Fatalf("a failed backup still blocks: busy=%v err=%v", busy, err)
+	}
+}
+
+// TestBackupStageFailureLeavesNoEmptyUpgradeDir pins the second nit: a failed
+// stage drops the package directory only when it is empty, so a failed first
+// backup leaves no stray upgrade/, while a directory that already holds a staged
+// package is always left alone (that copy is a restore source).
+func TestBackupStageFailureLeavesNoEmptyUpgradeDir(t *testing.T) {
+	t.Run("empty directory is removed", func(t *testing.T) {
+		f := newHubBackupFixture(t)
+		// A previous crash left an empty package directory behind. The stage
+		// refuses it (not private), so the failure path must not keep it.
+		upgradeDir := filepath.Join(f.dataDir, UpgradeDir)
+		if err := os.Mkdir(upgradeDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := CreateBackup(context.Background(), f.config()); err == nil || codeOf(err) != "HUB_BACKUP_BINARY_STAGE_FAILED" {
+			t.Fatalf("blocked stage = %v", err)
+		}
+		if _, err := os.Lstat(upgradeDir); !os.IsNotExist(err) {
+			t.Fatalf("an empty upgrade directory survived a failed stage: %v", err)
+		}
+	})
+
+	t.Run("staged package is retained", func(t *testing.T) {
+		f := newHubBackupFixture(t)
+		digest, err := buildinfo.Digest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		staged, err := stageRunningBinary(f.dataDir, buildinfo.Version, digest)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+		// A later failure of this attempt must never remove the restore source.
+		f.intCheck = func(string) error { return errors.New("integrity_check: not ok") }
+		if _, err := CreateBackup(context.Background(), f.config()); err == nil || codeOf(err) != "HUB_BACKUP_INTEGRITY_FAILED" {
+			t.Fatalf("integrity failure = %v", err)
+		}
+		if _, err := os.Lstat(staged); err != nil {
+			t.Fatalf("the staged restore source was removed: %v", err)
+		}
+	})
+}
+
+// TestBackupPointerUnflushedLogsItsOwnCode pins the fix for the misleading log: a
+// pointer that was renamed into place but not fsynced is reported as
+// HUB_BACKUP_POINTER_UNFLUSHED, not as if nothing had been published. The
+// operation still stays backed_up and the receipt stays staged.
+func TestBackupPointerUnflushedLogsItsOwnCode(t *testing.T) {
+	f := newHubBackupFixture(t)
+	f.publish = func(root, operationID string) error {
+		old := pointerRootSync
+		pointerRootSync = func(string) error { return errors.New("sync failed") }
+		defer func() { pointerRootSync = old }()
+		return PublishFlatPointer(root, operationID)
+	}
+	receipt, record := f.run(t)
+	if receipt.Status != "staged" || record.State != backup.StateStaged {
+		t.Fatalf("receipt/record after an unflushed pointer: %+v / %+v", receipt, record)
+	}
+	if op := lastJournalOp(t, f.dataDir); op.State != StateBackedUp || op.ErrorCode != "" {
+		t.Fatalf("an unflushed pointer changed the journal: %+v", op)
+	}
+	// The pointer itself was published: only its durability is in doubt.
+	if _, err := os.Lstat(f.pointerPath()); err != nil {
+		t.Fatalf("the published pointer is missing: %v", err)
+	}
+	if logs := f.logged(); len(logs) != 1 || !strings.HasPrefix(logs[0], "HUB_BACKUP_POINTER_UNFLUSHED "+receipt.OperationID) {
+		t.Fatalf("unflushed pointer log = %v", logs)
 	}
 }
