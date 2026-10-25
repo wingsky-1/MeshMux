@@ -62,8 +62,8 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	if err = s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 10 {
-		t.Fatalf("user_version=%d err=%v, want 10", version, err)
+	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("user_version=%d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
 	for _, table := range []string{"mesh_devices", "mesh_enrollment_keys"} {
 		var count int
@@ -86,7 +86,7 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	}
 
 	// The guard moved with the migration.
-	if _, err = s.DB.Exec(`PRAGMA user_version=11`); err != nil {
+	if _, err = s.DB.Exec(`PRAGMA user_version=13`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

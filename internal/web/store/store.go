@@ -234,6 +234,12 @@ func (s *Store) Migrate() error {
 		}
 		version = 10
 	}
+	if version == 10 || version == 11 {
+		if err = migrateSchema12(tx); err != nil {
+			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+		}
+		version = 12
+	}
 	// The Out dial-parameter table is ensured on every open without a version
 	// step: the aggregation schema numbers above 10 are reserved (11 for 11d,
 	// 12/13/14 for Tasks 3/4/5), so Task 2 takes no number. The table is

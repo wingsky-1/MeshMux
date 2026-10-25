@@ -5,7 +5,9 @@
 //
 // Dependency direction (compiler-enforced): handler → store and handler →
 // view. Handlers use Store.DB only for the session/auth transactions that
-// moved here untouched; domain writes go through store methods. Rendering
-// goes through view components and view page-models built from store records.
-// handler never imports web; nothing below handler imports handler.
+// moved here untouched; domain writes go through store methods or the policy
+// rule-library store constructed on the same handle (migration stays in
+// store). Rendering goes through view components and view page-models built
+// from store records. handler never imports web; nothing below handler
+// imports handler.
 package handler

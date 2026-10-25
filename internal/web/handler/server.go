@@ -172,6 +172,14 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	// them with the pinned kernels and store one immutable candidate revision
 	// per Line. It is never a bare render-to-response.
 	r.Post("/policies/publish", jsonAPI(app.mutation(app.policiesPublish, true)))
+	// /rules is the Task-3 rule library: the read-only list, the create and
+	// revise mutations (new versions only), and the two-step delete with
+	// used-by protection. Like the nodes-page Out twins, the mutations are
+	// HTML forms that re-render the list instead of answering JSON.
+	r.Get("/rules", app.authenticated(app.rulesLibraryPage))
+	r.Post("/rules", app.mutation(app.rulesLibraryCreate, true))
+	r.Post("/rules/revise", app.mutation(app.rulesLibraryRevise, true))
+	r.Post("/rules/delete", app.mutation(app.rulesLibraryDelete, true))
 	// /tasks is the read-only upgrade view of issue #11a: the release manifest
 	// plus each node's staged vs active readback. #11c-1 adds the explicit
 	// "check new version" query and the gated per-node approval; the check is a
@@ -188,7 +196,7 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
 	r.Post("/mesh/routes/revoke", app.mutation(app.meshRouteRevoke, true))
 	for _, page := range view.Navigation {
-		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" || page.Path == "/tasks" {
+		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" || page.Path == "/rules" || page.Path == "/tasks" {
 			continue
 		}
 		p := page

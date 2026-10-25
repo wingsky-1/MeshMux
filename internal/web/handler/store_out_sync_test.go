@@ -810,8 +810,8 @@ func TestOutAllowlist_SchemaIsUnchanged(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s := f.store
 	var version int
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 10 {
-		t.Fatalf("user_version = %d err=%v, want 10", version, err)
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("user_version = %d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
 	// The four kinds are still exactly the frozen publication chain.
 	if len(protocol.PublicationKinds) != 4 {

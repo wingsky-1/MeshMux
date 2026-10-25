@@ -46,9 +46,12 @@ import (
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
 
 const (
-	// DatabaseSchemaVersion is the storage schema this binary owns. 11c-3 adds
-	// exactly version 10; a newer file is refused instead of opened.
-	DatabaseSchemaVersion = 10
+	// DatabaseSchemaVersion is the storage schema this binary owns. Task 3 of
+	// the subscription aggregation rebuild adds version 12 (rule library +
+	// preset seeds); version 11 stays reserved for 11d, whose migration leg
+	// runs ahead of migrateSchema12 when it merges. A newer file is refused
+	// instead of opened for writes; a database is never downgraded in place.
+	DatabaseSchemaVersion = 12
 
 	// The Hub database backup is independent of the node rollback store
 	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to

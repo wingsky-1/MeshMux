@@ -1,6 +1,6 @@
 // Package view is the rendering layer of the Hub control plane: the templ
 // pages (Document, AuthPage, Dashboard, NodesPage, SubscribersPage, MeshPage,
-// PoliciesPage and fragments), the page view-models handlers fill from store
+// PoliciesPage, RulesLibraryPage and fragments), the page view-models handlers fill from store
 // records, and small display helpers (ShellQuote, policy labels).
 //
 // Dependency direction (compiler-enforced): view → store for shared record
