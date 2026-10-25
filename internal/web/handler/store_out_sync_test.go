@@ -40,6 +40,9 @@ func newOutSyncFixture(t *testing.T) outSyncFixture {
 	if _, err := s.SetLine(lineSettings, now); err != nil {
 		t.Fatal(err)
 	}
+	// The fixture Out always carries its dial address, so enabling a binding
+	// in a test exercises the egress path instead of the transport refusal.
+	configureOut(t, s, out, now)
 	markLineOnline(t, s, line, now)
 	markLineOnline(t, s, out, now)
 	if _, _, err := s.CreateSubscriber("alice", []string{line}, now); err != nil {

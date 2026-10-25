@@ -23,6 +23,8 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 		return 409, "LINE_ROLE_INVALID", "所选节点不是 Line 角色。", "请选择角色为 Edge 的 Line。"
 	case strings.HasPrefix(err.Error(), "LINE_NOT_CONFIGURED"):
 		return 409, "LINE_NOT_CONFIGURED", "Line 尚未配置传输参数。", "请先完成该 Line 的传输配置后再启用 Out 绑定。"
+	case strings.HasPrefix(err.Error(), "OUT_NOT_CONFIGURED"):
+		return 409, "OUT_NOT_CONFIGURED", "Out 出口地址尚未配置。", "请先在节点页为该 Out 配置出口地址后再启用绑定。"
 	case strings.HasPrefix(err.Error(), "OUT_NOT_AUTHORIZED"):
 		return 409, "OUT_NOT_AUTHORIZED", "绑定两端尚未完成配对或身份已撤销。", "请先完成两端配对并保持身份有效后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_BINDING_NOT_FOUND"):

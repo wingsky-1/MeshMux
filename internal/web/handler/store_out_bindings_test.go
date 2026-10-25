@@ -51,6 +51,7 @@ func TestOutBindingCRUD_PreviewUnaffectedWithoutOut(t *testing.T) {
 	line := pairedStoreNode(t, s, "edge", now)
 	out := pairedStoreNode(t, s, "out", now)
 	configureLine(t, s, line, "line-a", now)
+	configureOut(t, s, out, now)
 	subscriber, _, err := s.CreateSubscriber("alice", []string{line}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +209,9 @@ func TestOutBindingValidationAndAuthorization(t *testing.T) {
 		t.Fatalf("edge clear error = %v", err)
 	}
 
-	// Preview validates roles but never requires a paired identity.
+	// Preview validates roles but never requires a paired identity. The Out
+	// carries its dial address so the proposal can describe a real egress.
+	configureOut(t, s, outUnpaired.ID, now)
 	preview, err := s.PreviewOutBinding(outUnpaired.ID, edgePaired)
 	if err != nil {
 		t.Fatalf("read-only preview rejected an unpaired proposal: %v", err)
@@ -250,8 +253,18 @@ func TestOutBindingEnableRequiresConfiguredLine(t *testing.T) {
 	if err := s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: false}); err != nil {
 		t.Fatalf("disabled binding rejected: %v", err)
 	}
-	// Once the transport exists, enabling succeeds.
+	// A configured Line with an unconfigured Out is refused too: the Line
+	// would otherwise render a block stub while the gate reports healthy.
 	configureLine(t, s, line, "line-configured", now)
+	err = s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true})
+	if err == nil || !hasErrorCode(err, "OUT_NOT_CONFIGURED") {
+		t.Fatalf("enabled unconfigured out error = %v, want OUT_NOT_CONFIGURED", err)
+	}
+	if _, err := s.PreviewOutBinding(out, line); err == nil || !hasErrorCode(err, "OUT_NOT_CONFIGURED") {
+		t.Fatalf("proposal preview error = %v, want OUT_NOT_CONFIGURED", err)
+	}
+	// Once both transports exist, enabling succeeds.
+	configureOut(t, s, out, now)
 	if err := s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
 		t.Fatalf("configured line still rejected: %v", err)
 	}
@@ -265,6 +278,7 @@ func TestOutBindingStoreOwnsClock(t *testing.T) {
 	out := pairedStoreNode(t, s, "out", now)
 	line := pairedStoreNode(t, s, "edge", now)
 	configureLine(t, s, line, "line-clock", now)
+	configureOut(t, s, out, now)
 
 	for _, supplied := range []int64{0, 1, 1 << 40} {
 		if err := s.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true, UpdatedAt: supplied}, now); err != nil {
@@ -322,6 +336,7 @@ func TestOutBindingClearUnboundOutIsNoop(t *testing.T) {
 	// repeated clear stays idempotent.
 	line := pairedStoreNode(t, s, "edge", now)
 	configureLine(t, s, line, "line-noop", now)
+	configureOut(t, s, out, now)
 	if err := s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -528,6 +543,8 @@ func TestOutBindingPreviewFanOutCountsOnce(t *testing.T) {
 	outA := pairedStoreNode(t, s, "out", now)
 	outB := pairedStoreNode(t, s, "out", now)
 	configureLine(t, s, line, "line-fanout", now)
+	configureOut(t, s, outA, now)
+	configureOut(t, s, outB, now)
 	for _, name := range []string{"alice", "bob"} {
 		if _, _, err := s.CreateSubscriber(name, []string{line}, now); err != nil {
 			t.Fatal(err)
@@ -601,11 +618,17 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	if err = s.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='out_bindings'`).Scan(&tables); err != nil || tables != 1 {
 		t.Fatalf("out_bindings table missing: %d err=%v", tables, err)
 	}
+	// The Task 2 dial-parameter table is ensured on every open without a
+	// version step, so it survives the same upgrade.
+	if err = s.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='out_settings'`).Scan(&tables); err != nil || tables != 1 {
+		t.Fatalf("out_settings table missing: %d err=%v", tables, err)
+	}
 
 	// Schema-4 data and the new binding path survive the upgrade.
 	if _, err = s.GetSubscriber(subscriber.ID); err != nil {
 		t.Fatalf("subscriber lost by migration: %v", err)
 	}
+	configureOut(t, s, out, now)
 	if err = s.SetOutBinding(store.OutBinding{OutID: out, LineID: line, Enabled: true}); err != nil {
 		t.Fatalf("binding after migration failed: %v", err)
 	}

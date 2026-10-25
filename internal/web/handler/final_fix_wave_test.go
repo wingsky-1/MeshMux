@@ -33,6 +33,7 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 
 	out := createPairedWebNode(t, app, "out", "out-line-save", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-line-save", 8443, 2222)
+	configureOut(t, app.store, out.ID, now)
 	// The Line starts at one documentation address and both nodes are online
 	// with settled chains, so every later chain is attributable.
 	lineSettings := testLine(line.ID, "line-line-save")

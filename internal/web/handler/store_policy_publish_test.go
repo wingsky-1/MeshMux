@@ -67,6 +67,43 @@ func (f publishFixture) activatePolicy(t *testing.T, layer store.PolicyLayer, pa
 
 const publishServerDirect = `{"default":"direct","rules":[]}`
 
+// assertRealOutEgress proves the assembled Line document carries the Hub's
+// Out access path: the "out" tag is a VLESS outbound that dials the selected
+// Out node's configured address/port with a Hub-issued credential, not the
+// fail-closed block stub.
+func assertRealOutEgress(t *testing.T, document []byte) {
+	t.Helper()
+	var decoded struct {
+		Outbounds []struct {
+			Type       string `json:"type"`
+			Tag        string `json:"tag"`
+			Server     string `json:"server,omitempty"`
+			ServerPort int    `json:"server_port,omitempty"`
+			UUID       string `json:"uuid,omitempty"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(document, &decoded); err != nil {
+		t.Fatal("assembled Line document is not valid JSON")
+	}
+	for _, outbound := range decoded.Outbounds {
+		if outbound.Tag != "out" {
+			continue
+		}
+		if outbound.Type != "vless" {
+			t.Fatalf("assembled out outbound type = %q, want vless", outbound.Type)
+		}
+		if outbound.Server != "out.example.invalid" || outbound.ServerPort != 8443 {
+			t.Fatalf("assembled out endpoint = %s:%d, want the configured Out node address/port",
+				outbound.Server, outbound.ServerPort)
+		}
+		if outbound.UUID == "" {
+			t.Fatal("assembled out outbound carries no Hub-issued credential")
+		}
+		return
+	}
+	t.Fatal("assembled Line document declares no out outbound")
+}
+
 func TestPublishAssemblyOutStates(t *testing.T) {
 	f := newPublishFixture(t)
 	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
@@ -102,6 +139,7 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	// route names it, so the Line document must be compiled with the Out fact.
 	out := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, out, f.now)
+	configureOut(t, f.store, out, f.now)
 	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: f.line, Enabled: true}, f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +163,14 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 		t.Fatal("the gated Line document does not carry the Out rule")
 	}
 	// The gated document must declare the tag its route names, or the kernel
-	// would resolve the AI rule against a missing egress. The Out itself is a
-	// block stub until the Out access path owns the real body.
+	// would resolve the AI rule against a missing egress. The bound Out
+	// renders the real VLESS egress from its configured transport and the
+	// Hub-issued credential; the fail-closed block stub only remains for the
+	// never-route tag.
 	if !verifier.hasSingBoxDocument(`"tag": "out"`) {
 		t.Fatal("the gated Line document does not declare the out outbound")
 	}
+	assertRealOutEgress(t, assembly.Targets[0].Config)
 	if !verifier.hasSingBoxDocument(`"type": "block"`) {
 		t.Fatal("the gated Line document does not carry the fail-closed block stub")
 	}
@@ -166,6 +207,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
 	out := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, out, f.now)
+	configureOut(t, f.store, out, f.now)
 	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: f.line, Enabled: true}, f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +256,7 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	f := newPublishFixture(t)
 	healthy := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, healthy, f.now)
+	configureOut(t, f.store, healthy, f.now)
 	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: healthy, LineID: f.line, Enabled: true}, f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +276,7 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	markLineOnline(t, f.store, second, f.now)
 	offline := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, offline, f.now)
+	configureOut(t, f.store, offline, f.now)
 	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: offline, LineID: second, Enabled: true}, f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -275,6 +319,7 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	f := newPublishFixture(t)
 	healthy := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, healthy, f.now)
+	configureOut(t, f.store, healthy, f.now)
 	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: healthy, LineID: f.line, Enabled: true}, f.now); err != nil {
 		t.Fatal(err)
 	}
@@ -292,6 +337,7 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	markLineOnline(t, f.store, second, f.now)
 	offline := pairedStoreNode(t, f.store, "out", f.now)
 	markLineOnline(t, f.store, offline, f.now)
+	configureOut(t, f.store, offline, f.now)
 	if err := f.store.SetOutBindingAt(store.OutBinding{OutID: offline, LineID: second, Enabled: true}, f.now); err != nil {
 		t.Fatal(err)
 	}

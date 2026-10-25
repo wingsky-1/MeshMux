@@ -761,3 +761,75 @@ nav a.active {
     padding: 50px 18px;
   }
 }
+
+/* Task 2: node enrollment modal (CSS-only :target overlay) and the Out pool
+   form rows. No JavaScript: the modal opens on #enroll and closes on #. */
+.modal {
+  display: none;
+}
+.modal:target {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(20, 40, 32, 0.55);
+  overflow-y: auto;
+  padding: 8vh 18px;
+}
+.modal-card {
+  max-width: 640px;
+  margin: 0 auto;
+}
+.modal-card .panel {
+  margin: 0;
+}
+.field-label {
+  display: block;
+  font-weight: 600;
+  margin: 20px 0 8px;
+}
+.radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 4px 0 8px;
+}
+.radio-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-weight: 400;
+}
+.radio-row input {
+  display: inline-block;
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.action-row form button {
+  margin-top: 0;
+}
+a.button {
+  display: inline-block;
+  background: var(--green);
+  color: white;
+  padding: 13px 20px;
+  border-radius: 8px;
+  min-height: 44px;
+  font-weight: 600;
+  text-decoration: none;
+}
+a.button:hover {
+  background: #0c503e;
+  text-decoration: none;
+}
+.out-pool .button {
+  margin-top: 4px;
+}

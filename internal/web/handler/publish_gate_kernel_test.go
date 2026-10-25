@@ -55,8 +55,11 @@ func gatedLineOutbounds(t *testing.T, assembly store.PolicyAssembly) map[string]
 	compiled := assembly.Targets[0].Config
 	var document struct {
 		Outbounds []struct {
-			Type string `json:"type"`
-			Tag  string `json:"tag"`
+			Type       string `json:"type"`
+			Tag        string `json:"tag"`
+			Server     string `json:"server,omitempty"`
+			ServerPort int    `json:"server_port,omitempty"`
+			UUID       string `json:"uuid,omitempty"`
 		} `json:"outbounds"`
 	}
 	if err := json.Unmarshal(compiled, &document); err != nil {
@@ -65,6 +68,12 @@ func gatedLineOutbounds(t *testing.T, assembly store.PolicyAssembly) map[string]
 	tags := make(map[string]string, len(document.Outbounds))
 	for _, outbound := range document.Outbounds {
 		tags[outbound.Tag] = outbound.Type
+		// The gated "out" tag must be a dialable VLESS egress, never the
+		// fail-closed block stub: the stub exists only while the Out
+		// transport is not configured.
+		if outbound.Tag == "out" && (outbound.Server == "" || outbound.ServerPort == 0 || outbound.UUID == "") {
+			t.Fatalf("out outbound is not a dialable VLESS egress: %+v", outbound)
+		}
 	}
 	return tags
 }
@@ -97,6 +106,7 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	// document that actually carries the named "out" outbound.
 	out := pairedStoreNode(t, direct.store, "out", direct.now)
 	markLineOnline(t, direct.store, out, direct.now)
+	configureOut(t, direct.store, out, direct.now)
 	if err := direct.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: direct.line, Enabled: true}, direct.now); err != nil {
 		t.Fatal(err)
 	}
@@ -113,8 +123,8 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 		t.Fatalf("egress = %s/%s, want out", assembly.EgressState, assembly.EgressCode)
 	}
 	tags := gatedLineOutbounds(t, assembly)
-	if len(tags) != 3 || tags["direct"] != "direct" || tags["out"] != "block" || tags["block"] != "block" {
-		t.Fatalf("Out candidate outbounds = %v, want direct/out/block", tags)
+	if len(tags) != 3 || tags["direct"] != "direct" || tags["out"] != "vless" || tags["block"] != "block" {
+		t.Fatalf("Out candidate outbounds = %v, want direct/vless-out/block", tags)
 	}
 	// The published digest is the digest of the checked bytes, so the gate and
 	// the node agree on the exact document.

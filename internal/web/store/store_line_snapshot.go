@@ -22,6 +22,13 @@ const maxLineCandidateUsers = 1024
 // with the REALITY listener and the desired user set: every active credential
 // of every active subscriber of this Line, ordered by credential ID.
 //
+// A Line with an enabled Out binding additionally carries the Out egress: the
+// selected Out node's dial address/port plus the Hub-issued link credential.
+// The endpoint comes from the Out's own configured transport and the first
+// enabled binding in node-id order, so the candidate is deterministic while
+// the 1.0 model binds one Out at a time. A bound Out without transport leaves
+// the egress unattached and the route renders the fail-closed block stub.
+//
 // The function is read-only. It never commits, mutates subscribers or
 // publishes tasks; the caller owns the transaction and the candidate revision.
 func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candidate, error) {
@@ -80,6 +87,9 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 		PrivateKey:      line.PrivateKey,
 		ShortID:         line.ShortID,
 	}
+	if err := attachLineOutEgressTx(tx, nodeID, &candidate); err != nil {
+		return node.Candidate{}, err
+	}
 	return validateLineCandidate(candidate)
 }
 
@@ -113,6 +123,33 @@ func lineCandidateUsersTx(tx *sql.Tx, nodeID string) ([]node.VLESSUser, error) {
 		return nil, errors.New("CANDIDATE_INVALID: at most 1024 users are allowed")
 	}
 	return users, nil
+}
+
+// attachLineOutEgressTx attaches the Hub-issued Out dial body to a
+// configured Line candidate when an enabled binding exists. The first enabled
+// Out in node-id order wins, so one Line never renders two endpoints while
+// the 1.0 model carries a single "out" tag. A bound Out without configured
+// transport leaves the egress unattached: the route still renders the
+// fail-closed block stub, and enabling such a binding is refused by
+// SetOutBinding, so this only happens for bindings stored before the
+// transport existed.
+func attachLineOutEgressTx(tx *sql.Tx, nodeID string, candidate *node.Candidate) error {
+	outs, err := enabledOutIDsForLineTx(tx, nodeID)
+	if err != nil {
+		return err
+	}
+	if len(outs) == 0 {
+		return nil
+	}
+	egress, configured, err := outEgressTx(tx, outs[0])
+	if err != nil {
+		return err
+	}
+	if !configured {
+		return nil
+	}
+	candidate.Out = &egress
+	return nil
 }
 
 // validateLineCandidate validates the assembled candidate and replaces every

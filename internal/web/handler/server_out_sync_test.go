@@ -50,6 +50,9 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	if _, _, err := app.store.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
 		t.Fatal(err)
 	}
+	// The fixture Out always carries its dial address, so enabling a binding
+	// in a test exercises the egress path instead of the transport refusal.
+	configureOut(t, app.store, out.ID, now)
 	// The tokens are issued after the roles are known. A reissue resets the
 	// node to pending, so both are marked online again afterwards and their
 	// seeded chains are settled, which lets the test attribute every later chain

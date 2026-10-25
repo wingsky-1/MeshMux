@@ -155,6 +155,7 @@ func TestPublishEndpointRefusals(t *testing.T) {
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`)
 	out := pairedStoreNode(t, b.app.store, "out", b.app.now())
 	markLineOnline(t, b.app.store, out, b.app.now())
+	configureOut(t, b.app.store, out, b.app.now())
 	if err := b.app.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: line, Enabled: true}, b.app.now()); err != nil {
 		t.Fatal(err)
 	}

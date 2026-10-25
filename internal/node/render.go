@@ -33,6 +33,12 @@ type singBoxInbound struct {
 type singBoxOutbound struct {
 	Type string `json:"type"`
 	Tag  string `json:"tag"`
+	// Server, ServerPort and UUID carry the dial body of a real VLESS egress.
+	// They are present only on the "out" outbound of a Line whose Out access
+	// path attached an endpoint; every other outbound omits them.
+	Server     string `json:"server,omitempty"`
+	ServerPort int    `json:"server_port,omitempty"`
+	UUID       string `json:"uuid,omitempty"`
 }
 
 // Server document egress tags. compiler.RenderServerRoute maps ActionDirect to
@@ -57,27 +63,38 @@ type serverEgress struct {
 //
 //   - "direct" keeps the Line egress for every rule that does not select the
 //     Out;
-//   - "out" is the tag the route names. Until the Out access path owns the real
-//     outbound body (its endpoint and credential), it is declared as a block
-//     stub, so traffic the policy sends to the Out is refused instead of
-//     silently leaving from the Line address — the leak the fail-closed rule
-//     exists to prevent. An Out that is unavailable never reaches a published
-//     document (the Hub refuses it with OUT_OFFLINE_FAIL_CLOSED); the stub is
-//     what keeps a document published while the Out was healthy from silently
-//     turning into a Line egress if the binding disappears later;
+//   - "out" is the tag the route names. While the Out access path owns the real
+//     outbound body (its endpoint and Hub-issued credential), it is declared
+//     as a VLESS outbound that dials the selected Out node, so AI traffic the
+//     policy sends to the Out leaves through the Out instead of the Line
+//     address. Until that body is attached — the Out is bound but its
+//     transport is not configured yet — "out" stays a block stub, so the
+//     traffic is refused instead of silently leaving from the Line address,
+//     the leak the fail-closed rule exists to prevent. An Out that is
+//     unavailable never reaches a published document (the Hub refuses it with
+//     OUT_OFFLINE_FAIL_CLOSED); the stub is what keeps a document published
+//     while the Out was healthy from silently turning into a Line egress if
+//     the binding disappears later;
 //   - "block" is the explicit never-route egress, so a document that refuses a
 //     matched flow names a tag it actually carries.
 //
 // Without an Out the document keeps the single "direct" outbound: a route-free
 // or direct-only candidate renders the frozen v1/v2 bytes, and a direct-only
 // Line does not grow an unused tag.
-func (e serverEgress) outbounds() []singBoxOutbound {
+func (e serverEgress) outbounds(out *OutEgress) []singBoxOutbound {
 	if !e.out && !e.block {
 		return []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
 	}
 	outbounds := []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
 	if e.out {
-		outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxOutTag})
+		if out != nil {
+			outbounds = append(outbounds, singBoxOutbound{
+				Type: "vless", Tag: singBoxOutTag,
+				Server: out.Server, ServerPort: out.Port, UUID: out.UUID,
+			})
+		} else {
+			outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxOutTag})
+		}
 	}
 	outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxBlockTag})
 	return outbounds
@@ -157,16 +174,23 @@ const vlessFlow = "xtls-rprx-vision"
 // that route too: the Hub resolved the Out contract before it stored the
 // fragment, and the Agent must apply exactly the published route instead of
 // silently compiling a route-free kernel config. The outbound set follows the
-// route: "out" and "block" are declared whenever the route names them, and an
-// "out" body is a block stub until the Out access path owns the real endpoint
-// and credential. `sing-box check` accepts a route tag with no matching
-// outbound, so this renderer — not the kernel gate — is what keeps the document
-// complete.
+// route: "out" and "block" are declared whenever the route names them. An
+// "out" body is the real VLESS egress once the Hub attached the selected Out
+// node's endpoint and the Hub-issued credential to the candidate, and the
+// fail-closed block stub while it did not. `sing-box check` accepts a route
+// tag with no matching outbound, so this renderer — not the kernel gate — is
+// what keeps the document complete.
 //
 // The Out binding is deliberately not re-derived here: resolving "is an Out
 // configured and healthy" needs Hub state the node does not have. A route that
 // still names "out" only reaches this function through the Hub's own
 // ResolveServerPolicy gate; the Agent proves the rest with sing-box check.
+//
+// The endpoint itself rides the candidate: the Hub attaches the selected Out
+// node's address/port and the Hub-issued link credential to the Line
+// candidate before it compiles, so the Hub and the Agent render byte-identical
+// documents and the readback digest needs no second channel. A nil Out keeps
+// the fail-closed block stub.
 func CompileCandidate(c Candidate) ([]byte, error) {
 	return compileCandidate(c, c.Route, len(c.Route) > 0)
 }
@@ -177,8 +201,9 @@ func CompileCandidate(c Candidate) ([]byte, error) {
 // subscription acceptance test imports node, which would close a test cycle.
 // The caller must resolve the policy first; a fragment that references the
 // "out" tag while no Out is configured is refused with OUT_BINDING_INVALID,
-// never rendered as direct. The fragment references "out" but does not create
-// that outbound: the Out access path owns its endpoint and credential.
+// never rendered as direct. The caller attaches the Out egress to the
+// candidate when the binding names a configured Out: the fragment references
+// "out" but the candidate carries its endpoint and credential.
 func CompileCandidateWithRoute(c Candidate, route json.RawMessage, outConfigured bool) ([]byte, error) {
 	return compileCandidate(c, route, outConfigured)
 }
@@ -203,7 +228,7 @@ func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([
 			ListenPort: c.VLESSPort,
 			Users:      []json.RawMessage{},
 		}},
-		Outbounds: egress.outbounds(),
+		Outbounds: egress.outbounds(c.Out),
 		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")
@@ -284,7 +309,7 @@ func compileRealityCandidate(c Candidate, route json.RawMessage, egress serverEg
 			},
 			Users: renderUsers(c.Users),
 		}},
-		Outbounds: egress.outbounds(),
+		Outbounds: egress.outbounds(c.Out),
 		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")

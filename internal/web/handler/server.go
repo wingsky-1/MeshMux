@@ -127,6 +127,12 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/nodes/out/unbind", jsonAPI(app.mutation(app.outUnbind, true)))
 	r.Post("/nodes/out/delete", jsonAPI(app.mutation(app.outDelete, true)))
 	r.Post("/nodes/out/preview", jsonAPI(app.mutation(app.outPreview, true)))
+	// The nodes-page Out actions are the HTML twins of the transport, unbind
+	// and delete mutations above: same store calls, same session + CSRF
+	// boundary, but they re-render the list instead of answering JSON.
+	r.Post("/nodes/out-transport", app.mutation(app.outTransportSet, true))
+	r.Post("/nodes/out-unbind", app.mutation(app.outUnbindPage, true))
+	r.Post("/nodes/out-delete", app.mutation(app.outDeletePage, true))
 	// The JSON management routes declare their failure representation here, next
 	// to the route. The error writer never infers it from the URL, so moving an
 	// endpoint cannot silently change its failure body.

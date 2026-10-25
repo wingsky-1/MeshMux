@@ -67,12 +67,7 @@ func decodeAgentJSON(r *http.Request, dst any) error {
 // nodesPage renders the pending-node workspace. created + pairingCode are set
 // only immediately after creation so the one-time code is shown once.
 func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, pairingCode string) {
-	nodes, err := s.store.ListNodesAt(s.now())
-	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
-		return
-	}
-	s.render(w, r, 200, view.NodesPage(view.PageData{Title: "代理节点", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP}, nodes, created, "", pairingCode, s.cfg.Origin, s.cfg.InstallArtifact))
+	s.nodesPageFull(w, r, sess, created, "", pairingCode, view.NodesData{})
 }
 
 func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
@@ -221,12 +216,33 @@ func nodeIDFromRequest(r *http.Request) string {
 }
 
 func (s *Server) nodesPageWithCode(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, action, code string) {
+	s.nodesPageFull(w, r, sess, created, action, code, view.NodesData{})
+}
+
+// nodesPageFull renders the nodes page with the Task 2 pool projection: the
+// Out pool strip, the per-card transport and binding state, an optional
+// one-shot notice and an optional pending delete confirm.
+func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, action, code string, data view.NodesData) {
 	nodes, err := s.store.ListNodesAt(s.now())
 	if err != nil {
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
 		return
 	}
-	s.render(w, r, 200, view.NodesPage(view.PageData{Title: "代理节点", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP}, nodes, created, action, code, s.cfg.Origin, s.cfg.InstallArtifact))
+	pool, err := s.store.OutPool(s.now())
+	if err != nil {
+		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取 Out 池。", "请检查数据库。")
+		return
+	}
+	data.Pool = pool
+	data.ByOut = make(map[string]store.OutPoolEntry, len(pool))
+	data.ByLine = make(map[string][]store.OutPoolEntry)
+	for _, entry := range pool {
+		data.ByOut[entry.OutID] = entry
+		if entry.LineID != "" {
+			data.ByLine[entry.LineID] = append(data.ByLine[entry.LineID], entry)
+		}
+	}
+	s.render(w, r, 200, view.NodesPage(view.PageData{Title: "代理节点", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP}, nodes, data, created, action, code, s.cfg.Origin, s.cfg.InstallArtifact))
 }
 
 func (s *Server) agentMetadata(w http.ResponseWriter, r *http.Request) {

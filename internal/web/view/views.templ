@@ -159,7 +159,7 @@ templ Dashboard(p PageData) {
 	}
 }
 
-templ NodesPage(p PageData, nodes []store.Node, created *store.Node, pairAction string, pairingCode string, hubOrigin string, artifact *InstallArtifact) {
+templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.Node, pairAction string, pairingCode string, hubOrigin string, artifact *InstallArtifact) {
 	@Document(p.Title) {
 		<a class="skip" href="#main">跳到内容</a>
 		<div class="shell">
@@ -185,6 +185,22 @@ templ NodesPage(p PageData, nodes []store.Node, created *store.Node, pairAction 
 						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
 					}
 					<p class="subtitle">创建节点后，在目标 Debian 主机上核验本地 CLI 的 SHA-256，再通过交互 stdin 完成配对。全部安装动作都属于宿主机变更。</p>
+					if data.Notice != "" {
+						<div class="notice">{ data.Notice }</div>
+					}
+					<section class="panel out-pool"><div class="panel-heading"><h2>Out 池</h2><span class="badge">{ len(data.Pool) } 个已纳管 · 不限个数</span></div>
+						{{ bound, missing := 0, 0 }}
+						for _, entry := range data.Pool {
+							if entry.Enabled {
+								{{ bound++ }}
+							}
+							if !entry.TransportConfigured {
+								{{ missing++ }}
+							}
+						}
+						<p class="muted">{ bound } 个已绑定 · { missing } 个未配置出口地址。Out 池本身不限个数；同一 Line 的订阅必须选择同一个 Out（由订阅向导保证）。未配置出口地址的 Out 不可启用绑定，其 Line 保持直连。</p>
+						<a class="button" href="#enroll">纳管节点 →</a>
+					</section>
 					if created != nil {
 							<section class="panel">
 								if pairAction == "reissued" {
@@ -197,7 +213,7 @@ templ NodesPage(p PageData, nodes []store.Node, created *store.Node, pairAction 
 						</section>
 					}
 					<div class="settings-grid">
-						<section class="panel"><h2>创建待纳管节点</h2><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><label for="role">角色</label><select id="role" name="role" required><option value="edge">Line（edge）· 客户端入口</option><option value="out">Out · 可选私有出口</option></select><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" required placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" required placeholder="例如 2222"/><p class="hint">SSH 端口由你在目标主机上准备，安装器会在安装开放后检测它。VLESS 与 SSH 端口必须不同。配对码 15 分钟过期、一次性使用，不记日志。</p><button type="submit">创建并签发配对码 →</button></form></section>
+						<section class="panel"><h2>创建待纳管节点</h2><p class="muted">节点纳管不限个数，Out 池可按需扩展；Out 出口地址在下方节点卡片中配置。</p><a class="button" href="#enroll">纳管节点 →</a></section>
 						<section class="panel"><h2>安装制品</h2><dl class="details"><dt>Agent 版本</dt><dd><code>{ nodedomain.CurrentAgentVersion }</code></dd><dt>内核</dt><dd><code>{ nodedomain.KernelVersion }</code></dd>
 							if artifact != nil {
 								<dt>当前架构</dt><dd>{ artifact.Architecture }</dd><dt>CLI SHA-256</dt><dd><code>{ artifact.SHA256 }</code></dd>
@@ -209,6 +225,7 @@ templ NodesPage(p PageData, nodes []store.Node, created *store.Node, pairAction 
 							}
 						</dl></section>
 					</div>
+					<div id="enroll" class="modal" role="dialog" aria-label="纳管节点"><div class="modal-card"><section class="panel"><div class="panel-heading"><h2>纳管节点</h2><a class="text-button" href="#">关闭 ✕</a></div><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><span class="field-label">角色</span><div class="radio-row"><label><input type="radio" name="role" value="edge" checked required/>Line（edge）· 客户端入口</label><label><input type="radio" name="role" value="out" required/>Out · 可选私有出口</label></div><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" required placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" required placeholder="例如 2222"/><p class="hint">SSH 端口由你在目标主机上准备，安装器会在安装开放后检测它。VLESS 与 SSH 端口必须不同。Out 节点创建后，在下方节点卡片中配置其出口地址，再绑定 Line。配对码 15 分钟过期、一次性使用，不记日志。</p><button type="submit">创建并签发配对码 →</button></form></section></div></div>
 						<section class="panel"><div class="panel-heading"><h2>节点列表</h2><span class="badge">待纳管</span></div>
 					if len(nodes) == 0 {
 						<p class="muted">尚未创建待纳管节点。</p>
@@ -268,6 +285,64 @@ templ NodesPage(p PageData, nodes []store.Node, created *store.Node, pairAction 
 											}
 										</dd>
 								<dt>网络验证边界</dt><dd class="muted">公网、协议握手、客户端可用均未验证</dd>
+								if n.Role == "out" {
+									for _, entry := range data.Pool {
+										if entry.OutID == n.ID {
+											<dt>出口地址</dt><dd>
+												if entry.TransportConfigured {
+													<code>{ entry.Server }:{ entry.Port }</code>
+												} else {
+													<span class="badge failure">未配置出口地址</span>
+												}
+											</dd>
+											<dt>配置出口地址</dt><dd><form method="post" action="/nodes/out-transport"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "out-server-" + n.ID }>出口地址</label><input id={ "out-server-" + n.ID } name="server" type="text" required maxlength="253" placeholder="例如 out.example.invalid 或 203.0.113.10" value={ entry.Server }/><button type="submit">保存出口地址 →</button></form><p class="hint">端口须与 VLESS 端口（{ n.VlessPortString() }）一致。保存后，已绑定的 Line 在下一次收敛中获得真实 VLESS 出站；凭据由 Hub 签发，不显示、不进日志。</p></dd>
+											<dt>服务对象</dt><dd>
+												if entry.LineID == "" {
+													<span class="muted">未绑定任何 Line</span>
+												} else {
+													<span>服务 Line <code>{ entry.LineID }</code></span>
+													if entry.Enabled {
+														<span class="badge accent">已启用</span>
+													} else {
+														<span class="badge">已禁用</span>
+													}
+												}
+											</dd>
+											<dt>出口操作</dt><dd><div class="action-row">
+												<form method="post" action="/nodes/out-unbind"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><button class="secondary-button" type="submit">解绑</button></form>
+												if data.PendingDeleteOut == n.ID {
+													<form method="post" action="/nodes/out-delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><input type="hidden" name="confirm" value="1"/><button class="secondary-button" type="submit">确认删除出口</button></form>
+												} else {
+													<form method="post" action="/nodes/out-delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><button class="secondary-button" type="submit">删除出口…</button></form>
+												}
+											</div>
+												if data.PendingDeleteOut == n.ID {
+													if entry.LineID == "" {
+														<p class="hint">删除后该 Out 的路由与 ACL 授权将被清理；节点身份不受影响，可重新绑定。</p>
+													} else {
+														<p class="hint">删除后该 Out 的路由与 ACL 授权将被清理，Line <code>{ entry.LineID }</code> 恢复直连；节点身份不受影响，可重新绑定。</p>
+													}
+												}
+											</dd>
+										}
+									}
+								} else {
+									<dt>Out 绑定</dt><dd>
+										if len(data.ByLine[n.ID]) == 0 {
+											<span class="muted">未被任何 Out 服务 · 直连出口</span>
+										} else {
+											for _, entry := range data.ByLine[n.ID] {
+												<div><span>{ entry.DisplayName }</span>
+													if entry.Enabled {
+														<span class="badge accent">已启用</span>
+													} else {
+														<span class="badge">已禁用</span>
+													}
+												</div>
+											}
+										}
+									</dd>
+								}
 									</dl>
 									<div class="action-row">
 										<form method="post" action="/nodes/reconcile"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button type="submit">重新校验 / 应用</button></form>

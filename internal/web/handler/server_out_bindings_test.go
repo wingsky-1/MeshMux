@@ -85,6 +85,7 @@ func TestOutBindingManagementAPI(t *testing.T) {
 	out := createPairedWebNode(t, app, "out", "out-api", 9443, 2223)
 	now := time.Now()
 	configureLine(t, app.store, line.ID, "line-api", now)
+	configureOut(t, app.store, out.ID, now)
 	subscriber, _, err := app.store.CreateSubscriber("alice", []string{line.ID}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +195,7 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 	out := createPairedWebNode(t, app, "out", "out-del", 9443, 2223)
 	now := time.Now()
 	configureLine(t, app.store, line.ID, "line-del", now)
+	configureOut(t, app.store, out.ID, now)
 	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: out.ID, LineID: line.ID, Enabled: true}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -254,6 +256,7 @@ func TestOutDeleteReportsPendingCleanupWithoutClaimingSuccess(t *testing.T) {
 	out := createPairedWebNode(t, app, "out", "out-del-pending", 9443, 2223)
 	now := time.Now()
 	configureLine(t, app.store, line.ID, "line-del-pending", now)
+	configureOut(t, app.store, out.ID, now)
 	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: out.ID, LineID: line.ID, Enabled: true}, now); err != nil {
 		t.Fatal(err)
 	}

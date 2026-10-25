@@ -210,10 +210,27 @@ func (s *Store) SetOutBindingAt(binding OutBinding, now time.Time) error {
 				return errors.New("OUT_NOT_AUTHORIZED: both ends need a current paired identity before the out can be enabled")
 			}
 		}
+		// The Line candidate renders the real VLESS egress from the Out's
+		// configured transport. Enabling a binding whose Out has no transport
+		// would publish a route the Line renders as a block stub while the
+		// Out gate still reports healthy, so the enable is refused instead.
+		if err = tx.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, binding.OutID).Scan(&configured); err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		if configured == 0 {
+			return errors.New("OUT_NOT_CONFIGURED: configure the out transport before enabling an out binding")
+		}
 	}
 	enabled := 0
 	if binding.Enabled {
 		enabled = 1
+	}
+	// The previous Line is read before the upsert so both ends converge after
+	// the commit: the newly bound Line picks up the route and the real egress,
+	// and the released Line falls back to direct.
+	var previousLine sql.NullString
+	if err = tx.QueryRow(`SELECT line_id FROM out_bindings WHERE out_id=?`, binding.OutID).Scan(&previousLine); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	if _, err = tx.Exec(`INSERT INTO out_bindings(out_id, line_id, enabled, updated_at) VALUES(?,?,?,?)
  ON CONFLICT(out_id) DO UPDATE SET line_id=excluded.line_id, enabled=excluded.enabled, updated_at=excluded.updated_at`,
@@ -225,9 +242,14 @@ func (s *Store) SetOutBindingAt(binding OutBinding, now time.Time) error {
 	}
 	// The binding is the authorization intent: enabling it publishes the Out
 	// allowlist and disabling it republishes the Out with an explicit empty
-	// list. The drain owns its own transaction and never fails the mutation;
-	// the next Out event retries it.
+	// list. The bound Lines republish too, because the Line candidate carries
+	// the route and the real egress. Each drain owns its own transaction and
+	// never fails the mutation; the next Out or Line event retries it.
 	s.drainOutNode(binding.OutID, now)
+	if previousLine.Valid && previousLine.String != "" && previousLine.String != binding.LineID {
+		s.drainSubscriberNode(previousLine.String, now)
+	}
+	s.drainSubscriberNode(binding.LineID, now)
 	return nil
 }
 
@@ -417,6 +439,12 @@ func (s *Store) ClearOutBindingAt(outID string, now time.Time) error {
 	if role != "out" {
 		return errors.New("OUT_ROLE_INVALID: only out nodes can carry an out binding")
 	}
+	// The released Line is read before the row is cleared so it can fall back
+	// to direct after the commit.
+	var releasedLine sql.NullString
+	if err = tx.QueryRow(`SELECT line_id FROM out_bindings WHERE out_id=?`, outID).Scan(&releasedLine); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
 	res, err := tx.Exec(`UPDATE out_bindings SET line_id=NULL, enabled=0, updated_at=? WHERE out_id=?`, now.Unix(), outID)
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
@@ -437,9 +465,14 @@ func (s *Store) ClearOutBindingAt(outID string, now time.Time) error {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	// The unbound Out has to stop authorizing the Line: the drain republishes
-	// it with an explicit empty allowlist. It owns its own transaction and never
-	// fails the mutation; the next Out event retries it.
+	// it with an explicit empty allowlist. The released Line republishes too,
+	// because its candidate no longer carries the route or the real egress.
+	// Each drain owns its own transaction and never fails the mutation; the
+	// next Out or Line event retries it.
 	s.drainOutNode(outID, now)
+	if releasedLine.Valid && releasedLine.String != "" {
+		s.drainSubscriberNode(releasedLine.String, now)
+	}
 	return nil
 }
 
@@ -497,14 +530,21 @@ func (s *Store) PreviewOutBindingAt(outID, lineID string, now time.Time) (OutBin
 			return OutBindingPreview{}, errors.New("LINE_ROLE_INVALID: only edge nodes can be bound to an out")
 		}
 		// A proposal preview mirrors the enable gate: a Line without a stored
-		// transport can never anchor an Out path, so the preview must not
-		// claim an egress that SetOutBinding would reject.
+		// transport can never anchor an Out path, and neither can an Out
+		// without a configured dial address, so the preview must not claim
+		// an egress that SetOutBinding would reject.
 		var configured int
 		if err = s.DB.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, lineID).Scan(&configured); err != nil {
 			return OutBindingPreview{}, errors.New("DATABASE_UNAVAILABLE")
 		}
 		if configured == 0 {
 			return OutBindingPreview{}, errors.New("LINE_NOT_CONFIGURED: configure the line transport before enabling an out binding")
+		}
+		if err = s.DB.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, outID).Scan(&configured); err != nil {
+			return OutBindingPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		}
+		if configured == 0 {
+			return OutBindingPreview{}, errors.New("OUT_NOT_CONFIGURED: configure the out transport before enabling an out binding")
 		}
 		preview.LineID = lineID
 		preview.Enabled = true

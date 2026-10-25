@@ -404,6 +404,7 @@ func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 	}
 	out := pairedStoreNode(t, app.store, "out", now)
 	markLineOnline(t, app.store, out, now)
+	configureOut(t, app.store, out, now)
 	if err := app.store.SetOutBindingAt(store.OutBinding{OutID: out, LineID: nodeID, Enabled: true}, now); err != nil {
 		t.Fatal(err)
 	}
