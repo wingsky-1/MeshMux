@@ -391,12 +391,12 @@ func TestOutAllowlist_SourceCanonicalization(t *testing.T) {
 			got, err := store.OutAllowlistSource(tc.input)
 			if tc.ok {
 				if err != nil || got != tc.want {
-					t.Fatalf("store.OutAllowlistSource(%q) = %q err=%v, want %q", tc.input, got, err, tc.want)
+					t.Fatalf("outAllowlistSource(%q) = %q err=%v, want %q", tc.input, got, err, tc.want)
 				}
 				return
 			}
 			if err == nil || !hasErrorCode(err, "OUT_ALLOWLIST_INVALID") {
-				t.Fatalf("store.OutAllowlistSource(%q) = %q err=%v, want OUT_ALLOWLIST_INVALID", tc.input, got, err)
+				t.Fatalf("outAllowlistSource(%q) = %q err=%v, want OUT_ALLOWLIST_INVALID", tc.input, got, err)
 			}
 		})
 	}

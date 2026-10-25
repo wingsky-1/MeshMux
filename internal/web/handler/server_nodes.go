@@ -328,7 +328,7 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 		// Default: one neutral refusal, whatever the code's history. The log
 		// reason is the precise one so the operator can still diagnose it.
 		code, status, reason := "PAIRING_INVALID", 401, "PAIRING_INVALID"
-		message, next := "配对被拒绝。", "请确认 store.Node ID、角色与未过期的一次性配对码。"
+		message, next := "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。"
 		switch {
 		case strings.HasPrefix(msg, "ROLE_MISMATCH"):
 			code, status, reason = "ROLE_MISMATCH", 403, "ROLE_MISMATCH"

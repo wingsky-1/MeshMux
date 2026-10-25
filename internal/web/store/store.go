@@ -67,7 +67,7 @@ func OpenStore(dir string) (*Store, error) {
 	if err = privatePath(abs, true); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"meshmux.DB", "meshmux.db-wal", "meshmux.db-shm", ".lock", "bootstrap.token"} {
+	for _, name := range []string{"meshmux.db", "meshmux.db-wal", "meshmux.db-shm", ".lock", "bootstrap.token"} {
 		if e := privatePath(filepath.Join(abs, name), false); e != nil && !os.IsNotExist(e) {
 			return nil, e
 		}
@@ -81,13 +81,13 @@ func OpenStore(dir string) (*Store, error) {
 		return nil, errors.New("DATA_LOCKED: another Web process uses this directory")
 	}
 	s := &Store{lock: lock, Dir: abs}
-	f, err := os.OpenFile(filepath.Join(abs, "meshmux.DB"), os.O_CREATE|os.O_RDWR, 0600)
+	f, err := os.OpenFile(filepath.Join(abs, "meshmux.db"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		s.Close()
 		return nil, err
 	}
 	f.Close()
-	u := url.URL{Scheme: "file", Path: filepath.Join(abs, "meshmux.DB")}
+	u := url.URL{Scheme: "file", Path: filepath.Join(abs, "meshmux.db")}
 	s.DB, err = sql.Open("sqlite", u.String()+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)")
 	if err != nil {
 		s.Close()
@@ -98,7 +98,7 @@ func OpenStore(dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	for _, name := range []string{"meshmux.DB", "meshmux.db-wal", "meshmux.db-shm"} {
+	for _, name := range []string{"meshmux.db", "meshmux.db-wal", "meshmux.db-shm"} {
 		if e := privatePath(filepath.Join(abs, name), false); e != nil && !os.IsNotExist(e) {
 			s.Close()
 			return nil, e

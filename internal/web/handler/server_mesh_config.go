@@ -362,7 +362,7 @@ func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess sessio
 	nodeID, parseErr := strconv.ParseUint(strings.TrimSpace(r.PostForm.Get("node_id")), 10, 64)
 	if parseErr != nil || nodeID == 0 {
 		app.fail(w, r, http.StatusBadRequest, codeMeshClaimNodeNotFound,
-			"待认领的 Headscale store.Node ID 不正确。", "请从设备卡中的待认领列表重新选择。")
+			"待认领的 Headscale Node ID 不正确。", "请从设备卡中的待认领列表重新选择。")
 		return
 	}
 	if record.Status == mesh.StatusRegistered && record.HeadscaleNodeID == nodeID {

@@ -218,12 +218,12 @@ func TestSubscriptionStoreErrorComparesCodes(t *testing.T) {
 		// rejection: only the code segment decides.
 		{errors.New(store.CodeDatabaseUnavailable + "_LOOKALIKE: no"), store.ErrSubscriptionRejected},
 		{errors.New("SUBSCRIPTION_DOWNLOAD_REJECTED: " + store.CodeDatabaseUnavailable), store.ErrSubscriptionRejected},
-		{errors.New("/var/lib/meshmux/web.DB: unreachable"), store.ErrSubscriptionRejected},
+		{errors.New("/var/lib/meshmux/web.db: unreachable"), store.ErrSubscriptionRejected},
 	}
 	for _, tc := range cases {
 		got := store.SubscriptionStoreError(tc.err)
 		if !errors.Is(got, tc.want) || (tc.want == nil && got != nil) {
-			t.Errorf("store.SubscriptionStoreError(%v) = %v, want %v", tc.err, got, tc.want)
+			t.Errorf("subscriptionStoreError(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
 }
@@ -244,7 +244,7 @@ func TestErrorCodeOfIsPrefixSafe(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := store.ErrorCodeOf(tc.err); got != tc.want {
-			t.Errorf("store.ErrorCodeOf(%v) = %q, want %q", tc.err, got, tc.want)
+			t.Errorf("errorCodeOf(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 	}
 	// A code is only ever compared against a constant, never against a prefix.

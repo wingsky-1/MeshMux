@@ -340,7 +340,7 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 	}
 	if device.HeadscaleNodeID == 0 {
 		app.fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
-			"设备尚未观测到 Headscale store.Node ID，无法批准子网路由。",
+			"设备尚未观测到 Headscale Node ID，无法批准子网路由。",
 			"请先完成设备注册并“重新核对全部设备”，再批准前缀。")
 		return
 	}
@@ -439,7 +439,7 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 	}
 	if device.HeadscaleNodeID == 0 {
 		app.fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
-			"设备尚未观测到 Headscale store.Node ID，无法撤销路由批准。",
+			"设备尚未观测到 Headscale Node ID，无法撤销路由批准。",
 			"请先完成设备注册并“重新核对全部设备”。")
 		return
 	}

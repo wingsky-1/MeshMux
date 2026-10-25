@@ -15,7 +15,7 @@ func TestSchemaV1MigrationPreservesAdminSessions(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.DB"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ PRAGMA user_version=1;
 	if err = os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.Chmod(filepath.Join(dir, "meshmux.DB"), 0600); err != nil {
+	if err = os.Chmod(filepath.Join(dir, "meshmux.db"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

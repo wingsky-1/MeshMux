@@ -46,7 +46,7 @@ type nodeFixtureMetadata struct {
 func TestNodeHubFixture(t *testing.T) {
 	dir := os.Getenv("MESHMUX_NODE_HUB_FIXTURE_DIR")
 	if dir == "" {
-		t.Skip("MESHMUX_NODE_HUB_FIXTURE_DIR is not set: set it (with MESHMUX_NODE_HUB_FIXTURE_ROLE=edge or out) to run the isolated store.Node VM Hub fixture")
+		t.Skip("MESHMUX_NODE_HUB_FIXTURE_DIR is not set: set it (with MESHMUX_NODE_HUB_FIXTURE_ROLE=edge or out) to run the isolated Node VM Hub fixture")
 	}
 	role := node.Role(os.Getenv("MESHMUX_NODE_HUB_FIXTURE_ROLE"))
 	if role != node.RoleEdge && role != node.RoleOut {
@@ -108,7 +108,7 @@ func TestNodeHubFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if metadata.Role != role || metadata.HubURL != cfg.Origin || metadata.CAPath != caPath {
-		t.Fatal("persistent store.Node fixture metadata does not match this role or origin")
+		t.Fatal("persistent Node fixture metadata does not match this role or origin")
 	}
 	if err := writePrivateJSON(metadataPath, metadata); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestNodeHubFixture(t *testing.T) {
 	if err := writeAtomicFile(readyPath, []byte("node-hub-fixture-ready\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("store.Node Hub HTTPS/SQLite fixture ready")
+	t.Log("Node Hub HTTPS/SQLite fixture ready")
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
@@ -158,7 +158,7 @@ func prepareFixtureDir(dir string) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
-		return errors.New("store.Node fixture directory must be a private directory without symlinks")
+		return errors.New("Node fixture directory must be a private directory without symlinks")
 	}
 	return nil
 }
@@ -200,14 +200,14 @@ func loadOrCreateNodeFixtureMetadata(app *Server, path string, role node.Role, c
 	}
 	if data, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(data, &metadata); err != nil {
-			return metadata, errors.New("store.Node fixture metadata is invalid")
+			return metadata, errors.New("Node fixture metadata is invalid")
 		}
 		existing, err := app.store.GetNodeAt(metadata.NodeID, app.now())
 		if err != nil {
-			return metadata, errors.New("persistent store.Node fixture database has no matching node")
+			return metadata, errors.New("persistent Node fixture database has no matching node")
 		}
 		if existing.Role != string(role) || existing.VlessPort != 8443 || existing.SSHPort != sshPort {
-			return metadata, errors.New("persistent store.Node fixture node does not match its role or ports")
+			return metadata, errors.New("persistent Node fixture node does not match its role or ports")
 		}
 		return metadata, nil
 	} else if !os.IsNotExist(err) {
@@ -275,7 +275,7 @@ func loadOrCreateFixtureTLS(caPath, caKeyPath, certPath, keyPath string) (tls.Ce
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          caSerial,
-		Subject:               pkix.Name{CommonName: "MeshMux disposable store.Node VM fixture CA"},
+		Subject:               pkix.Name{CommonName: "MeshMux disposable Node VM fixture CA"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(30 * 24 * time.Hour),
 		IsCA:                  true,
@@ -301,7 +301,7 @@ func loadOrCreateFixtureTLS(caPath, caKeyPath, certPath, keyPath string) (tls.Ce
 	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: leafSerial,
-		Subject:      pkix.Name{CommonName: "MeshMux store.Node VM fixture"},
+		Subject:      pkix.Name{CommonName: "MeshMux Node VM fixture"},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.Add(30 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

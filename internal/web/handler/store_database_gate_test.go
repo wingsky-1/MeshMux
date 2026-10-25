@@ -30,7 +30,7 @@ import (
 
 func setUserVersion(t *testing.T, dir string, version int) {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.DB"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func setUserVersion(t *testing.T, dir string, version int) {
 
 func userVersion(t *testing.T, dir string) int {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.DB"))
+	db, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*b
 		t.Fatal(err)
 	}
 	// The payload bytes are a fixture copy, never opened by the approval path.
-	if err := os.WriteFile(filepath.Join(payload, "meshmux.DB"), []byte("fixture database copy"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(payload, "meshmux.db"), []byte("fixture database copy"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	record := backup.Record{
@@ -122,7 +122,7 @@ func TestSchemaTooNewNamesTheBackupRecord(t *testing.T) {
 	if err := os.WriteFile(recordPath, []byte(`{"schema":99,"future":"unknown"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.DB"))
+	raw, err := sql.Open("sqlite", filepath.Join(dir, "meshmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestSchemaTooNewNamesTheBackupRecord(t *testing.T) {
 	if got := userVersion(t, dir); got != store.DatabaseSchemaVersion+1 {
 		t.Fatalf("refusal rewrote user_version to %d", got)
 	}
-	raw, err = sql.Open("sqlite", filepath.Join(dir, "meshmux.DB"))
+	raw, err = sql.Open("sqlite", filepath.Join(dir, "meshmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

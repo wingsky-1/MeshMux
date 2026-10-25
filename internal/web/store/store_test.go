@@ -38,14 +38,14 @@ func TestPrivateStateAndSchema(t *testing.T) {
 	if err = os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.Chmod(filepath.Join(dir, "meshmux.DB"), 0644); err != nil {
+	if err = os.Chmod(filepath.Join(dir, "meshmux.db"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if s, err := OpenStore(dir); err == nil {
 		s.Close()
 		t.Fatal("public DB accepted")
 	}
-	for _, name := range []string{"meshmux.DB", "bootstrap.token", ".lock", "meshmux.db-wal"} {
+	for _, name := range []string{"meshmux.db", "bootstrap.token", ".lock", "meshmux.db-wal"} {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "state")
 			os.Mkdir(dir, 0700)

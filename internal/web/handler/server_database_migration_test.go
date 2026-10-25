@@ -155,7 +155,7 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 		{"no payload files", func(r *backup.Record) { r.PayloadFiles = 0 }, nil, "DB_BACKUP_RECORD_UNVERIFIED", http.StatusConflict},
 		{"payload named elsewhere", func(r *backup.Record) { r.PayloadPath = "/var/tmp/elsewhere" }, nil, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},
 		{"empty payload directory", nil, func(path string) {
-			if err := os.Remove(filepath.Join(filepath.Dir(path), store.DatabaseBackupPayloadDirName, "meshmux.DB")); err != nil {
+			if err := os.Remove(filepath.Join(filepath.Dir(path), store.DatabaseBackupPayloadDirName, "meshmux.db")); err != nil {
 				t.Fatal(err)
 			}
 		}, "DB_BACKUP_RECORD_CORRUPT", http.StatusConflict},

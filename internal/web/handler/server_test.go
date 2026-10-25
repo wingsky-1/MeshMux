@@ -440,7 +440,7 @@ func TestMigrationRollback(t *testing.T) {
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "meshmux.DB")
+	path := filepath.Join(dir, "meshmux.db")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		t.Fatal(err)

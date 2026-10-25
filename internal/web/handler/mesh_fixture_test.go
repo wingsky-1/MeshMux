@@ -67,7 +67,7 @@ func TestMeshHubFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateDir := filepath.Join(dir, "state")
-	if _, err = os.Stat(filepath.Join(stateDir, "meshmux.DB")); err == nil {
+	if _, err = os.Stat(filepath.Join(stateDir, "meshmux.db")); err == nil {
 		t.Fatal("fixture state already exists: use a fresh MESHMUX_MESH_HUB_FIXTURE_DIR for every archived run")
 	}
 	eventsPath := filepath.Join(dir, "events.jsonl")
