@@ -5,11 +5,23 @@ package hubupgrade
 // never an authorization: it only says which frozen operation to look at, and
 // every path, target and digest is re-derived on the root side.
 //
-// A request must survive a crash half-way through publication, so it is written
-// to a private scratch name, fsynced and renamed into place. The reader opens it
-// O_NOFOLLOW, re-checks the inode it actually opened, and refuses a symlink, a
-// loose mode, another account's file, an oversized document, trailing JSON and a
-// data_dir that is not a clean absolute path.
+// A request is staged in an *unwatched* sibling directory, fsynced, and only the
+// completed document is renamed into the watched one. The path unit triggers on
+// DirectoryNotEmpty, so a scratch file under requests/ would fire the oneshot
+// while the writer was still filling it; staging outside removes that race
+// without a timeout guess in the dispatcher.
+//
+// The publish path deliberately does not fsync the request directory. It is
+// 0730 root:meshmux (write+execute, no read for the Web), so the Web cannot open
+// it O_RDONLY and a directory fsync would fail with EACCES *after* a successful
+// rename, turning a live request into HUB_HANDOFF_WRITE_FAILED. Losing a
+// request to a power cut is not load-bearing: the journal is already `queued`,
+// and reconciliation turns an unanswered request into HUB_HANDOFF_TIMEOUT.
+//
+// The reader opens the document O_NOFOLLOW, re-checks the inode it actually
+// opened, and refuses a symlink, a loose mode, another account's file, an
+// oversized document, trailing JSON and a data_dir that is not a clean absolute
+// path.
 
 import (
 	"bytes"
@@ -22,6 +34,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -29,6 +43,11 @@ const (
 	// and the path unit watches. It is deliberately outside the data
 	// directory: a restore flips --data-dir but cannot move this unit.
 	RequestDir = "/run/meshmux-hub/requests"
+	// RequestStagingDir is the unwatched sibling where a request is completed
+	// before it becomes visible. The Web creates it on demand inside the
+	// already Web-writable /run/meshmux-hub, so no unit or tmpfiles change is
+	// needed; it never appears inside the watched directory.
+	RequestStagingDir = "/run/meshmux-hub/staging"
 	// RequestDoneDir holds consumed requests. It is root:root 0700; the Web
 	// can neither read nor replace a dispatched intent.
 	RequestDoneDir = "/run/meshmux-hub/requests.done"
@@ -36,6 +55,13 @@ const (
 	RequestSchema = 1
 	// RequestMaxBytes bounds the one document a reader parses.
 	RequestMaxBytes = 1 << 10
+
+	// requestDirMode is the one accepted watched-directory mode: the Web needs
+	// write+execute to publish, and must not be able to read (list) what other
+	// principals queued.
+	requestDirMode = 0730
+	// doneDirMode is the dispatcher's private done directory.
+	doneDirMode = 0700
 
 	codeRequestInvalid = "HUB_HANDOFF_REQUEST_INVALID"
 	codeRequestWrite   = "HUB_HANDOFF_WRITE_FAILED"
@@ -59,19 +85,38 @@ func WriteRequest(dir string, r Request) (string, error) {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return "", fail(codeRequestWrite, "the request directory is not absolute")
 	}
-	if err := os.MkdirAll(dir, 0730); err != nil {
+	if err := os.MkdirAll(dir, requestDirMode); err != nil {
 		return "", fail(codeRequestWrite, "the request directory is unavailable")
 	}
 	info, err := os.Lstat(dir)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return "", fail(codeRequestWrite, "the request directory is not a real directory")
 	}
+	staging := stagingDirFor(dir)
+	if err := os.MkdirAll(staging, requestDirMode); err != nil {
+		return "", fail(codeRequestWrite, "the request staging directory is unavailable")
+	}
+	stagingInfo, err := os.Lstat(staging)
+	if err != nil || stagingInfo.Mode()&os.ModeSymlink != 0 || !stagingInfo.IsDir() ||
+		stagingInfo.Mode().Perm()&0002 != 0 ||
+		(!ownedBy(os.Geteuid(), stagingInfo) && !ownedBy(0, stagingInfo)) {
+		return "", fail(codeRequestWrite, "the request staging directory is not a safe scratch directory")
+	}
 	body, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return "", fail(codeRequestInvalid, "the request could not be encoded")
 	}
+	// A crashed writer can leave one scratch document behind; tmpfs clears it on
+	// boot, and the same operation's leftovers are never reused.
+	if leftovers, err := os.ReadDir(staging); err == nil {
+		for _, entry := range leftovers {
+			if strings.HasPrefix(entry.Name(), "."+r.OperationID+".json.part-") {
+				_ = os.Remove(filepath.Join(staging, entry.Name()))
+			}
+		}
+	}
 	target := filepath.Join(dir, r.OperationID+".json")
-	scratch, err := os.CreateTemp(dir, "."+r.OperationID+".json.part-*")
+	scratch, err := os.CreateTemp(staging, "."+r.OperationID+".json.part-*")
 	if err != nil {
 		return "", fail(codeRequestWrite, "the request scratch file could not be created")
 	}
@@ -100,22 +145,70 @@ func WriteRequest(dir string, r Request) (string, error) {
 		_ = os.Remove(scratchName)
 		return "", fail(codeRequestWrite, "the request could not be published")
 	}
-	if err := syncAllocatedDir(dir); err != nil {
-		return "", err
-	}
 	return target, nil
+}
+
+// stagingDirFor returns the unwatched staging directory for a watched one. The
+// script-visible name is fixed ("requests"), so a caller passing that path gets
+// RequestStagingDir; a fixture with another name gets a unique sibling instead of
+// a scratch file inside the watched directory.
+func stagingDirFor(requestDir string) string {
+	if requestDir == RequestDir {
+		return RequestStagingDir
+	}
+	parent := filepath.Dir(requestDir)
+	if filepath.Base(requestDir) == "requests" {
+		return filepath.Join(parent, "staging")
+	}
+	return filepath.Join(parent, "staging-"+filepath.Base(requestDir))
 }
 
 // ReadRequest parses one request for the named owner. It never follows a
 // symlink and never trusts a pathname after opening it.
 func ReadRequest(path string, expectedOwner int) (Request, error) {
-	var request Request
-	base := filepath.Base(path)
-	if !strings.HasSuffix(base, ".json") || !opIDRE.MatchString(strings.TrimSuffix(base, ".json")) {
-		return request, fail(codeRequestInvalid, "the request file name is not <op32hex>.json")
+	name := filepath.Base(path)
+	if _, ok := requestNameOperationID(name); !ok {
+		return Request{}, fail(codeRequestInvalid, "the request file name is not <op32hex>.json")
 	}
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return Request{}, fail(codeRequestInvalid, "the request is not a regular file")
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return Request{}, fail(codeRequestInvalid, "the request could not be opened without following a link")
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return Request{}, fail(codeRequestInvalid, "the request changed while it was being opened")
+	}
+	return readRequestDocument(file, name, opened, expectedOwner)
+}
+
+// ReadRequestAt is the directory-fd relative half the dispatcher uses. The
+// request is opened relative to the validated directory handle, so renaming the
+// watched path away and substituting a symlink cannot redirect the read.
+func ReadRequestAt(dirFD int, name string, expectedOwner int) (Request, error) {
+	if _, ok := requestNameOperationID(name); !ok {
+		return Request{}, fail(codeRequestInvalid, "the request file name is not <op32hex>.json")
+	}
+	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return Request{}, fail(codeRequestInvalid, "the request could not be opened without following a link")
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return Request{}, fail(codeRequestInvalid, "the request could not be inspected")
+	}
+	return readRequestDocument(file, name, info, expectedOwner)
+}
+
+func readRequestDocument(file *os.File, name string, info os.FileInfo, expectedOwner int) (Request, error) {
+	var request Request
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return request, fail(codeRequestInvalid, "the request is not a regular file")
 	}
 	if info.Mode().Perm() != 0600 || !ownedBy(expectedOwner, info) {
@@ -123,15 +216,6 @@ func ReadRequest(path string, expectedOwner int) (Request, error) {
 	}
 	if info.Size() < 1 || info.Size() > RequestMaxBytes {
 		return request, fail(codeRequestInvalid, "the request is outside its size bound")
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return request, fail(codeRequestInvalid, "the request could not be opened without following a link")
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return request, fail(codeRequestInvalid, "the request changed while it was being opened")
 	}
 	body, err := io.ReadAll(io.LimitReader(file, RequestMaxBytes+1))
 	if err != nil || len(body) > RequestMaxBytes {
@@ -143,37 +227,68 @@ func ReadRequest(path string, expectedOwner int) (Request, error) {
 	if err := validateRequest(request); err != nil {
 		return request, err
 	}
-	if request.OperationID != strings.TrimSuffix(base, ".json") {
+	operationID, _ := requestNameOperationID(name)
+	if request.OperationID != operationID {
 		return request, fail(codeRequestInvalid, "the request document and its file name name different operations")
 	}
 	return request, nil
 }
 
-// DrainRejected moves every entry of requestDir into doneDir as
-// rejected-<unix>-<name>. The dispatcher uses it for the >1-request refusal and
-// for any single request it refuses: the path unit must see an empty directory
-// again or it never re-arms.
-func DrainRejected(requestDir, doneDir string, now time.Time) ([]string, error) {
-	entries, err := os.ReadDir(requestDir)
-	if os.IsNotExist(err) {
-		return nil, nil
+// OpenRequestDir opens the watched directory without following a symlink and
+// proves it is the expected account's exact 0730 directory. The returned handle
+// is the authority for the rest of one dispatcher pass: children are opened and
+// renamed relative to it, so replacing the path with another directory or a
+// symlink cannot redirect a read or a drain.
+func OpenRequestDir(dir string, expectedOwner int) (*os.File, error) {
+	return openDispatchDir(dir, expectedOwner, requestDirMode, codeRequestInvalid)
+}
+
+// OpenRequestDoneDir is the same proof for the dispatcher's private done
+// directory: 0700, root-owned, no symlink.
+func OpenRequestDoneDir(dir string, expectedOwner int) (*os.File, error) {
+	return openDispatchDir(dir, expectedOwner, doneDirMode, codeRequestWrite)
+}
+
+func openDispatchDir(path string, expectedOwner int, mode os.FileMode, code string) (*os.File, error) {
+	if path == "" || !filepath.IsAbs(path) {
+		return nil, fail(code, "the dispatch directory is not absolute")
 	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fail(codeRequestWrite, "the request directory could not be read")
+		return nil, fail(code, "the dispatch directory could not be opened without following a link")
 	}
-	if err := os.MkdirAll(doneDir, 0700); err != nil {
-		return nil, fail(codeRequestWrite, "the request done directory is unavailable")
+	file := os.NewFile(uintptr(fd), path)
+	info, err := file.Stat()
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		_ = file.Close()
+		return nil, fail(code, "the dispatch directory is not a real directory")
 	}
-	info, err := os.Lstat(doneDir)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
-		info.Mode().Perm() != 0700 || !ownedBy(os.Geteuid(), info) {
-		return nil, fail(codeRequestWrite, "the request done directory is not a private directory of the dispatcher")
+	if info.Mode().Perm() != mode || !ownedBy(expectedOwner, info) {
+		_ = file.Close()
+		return nil, fail(code, "the dispatch directory is not the expected private directory")
 	}
-	moved := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		source := filepath.Join(requestDir, entry.Name())
-		target := filepath.Join(doneDir, "rejected-"+itoaUnix(now)+"-"+entry.Name())
-		if err := os.Rename(source, target); err != nil {
+	return file, nil
+}
+
+// DrainAt moves the named entries of requestDir into doneDir as
+// rejected-<unix>-<name> when rejected is set, or keeps their names otherwise.
+// Both handles come from OpenRequestDir/OpenRequestDoneDir, and the rename is
+// relative to them, so a swapped directory path cannot capture the move. The
+// watched directory must end up empty or the path unit never re-arms.
+func DrainAt(requestDir, doneDir *os.File, names []string, rejected bool, now time.Time) ([]string, error) {
+	if requestDir == nil || doneDir == nil {
+		return nil, fail(codeRequestWrite, "the dispatch directories are not open")
+	}
+	moved := make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
+			return moved, fail(codeRequestWrite, "a request entry name is not a plain file name")
+		}
+		target := name
+		if rejected {
+			target = "rejected-" + itoaUnix(now) + "-" + name
+		}
+		if err := unix.Renameat(int(requestDir.Fd()), name, int(doneDir.Fd()), target); err != nil {
 			return moved, fail(codeRequestWrite, "a request could not be drained")
 		}
 		moved = append(moved, target)
@@ -195,6 +310,15 @@ func validateRequest(request Request) error {
 	return nil
 }
 
+// requestNameOperationID accepts exactly <op32hex>.json as a request name.
+func requestNameOperationID(name string) (string, bool) {
+	if !strings.HasSuffix(name, ".json") {
+		return "", false
+	}
+	operationID := strings.TrimSuffix(name, ".json")
+	return operationID, opIDRE.MatchString(operationID)
+}
+
 // cleanAbsolutePath is the one path rule shared by the request writer, the
 // dispatcher and the unit parser: absolute, already clean, and free of control
 // bytes that would make a log line or an argv element ambiguous.
@@ -212,18 +336,6 @@ func decodeStrictDocument(body []byte, destination any) error {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("trailing JSON")
-	}
-	return nil
-}
-
-func syncAllocatedDir(dir string) error {
-	handle, err := os.Open(dir)
-	if err != nil {
-		return fail(codeRequestWrite, "the request directory could not be opened for flushing")
-	}
-	defer handle.Close()
-	if err := handle.Sync(); err != nil {
-		return fail(codeRequestWrite, "the request directory could not be flushed")
 	}
 	return nil
 }

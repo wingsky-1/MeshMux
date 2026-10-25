@@ -104,56 +104,66 @@ type DispatchConfig struct {
 // RunDispatch performs one dispatcher pass. A missing/empty request directory is
 // a successful no-op; every actual request either ends in exactly one exec of a
 // verified copy or in a failed result with no exec.
+//
+// The watched directory is opened O_NOFOLLOW|O_DIRECTORY and must be the
+// dispatcher account's exact 0730 directory; every list, read and rename after
+// that is relative to the open handle. The directory is group-writable by the
+// Web (it must publish there), so a path-based pass could be redirected by
+// renaming the directory away and substituting a symlink or another directory
+// between the check and the use.
 func RunDispatch(ctx context.Context, cfg DispatchConfig, _ node.CommandRunner) error {
 	if err := normalizeDispatchConfig(&cfg); err != nil {
 		return err
 	}
-	requests, strays, err := scanRequestDir(cfg.RequestDir)
+	requestDir, err := openOptionalRequestDir(cfg.RequestDir, cfg.RootOwner)
 	if err != nil {
 		return err
 	}
-	if len(requests) == 0 && len(strays) > 0 {
-		// The path unit fires on the Web's scratch file too. Give an in-flight
-		// fsync+rename a short, bounded chance to publish the real request
-		// before treating the scratch name as crash residue.
-		if err := settleScratch(ctx); err != nil {
-			return err
-		}
-		requests, strays, err = scanRequestDir(cfg.RequestDir)
-		if err != nil {
-			return err
+	if requestDir == nil {
+		return nil
+	}
+	defer requestDir.Close()
+	entries, err := requestDir.ReadDir(-1)
+	if err != nil {
+		return fail(codeRequestInvalid, "the request directory could not be read")
+	}
+	// Only <op32hex>.json is a request. The writer stages in the unwatched
+	// sibling, so no half-written document can appear here; any other name is
+	// unsupported debris and is deliberately left alone rather than guessed at.
+	// It cannot widen the boundary (nothing is executed without a validated
+	// request), but it does keep the path unit non-empty, so a later queued
+	// operation times out with HUB_HANDOFF_TIMEOUT instead of re-arming.
+	var requests []string
+	for _, entry := range entries {
+		if _, ok := requestOperationID(entry.Name()); ok {
+			requests = append(requests, entry.Name())
 		}
 	}
 	if len(requests) == 0 {
-		for _, name := range strays {
-			if err := moveRequestEntry(cfg, name, true); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
+
+	doneDir, err := openRequestDoneDir(cfg.DoneDir, cfg.RootOwner)
+	if err != nil {
+		return err
+	}
+	defer doneDir.Close()
+
 	if len(requests) > 1 {
 		for _, name := range requests {
 			opID, _ := requestOperationID(name)
 			writeFailureResult(cfg, opID, codeBusy, nil)
 		}
-		if _, err := hubupgrade.DrainRejected(cfg.RequestDir, cfg.DoneDir, cfg.Now()); err != nil {
+		if _, err := hubupgrade.DrainAt(requestDir, doneDir, requests, true, cfg.Now()); err != nil {
 			return err
 		}
 		return fail(codeBusy, "more than one request is queued; every request was drained")
 	}
 
-	// Drain anything that is not a request first; the path unit must re-arm.
-	for _, name := range strays {
-		if err := moveRequestEntry(cfg, name, true); err != nil {
-			return err
-		}
-	}
 	name := requests[0]
 	opID, _ := requestOperationID(name)
-	requestPath := filepath.Join(cfg.RequestDir, name)
 	drain := func(rejected bool) error {
-		if err := moveRequestEntry(cfg, name, rejected); err != nil {
+		if _, err := hubupgrade.DrainAt(requestDir, doneDir, []string{name}, rejected, cfg.Now()); err != nil {
 			return err
 		}
 		return nil
@@ -169,7 +179,7 @@ func RunDispatch(ctx context.Context, cfg DispatchConfig, _ node.CommandRunner) 
 		return cause
 	}
 
-	request, err := hubupgrade.ReadRequest(requestPath, cfg.Owner)
+	request, err := hubupgrade.ReadRequestAt(int(requestDir.Fd()), name, cfg.Owner)
 	if err != nil {
 		return refuse(codeOfError(err), err, nil)
 	}
@@ -178,7 +188,11 @@ func RunDispatch(ctx context.Context, cfg DispatchConfig, _ node.CommandRunner) 
 		return refuse(codeOfError(err), err, nil)
 	}
 	if request.DataDir != expectedDataDir || (cfg.DataDir != "" && cfg.DataDir != request.DataDir) {
-		return refuse(codeDataDirMismatch, fail(codeDataDirMismatch, "the request data directory is not the Web unit's current --data-dir"), nil)
+		// Recovery hint in the log line only: inspect `systemctl cat
+		// meshmux-web.service` and move any hand-made ExecStart drop-in into the
+		// /etc drop-in directory this check reads.
+		return refuse(codeDataDirMismatch, fail(codeDataDirMismatch,
+			"the request data directory is not the Web unit's current --data-dir; inspect systemctl cat meshmux-web.service and keep ExecStart drop-ins under /etc/systemd/system/meshmux-web.service.d"), nil)
 	}
 
 	op, found, err := hubupgrade.ReadOp(request.DataDir, request.OperationID, cfg.Owner)
@@ -321,37 +335,26 @@ func lookupAccountID(name string) (int, error) {
 	return strconv.Atoi(account.Uid)
 }
 
-// scanRequestDir splits the directory into request-named entries and everything
-// else. A missing directory is an empty directory.
-func scanRequestDir(dir string) (requests, strays []string, err error) {
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil, nil
+// openOptionalRequestDir is OpenRequestDir with the one benign absence: a host
+// whose tmpfiles drop-in has not created the directory yet has no request.
+func openOptionalRequestDir(dir string, expectedOwner int) (*os.File, error) {
+	handle, err := hubupgrade.OpenRequestDir(dir, expectedOwner)
+	if err == nil {
+		return handle, nil
 	}
-	if err != nil {
-		return nil, nil, fail(codeRequestInvalid, "the request directory could not be read")
+	if _, statErr := os.Lstat(dir); os.IsNotExist(statErr) {
+		return nil, nil
 	}
-	for _, entry := range entries {
-		if _, ok := requestOperationID(entry.Name()); ok {
-			requests = append(requests, entry.Name())
-		} else {
-			strays = append(strays, entry.Name())
-		}
-	}
-	return requests, strays, nil
+	return nil, err
 }
 
-// settleScratch waits once for a scratch-file trigger to become a published
-// request. It is not a retry loop: a crash residue is drained after it.
-func settleScratch(ctx context.Context) error {
-	timer := time.NewTimer(100 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+// openRequestDoneDir creates the dispatcher's own done directory 0700 when it is
+// absent, then proves it through the same open-handle check.
+func openRequestDoneDir(dir string, expectedOwner int) (*os.File, error) {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fail(codeDrainFailed, "the request done directory is unavailable")
 	}
+	return hubupgrade.OpenRequestDoneDir(dir, expectedOwner)
 }
 
 func requestOperationID(name string) (string, bool) {
@@ -428,29 +431,17 @@ func writeFailureResult(cfg DispatchConfig, opID, code string, op *hubupgrade.Op
 	_, _ = hubupgrade.WriteResult(cfg.ResultsDir, result)
 }
 
-func moveRequestEntry(cfg DispatchConfig, name string, rejected bool) error {
-	if err := os.MkdirAll(cfg.DoneDir, 0700); err != nil {
-		return fail(codeDrainFailed, "the request done directory is unavailable")
-	}
-	info, err := os.Lstat(cfg.DoneDir)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
-		info.Mode().Perm() != 0700 || !statOwnedBy(info, cfg.RootOwner) {
-		return fail(codeDrainFailed, "the request done directory is not a private root-owned directory")
-	}
-	target := filepath.Join(cfg.DoneDir, name)
-	if rejected {
-		target = filepath.Join(cfg.DoneDir, "rejected-"+strconv.FormatInt(cfg.Now().Unix(), 10)+"-"+name)
-	}
-	if err := os.Rename(filepath.Join(cfg.RequestDir, name), target); err != nil {
-		return fail(codeDrainFailed, "the request could not be drained")
-	}
-	return nil
-}
-
 // webDataDir returns the data directory of the effective Web ExecStart, applying
 // root-owned drop-ins in lexicographic order. A drop-in may reset ExecStart with
 // an empty value and then name exactly one replacement, which is exactly the
 // shape Task 7 writes for a restore.
+//
+// Caveat: only /etc/systemd/system/meshmux-web.service.d/*.conf is read. That is
+// the tree the installer and the restore executor write; a hand-made drop-in
+// under /usr/lib/systemd/system or /run/systemd/system would make this comparison
+// disagree with the running unit. The refusal is HUB_HANDOFF_DATA_DIR_MISMATCH;
+// the recovery hint is to inspect `systemctl cat meshmux-web.service` and keep
+// data-dir overrides in the /etc drop-in directory.
 func webDataDir(unitPath string, expectedOwner int) (string, error) {
 	body, err := readUnitFile(unitPath, expectedOwner)
 	if err != nil {

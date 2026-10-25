@@ -60,6 +60,7 @@ func freeBytes(path string) (uint64, error) {
 	}
 	// Bavail is the space available to an unprivileged process; the Web runs as
 	// meshmux and must not consume root-reserved blocks it can never use.
+	// (Bavail is uint64: no negative check possible or needed.)
 	available := uint64(stat.Bavail)
 	block := uint64(stat.Bsize)
 	if available > math.MaxUint64/block {

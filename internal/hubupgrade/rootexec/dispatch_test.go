@@ -68,10 +68,18 @@ func newDispatchFixture(t *testing.T) *dispatchFixture {
 		pkgBytes:    []byte("#!/bin/sh\nexit 0\n"),
 		oldBytes:    []byte("#!/bin/sh\necho old\n"),
 	}
-	for _, dir := range []string{f.dataDir, f.manifestDir, f.requestDir, f.doneDir, f.execRoot, f.resultsDir, filepath.Dir(f.webUnit)} {
+	for _, dir := range []string{f.dataDir, f.manifestDir, f.doneDir, f.execRoot, f.resultsDir, filepath.Dir(f.webUnit)} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// The watched request directory is the production shape: 0730, owned by
+	// the dispatcher account, group-writable so the Web can publish.
+	if err := os.MkdirAll(f.requestDir, 0730); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(f.requestDir, 0730); err != nil {
+		t.Fatal(err)
 	}
 	f.pkgSHA = sha256Hex(f.pkgBytes)
 	f.oldSHA = sha256Hex(f.oldBytes)
@@ -346,6 +354,114 @@ func TestDispatchRejectsSymlinkRequest(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("request directory after rejection = %v, %v", entries, err)
 	}
+}
+
+// TestDispatchRejectsUnsafeRequestDir is the blocker-2 regression. requests/ is
+// group-writable by the Web, so its identity is part of the boundary: a
+// symlinked, Web-readable or foreign-owned watched directory must never be
+// traversed, because the Web could otherwise rename the real directory away and
+// substitute one it controls.
+func TestDispatchRejectsUnsafeRequestDir(t *testing.T) {
+	t.Run("symlink", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		realDir := filepath.Join(f.root, "run/meshmux-hub/real-requests")
+		if err := os.Mkdir(realDir, 0730); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(realDir, 0730); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(f.requestDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realDir, f.requestDir); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := hubupgrade.WriteRequest(realDir, f.updateRequest()); err != nil {
+			t.Fatal(err)
+		}
+		executed := false
+		err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+			executed = true
+			return nil
+		}), node.ExecRunner{})
+		if err == nil || executed {
+			t.Fatalf("symlinked request directory: err=%v executed=%v", err, executed)
+		}
+		if code := errorCode(err); code != codeRequestInvalid {
+			t.Fatalf("code = %q, want %q", code, codeRequestInvalid)
+		}
+	})
+	t.Run("web-readable mode", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		if err := os.Chmod(f.requestDir, 0770); err != nil {
+			t.Fatal(err)
+		}
+		f.writeRequest(t, f.updateRequest())
+		executed := false
+		err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+			executed = true
+			return nil
+		}), node.ExecRunner{})
+		if err == nil || executed {
+			t.Fatalf("0770 request directory: err=%v executed=%v", err, executed)
+		}
+	})
+	t.Run("foreign owner", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		f.writeRequest(t, f.updateRequest())
+		cfg := f.config(func(string, []string, []string) error {
+			t.Error("exec ran with a foreign request-directory owner")
+			return nil
+		})
+		cfg.RootOwner = os.Geteuid() + 1
+		if err := RunDispatch(context.Background(), cfg, node.ExecRunner{}); err == nil {
+			t.Fatal("a request directory owned by another account was accepted")
+		}
+	})
+}
+
+// TestDispatchIgnoresUnstagedResidue proves the removed scratch-drain branch:
+// only a completed <op>.json is a request. A name the writer never publishes
+// (scratch residue) is left alone, so the dispatcher cannot consume a document
+// that is still being written; a real request beside it is still executed.
+func TestDispatchIgnoresUnstagedResidue(t *testing.T) {
+	t.Run("residue alone is a no-op", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		residue := filepath.Join(f.requestDir, "."+fixtureOp+".json.part-123")
+		if err := os.WriteFile(residue, []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		executed := false
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+			executed = true
+			return nil
+		}), node.ExecRunner{}); err != nil {
+			t.Fatal(err)
+		}
+		if executed {
+			t.Fatal("scratch residue was executed")
+		}
+		if _, err := os.Lstat(residue); err != nil {
+			t.Fatalf("dispatcher consumed a non-request entry: %v", err)
+		}
+		if _, ok, err := hubupgrade.ReadResult(f.resultsDir, fixtureOp); err != nil || ok {
+			t.Fatalf("a result was written for a non-request: ok=%v err=%v", ok, err)
+		}
+	})
+	t.Run("residue does not block a completed request", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		if err := os.WriteFile(filepath.Join(f.requestDir, "."+fixtureOp+".json.part-9"), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		f.writeRequest(t, f.updateRequest())
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(f.requestDir, fixtureOp+".json")); !os.IsNotExist(err) {
+			t.Fatalf("the consumed request is still in the watched directory: %v", err)
+		}
+	})
 }
 
 func TestDispatchRejectsForeignDataDir(t *testing.T) {

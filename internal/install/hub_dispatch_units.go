@@ -31,6 +31,13 @@ const (
 // hubDispatchService is a fixed oneshot. It has no [Install] section on purpose:
 // the installer enables only the .path unit, and the service runs when the path
 // unit fires.
+//
+// The ReadWritePaths list is intentionally broad: it is the enumerated write set
+// of the Hub self-upgrade (staged/exec packages, data dir, installer state,
+// config and systemd units). What keeps it safe is not a narrow path list but
+// that ExecStart is a constant dispatcher which can only exec a root-manifest-
+// pinned digest from a root-only copy; no unit attribute or argv comes from the
+// Web.
 const hubDispatchService = `[Unit]
 Description=MeshMux Hub upgrade dispatcher
 After=local-fs.target
