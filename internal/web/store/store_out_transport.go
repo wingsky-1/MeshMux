@@ -108,20 +108,22 @@ type OutTransport struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-// OutPoolEntry is one Out of the pool: the node identity, its dial parameters
-// when configured, and the Lines a subscription selects it for. It is the
-// selection datasource the wizard consumes; it carries no credential, no link key
-// and no allowlist.
+// OutPoolEntry is one selectable egress of the pool: an Out node or an
+// external HTTP proxy (Ruling R11). It carries the node identity, its dial
+// parameters when configured, and the Lines a subscription selects it for. It
+// is the selection datasource the wizard consumes; it carries no credential,
+// no link key, no proxy password and no allowlist.
 //
-// LineIDs is plural because one Out may be selected by several subscriptions
+// LineIDs is plural because one egress may be selected by several subscriptions
 // serving different Lines, and the pool has to show all of them. Enabled is true
-// when at least one active subscription serves at least one Line through this Out;
-// it is a wizard/UI signal only — it does NOT authorize anything. The source
-// authorization is node membership (Ruling R10): every enrolled Line is accepted by
-// every enrolled Out regardless of any selection.
+// when at least one active subscription serves at least one Line through this
+// egress; it is a wizard/UI signal only — it does NOT authorize anything. The
+// source authorization is node membership (Ruling R10): every enrolled Line is
+// accepted by every enrolled Out regardless of any selection.
 type OutPoolEntry struct {
 	OutID               string   `json:"out_id"`
 	DisplayName         string   `json:"display_name"`
+	Role                string   `json:"role"`
 	VlessPort           int      `json:"vless_port"`
 	Online              bool     `json:"online"`
 	TransportConfigured bool     `json:"transport_configured"`
@@ -130,6 +132,11 @@ type OutPoolEntry struct {
 	LineIDs             []string `json:"line_ids,omitempty"`
 	Enabled             bool     `json:"enabled"`
 }
+
+// External reports whether the entry is an external HTTP proxy. An external
+// egress is always reachable as far as the Hub knows, so the UI labels it
+// "外部" instead of online/offline.
+func (e OutPoolEntry) External() bool { return e.Role == "http" }
 
 // SetOutTransport stores the dial address of one Out node. The node must
 // exist with the immutable out role; the port must equal the Out's VLESS
@@ -286,14 +293,15 @@ func (s *Store) ListOutTransports() ([]OutTransport, error) {
 // every Out (pausing a subscription never narrows an allowlist).
 func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
 	rows, err := s.DB.Query(`
-SELECT n.id, n.display_name, n.vless_port, n.status, n.last_heartbeat,
- o2.server, o2.port, l.node_id, b.state
+SELECT n.id, n.role, n.display_name, n.vless_port, n.status, n.last_heartbeat,
+ o2.server, o2.port, h.url, l.node_id, b.state
 FROM nodes n
 LEFT JOIN out_settings o2 ON o2.node_id=n.id
+LEFT JOIN node_http_proxy h ON h.node_id=n.id
 LEFT JOIN subscription_outs o ON o.out_id=n.id
 LEFT JOIN subscribers b ON b.id=o.subscriber_id
 LEFT JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
-WHERE n.role='out'
+WHERE n.role IN ('out','http')
 ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 	if err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
@@ -304,17 +312,19 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 	for rows.Next() {
 		var (
 			outID    string
+			role     string
 			name     string
 			vless    int
 			status   string
 			lastBeat int64
 			server   sql.NullString
 			port     sql.NullInt64
+			proxyURL sql.NullString
 			lineID   sql.NullString
 			state    sql.NullString
 		)
-		if err := rows.Scan(&outID, &name, &vless, &status, &lastBeat,
-			&server, &port, &lineID, &state); err != nil {
+		if err := rows.Scan(&outID, &role, &name, &vless, &status, &lastBeat,
+			&server, &port, &proxyURL, &lineID, &state); err != nil {
 			return nil, errors.New("DATABASE_UNAVAILABLE")
 		}
 		entry, seen := byOut[outID]
@@ -322,14 +332,29 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 			entry = &OutPoolEntry{
 				OutID:       outID,
 				DisplayName: name,
+				Role:        role,
 				VlessPort:   vless,
 				Online:      status != "pending" && lastBeat != 0 && now.Sub(time.Unix(lastBeat, 0)) <= OfflineAfter,
 				LineIDs:     []string{},
 			}
-			entry.TransportConfigured = server.Valid && port.Valid
-			if entry.TransportConfigured {
-				entry.Server = server.String
-				entry.Port = int(port.Int64)
+			if role == "http" {
+				// The external proxy has no heartbeat: its endpoint is the
+				// operator's URL and it is "reachable" only in the sense that
+				// the Hub holds a configured dial body. The UI labels it 外部.
+				entry.Online = true
+				if proxyURL.Valid {
+					if egress, parseErr := nodedomain.ParseHTTPProxyURL(proxyURL.String); parseErr == nil {
+						entry.TransportConfigured = true
+						entry.Server = egress.Server
+						entry.Port = egress.Port
+					}
+				}
+			} else {
+				entry.TransportConfigured = server.Valid && port.Valid
+				if entry.TransportConfigured {
+					entry.Server = server.String
+					entry.Port = int(port.Int64)
+				}
 			}
 			byOut[outID] = entry
 			order = append(order, outID)

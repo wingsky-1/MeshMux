@@ -772,7 +772,7 @@ func SubscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string,
 		return SubscriberSyncPartial, "DATABASE_UNAVAILABLE", err
 	}
 	switch egress {
-	case LineEgressDirect, LineEgressHealthy:
+	case LineEgressDirect, LineEgressExternal, LineEgressHealthy:
 	case LineEgressVerifying:
 		return SubscriberSyncPending, egressCode, nil
 	default:

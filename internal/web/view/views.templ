@@ -188,7 +188,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 					if data.Notice != "" {
 						<div class="notice">{ data.Notice }</div>
 					}
-					<section class="panel out-pool"><div class="panel-heading"><h2>Out 池</h2><span class="badge">{ len(data.Pool) } 个已纳管 · 不限个数</span></div>
+					<section class="panel out-pool"><div class="panel-heading"><h2>出口池（Out / HTTP 代理）</h2><span class="badge">{ len(data.Pool) } 个已纳管 · 不限个数</span></div>
 						{{ bound, missing := 0, 0 }}
 						for _, entry := range data.Pool {
 							if entry.Enabled {
@@ -198,7 +198,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								{{ missing++ }}
 							}
 						}
-						<p class="muted">{ bound } 个被订阅选中 · { missing } 个未配置出口地址。Out 池本身不限个数；Line 与 Out 默认互通（纳管即加入 ACL），订阅只决定客户端走哪个出口。同一 Line 的订阅必须选择同一个 Out（由订阅向导保证）。</p>
+						<p class="muted">{ bound } 个被订阅选中 · { missing } 个未配置出口地址。出口池本身不限个数；Out 与 Line 默认互通（纳管即加入 ACL），HTTP 代理是外部端点（无 Agent / 无回读 / 不参与 ACL），订阅只决定客户端走哪个出口。同一 Line 的订阅必须选择同一个出口（由订阅向导保证）。</p>
 						<a class="button" href="#enroll">纳管节点 →</a>
 					</section>
 					if created != nil {
@@ -225,7 +225,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 							}
 						</dl></section>
 					</div>
-					<div id="enroll" class="modal" role="dialog" aria-label="纳管节点"><div class="modal-card"><section class="panel"><div class="panel-heading"><h2>纳管节点</h2><a class="text-button" href="#">关闭 ✕</a></div><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><span class="field-label">角色</span><div class="radio-row"><label><input type="radio" name="role" value="edge" checked required/>Line（edge）· 客户端入口</label><label><input type="radio" name="role" value="out" required/>Out · 可选私有出口</label></div><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" required placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" required placeholder="例如 2222"/><p class="hint">SSH 端口由你在目标主机上准备，安装器会在安装开放后检测它。VLESS 与 SSH 端口必须不同。Out 节点创建后，在下方节点卡片中配置其出口地址，再到订阅向导中选择它。配对码 15 分钟过期、一次性使用，不记日志。</p><button type="submit">创建并签发配对码 →</button></form></section></div></div>
+					<div id="enroll" class="modal" role="dialog" aria-label="纳管节点"><div class="modal-card"><section class="panel"><div class="panel-heading"><h2>纳管节点</h2><a class="text-button" href="#">关闭 ✕</a></div><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><span class="field-label">角色</span><div class="radio-row"><label><input type="radio" name="role" value="edge" checked required/>Line（edge）· 客户端入口</label><label><input type="radio" name="role" value="out" required/>Out · 可选私有出口</label><label><input type="radio" name="role" value="http" required/>HTTP 代理 · 外部出口</label></div><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><div id="node-port-fields"><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" placeholder="例如 2222"/></div><div id="http-proxy-fields"><label for="proxy_url">HTTP 代理 URL</label><input id="proxy_url" name="proxy_url" type="text" maxlength="512" placeholder="http://user:pass@proxy.example.invalid:8080"/><p class="hint">仅接受 http://主机:端口，可带用户名与密码，不要带路径或查询参数。URL 中的凭据单独存放，页面只显示 host:port。HTTP 代理是外部节点：无 Agent、无配对、无回读，也不参与 Out ACL。</p></div><p class="hint">Line / Out 需要 VLESS 与 SSH 端口，且两者必须不同；SSH 端口由你在目标主机上准备。Out 节点创建后，在下方节点卡片中配置其出口地址，再到订阅向导中选择它。HTTP 代理保存 URL 后即可在订阅向导中选择。配对码 15 分钟过期、一次性使用，不记日志（HTTP 代理不需要配对码）。</p><button type="submit">创建节点 →</button></form></section></div></div>
 						<section class="panel"><div class="panel-heading"><h2>节点列表</h2><span class="badge">待纳管</span></div>
 					if len(nodes) == 0 {
 						<p class="muted">尚未创建待纳管节点。</p>
@@ -236,7 +236,9 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 							<article class="node-card">
 								<div class="panel-heading">
 									<h3>{ n.DisplayName }</h3>
-									if n.Offline {
+									if n.Role == "http" {
+										<span class="badge accent">外部</span>
+									} else if n.Offline {
 										<span class="badge failure">离线</span>
 									} else {
 										<span class="badge accent">最近联系</span>
@@ -244,7 +246,12 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								</div>
 									<dl class="details">
 										<dt>Node ID</dt><dd><code>{ n.ID }</code></dd>
-										<dt>角色 / 端口</dt><dd>{ n.Role } · VLESS { n.VlessPortString() } · SSH { n.SSHPortString() }</dd>
+										if n.Role == "http" {
+											<dt>角色</dt><dd>http · 外部 HTTP 代理（无 Agent / 无回读 / 不参与 ACL）</dd>
+										} else {
+											<dt>角色 / 端口</dt><dd>{ n.Role } · VLESS { n.VlessPortString() } · SSH { n.SSHPortString() }</dd>
+										}
+										if n.Role != "http" {
 										<dt>声明心跳版本</dt><dd>Agent { n.AgentVersion } · kernel { n.KernelVersion }（节点声明，未由回读验证）</dd>
 										<dt>严格回读版本</dt><dd>Agent { n.ObservedAgentVersion } · kernel { n.ObservedKernelVersion }</dd>
 										<dt>Agent SHA-256</dt><dd><code>{ n.ObservedAgentSHA256 }</code> · 节点自报，未与 Hub 制品清单比对</dd>
@@ -284,6 +291,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 												<span>最近联系</span>
 											}
 										</dd>
+										}
 								<dt>网络验证边界</dt><dd class="muted">公网、协议握手、客户端可用均未验证</dd>
 								if n.Role == "out" {
 									for _, entry := range data.Pool {
@@ -319,6 +327,38 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 											</dd>
 										}
 									}
+								} else if n.Role == "http" {
+									for _, entry := range data.Pool {
+										if entry.OutID == n.ID {
+											<dt>出口地址</dt><dd>
+												if entry.TransportConfigured {
+													<code>{ entry.Server }:{ entry.Port }</code><span class="badge accent">外部</span>
+												} else {
+													<span class="badge failure">未配置代理 URL</span>
+												}
+											</dd>
+											<dt>服务对象</dt><dd>
+												if len(entry.LineIDs) == 0 {
+													<span class="muted">没有订阅选择该 HTTP 代理 · 它不承载任何客户端出口</span>
+												} else {
+													for _, lineID := range entry.LineIDs {
+														<div><span>承载 Line <code>{ lineID }</code></span><span class="badge accent">订阅已选择</span></div>
+													}
+												}
+											</dd>
+											<dt>出口操作</dt><dd><div class="action-row">
+												if data.PendingDeleteOut == n.ID {
+													<form method="post" action="/nodes/out-delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><input type="hidden" name="confirm" value="1"/><button class="secondary-button" type="submit">确认删除出口</button></form>
+												} else {
+													<form method="post" action="/nodes/out-delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><button class="secondary-button" type="submit">删除出口…</button></form>
+												}
+											</div>
+												if data.PendingDeleteOut == n.ID {
+													<p class="hint">删除会<strong>彻底清除</strong>该 HTTP 代理：节点行与存储的 URL/凭据一并删除；引用过它的 Line 路由按 fail-closed 重算，不会静默改走直连。<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名（本次未删除任何内容）。</p>
+												}
+											</dd>
+										}
+									}
 								} else {
 									<dt>Out 出口</dt><dd>
 										if len(data.ByLine[n.ID]) == 0 {
@@ -331,11 +371,15 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 									</dd>
 								}
 									</dl>
+									if n.Role == "http" {
+										<p class="hint">外部 HTTP 代理没有 Agent、配对、回读或 ACL：无需安装、重签或吊销。凭据只用于渲染 Line 的 http 出站，页面与日志只显示 host:port。</p>
+									} else {
 									<div class="action-row">
 										<form method="post" action="/nodes/reconcile"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button type="submit">重新校验 / 应用</button></form>
 										<form method="post" action="/nodes/reissue"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button class="secondary-button" type="submit">重签身份</button></form>
 										<form method="post" action="/nodes/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button class="secondary-button" type="submit">吊销身份</button></form>
 									</div>
+									}
 							</article>
 					}
 					<p class="hint">check/stage/apply 成功不等于 Native ready。只有最新 desired revision 与严格本机回读一致才标为“本机服务已确认”；旧成功仅作为最近回读。离线不会下发停线任务。</p>

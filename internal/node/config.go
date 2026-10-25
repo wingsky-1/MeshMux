@@ -50,12 +50,18 @@ const (
 	CurrentAgentVersion = "1.0.0-dev"
 )
 
-// Role is the installed node purpose. Line is represented by "edge".
+// Role is the Hub-visible node purpose. Line is represented by "edge".
+//
+// RoleHTTP is an external HTTP proxy managed by the Hub only (Ruling R11): it
+// has no Agent, no pairing, no candidate and no readback, so valid() (the
+// agent/install role check) deliberately rejects it. Its status is always
+// "external" and it is excluded from every convergence gate.
 type Role string
 
 const (
 	RoleEdge Role = "edge"
 	RoleOut  Role = "out"
+	RoleHTTP Role = "http"
 )
 
 // Config is the installer-owned, non-secret Agent configuration. Installed
@@ -408,6 +414,8 @@ func (c Config) Metadata() Metadata {
 }
 
 func (r Role) valid() bool {
+	// Only an installed Agent role. RoleHTTP is a Hub-only external endpoint:
+	// it never receives a Config, a Metadata document or a Candidate.
 	return r == RoleEdge || r == RoleOut
 }
 

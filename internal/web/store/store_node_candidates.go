@@ -282,6 +282,11 @@ func (s *Store) ReconcileNode(nodeID string, now time.Time) (storedCandidate, []
 	if err != nil {
 		return storedCandidate{}, nil, errors.New("DATABASE_UNAVAILABLE")
 	}
+	if role == string(node.RoleHTTP) {
+		// An external HTTP proxy has no Agent, candidate or readback; a
+		// reconcile would have nowhere to go (Ruling R11).
+		return storedCandidate{}, nil, errors.New("NODE_ROLE_INVALID: an external http proxy has no agent candidate")
+	}
 	var unfinished int
 	if err = tx.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status IN ('pending','applying','verifying')`, nodeID).Scan(&unfinished); err != nil {
 		return storedCandidate{}, nil, errors.New("DATABASE_UNAVAILABLE")

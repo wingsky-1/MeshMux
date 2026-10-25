@@ -611,7 +611,7 @@ func SubscriptionWizardPage(p PageData, v SubscriptionWizardView) templ.Componen
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<p class=\"hint\">凭据与线路一一对应：保留的线路沿用历史 UUID，新增线路在保存时获得新凭据，移除的线路只停用、UUID 保留可审计。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>二 · Out</h2><span class=\"badge\">已记录，执行待 1.1</span></div><p class=\"hint\">！1.0 每个订阅最多选择 1 个 Out；同一 Line 的所有订阅必须选择同一个 Out，否则后选会被拒绝。</p><label class=\"sub-check\"><input type=\"radio\" name=\"out_id\" value=\"\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<p class=\"hint\">凭据与线路一一对应：保留的线路沿用历史 UUID，新增线路在保存时获得新凭据，移除的线路只停用、UUID 保留可审计。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>二 · 出口</h2><span class=\"badge\">Out / HTTP 代理 · 单选</span></div><p class=\"hint\">！1.0 每个订阅最多选择 1 个出口：MeshMux Out 或外部 HTTP 代理。同一 Line 的所有订阅必须选择同一个出口，否则后选会被拒绝。</p><label class=\"sub-check\"><input type=\"radio\" name=\"out_id\" value=\"\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -621,12 +621,12 @@ func SubscriptionWizardPage(p PageData, v SubscriptionWizardView) templ.Componen
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "> <span class=\"sub-check-text\">不使用 Out<small>Line 直出；代理规则也走 Line</small></span></label> ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 62, "> <span class=\"sub-check-text\">不使用出口<small>Line 直出；代理规则也走 Line</small></span></label> ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if len(v.Outs) == 0 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "<p class=\"hint\">Out 池为空。请先在节点页纳管 Out 并填写出口地址。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "<p class=\"hint\">出口池为空。请先在节点页纳管 Out 或 HTTP 代理并配置出口地址。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -714,7 +714,7 @@ func SubscriptionWizardPage(p PageData, v SubscriptionWizardView) templ.Componen
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "<p class=\"hint\">Out 选择只决定 Line 路由片段渲染的出口并过内核门禁；服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>三 · 规则</h2><span class=\"badge\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "<p class=\"hint\">出口选择只决定 Line 路由片段渲染的出口并过内核门禁：Out 使用 Hub 签发的 Shadowsocks link key，HTTP 代理使用其 URL/凭据渲染 http 出站。服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>三 · 规则</h2><span class=\"badge\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -957,7 +957,7 @@ func (v SubscriptionWizardView) noOutSelected() bool {
 	return true
 }
 
-// Endpoint renders one Out's dial address or its configuration state.
+// Endpoint renders one egress's dial address or its configuration state.
 func (o WizardOut) Endpoint() string {
 	if !o.Configured {
 		return "未配置出口地址"
@@ -965,8 +965,12 @@ func (o WizardOut) Endpoint() string {
 	return o.Server + ":" + wizardVersion(o.Port)
 }
 
-// StateLabel renders one Out's availability.
+// StateLabel renders one egress's availability. An external HTTP proxy is
+// always 外部: the Hub has no heartbeat for it and never claims one.
 func (o WizardOut) StateLabel() string {
+	if o.External() {
+		return "外部 · HTTP 代理"
+	}
 	if o.Online {
 		return "在线"
 	}

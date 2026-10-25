@@ -173,7 +173,7 @@ func TestRunSurfacesSchemaTooNewRecord(t *testing.T) {
 	}
 	// One above the schema this binary owns: 11 is a version the migration
 	// chain can still upgrade from, so it would not exercise the gate.
-	if _, err := db.Exec(`PRAGMA user_version=16`); err != nil {
+	if _, err := db.Exec(`PRAGMA user_version=17`); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}

@@ -213,9 +213,11 @@ func normalizeDeviceSelection(deviceIDs []string) ([]string, error) {
 	return out, nil
 }
 
-// validateSelectionOutTx checks that a selected Out is an existing Out node
-// with a configured dial address. An Out without a transport would render a
-// route that names an egress nobody can reach.
+// validateSelectionOutTx checks that a selected egress is a usable endpoint:
+// a managed Out with configured transport, or an external HTTP proxy
+// (Ruling R11) with a stored proxy row. The proxy is not an Agent node, so the
+// out_settings requirement applies to role "out" only. An egress without a
+// dial body would render a route that names an egress nobody can reach.
 func validateSelectionOutTx(tx *sql.Tx, outID string) error {
 	if outID == "" {
 		return nil
@@ -228,15 +230,25 @@ func validateSelectionOutTx(tx *sql.Tx, outID string) error {
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
-	if role != "out" {
-		return errors.New("OUT_ROLE_INVALID: only out nodes can be selected as an out")
-	}
-	var configured int
-	if err := tx.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, outID).Scan(&configured); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	if configured == 0 {
-		return errors.New("OUT_NOT_CONFIGURED: configure the out transport before selecting it")
+	switch role {
+	case "out":
+		var configured int
+		if err := tx.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, outID).Scan(&configured); err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		if configured == 0 {
+			return errors.New("OUT_NOT_CONFIGURED: configure the out transport before selecting it")
+		}
+	case "http":
+		var configured int
+		if err := tx.QueryRow(`SELECT count(*) FROM node_http_proxy WHERE node_id=?`, outID).Scan(&configured); err != nil {
+			return errors.New("DATABASE_UNAVAILABLE")
+		}
+		if configured == 0 {
+			return errors.New("OUT_NOT_CONFIGURED: configure the http proxy before selecting it")
+		}
+	default:
+		return errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected as an egress")
 	}
 	return nil
 }

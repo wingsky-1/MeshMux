@@ -26,7 +26,9 @@ type WizardLine struct {
 	Code        string
 }
 
-// WizardOut is one selectable Out row.
+// WizardOut is one selectable egress row: a MeshMux Out or an external HTTP
+// proxy (Ruling R11). Kind is the node role; an external proxy has no
+// heartbeat, so its state label is 外部 instead of online/offline.
 type WizardOut struct {
 	OutID       string
 	DisplayName string
@@ -35,7 +37,11 @@ type WizardOut struct {
 	Online      bool
 	Configured  bool
 	Selected    bool
+	Kind        string
 }
+
+// External reports whether the row is an external HTTP proxy.
+func (o WizardOut) External() bool { return o.Kind == "http" }
 
 // WizardRule is one selectable rule revision.
 type WizardRule struct {

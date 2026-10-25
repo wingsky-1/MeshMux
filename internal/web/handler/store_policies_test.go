@@ -79,7 +79,7 @@ func TestSchemaV8MigrationReplays(t *testing.T) {
 	if policies, err := s.ListRoutePolicies(""); err != nil || len(policies) != 0 {
 		t.Fatalf("replayed tables not empty: %d err=%v", len(policies), err)
 	}
-	if _, err := s.DB.Exec(`PRAGMA user_version=16`); err != nil {
+	if _, err := s.DB.Exec(`PRAGMA user_version=17`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

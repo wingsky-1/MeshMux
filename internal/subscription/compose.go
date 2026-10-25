@@ -161,14 +161,25 @@ type ComposeLine struct {
 	Credential Credential
 }
 
-// ComposeOut is one selected Out node. It carries no credential: the Line
-// presents the Hub-issued link credential on its own candidate path, never in a
-// subscription document.
+// ComposeOutHTTP marks one egress slot entry whose endpoint is an external
+// HTTP proxy (Ruling R11) instead of a MeshMux Out node. The composer only
+// needs the fact: the proxy credentials never enter a client document, they
+// stay in the Line candidate's private egress.
+const ComposeOutHTTP = "http"
+
+// ComposeOut is one selected egress: an Out node or an external HTTP proxy.
+// The 1.0 slot always holds at most one entry; Kind distinguishes the two
+// shapes for the UI, the selection identity and validation. It carries no
+// credential: the Line presents the Hub-issued link credential on its own
+// candidate path, never in a subscription document.
 type ComposeOut struct {
 	OutID       string
 	DisplayName string
 	Server      string
 	Port        int
+	// Kind is "" (or "out") for a MeshMux Out node and ComposeOutHTTP for an
+	// external HTTP proxy.
+	Kind string
 }
 
 // ComposeRule is one pinned library revision in the subscription's order.
@@ -293,14 +304,14 @@ func ComposeSubscription(lines []ComposeLine, outs []ComposeOut, rules []Compose
 			// An Out that no rule selects would render a Line route that never
 			// uses it: the operator asked for a double hop the document cannot
 			// express. Refuse instead of silently keeping the Line egress.
-			block(CodeComposeOutUnused, "已选择 Out，但没有任何代理规则使用它；请为规则选择代理动作或取消 Out")
+			block(CodeComposeOutUnused, "已选择出口，但没有任何代理规则使用它；请为规则选择代理动作或取消出口")
 		}
 	}
 	if hasBlocking() {
 		return ComposeDocuments{}, diagnostics
 	}
 	if out != nil {
-		remind(CodeComposeOutRecorded, "Out 选择已记录；服务端授权切换待 1.1，当前仍按既有 Out 绑定路径执行")
+		remind(CodeComposeOutRecorded, "出口选择已记录；Line 路由片段按所选出口渲染并通过内核门禁")
 	}
 	if len(network) > 0 {
 		remind(CodeComposeNetworkRecorded, "组网设备选择已记录；Mesh 子网路由执行待 1.1，本订阅不包含 Mesh 端点")
@@ -343,12 +354,18 @@ func ComposeSubscription(lines []ComposeLine, outs []ComposeOut, rules []Compose
 	return documents, diagnostics
 }
 
-// validateComposeOut checks the operator-visible half of one Out. The endpoint
-// is required: an Out without a configured dial address would render a route
-// that names an egress nobody can reach.
+// validateComposeOut checks the operator-visible half of one egress. The
+// endpoint is required: an egress without a configured dial address would
+// render a route that names an egress nobody can reach. The kind is either the
+// MeshMux Out ("out" or empty) or an external HTTP proxy ("http").
 func validateComposeOut(out ComposeOut) error {
 	if err := ValidateID(out.OutID); err != nil {
 		return errors.New(CodeComposeOutInvalid + ": out_id must be 32 lowercase hex characters")
+	}
+	switch out.Kind {
+	case "", "out", ComposeOutHTTP:
+	default:
+		return errors.New(CodeComposeOutInvalid + ": the egress kind must be out or http")
 	}
 	if out.Server == "" || !validHost(out.Server) {
 		return errors.New(CodeComposeOutInvalid + ": the out endpoint must be one hostname or IP address")
@@ -597,7 +614,7 @@ func composeSelectionID(lines []Line, out *ComposeOut, rules []ComposeRule, netw
 		builder.WriteString("line\t" + line.NodeID + "\t" + strconv.Itoa(line.SortOrder) + "\n")
 	}
 	if out != nil {
-		builder.WriteString("out\t" + out.OutID + "\n")
+		builder.WriteString("out\t" + out.OutID + "\t" + out.Kind + "\n")
 	}
 	for _, rule := range rules {
 		builder.WriteString("rule\t" + rule.StableKey + "\t" + strconv.Itoa(rule.Version) + "\n")

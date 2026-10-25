@@ -64,8 +64,8 @@ func TestWizardPageRendersFourGroupsAndExecutionBoundary(t *testing.T) {
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{
-		"订阅向导", "一 · 线路", "二 · Out", "三 · 规则", "四 · 组网",
-		"已记录，执行待 1.1", "预览（不保存）", "保存并校验",
+		"订阅向导", "一 · 线路", "二 · 出口", "三 · 规则", "四 · 组网",
+		"Out / HTTP 代理 · 单选", "预览（不保存）", "保存并校验",
 		"line_" + lineID, "out_id", "rule_", "四 · 组网",
 	} {
 		if !strings.Contains(body, want) {
@@ -75,9 +75,10 @@ func TestWizardPageRendersFourGroupsAndExecutionBoundary(t *testing.T) {
 	if !strings.Contains(body, outID) {
 		t.Fatal("wizard page misses the configured Out")
 	}
-	// The 1.0 boundary is stated next to both recorded-only groups.
-	if strings.Count(body, "已记录，执行待 1.1") < 2 {
-		t.Fatal("the recorded-only execution status is not stated for both Out and mesh groups")
+	// The mesh group is still recorded-only; the egress group is executable
+	// (the Line route renders it and passes the kernel gate).
+	if strings.Count(body, "已记录，执行待 1.1") < 1 {
+		t.Fatal("the recorded-only execution status is not stated for the mesh group")
 	}
 	// The wizard is admin-only like every other management surface.
 	app2, _ := testApp(t)

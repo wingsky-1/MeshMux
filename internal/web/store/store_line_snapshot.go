@@ -62,6 +62,12 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 		}
 		return validateLineCandidate(candidate)
 	}
+	if node.Role(role) == node.RoleHTTP {
+		// An external HTTP proxy has no Agent and therefore no candidate. Every
+		// caller that reaches this branch (reconcile, ACL cleanup) is an Agent
+		// action that a proxy node must never receive.
+		return node.Candidate{}, errors.New("NODE_ROLE_INVALID: an external http proxy has no candidate")
+	}
 	if node.Role(role) != node.RoleEdge {
 		return node.Candidate{}, errors.New("CANDIDATE_INVALID: role must be edge or out")
 	}
@@ -135,23 +141,26 @@ func lineCandidateUsersTx(tx *sql.Tx, nodeID string) ([]node.VLESSUser, error) {
 	return users, nil
 }
 
-// attachLineOutEgressTx attaches the Hub-issued Out dial body to a configured Line
-// candidate when a subscription selected an Out for that Line (Task 5: the edge is
-// the authorization, there is no binding row). The first Out in node-id order wins,
-// so one Line never renders two endpoints while the 1.0 same-Line rule carries a
-// single "out" tag. An Out without configured transport leaves the egress
-// unattached: the route still renders the fail-closed block stub, and selecting such
-// an Out is refused by validateSelectionOutTx, so this only happens for an Out whose
-// transport was removed after it was selected (SetOutTransport never deletes).
+// attachLineOutEgressTx attaches the Hub-issued egress dial body to a configured
+// Line candidate when a subscription selected an egress for that Line (Task 5: the
+// edge is the authorization, there is no binding row). The selected egress may be a
+// MeshMux Out (SS link key) or an external HTTP proxy (Ruling R11: address/port
+// plus optional Basic credentials). The first egress in node-id order wins, so one
+// Line never renders two endpoints while the 1.0 same-Line rule carries a single
+// "out" tag. An egress without a configured dial body leaves the egress
+// unattached: the route still renders the fail-closed block stub, and selecting
+// such an egress is refused by validateSelectionOutTx, so this only happens for
+// an egress whose endpoint was removed after it was selected (SetOutTransport
+// never deletes; an HTTP proxy row is deleted with its node).
 func attachLineOutEgressTx(tx *sql.Tx, nodeID string, candidate *node.Candidate) error {
-	outs, err := enabledOutIDsForLineTx(tx, nodeID)
+	outs, err := selectedEgressIDsForLineTx(tx, nodeID)
 	if err != nil {
 		return err
 	}
 	if len(outs) == 0 {
 		return nil
 	}
-	egress, configured, err := outEgressTx(tx, outs[0])
+	egress, configured, err := lineEgressBodyTx(tx, outs[0])
 	if err != nil {
 		return err
 	}

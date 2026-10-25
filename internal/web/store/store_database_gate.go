@@ -5,7 +5,7 @@ package store
 // Two version numbers are deliberately kept apart:
 //
 //   - `PRAGMA user_version` is the storage schema of this SQLite file. This
-//     binary owns version 13 and refuses any newer file without opening it for
+//     binary owns version 16 and refuses any newer file without opening it for
 //     writes; a database is never downgraded in place.
 //   - `policy_schema` is the stored route policy contract named by an upgrade
 //     manifest (currently 8). It is checked by the upgrade approval and the
@@ -51,11 +51,12 @@ const (
 	// preset seeds), Task 4 adds version 13 (subscription edge tables +
 	// selection snapshot), Task 5 adds version 14 (drop out_bindings now that the
 	// Out authorization is node membership) and version 15 (narrow the candidate
-	// immutability trigger so a node can be deleted); version 11 stays reserved for
-	// 11d, whose migration leg runs ahead of migrateSchema12 when it merges. A newer
-	// file is refused instead of opened for writes; a database is never downgraded
-	// in place.
-	DatabaseSchemaVersion = 15
+	// immutability trigger so a node can be deleted); Task 8 adds version 16
+	// (the external HTTP proxy node role and the private node_http_proxy table).
+	// Version 11 stays reserved for 11d, whose migration leg runs ahead of
+	// migrateSchema12 when it merges. A newer file is refused instead of opened
+	// for writes; a database is never downgraded in place.
+	DatabaseSchemaVersion = 16
 
 	// The Hub database backup is independent of the node rollback store
 	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to

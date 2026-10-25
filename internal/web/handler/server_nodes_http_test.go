@@ -1,0 +1,153 @@
+package handler
+
+// Ruling R11 at the Web boundary: the node onboarding radio can create an
+// external HTTP proxy (URL instead of ports, no pairing code), the subscription
+// wizard offers it as an egress with an 外部 state, and the delete is the same
+// used-by interlocked thorough delete the Out path uses.
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
+)
+
+func TestHTTPProxyCreateThroughNodesPage(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	loginAs(t, b, testPassword)
+
+	w := b.post("/nodes", url.Values{
+		"role":         {"http"},
+		"display_name": {"办公室代理"},
+		"proxy_url":    {"http://alice:s3cret@proxy.example.invalid:8080"},
+	})
+	requireStatus(t, w, 200)
+	body := w.Body.String()
+	for _, want := range []string{"外部", "proxy.example.invalid:8080", "HTTP 代理节点已创建", "无需配对", `value="http"`, `name="proxy_url"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("nodes page missing %q: %.600s", want, body)
+		}
+	}
+	if strings.Contains(body, "s3cret") || strings.Contains(body, "http://alice") {
+		t.Fatal("the nodes page echoed the proxy credentials")
+	}
+	if strings.Contains(body, "配对码已签发") {
+		t.Fatal("an external HTTP proxy was issued a pairing code")
+	}
+
+	w = b.req("GET", "/api/nodes", nil, nil)
+	requireStatus(t, w, 200)
+	var listed struct {
+		Nodes []struct {
+			ID      string `json:"id"`
+			Role    string `json:"role"`
+			Status  string `json:"status"`
+			Offline bool   `json:"offline"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil || len(listed.Nodes) != 1 {
+		t.Fatalf("api nodes list: %v %.300s", err, w.Body.String())
+	}
+	n := listed.Nodes[0]
+	if n.Role != "http" || n.Status != "external" || n.Offline {
+		t.Fatalf("http proxy node projection = %+v", n)
+	}
+	for table, want := range map[string]int{"node_pairing": 0, "node_identities": 0, "node_candidates": 0, "agent_tasks": 0} {
+		var count int
+		if err := app.store.DB.QueryRow(`SELECT count(*) FROM `+table+` WHERE node_id=?`, n.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != want {
+			t.Fatalf("%s rows = %d, want %d", table, count, want)
+		}
+	}
+}
+
+func TestHTTPProxyCreateRejectsBadURL(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	initialize(t, b)
+	loginAs(t, b, testPassword)
+
+	w := b.post("/nodes", url.Values{
+		"role":         {"http"},
+		"display_name": {"办公室代理"},
+		"proxy_url":    {"https://proxy.example.invalid:8080"},
+	})
+	requireStatus(t, w, http.StatusBadRequest)
+	if !strings.Contains(w.Body.String(), "HTTP_PROXY_INVALID") {
+		t.Fatalf("bad URL refusal = %.300s", w.Body.String())
+	}
+	var nodes int
+	if err := app.store.DB.QueryRow(`SELECT count(*) FROM nodes`).Scan(&nodes); err != nil || nodes != 0 {
+		t.Fatalf("rejected creation wrote %d nodes (err=%v)", nodes, err)
+	}
+}
+
+func TestWizardOffersHTTPProxyAsExternalEgress(t *testing.T) {
+	app, b, _ := wizardApp(t)
+	lineID := wizardLine(t, app, "hk-01")
+	proxy, err := app.store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := b.req("GET", "/subscribers/wizard", nil, nil)
+	requireStatus(t, w, http.StatusOK)
+	body := w.Body.String()
+	for _, want := range []string{proxy.ID, "办公室代理", "proxy.example.invalid:8080", "外部 · HTTP 代理"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("wizard page missing %q", want)
+		}
+	}
+	// The egress slot stays one radio group: selecting the HTTP proxy is the
+	// same single-choice control the Out uses.
+	if strings.Count(body, `name="out_id"`) < 2 {
+		t.Fatal("the egress radio group is missing")
+	}
+	if !strings.Contains(body, `name="line_`+lineID+`"`) {
+		t.Fatal("the Line checkbox is missing")
+	}
+}
+
+func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
+	app, _ := testApp(t)
+	browserState := &browser{app: app}
+	initialize(t, browserState)
+	loginAs(t, browserState, testPassword)
+
+	lineNode, _, err := app.store.CreateNode("edge", "line", 8443, 2222, app.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.store.SetLine(testLine(lineNode.ID, "line"), app.now()); err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := app.store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableOutForLine(t, app.store, proxy.ID, lineNode.ID, app.now())
+
+	w := browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
+	requireStatus(t, w, http.StatusConflict)
+	if !strings.Contains(w.Body.String(), "SUBSCRIPTION_OUT_CONFLICT") && !strings.Contains(w.Body.String(), "OUT_REFERENCED_BY_SUBSCRIPTIONS") {
+		t.Fatalf("referenced http proxy delete = %.300s", w.Body.String())
+	}
+	if _, err := app.store.GetNodeAt(proxy.ID, app.now()); err != nil {
+		t.Fatal("refused delete destroyed the proxy")
+	}
+
+	clearOutForLine(t, app.store, lineNode.ID, app.now())
+	w = browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
+	requireStatus(t, w, 200)
+	if !strings.Contains(w.Body.String(), "HTTP 代理节点已彻底删除") {
+		t.Fatalf("http proxy delete notice = %.300s", w.Body.String())
+	}
+	if _, err := app.store.GetNodeAt(proxy.ID, app.now()); err == nil {
+		t.Fatal("http proxy node survived the delete")
+	}
+}

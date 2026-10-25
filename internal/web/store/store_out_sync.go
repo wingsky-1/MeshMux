@@ -89,10 +89,15 @@ const (
 // The Line egress states derived from the subscription selection plus the Out
 // authorization.
 const (
-	// LineEgressDirect: no active subscription selects a configured Out for this
-	// Line, so its clients egress directly. This is a routing state, not an ACL
-	// state: the Line is still an authorized source at every Out (Ruling R10).
+	// LineEgressDirect: no active subscription selects a configured egress for
+	// this Line, so its clients egress directly. This is a routing state, not an
+	// ACL state: the Line is still an authorized source at every Out (Ruling R10).
 	LineEgressDirect = "direct"
+	// LineEgressExternal: the Line's egress slot holds an external HTTP proxy
+	// (Ruling R11). The proxy is not a managed host, so there is no Out ACL,
+	// readback or deep-hook fact to prove; the Line is excluded from the Out
+	// convergence gate but still has to prove its own inbound snapshot.
+	LineEgressExternal = "external"
 	// LineEgressHealthy: every Out selected for this Line authorized it and
 	// confirmed it.
 	LineEgressHealthy = "healthy"
@@ -572,7 +577,25 @@ func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 	return out, nil
 }
 
-// enabledOutIDsForLineTx returns the Outs a Line's own route may egress through.
+// selectedEgressIDsForLineTx returns every egress the Line's selection names:
+// managed Out nodes and external HTTP proxies (Ruling R11). The 1.0 slot holds
+// one egress per subscriber and the same-Line rule makes all subscriptions on
+// one Line agree, so the caller sees at most one distinct id in practice; the
+// query does not rely on that to stay correct.
+func selectedEgressIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
+	return queryIDsTx(tx, `SELECT DISTINCT o.out_id
+	  FROM subscription_outs o
+	  JOIN subscribers s ON s.id=o.subscriber_id AND s.state='active'
+	  JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
+	 WHERE l.node_id=?
+	 ORDER BY o.out_id ASC`, lineID)
+}
+
+// enabledOutIDsForLineTx returns the managed Outs a Line's own route may egress
+// through. An external HTTP proxy is deliberately excluded: it has no ACL and
+// no readback, so it must never enter the Out authorization gate
+// (Ruling R11). Callers that need the complete egress slot use
+// selectedEgressIDsForLineTx.
 //
 // This is the *routing* question, not the ACL question, and Ruling R10 changed only
 // the latter: the data plane authorizes Line membership, while a Line still renders
@@ -588,6 +611,7 @@ func enabledOutIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
 	  FROM subscription_outs o
 	  JOIN subscribers s ON s.id=o.subscriber_id AND s.state='active'
 	  JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
+	  JOIN nodes n ON n.id=o.out_id AND n.role='out'
 	 WHERE l.node_id=?
 	 ORDER BY o.out_id ASC`, lineID)
 }
@@ -638,12 +662,23 @@ func requireOutRoleTx(tx *sql.Tx, outID string) error {
 // publish the Line while the Out path would drop its traffic, and the Web projection
 // shows the same state instead of a false healthy.
 func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
+	selected, err := selectedEgressIDsForLineTx(tx, lineID)
+	if err != nil {
+		return LineEgressPartial, "DATABASE_UNAVAILABLE", err
+	}
+	if len(selected) == 0 {
+		return LineEgressDirect, "", nil
+	}
 	outs, err := enabledOutIDsForLineTx(tx, lineID)
 	if err != nil {
 		return LineEgressPartial, "DATABASE_UNAVAILABLE", err
 	}
 	if len(outs) == 0 {
-		return LineEgressDirect, "", nil
+		// The slot names an external HTTP proxy: there is no Out ACL and no
+		// Agent readback to prove, so the gate is deliberately excluded
+		// (Ruling R11). The Line still has to prove its own inbound snapshot;
+		// that fact is reported separately.
+		return LineEgressExternal, "", nil
 	}
 	if _, authorized, err := lineEgressSourceTx(tx, lineID); err != nil {
 		return LineEgressPartial, SanitizeSubscriberSyncCode(err.Error()), nil
@@ -685,7 +720,7 @@ func lineOutPublishGateTx(tx *sql.Tx, lineID string, now time.Time) error {
 		return err
 	}
 	switch state {
-	case LineEgressDirect, LineEgressHealthy:
+	case LineEgressDirect, LineEgressExternal, LineEgressHealthy:
 		return nil
 	}
 	if code == "" {
@@ -702,15 +737,16 @@ func lineOutPublishGateTx(tx *sql.Tx, lineID string, now time.Time) error {
 // snapshot, and the resulting final egress.
 func outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressReadback, error) {
 	readback := OutEgressReadback{LineID: lineID}
-	outs, err := enabledOutIDsForLineTx(tx, lineID)
+	selected, err := selectedEgressIDsForLineTx(tx, lineID)
 	if err != nil {
 		return OutEgressReadback{}, err
 	}
-	if len(outs) > 0 {
-		readback.OutID = outs[0]
+	if len(selected) > 0 {
+		readback.OutID = selected[0]
 	}
-	// The allowlist fact belongs to the Out side; a direct Line has none.
-	if len(outs) == 0 {
+	// The allowlist fact belongs to a managed Out; a direct Line and an
+	// external HTTP proxy have none.
+	if len(selected) == 0 {
 		readback.Allowlist = LineEgressDirect
 	} else {
 		state, code, err := LineOutEgressStatusTx(tx, lineID, now)
@@ -737,7 +773,7 @@ func outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressRea
 	readback.Reality = lineRealityConfirmedTx(tx, lineID)
 	readback.ConfirmedRevision, readback.ConfirmedDigest = confirmedLineRevisionTx(tx, lineID)
 	switch {
-	case readback.Allowlist == LineEgressDirect:
+	case readback.Allowlist == LineEgressDirect || readback.Allowlist == LineEgressExternal:
 		readback.FinalEgress, readback.FinalEgressCode = inbound, inboundCode
 	case readback.Allowlist == LineEgressHealthy && inbound == SubscriberSyncHealthy && readback.Reality:
 		readback.FinalEgress = LineEgressHealthy

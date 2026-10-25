@@ -1,6 +1,6 @@
 # ADR-0008：订阅聚合契约（实体独立、聚合只活在订阅里）
 
-状态：Accepted（订阅聚合重构契约冻结，Task 1–7 引用；refs #113）。
+状态：Accepted（订阅聚合重构契约冻结，Task 1–8 引用；refs #113）。
 
 日期：2026-10-26。
 
@@ -37,6 +37,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 - 订阅选了 Out 但其 Line 内核 route 未生效时：预期拒绝创建（出冲突）或明确标注“待生效”，绝不静默生成缺 Out 路由的配置。
 - 授权派生方向（Task 5，**Ruling R10 修订**）：服务端 Out 入站 ACL 与 Line→Out 双跳允许清单不再来自 `out_bindings`，也**不再**按订阅边推导，而是**节点成员制**——`outAllowedSources(outID)` = 所有持有当前配对身份的 Line 地址并集。Line 纳管成功即加入所有 Out 的 allowlist，Out 纳管成功即为全部现存 Line 生成 allowlist；Line/Out 删除或身份吊销即从相关 allowlist 移除；无成员即默认拒绝。订阅的创建/改选/状态变更**完全不碰 ACL**，也不再触发池级重算。切换与旧表删除在同一 PR 内原子完成，不留授权空窗。
 - Out 删除语义（**Ruling R9**）：删除即彻底删除——先清空 ACL 并等待主机确认，再删除节点行、`out_settings`（出口地址与 link key）及候选/任务；被活跃订阅引用、Out 离线或仍有未完成链时拒绝（不删除任何内容）。
+- 出口位扩展（**Ruling R11**）：节点类型为 Line / Out / HTTP 代理。HTTP 代理是**外部**端点：role=`http`、status 恒为 `external`，无 Agent、无配对、无安装、无候选、无回读，因此**排除在收敛门禁之外**（`outEgressFacts` / `LineOutEgressStatusTx` 不等待其 ACL 或回读）。订阅的 `MAX_OUTS_PER_SUBSCRIPTION = 1` 语义延续为“出口位二选一”：Out 或 HTTP 代理，同一 Line 的所有订阅仍须选择同一出口。服务端 route 的 `out` 出口按类型渲染：Out→Shadowsocks link key；HTTP 代理→sing-box `http` 出站 `{server, server_port, username?, password?}`。凭据与 Line 私钥同级存放（0600 数据库；URL 去 userinfo 后存 host:port，凭据分列），UI 只展示 host:port；无凭据时出站省略 username/password。HTTP 代理同样受 used-by 互锁与彻底删除约束（删除节点行与 `node_http_proxy`，被订阅选中时拒绝并列出订阅名）。
 
 ### 4. Out / Mesh 边界：1.0 记录不执行
 
@@ -54,7 +55,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 ### 6. 版本与 schema 冻结
 
 - `policy_schema` 保持 8；升级 manifest 校验规则（ADR-0007 PR-10d-1b 契约）不变。
-- 存储 schema：11 归 11d，本重构从 12 开始（Task 3→12、Task 4→13、Task 5→14，按 progress.md Ruling R2 顺序编号；Task 7 不碰 schema）。每个迁移为纯增量 additive，并按 11d 门禁声明不可逆性；`store_database_gate.go` 必须同步改上限。
+- 存储 schema：11 归 11d，本重构从 12 开始（Task 3→12、Task 4→13、Task 5→14，按 progress.md Ruling R2 顺序编号；Task 7 不碰 schema；Task 8→16 重建 `nodes` 以容纳 role `http` 并新增 `node_http_proxy`）。每个迁移为纯增量 additive，并按 11d 门禁声明不可逆性；`store_database_gate.go` 必须同步改上限。Schema 16 的 `nodes` 重建必须在 `foreign_keys=OFF` 的独立事务中执行（SQLite 的 `DROP TABLE` 在 FK 开启时会级联删除子表），并重建候选不可变触发器。
 - 规则表：`name` 不唯一，`UNIQUE(stable_key, version)`；预置种子版本号随迁移单调递增。
 
 ### 7. 组装与门禁（Task 4 必须遵守）
@@ -66,7 +67,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 ## 后果
 
 - Task 1（组网）、Task 2（节点 + Out 池 + Out 接入真实 SS 出站，2022-blake3-aes-128-gcm/16B link key，R7）、Task 3（规则库 + 预置 + 互锁）可并行：三轨只生产本 ADR 定义的数据源（设备 id/名称/在线/子网；Line 候选含真实 out 出站；`rule_revision_id`），不直接写订阅边表。
-- Task 4 消费三轨接口，实现边表 + 快照 + 组装器 + 预览 fail-fast + used-by 图；Task 5 做授权原子切换（含 AI 双跳 E2E 证据）；Task 6 做死代码删除 + 文档同步；Task 7（web 包分层搬迁）为纯机械 PR，11d 合入后第一个做。
+- Task 4 消费三轨接口，实现边表 + 快照 + 组装器 + 预览 fail-fast + used-by 图；Task 5 做授权原子切换（含 AI 双跳 E2E 证据）；Task 6 做死代码删除 + 文档同步；Task 7（web 包分层搬迁）为纯机械 PR，11d 合入后第一个做；Task 8（R11）在 Task 5 后加 HTTP 代理节点与出口位，不触碰 ACL 派生。
 - 任一任务发现契约缺口，先修订本 ADR 再实现；不接受“实现先行、ADR 后补”。
 
 ## 非目标（1.1，不在本重构）

@@ -69,8 +69,8 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
-	if role != "out" {
-		return errors.New("OUT_ROLE_INVALID: only out nodes can be deleted")
+	if role != "out" && role != "http" {
+		return errors.New("OUT_ROLE_INVALID: only out and http egress nodes can be deleted")
 	}
 	// A subscription that selects this Out is a live reference: the client document
 	// names an egress that is about to disappear, so the operator migrates those

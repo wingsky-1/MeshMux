@@ -311,11 +311,17 @@ func hasOutField(obj map[string]json.RawMessage) bool {
 }
 
 // decodeOutEgress decodes the optional out egress of a v2/v3/v4 document. An
-// absent key means no Out egress; a present one is one object with the server,
-// the port and exactly one credential: the SS link key ("key") for new
-// egresses, the void VLESS UUID ("uuid") only for documents stored before the
-// SS switch. Both shapes decode so immutable history keeps verifying; new
-// writes always carry the key.
+// absent key means no Out egress. Two mutually exclusive shapes are accepted:
+//
+//   - the SS link shape: server, port and exactly one credential, the SS link
+//     key ("key") for new egresses or the void VLESS UUID ("uuid") only for
+//     documents stored before the SS switch;
+//   - the external HTTP proxy shape (Ruling R11): server, port, type:"http"
+//     and optional username/password. It never carries a key or UUID, and a
+//     password without a username is refused by OutEgress.Validate.
+//
+// Both shapes decode so immutable history keeps verifying; new writes always
+// carry the key or the http body.
 func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
 	const malformed = "CANDIDATE_INVALID: malformed candidate JSON"
 	if len(raw) == 0 {
@@ -329,8 +335,15 @@ func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
 	if err != nil {
 		return nil, errors.New(malformed)
 	}
-	if len(obj) != 3 {
+	if len(obj) < 3 || len(obj) > 6 {
 		return nil, errors.New(malformed)
+	}
+	for name := range obj {
+		switch name {
+		case "server", "port", "key", "uuid", "type", "username", "password":
+		default:
+			return nil, errors.New(malformed)
+		}
 	}
 	var egress OutEgress
 	if err := decodeStringField(obj["server"], &egress.Server); err != nil {
@@ -341,19 +354,45 @@ func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
 		return nil, errors.New("CANDIDATE_INVALID: out port must be an integer")
 	}
 	egress.Port = int(port)
+	_, hasType := obj["type"]
 	_, hasKey := obj["key"]
 	_, hasUUID := obj["uuid"]
-	if hasKey == hasUUID {
-		return nil, errors.New(malformed)
-	}
-	if hasKey {
-		if err := decodeStringField(obj["key"], &egress.Key); err != nil {
+	if hasType {
+		if hasKey || hasUUID || len(obj) > 5 {
+			return nil, errors.New(malformed)
+		}
+		if err := decodeStringField(obj["type"], &egress.Type); err != nil {
 			return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+		}
+		if egress.Type != OutEgressHTTP {
+			return nil, errors.New("CANDIDATE_INVALID: out egress type must be http")
+		}
+		if rawUsername, ok := obj["username"]; ok {
+			if err := decodeStringField(rawUsername, &egress.Username); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		}
+		if rawPassword, ok := obj["password"]; ok {
+			if err := decodeStringField(rawPassword, &egress.Password); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
 		}
 	} else {
-		if err := decodeStringField(obj["uuid"], &egress.UUID); err != nil {
-			return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+		if len(obj) != 3 || hasKey == hasUUID {
+			return nil, errors.New(malformed)
 		}
+		if hasKey {
+			if err := decodeStringField(obj["key"], &egress.Key); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		} else {
+			if err := decodeStringField(obj["uuid"], &egress.UUID); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		}
+	}
+	if err := egress.Validate(); err != nil {
+		return nil, err
 	}
 	return &egress, nil
 }

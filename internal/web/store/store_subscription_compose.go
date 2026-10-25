@@ -460,24 +460,48 @@ type selectionInputs struct {
 	Network []subscription.ComposeNetwork
 }
 
-// selectionOutTx resolves one Out into its operator-visible dial parameters.
-// The link credential stays in out_settings: a subscription never carries it.
+// selectionOutTx resolves one selected egress into its operator-visible dial
+// parameters. The link credential and the HTTP proxy credentials stay in the
+// private tables: a subscription never carries them. An HTTP proxy egress is
+// reported with ComposeOutHTTP so the composer, the UI and the selection
+// identity can tell the two shapes apart.
 func selectionOutTx(tx *sql.Tx, outID string) (subscription.ComposeOut, error) {
-	var role, displayName, server string
+	var role, displayName, server, proxyURL string
 	var port int
-	err := tx.QueryRow(`SELECT n.role, n.display_name, s.server, s.port
-	  FROM nodes n JOIN out_settings s ON s.node_id=n.id WHERE n.id=?`, outID).
-		Scan(&role, &displayName, &server, &port)
+	err := tx.QueryRow(`SELECT n.role, n.display_name,
+	  COALESCE(s.server,''), COALESCE(s.port,0), COALESCE(h.url,'')
+	  FROM nodes n
+	  LEFT JOIN out_settings s ON s.node_id=n.id
+	  LEFT JOIN node_http_proxy h ON h.node_id=n.id
+	  WHERE n.id=?`, outID).
+		Scan(&role, &displayName, &server, &port, &proxyURL)
 	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the out has no transport")
+		return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the egress does not exist")
 	}
 	if err != nil {
 		return subscription.ComposeOut{}, errors.New("DATABASE_UNAVAILABLE")
 	}
-	if role != "out" {
-		return subscription.ComposeOut{}, errors.New("OUT_ROLE_INVALID: only out nodes can be selected")
+	switch role {
+	case "out":
+		if server == "" || port == 0 {
+			return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the out has no transport")
+		}
+		return subscription.ComposeOut{OutID: outID, DisplayName: displayName, Server: server, Port: port}, nil
+	case "http":
+		if proxyURL == "" {
+			return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the http proxy has no URL")
+		}
+		egress, err := node.ParseHTTPProxyURL(proxyURL)
+		if err != nil {
+			return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the http proxy URL is invalid")
+		}
+		return subscription.ComposeOut{
+			OutID: outID, DisplayName: displayName,
+			Server: egress.Server, Port: egress.Port, Kind: subscription.ComposeOutHTTP,
+		}, nil
+	default:
+		return subscription.ComposeOut{}, errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected")
 	}
-	return subscription.ComposeOut{OutID: outID, DisplayName: displayName, Server: server, Port: port}, nil
 }
 
 // selectionRulesTx resolves the pinned rule revisions into composer rules with

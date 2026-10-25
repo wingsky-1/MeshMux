@@ -110,7 +110,7 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 	}
 
 	// The guard moved with the migration.
-	if _, err = s.DB.Exec(`PRAGMA user_version=16`); err != nil {
+	if _, err = s.DB.Exec(`PRAGMA user_version=17`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {

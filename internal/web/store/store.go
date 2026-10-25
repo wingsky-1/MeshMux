@@ -137,6 +137,22 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Migrate() error {
+	// The sequential chain stops at schema 15. Schema 16 rebuilds the nodes
+	// table with role "http" and must toggle foreign_keys OFF, which SQLite
+	// only honours outside a transaction; it therefore runs as its own atomic
+	// leg after this chain committed.
+	if err := s.migrateSchemaChain(); err != nil {
+		return err
+	}
+	if err := migrateSchema16(s); err != nil {
+		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+	}
+	return nil
+}
+
+// migrateSchemaChain applies every additive leg up to schema 15. It is one
+// transaction; a failure leaves the database at its previous version.
+func (s *Store) migrateSchemaChain() error {
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err

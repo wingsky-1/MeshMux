@@ -34,14 +34,16 @@ type singBoxOutbound struct {
 	Type string `json:"type"`
 	Tag  string `json:"tag"`
 	// Server, ServerPort, Method and Password carry the dial body of a real
-	// Shadowsocks egress. They are present only on the "out" outbound of a
-	// Line whose Out access path attached an endpoint; every other outbound
+	// Shadowsocks egress (or the ServerPort and optional Basic credentials of
+	// an external HTTP proxy). They are present only on the "out" outbound of
+	// a Line whose selected egress attached an endpoint; every other outbound
 	// omits them. UUID is the void Task-2 shape: stored history keeps
 	// rendering it byte-identically (see OutEgress), new writes never set it.
 	Server     string `json:"server,omitempty"`
 	ServerPort int    `json:"server_port,omitempty"`
 	Method     string `json:"method,omitempty"`
 	Password   string `json:"password,omitempty"`
+	Username   string `json:"username,omitempty"`
 	UUID       string `json:"uuid,omitempty"`
 }
 
@@ -80,11 +82,12 @@ type serverEgress struct {
 //
 //   - "direct" keeps the Line egress for every rule that does not select the
 //     Out;
-//   - "out" is the tag the route names. While the Out access path owns the real
-//     outbound body (its endpoint and Hub-issued link key), it is declared
-//     as a Shadowsocks outbound that dials the selected Out node, so traffic
-//     the policy sends to the Out leaves through the Out instead of the Line
-//     address. Until that body is attached — the Out is bound but its
+//   - "out" is the tag the route names. While the egress slot owns the real
+//     outbound body, it is declared as a Shadowsocks outbound that dials the
+//     selected Out node (Ruling R7) or as an HTTP outbound that dials the
+//     selected external HTTP proxy (Ruling R11), so traffic the policy sends
+//     to the Out leaves through the selected egress instead of the Line
+//     address. Until that body is attached — the egress is bound but its
 //     transport is not configured yet — "out" stays a block stub, so the
 //     traffic is refused instead of silently leaving from the Line address,
 //     the leak the fail-closed rule exists to prevent. An Out that is
@@ -110,6 +113,16 @@ func (e serverEgress) outbounds(out *OutEgress) []singBoxOutbound {
 	outbounds := []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
 	if e.out {
 		switch {
+		case out != nil && out.Type == OutEgressHTTP:
+			// Ruling R11: the egress slot may point at an external HTTP
+			// proxy instead of a MeshMux Out. The kernel type is "http";
+			// a credential-free proxy omits username and password because
+			// both are omitempty.
+			outbounds = append(outbounds, singBoxOutbound{
+				Type: "http", Tag: singBoxOutTag,
+				Server: out.Server, ServerPort: out.Port,
+				Username: out.Username, Password: out.Password,
+			})
 		case out != nil && out.Key != "":
 			outbounds = append(outbounds, singBoxOutbound{
 				Type: "shadowsocks", Tag: singBoxOutTag,

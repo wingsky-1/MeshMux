@@ -101,7 +101,7 @@ func (m subscriptionWizardView) toView() view.SubscriptionWizardView {
 			OutID: outEntry.OutID, DisplayName: outEntry.DisplayName,
 			Server: outEntry.Server, Port: outEntry.Port,
 			Online: outEntry.Online, Configured: outEntry.TransportConfigured,
-			Selected: outEntry.OutID == m.OutID,
+			Selected: outEntry.OutID == m.OutID, Kind: outEntry.Role,
 		})
 	}
 	selectedRules := make(map[string]bool, len(m.RuleSelections))

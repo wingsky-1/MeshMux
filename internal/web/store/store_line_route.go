@@ -149,18 +149,30 @@ func outEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an ai egress")
 	}
 	facts := OutEgressFacts{LineID: lineID}
-	outs, err := enabledOutIDsForLineTx(tx, lineID)
+	selected, err := selectedEgressIDsForLineTx(tx, lineID)
 	if err != nil {
 		return OutEgressFacts{}, err
 	}
-	if len(outs) == 0 {
-		// No Out is the configured direct egress. This is the only path that
+	if len(selected) == 0 {
+		// No egress is the configured direct egress. This is the only path that
 		// is allowed to send AI traffic down the Line without an explicit
 		// administrator decision.
 		return facts, nil
 	}
 	facts.Configured = true
-	facts.OutID = outs[0]
+	facts.OutID = selected[0]
+	outs, err := enabledOutIDsForLineTx(tx, lineID)
+	if err != nil {
+		return OutEgressFacts{}, err
+	}
+	if len(outs) == 0 {
+		// The slot holds an external HTTP proxy (Ruling R11). It has no ACL,
+		// no Agent and no readback, so there is no Hub-side fact to wait for:
+		// the policy may keep the out tag, and the availability is the
+		// operator's external endpoint.
+		facts.Available = true
+		return facts, nil
+	}
 	// An Out that stopped reporting cannot apply or prove the authorization.
 	// The synchronization projection alone would call a confirmed chain
 	// healthy, so the offline window is checked separately and reported as

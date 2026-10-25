@@ -104,19 +104,23 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 		node, err := s.store.GetNodeAt(outID, now)
 		if err != nil {
 			if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
-				s.fail(w, r, 404, "OUT_NOT_FOUND", "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。")
+				s.fail(w, r, 404, "OUT_NOT_FOUND", "出口节点不存在。", "请先在节点页纳管该出口后重试。")
 				return
 			}
 			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点。", "请检查数据库。")
 			return
 		}
-		if node.Role != "out" {
-			s.fail(w, r, 409, "OUT_ROLE_INVALID", "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。")
+		if node.Role != "out" && node.Role != "http" {
+			s.fail(w, r, 409, "OUT_ROLE_INVALID", "所选节点不是出口角色。", "请选择角色为 Out 或 HTTP 代理的节点。")
 			return
 		}
 		s.event(r, "OUT_DELETE_PENDING")
 		s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{PendingDeleteOut: outID})
 		return
+	}
+	role := ""
+	if node, err := s.store.GetNodeAt(outID, now); err == nil {
+		role = node.Role
 	}
 	if err := s.store.DeleteOutAt(outID, now); err != nil {
 		if errors.Is(err, store.ErrOutCleanupPending) {
@@ -132,14 +136,18 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 		status, code, message, next := outBindingFailure(err)
 		if code == store.CodeOutReferenced {
 			if names := outReferencedSubscribers(err.Error()); names != "" {
-				message = "该 Out 仍被订阅选中：" + names + "。"
+				message = "该出口仍被订阅选中：" + names + "。"
 			}
 		}
 		s.fail(w, r, status, code, message, next)
 		return
 	}
 	s.event(r, "OUT_DELETED")
-	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "出口已彻底删除：节点行、出口地址与 link key 均已清除；引用过它的 Line 路由已按 fail-closed 重算。"})
+	notice := "出口已彻底删除：节点行、出口地址与 link key 均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
+	if role == "http" {
+		notice = "HTTP 代理节点已彻底删除：节点行与存储的 URL/凭据均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
+	}
+	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }
 
 // outPreview is a read-only projection. It goes through the mutation wrapper only

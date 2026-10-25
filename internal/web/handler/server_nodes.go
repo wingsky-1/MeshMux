@@ -86,6 +86,21 @@ func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
 func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess session) {
 	role := strings.TrimSpace(r.PostForm.Get("role"))
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
+	if role == string(nodedomain.RoleHTTP) {
+		// Ruling R11: an external HTTP proxy is a Hub-only egress node. It has
+		// no ports, no pairing code, no Agent and no candidate: only its URL
+		// is validated and stored.
+		proxyURL := strings.TrimSpace(r.PostForm.Get("proxy_url"))
+		if _, err := s.store.CreateHTTPProxyNode(displayName, proxyURL, s.now()); err != nil {
+			s.event(r, "NODE_CREATE_FAILED")
+			status, code, message, next := httpProxyCreateFailure(err)
+			s.fail(w, r, status, code, message, next)
+			return
+		}
+		s.event(r, "HTTP_PROXY_CREATED")
+		s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "HTTP 代理节点已创建：外部出口无需配对或安装，可直接在订阅向导中选择。"})
+		return
+	}
 	vless, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("vless_port")))
 	ssh, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("ssh_port")))
 	if err := protocol.ValidateNodeInputs(role, displayName, vless, ssh); err != nil {
@@ -101,6 +116,21 @@ func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess sessio
 	s.event(r, "NODE_CREATED")
 	created := node
 	s.nodesPageWithCode(w, r, sess, &created, "created", code)
+}
+
+// httpProxyCreateFailure maps one HTTP proxy create refusal onto the stable
+// HTTP contract. The response never echoes the submitted URL or its userinfo.
+func httpProxyCreateFailure(err error) (status int, code, message, next string) {
+	switch {
+	case strings.HasPrefix(err.Error(), "HTTP_PROXY_INVALID"):
+		return 400, "HTTP_PROXY_INVALID", "HTTP 代理 URL 不正确。", "请填写一个 http://主机:端口 的 URL，可带用户名与密码，不要带路径或查询参数。"
+	case strings.HasPrefix(err.Error(), "DISPLAY_NAME_INVALID"):
+		return 400, "DISPLAY_NAME_INVALID", "展示名不正确。", "请使用 1-64 个可打印字符。"
+	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
+		return 503, "DATABASE_UNAVAILABLE", "暂时无法创建节点。", "请检查数据库与服务日志后重试。"
+	default:
+		return 500, "NODE_CREATE_FAILED", "无法创建 HTTP 代理节点。", "请凭操作编号检查服务日志后重试。"
+	}
 }
 
 func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess session) {

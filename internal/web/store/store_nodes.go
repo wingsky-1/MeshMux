@@ -221,6 +221,15 @@ func scanNodeAt(row rowScanner, now time.Time) (Node, error) {
 	if err != nil {
 		return Node{}, err
 	}
+	// An external HTTP proxy (Ruling R11) is not a managed host: it has no
+	// Agent and no heartbeat, so it is never "offline". Its status is the
+	// constant "external" written at create time.
+	if n.Role == string(nodedomain.RoleHTTP) {
+		n.Status = "external"
+		n.Offline = false
+		n.LocalVerified = false
+		return n, nil
+	}
 	n.Offline = n.Status == "pending" || n.LastHeartbeat == 0 || now.Sub(time.Unix(n.LastHeartbeat, 0)) > OfflineAfter
 	n.LocalVerified = n.ObservedAt > 0
 	n.NativeReady = nativeReady(n)
@@ -400,10 +409,16 @@ func (s *Store) ReissuePairing(nodeID string, now time.Time) (string, error) {
 	}
 	defer tx.Rollback()
 	var exists int
-	if err = tx.QueryRow(`SELECT 1 FROM nodes WHERE id=?`, nodeID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+	var role string
+	if err = tx.QueryRow(`SELECT 1, role FROM nodes WHERE id=?`, nodeID).Scan(&exists, &role); errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("NODE_NOT_FOUND")
 	} else if err != nil {
 		return "", errors.New("DATABASE_UNAVAILABLE")
+	}
+	if role == "http" {
+		// An external HTTP proxy has no Agent identity to reissue. Deleting and
+		// recreating the proxy is the only rotation it supports.
+		return "", errors.New("NODE_ROLE_INVALID: an external http proxy has no agent identity")
 	}
 	if _, err = tx.Exec(`UPDATE node_identities SET revoked=1 WHERE node_id=?`, nodeID); err != nil {
 		return "", errors.New("DATABASE_UNAVAILABLE")
@@ -441,10 +456,14 @@ func (s *Store) RevokeIdentity(nodeID string, now time.Time) error {
 	}
 	defer tx.Rollback()
 	var exists int
-	if err = tx.QueryRow(`SELECT 1 FROM nodes WHERE id=?`, nodeID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+	var role string
+	if err = tx.QueryRow(`SELECT 1, role FROM nodes WHERE id=?`, nodeID).Scan(&exists, &role); errors.Is(err, sql.ErrNoRows) {
 		return errors.New("NODE_NOT_FOUND")
 	} else if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	if role == "http" {
+		return errors.New("NODE_ROLE_INVALID: an external http proxy has no agent identity")
 	}
 	if _, err = tx.Exec(`UPDATE node_identities SET revoked=1 WHERE node_id=?`, nodeID); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
