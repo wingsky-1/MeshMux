@@ -162,7 +162,10 @@ func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 		return HandoffReceipt{}, fail("IRREVERSIBLE_CONFIRM_REQUIRED",
 			"the target declares an irreversible database migration and this operation is not approved")
 	}
-	if err := cfg.Space(cfg.DataDir, RequiredSpace(payloadSize(verified))); err != nil {
+	// The floor is the installer's 1 GiB preflight minimum (spec §5.9): the
+	// target stage must never pass a weaker requirement than a fresh backup did
+	// (T3r's producer uses the same Floor at backup.go's two space checks).
+	if err := cfg.Space(cfg.DataDir, Floor(payloadSize(verified))); err != nil {
 		return HandoffReceipt{}, err
 	}
 
@@ -179,7 +182,19 @@ func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 			"the target package could not be staged ("+codeOf(stageErr)+")")
 	}
 
-	queued, err := Advance(op, StateQueued, "")
+	// Re-read the journal after the stage. A stage can take minutes, and the
+	// 30s reconcile ticker may have failed this operation in the meantime (a
+	// backed_up orphan). The forward-only queued write must never clobber that
+	// fact, and a concurrent handoff must not be run twice.
+	fresh, ok, err := ReadOp(cfg.DataDir, cfg.OperationID, os.Geteuid())
+	if err != nil {
+		return HandoffReceipt{}, backupJournalError(err)
+	}
+	if !ok || fresh.State != StateBackedUp || fresh.ErrorCode != op.ErrorCode || !fresh.UpdatedAt.Equal(op.UpdatedAt) {
+		return HandoffReceipt{}, fail(codeHandoffInvalidState,
+			"the operation changed while the target package was being staged")
+	}
+	queued, err := Advance(fresh, StateQueued, "")
 	if err != nil {
 		return HandoffReceipt{}, err
 	}

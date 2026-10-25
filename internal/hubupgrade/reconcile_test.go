@@ -362,8 +362,9 @@ func TestReconcileRevertedSticky(t *testing.T) {
 
 // TestReconcileRestoredMarker pins the restore fact: a restored result writes
 // restored.json with the snapshot time and the lossy flag, moves the journal to
-// reverted, and a later backup of the next generation clears the marker. The
-// reverted journal stays reverted.
+// reverted, and only a *committed* backup of a later generation clears the
+// marker. A failed attempt (backing_up that never committed a record) must not
+// erase the lossy fact. The reverted journal stays reverted.
 func TestReconcileRestoredMarker(t *testing.T) {
 	h := newReconcileHarness(t)
 	id := strings.Repeat("e", 32)
@@ -387,14 +388,27 @@ func TestReconcileRestoredMarker(t *testing.T) {
 	h.run(t, true)
 	h.requireState(t, id, StateReverted, "")
 
-	// The next backup (a fresh staged generation) supersedes the marker.
-	next := strings.Repeat("f", 32)
-	writeJournal(t, h.dataDir, operation(next, StateBackedUp, h.now, 2))
+	// A failed backup attempt never committed a record, so it does not supersede
+	// the marker: the attempt only reached backing_up and is orphaned.
+	attempt := strings.Repeat("a", 32)
+	writeJournal(t, h.dataDir, operation(attempt, StateBackingUp, h.now.Add(-OrphanTimeout-time.Minute), 2))
+	h.run(t, true)
+	h.requireState(t, attempt, StateFailed, codeBackupOrphaned)
+	if _, ok, err := ReadRestoredMarker(h.dataDir); err != nil || !ok {
+		t.Fatalf("marker after a failed backup attempt: ok=%v err=%v", ok, err)
+	}
+
+	// A committed per-operation record with the journal backed_up is the first
+	// generation that replaces the restored data directory.
+	committed := strings.Repeat("b", 32)
+	plantRecord(t, h.dataDir, committed, h.now)
+	writeJournal(t, h.dataDir, operation(committed, StateBackedUp, h.now, 3))
 	h.run(t, true)
 	if _, ok, err := ReadRestoredMarker(h.dataDir); err != nil || ok {
-		t.Fatalf("marker after a new backup: ok=%v err=%v", ok, err)
+		t.Fatalf("marker after a committed backup: ok=%v err=%v", ok, err)
 	}
 	h.requireState(t, id, StateReverted, "")
+	h.requireState(t, committed, StateBackedUp, "")
 }
 
 // TestConfirmCollectsConfirmedBeyondTwo pins the Hub's keep=2 policy at the
@@ -576,5 +590,34 @@ func TestConfirmAndCollectNeedsTheReadbackAnchors(t *testing.T) {
 	}
 	if publishes != 2 {
 		t.Fatalf("pointer publishes = %d, want 2", publishes)
+	}
+}
+
+// TestReconcileDigestFailureIsRetryable pins the digest rule of this fix round:
+// an unreadable running digest is an environment failure, not an identity. It
+// must never be folded into identityOther, because that would write a terminal
+// VERIFY_MISMATCH (or NOT_APPLIED) for an operation that is in fact fine. The
+// pass reports HUB_DIGEST_UNAVAILABLE and leaves the journal untouched so the
+// next pass retries.
+func TestReconcileDigestFailureIsRetryable(t *testing.T) {
+	digestErr := errors.New("HUB_DIGEST_UNAVAILABLE: the running executable could not be opened")
+	for _, state := range []State{StateVerifying, StateRestarting} {
+		t.Run(string(state), func(t *testing.T) {
+			h := newReconcileHarness(t)
+			h.version, h.digestErr = handoffTarget, digestErr
+			id := strings.Repeat("a", 32)
+			writeJournal(t, h.dataDir, operation(id, state, h.now.Add(-time.Minute), 1))
+			report := h.run(t, true)
+			h.requireState(t, id, state, "")
+			if len(report.Errors) != 1 || report.Errors[0].Code != "HUB_DIGEST_UNAVAILABLE" {
+				t.Fatalf("report errors = %+v, want one HUB_DIGEST_UNAVAILABLE", report.Errors)
+			}
+			if len(h.confirmed) != 0 {
+				t.Fatalf("a digest failure confirmed: %v", h.confirmed)
+			}
+			if len(report.Changes) != 0 {
+				t.Fatalf("a digest failure wrote the journal: %+v", report.Changes)
+			}
+		})
 	}
 }

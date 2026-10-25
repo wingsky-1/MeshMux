@@ -110,6 +110,11 @@ type handoffFixture struct {
 	manifest    TargetManifest
 	record      backup.Record
 	now         time.Time
+	// spaceNeed records the requirement the handoff passed to Space, so a test
+	// can pin the 1 GiB floor instead of trusting the call.
+	spaceNeed  uint64
+	spaceCalls int
+	spaceErr   error
 }
 
 func newHandoffFixture(t *testing.T, mutate func(*upgrade.Manifest)) *handoffFixture {
@@ -140,8 +145,12 @@ func (fx *handoffFixture) config(fetch func(context.Context, string, string) (st
 		ManifestDir: fx.manifestDir, ManifestOwner: os.Geteuid(),
 		RequestDir: fx.requestDir,
 		Now:        func() time.Time { return fx.now },
-		Space:      func(string, uint64) error { return nil },
-		Fetch:      fetch,
+		Space: func(_ string, need uint64) error {
+			fx.spaceCalls++
+			fx.spaceNeed = need
+			return fx.spaceErr
+		},
+		Fetch: fetch,
 	}
 }
 
@@ -418,4 +427,71 @@ func TestHandoffPreconditions(t *testing.T) {
 		}
 		fx.requireNoRequest(t)
 	})
+}
+
+// TestHandoffSpaceFloor pins the requirement the handoff passes to Space: the
+// installer's 1 GiB preflight floor, not the bare formula. The target stage may
+// never be allowed with less free space than a fresh backup already required
+// (T3r's producer uses Floor at both of its space checks).
+func TestHandoffSpaceFloor(t *testing.T) {
+	fx := newHandoffFixture(t, nil)
+	info, err := os.Lstat(filepath.Join(fx.record.PayloadPath, backup.SingleDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := uint64(info.Size())
+	// The floor only matters because this small fixture's bare formula is below
+	// it; otherwise the assertion would pass for the wrong reason.
+	if RequiredSpace(size) >= spaceFloor {
+		t.Fatalf("fixture payload is too large for the floor assertion: %d", size)
+	}
+	staged := filepath.Join(t.TempDir(), "staged-target")
+	fetch := func(context.Context, string, string) (string, error) {
+		return staged, os.WriteFile(staged, []byte("target package"), 0755)
+	}
+	if _, err := Handoff(context.Background(), fx.config(fetch)); err != nil {
+		t.Fatalf("Handoff: %v", err)
+	}
+	if fx.spaceCalls != 1 {
+		t.Fatalf("space checks = %d, want 1", fx.spaceCalls)
+	}
+	want := Floor(size)
+	if fx.spaceNeed != want {
+		t.Fatalf("space need = %d, want Floor(%d) = %d", fx.spaceNeed, size, want)
+	}
+	if fx.spaceNeed < spaceFloor {
+		t.Fatalf("space need = %d, below the 1 GiB floor %d", fx.spaceNeed, spaceFloor)
+	}
+	if fx.spaceNeed != RequiredSpace(size) && fx.spaceNeed != spaceFloor {
+		t.Fatalf("space need = %d, want max(%d, %d)", fx.spaceNeed, RequiredSpace(size), spaceFloor)
+	}
+}
+
+// TestHandoffDoesNotClobberAConcurrentFailure pins the post-stage journal
+// re-read: the reconcile ticker can fail a backed_up orphan while a slow stage
+// runs, and the forward-only queued write must never overwrite that fact (nor
+// queue a second request for an operation someone else already moved).
+func TestHandoffDoesNotClobberAConcurrentFailure(t *testing.T) {
+	fx := newHandoffFixture(t, nil)
+	fetch := func(context.Context, string, string) (string, error) {
+		op, ok, err := ReadOp(fx.dataDir, fx.operationID, os.Geteuid())
+		if err != nil || !ok {
+			t.Fatalf("journal: ok=%v err=%v", ok, err)
+		}
+		failed, err := Advance(op, StateFailed, codeBackupOrphaned)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed.UpdatedAt = fx.now
+		if err := WriteOp(fx.dataDir, failed); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(t.TempDir(), "staged"), nil
+	}
+	_, err := Handoff(context.Background(), fx.config(fetch))
+	if codeOf(err) != codeHandoffInvalidState {
+		t.Fatalf("error = %v, want %s", err, codeHandoffInvalidState)
+	}
+	fx.requireJournal(t, StateFailed, codeBackupOrphaned)
+	fx.requireNoRequest(t)
 }

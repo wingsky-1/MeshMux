@@ -394,7 +394,13 @@ func (p *reconciler) restarting(ctx context.Context, op Op) error {
 		}
 		op = next
 	}
-	switch p.classify(op) {
+	class, err := p.classify(op)
+	if err != nil {
+		// No identity decision without a running digest; the pass reports the
+		// environment failure (HUB_DIGEST_UNAVAILABLE) and retries later.
+		return err
+	}
+	switch class {
 	case identityTarget:
 		next, err := p.advance(op, StateVerifying, "")
 		if err != nil {
@@ -418,7 +424,7 @@ func (p *reconciler) restarting(ctx context.Context, op Op) error {
 	if p.age(op) <= OrphanTimeout {
 		return nil
 	}
-	_, err := p.advance(op, StateFailed, codeUpgradeOrphaned)
+	_, err = p.advance(op, StateFailed, codeUpgradeOrphaned)
 	return err
 }
 
@@ -428,7 +434,12 @@ func (p *reconciler) verifying(ctx context.Context, op Op) error {
 	if !p.cfg.Startup {
 		return nil
 	}
-	switch p.classify(op) {
+	class, err := p.classify(op)
+	if err != nil {
+		// An unreadable running digest is retryable, never a terminal mismatch.
+		return err
+	}
+	switch class {
 	case identityTarget:
 		return p.confirm(ctx, op)
 	case identityFrom:
@@ -467,14 +478,27 @@ const (
 // package digest together prove the target; the from version is a version-only
 // hint that the swap did not happen (spec §5.5 rejects comparing from_* with
 // the post-upgrade running value).
-func (p *reconciler) classify(op Op) identityClass {
-	if digest, err := p.runningDigest(); err == nil && op.ConfirmedBy(p.cfg.Version, digest) {
-		return identityTarget
+//
+// A failing digest read is returned as an error, never folded into
+// identityOther: an unreadable executable is an environment failure
+// (HUB_DIGEST_UNAVAILABLE), and treating it as "another identity" would write a
+// terminal VERIFY_MISMATCH for an upgrade that is in fact fine. The caller
+// reports it and retries on the next pass.
+func (p *reconciler) classify(op Op) (identityClass, error) {
+	if p.cfg.Version != "" && p.cfg.Version == op.TargetVersion {
+		digest, err := p.runningDigest()
+		if err != nil {
+			return identityOther, err
+		}
+		if op.PackageSHA256 == digest {
+			return identityTarget, nil
+		}
+		return identityOther, nil
 	}
 	if p.cfg.Version != "" && p.cfg.Version == op.FromVersion {
-		return identityFrom
+		return identityFrom, nil
 	}
-	return identityOther
+	return identityOther, nil
 }
 
 func (p *reconciler) runningDigest() (string, error) {
@@ -523,22 +547,30 @@ func (p *reconciler) discardBackupScratch(operationID string) {
 }
 
 // clearSupersededMarker removes the restored marker once a new backup has been
-// staged. The marker describes the data directory the restore produced; the
-// first backup of the next generation supersedes it, and keeping it would label
-// the current record with an older operation's snapshot time.
+// committed. The marker describes the data directory the restore produced; the
+// first *committed* backup of the next generation supersedes it, and keeping it
+// would label the current record with an older operation's snapshot time.
+//
+// "Committed" means the journal is backed_up and this operation's per-operation
+// record reads back: a backup attempt that only reached backing_up and then
+// failed (or was orphaned) never produced a generation, so it must not erase the
+// lossy fact. The record may already be confirmed by the time this pass runs
+// (reconcile was down through the whole upgrade), so both committed states count.
 func (p *reconciler) clearSupersededMarker(ops []Op) {
 	marker, ok, err := ReadRestoredMarker(p.cfg.DataDir)
 	if err != nil || !ok {
 		return
 	}
+	root, err := dataPath(p.cfg.DataDir, DatabaseBackupDir)
+	if err != nil {
+		return
+	}
 	for _, op := range ops {
-		if op.Kind != KindUpdate || op.OperationID == marker.OperationID {
+		if op.Kind != KindUpdate || op.OperationID == marker.OperationID || op.State != StateBackedUp {
 			continue
 		}
-		// Only a fresh backup (staged, not yet handed off) supersedes the
-		// marker: behind it the operation is either the restored one or a
-		// terminal fact of another attempt.
-		if op.State != StateBackingUp && op.State != StateBackedUp {
+		record, err := backup.Read(root, op.OperationID, os.Geteuid())
+		if err != nil || (record.State != backup.StateStaged && record.State != backup.StateConfirmed) {
 			continue
 		}
 		if err := removeRestoredMarker(p.cfg.DataDir); err != nil {

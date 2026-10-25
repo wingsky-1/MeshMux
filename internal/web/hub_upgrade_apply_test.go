@@ -207,8 +207,14 @@ func TestNewRunsStartupReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// Close is deferred after the assertions: the startup pass must already have
-	// completed before New returned.
+	// Deferred first so any failing assertion below still stops the startup
+	// ticker and releases the store's data-directory lock.
+	defer func() {
+		if err := app.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
+	// The startup pass must already have completed before New returned.
 	op, ok, err := hubupgrade.ReadOp(dir, operationID, os.Geteuid())
 	if err != nil || !ok {
 		t.Fatalf("journal: ok=%v err=%v", ok, err)
@@ -228,9 +234,6 @@ func TestNewRunsStartupReconcile(t *testing.T) {
 	}
 	if record.State != backup.StateStaged {
 		t.Fatalf("the fixture record was not staged before New: %q", record.State)
-	}
-	if err := app.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 
