@@ -54,26 +54,40 @@ type updateFixture struct {
 
 	hubLedgerPath  string
 	lineLedgerPath string
+
+	payloadDBVersion int
+	corruptPayload   bool
 }
 
 func newUpdateFixture(t *testing.T) *updateFixture {
 	t.Helper()
+	return newUpdateFixturePayload(t, 10, false)
+}
+
+// newUpdateFixturePayload builds the same fixture with a chosen copy schema or
+// corrupt copy while the frozen record still claims db_schema 10. The record's
+// payload digest/integrity readback are honest for those bytes, so the failure
+// happens in the pre-flight trial, not in the identity gate.
+func newUpdateFixturePayload(t *testing.T, dbVersion int, corrupt bool) *updateFixture {
+	t.Helper()
 	root := t.TempDir()
 	f := &updateFixture{
-		root:           root,
-		dataDir:        filepath.Join(root, "var/lib/meshmux"),
-		claimDir:       filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
-		resultsDir:     filepath.Join(root, "var/lib/meshmux-installer/hub-upgrade/results"),
-		execRoot:       filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
-		manifestDir:    filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
-		binaryPath:     filepath.Join(root, "usr/local/libexec/meshmuxd"),
-		agentPath:      filepath.Join(root, "etc/meshmux/agent.json"),
-		opID:           strings.Repeat("a", 32),
-		target:         "2.0.0",
-		from:           buildinfo.Version,
-		now:            time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
-		hubLedgerPath:  filepath.Join(root, "var/lib/meshmux-installer/state.json"),
-		lineLedgerPath: filepath.Join(root, "var/lib/meshmux-installer/local-line/state.json"),
+		root:             root,
+		dataDir:          filepath.Join(root, "var/lib/meshmux"),
+		claimDir:         filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
+		resultsDir:       filepath.Join(root, "var/lib/meshmux-installer/hub-upgrade/results"),
+		execRoot:         filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
+		manifestDir:      filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
+		binaryPath:       filepath.Join(root, "usr/local/libexec/meshmuxd"),
+		agentPath:        filepath.Join(root, "etc/meshmux/agent.json"),
+		opID:             strings.Repeat("a", 32),
+		target:           "2.0.0",
+		from:             buildinfo.Version,
+		now:              time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
+		hubLedgerPath:    filepath.Join(root, "var/lib/meshmux-installer/state.json"),
+		lineLedgerPath:   filepath.Join(root, "var/lib/meshmux-installer/local-line/state.json"),
+		payloadDBVersion: dbVersion,
+		corruptPayload:   corrupt,
 	}
 	for _, dir := range []string{
 		f.dataDir, f.claimDir, f.resultsDir, f.execRoot, f.manifestDir,
@@ -198,7 +212,13 @@ func (f *updateFixture) writeRecord(t *testing.T) backup.Record {
 	if err := os.MkdirAll(part, 0700); err != nil {
 		t.Fatal(err)
 	}
-	createSQLite(t, filepath.Join(part, backup.SingleDBName), 10)
+	if f.corruptPayload {
+		if err := os.WriteFile(filepath.Join(part, backup.SingleDBName), []byte("this is not sqlite"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		createSQLite(t, filepath.Join(part, backup.SingleDBName), f.payloadDBVersion)
+	}
 	record, err := backup.Write(root, backup.Spec{
 		OperationID: f.opID, FromVersion: f.from, TargetVersion: f.target,
 		DBSchema: 10, PolicySchema: upgrade.PolicySchema,
@@ -311,6 +331,22 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([
 	return nil, errors.New("unexpected systemctl verb")
 }
 
+// failPinRenameAt injects one rename-time failure at the nth pin publication.
+// It is user-independent (unlike a read-only directory, which root ignores).
+func failPinRenameAt(t *testing.T, nth int) {
+	t.Helper()
+	original := renamePinFile
+	calls := 0
+	renamePinFile = func(oldPath, newPath string) error {
+		calls++
+		if calls == nth {
+			return errors.New("injected pin rename failure")
+		}
+		return original(oldPath, newPath)
+	}
+	t.Cleanup(func() { renamePinFile = original })
+}
+
 func (r *recordingRunner) restarted(unit string) bool {
 	for _, call := range r.calls {
 		if call == "systemctl restart "+unit {
@@ -375,15 +411,19 @@ func TestUpdateVersionMismatchZeroWrite(t *testing.T) {
 }
 
 func TestUpdatePreflightTrial(t *testing.T) {
-	f := newUpdateFixture(t)
-	before := f.snapshotPins(t)
-	cfg := f.config()
-	cfg.Preflight = func(string, int64) error { return errors.New("schema mismatch") }
-	err := RunUpdate(context.Background(), cfg, &recordingRunner{})
-	if codeOfError(err) != codePreflight {
-		t.Fatalf("error = %v, want %s", err, codePreflight)
+	for name, f := range map[string]*updateFixture{
+		"wrong user_version": newUpdateFixturePayload(t, 11, false),
+		"corrupt copy":       newUpdateFixturePayload(t, 10, true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := f.snapshotPins(t)
+			err := RunUpdate(context.Background(), f.config(), &recordingRunner{})
+			if codeOfError(err) != codePreflight {
+				t.Fatalf("error = %v, want %s", err, codePreflight)
+			}
+			f.requireZeroWrites(t, before)
+		})
 	}
-	f.requireZeroWrites(t, before)
 }
 
 func TestApplyPrecheckNeedsFourPins(t *testing.T) {
@@ -622,4 +662,59 @@ func createSQLite(t *testing.T, path string, userVersion int) {
 	if err := os.Chmod(path, 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestLineRepinRenameFailureRestoresOldBytes extends the all-or-nothing gate to
+// a failure after the Hub and Line ledgers were already renamed: the captured
+// pre-write bytes must be restored exactly, not re-rendered.
+func TestLineRepinRenameFailureRestoresOldBytes(t *testing.T) {
+	f := newUpdateFixture(t)
+	before := f.snapshotPins(t)
+	failPinRenameAt(t, 3) // hub, line renamed; agent rename fails
+	runner := &recordingRunner{}
+	err := RunUpdate(context.Background(), f.config(), runner)
+	if codeOfError(err) != codeRepinFailed {
+		t.Fatalf("error = %v, want %s", err, codeRepinFailed)
+	}
+	f.requireBinary(t, f.oldSHA)
+	f.requirePinsUnchanged(t, before)
+	f.requireNoClaim(t)
+	if runner.restarted(webUnit) {
+		t.Fatal("Web was restarted after a failed re-pin")
+	}
+	if got := f.result(t); got.Phase != hubupgrade.ResultFailed || got.ErrorCode != codeRepinFailed {
+		t.Fatalf("result = %s/%s", got.Phase, got.ErrorCode)
+	}
+}
+
+// TestApplyRollbackFailureKeepsClaimAndPartial: the pin write fails after the
+// swap, and the old package is gone so the binary rollback cannot finish. The
+// swapping claim must stay as the boot anchor and the receipt must be partial.
+func TestApplyRollbackFailureKeepsClaimAndPartial(t *testing.T) {
+	f := newUpdateFixture(t)
+	before := f.snapshotPins(t)
+	oldName, err := hubupgrade.OldPackageName(f.from, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(f.dataDir, hubupgrade.UpgradeDir, oldName)); err != nil {
+		t.Fatal(err)
+	}
+	failPinRenameAt(t, 1) // restore is exact; only the missing binary blocks rollback
+	err = RunUpdate(context.Background(), f.config(), &recordingRunner{})
+	if codeOfError(err) != codeRepinFailed {
+		t.Fatalf("error = %v, want %s", err, codeRepinFailed)
+	}
+	if got := f.result(t); got.Phase != hubupgrade.ResultPartial {
+		t.Fatalf("result phase = %s, want partial", got.Phase)
+	}
+	claim, ok, err := hubupgrade.ReadClaim(f.claimDir)
+	if err != nil || !ok {
+		t.Fatalf("claim retained? ok=%v err=%v", ok, err)
+	}
+	if claim.Phase != hubupgrade.ClaimPhaseSwapping || claim.OldPins.HubSharedSHA != f.oldSHA {
+		t.Fatalf("claim = %+v", claim)
+	}
+	f.requirePinsUnchanged(t, before)
+	f.requireBinary(t, f.newSHA)
 }

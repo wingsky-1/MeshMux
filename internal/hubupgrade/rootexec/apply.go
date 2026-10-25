@@ -32,6 +32,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
@@ -50,9 +51,10 @@ const (
 	codeWebRestart     = "HUB_UPGRADE_RESTART_FAILED"
 	codeUpdateIdentity = "HUB_BACKUP_IDENTITY_MISSING"
 
-	lineUnit       = "meshmux-agent.service"
-	webUnit        = "meshmux-web.service"
-	maxBinaryBytes = 128 << 20
+	lineUnit        = "meshmux-agent.service"
+	webUnit         = "meshmux-web.service"
+	maxBinaryBytes  = 128 << 20
+	maxPayloadBytes = 4 << 30
 )
 
 var updateVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
@@ -141,12 +143,29 @@ func RunUpdate(ctx context.Context, cfg UpdateConfig, runner node.CommandRunner)
 	}
 
 	copyPath := filepath.Join(cfg.DataDir, hubupgrade.DatabaseBackupDir, op.OperationID, backup.PayloadDir, backup.SingleDBName)
+	// The plan's "digest was verified earlier" is not true inside T6: the
+	// dispatcher verified the target PACKAGE, not this payload. Prove the
+	// record's own readback and the exact copy bytes before the pre-flight
+	// opens them; otherwise a swapped payload would only fail later.
+	if !record.IntegrityOK || record.PayloadFiles != 1 || !ledgerDigestRE.MatchString(record.PayloadSHA256) {
+		return fail(backup.CodeMismatch, "the frozen record does not prove the database copy")
+	}
+	payloadSHA, err := digestRegularFile(copyPath, maxPayloadBytes)
+	if err != nil || payloadSHA != record.PayloadSHA256 {
+		return fail(backup.CodeMismatch, "the staged database copy does not match the frozen payload digest")
+	}
 	if err := cfg.Preflight(copyPath, record.DBSchema); err != nil {
 		return fail(codePreflight, "the staged database copy failed the pre-flight trial")
 	}
 
+	// Everything up to here is a pre-claim refusal: no result file is written,
+	// so the dispatcher sees only the returned stable code and the operation id
+	// it already owns. This is a plan-level observability gap for T7 docs.
 	now := cfg.Now().UTC()
-	nextPins := advancePins(oldPins, cfg.Target, cfg.ExpectedSHA256)
+	nextPins, err := advancePins(cfg.Root, oldPins, cfg.Target, cfg.ExpectedSHA256)
+	if err != nil {
+		return err
+	}
 	claim := hubupgrade.Claim{
 		Schema: hubupgrade.ClaimSchema, Phase: hubupgrade.ClaimPhaseSwapping,
 		OperationID: op.OperationID, TargetVersion: record.TargetVersion, FromVersion: record.FromVersion,
@@ -187,11 +206,21 @@ func RunUpdate(ctx context.Context, cfg UpdateConfig, runner node.CommandRunner)
 		return run.fail(ctx, runner, codeRepinFailed, err)
 	}
 	if oldPins.HasLine() {
+		// Observability limit: the result schema has no free-form note field,
+		// so "Line unit inactive, restart skipped" is visible only in this
+		// process's log; the receipt cannot carry it (T7 docs).
 		if err := restartLineIfActive(ctx, runner); err != nil {
 			return run.fail(ctx, runner, codeRepinFailed, err)
 		}
 	}
 
+	// The restarting result must exist before the claim disappears: a crash
+	// after the claim unlink but before this write would leave a fully
+	// re-pinned host with no claim and an `applying` journal, which ages to
+	// ORPHANED instead of confirming. The claim stays swapping until here.
+	if err := run.progress(hubupgrade.ResultRestarting, now); err != nil {
+		return run.fail(ctx, runner, codeRepinFailed, err)
+	}
 	claim.Phase = hubupgrade.ClaimPhaseRepinned
 	if err := hubupgrade.WriteClaim(cfg.ClaimDir, claim); err != nil {
 		return run.fail(ctx, runner, codeRepinFailed, err)
@@ -199,9 +228,6 @@ func RunUpdate(ctx context.Context, cfg UpdateConfig, runner node.CommandRunner)
 	// The claim is inert from here on; a failed unlink only leaves debris.
 	_ = hubupgrade.RemoveClaim(cfg.ClaimDir)
 
-	if err := run.progress(hubupgrade.ResultRestarting, now); err != nil {
-		return run.fail(ctx, runner, codeRepinFailed, err)
-	}
 	if _, err := runner.Run(ctx, "systemctl", "restart", webUnit); err != nil {
 		return run.fail(ctx, runner, codeWebRestart, err)
 	}
@@ -286,9 +312,14 @@ func readUpdateInputs(cfg UpdateConfig) (hubupgrade.Op, backup.Record, error) {
 	if op.State != hubupgrade.StateQueued && op.State != hubupgrade.StateApplying {
 		return hubupgrade.Op{}, backup.Record{}, fail(codeUpdateState, "the operation is not queued or applying")
 	}
-	if op.FromVersion != cfg.FromVersion || op.TargetVersion != cfg.Target ||
-		op.PackageSHA256 != cfg.ExpectedSHA256 {
-		return hubupgrade.Op{}, backup.Record{}, fail(codeUpdateState, "the journal does not name this argv")
+	if op.FromVersion != cfg.FromVersion {
+		return hubupgrade.Op{}, backup.Record{}, fail(codeUpdateVersion, "the journal from-version does not name this argv")
+	}
+	if op.TargetVersion != cfg.Target {
+		return hubupgrade.Op{}, backup.Record{}, fail(codeUpdateVersion, "the journal target does not name this argv")
+	}
+	if op.PackageSHA256 != cfg.ExpectedSHA256 {
+		return hubupgrade.Op{}, backup.Record{}, fail(codeUpdateState, "the journal package digest does not name this argv")
 	}
 	record, err := backup.Read(filepath.Join(cfg.DataDir, hubupgrade.DatabaseBackupDir), cfg.OperationID, cfg.Owner)
 	if err != nil {
@@ -323,16 +354,31 @@ func checkUpdateIdentity(cfg UpdateConfig, op hubupgrade.Op, record backup.Recor
 	return nil
 }
 
-func advancePins(old Pins, target, newSHA string) Pins {
+// advancePins derives the complete next pin set, including the Line ledger's
+// managed_files digest of the agent.json bytes the re-pin will write. Leaving
+// that field empty would make Pins self-inconsistent and force writePinSet to
+// recompute a value the caller never validated.
+func advancePins(root string, old Pins, target, newSHA string) (Pins, error) {
 	next := Pins{HubSharedSHA: newSHA, HubManagedSHA: newSHA}
-	if old.HasLine() {
-		next.LineSharedSHA = newSHA
-		next.LineAgentVersion = target
-		next.LineAgentSHA = newSHA
-		next.AgentJSONVersion = target
-		next.AgentJSONSHA = newSHA
+	if !old.HasLine() {
+		return next, nil
 	}
-	return next
+	next.LineSharedSHA = newSHA
+	next.LineAgentVersion = target
+	next.LineAgentSHA = newSHA
+	next.AgentJSONVersion = target
+	next.AgentJSONSHA = newSHA
+	agentCfg, _, err := readAgentConfig(rootedPath(root, node.AgentConfigPath), os.Geteuid())
+	if err != nil {
+		return Pins{}, err
+	}
+	agentCfg.AgentVersion, agentCfg.AgentSHA256 = target, newSHA
+	agentBody, err := renderAgentConfig(agentCfg)
+	if err != nil {
+		return Pins{}, err
+	}
+	next.LineAgentManagedSHA = sha256Of(agentBody)
+	return next, nil
 }
 
 func (r *updateRun) progress(phase hubupgrade.ResultPhase, now time.Time) error {
@@ -353,9 +399,9 @@ func (r *updateRun) terminal(phase hubupgrade.ResultPhase, code string) {
 }
 
 // fail rolls the host back to the old binary and the complete old pin set. A
-// clean rollback writes failed; an incomplete one writes partial and keeps the
-// claim's crash evidence in place (the claim is removed only after both halves
-// are provably old again).
+// clean rollback writes failed and removes the claim; an incomplete one writes
+// partial and keeps the swapping claim, because the claim is removed only after
+// both halves are provably old again.
 func (r *updateRun) fail(ctx context.Context, runner node.CommandRunner, code string, cause error) error {
 	if err := r.rollback(ctx, runner); err != nil {
 		r.terminal(hubupgrade.ResultPartial, code)
@@ -375,13 +421,15 @@ func (r *updateRun) rollback(ctx context.Context, runner node.CommandRunner) err
 	if err := restoreOldBinary(r.cfg, r.record); err != nil {
 		firstErr = err
 	}
-	if err := writePins(r.cfg.Root, r.old, r.old); err != nil {
-		var repinned *repinError
-		// A staging failure reports mutated=false: the targets still hold the
-		// old bytes, so the rollback of the pins is already complete.
-		if !errors.As(err, &repinned) || repinned.mutated {
-			if firstErr == nil {
-				firstErr = err
+	if !pinsAlreadyOld(r.cfg.Root, r.old, r.record.FromVersion, r.record.FromAgentSHA256) {
+		if err := writePins(r.cfg.Root, r.old, r.old); err != nil {
+			var repinned *repinError
+			// A staging failure reports mutated=false: the targets still hold
+			// the old bytes, so the rollback of the pins is already complete.
+			if !errors.As(err, &repinned) || repinned.mutated {
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 		}
 	}
@@ -390,10 +438,24 @@ func (r *updateRun) rollback(ctx context.Context, runner node.CommandRunner) err
 	if r.old.HasLine() {
 		_ = restartLineIfActive(ctx, runner)
 	}
-	// The claim is inert once the old binary runs with the old pins (C22: the
-	// Web cannot delete it anyway); a failed unlink is debris, not partial.
-	_ = hubupgrade.RemoveClaim(r.cfg.ClaimDir)
+	// The claim is removed only after BOTH halves — binary and every pin — are
+	// provably old again. An incomplete rollback keeps the swapping claim as the
+	// boot anchor; the Web cannot delete it anyway (C22) and a failed unlink of
+	// an inert claim is debris, not partial.
+	if firstErr == nil {
+		_ = hubupgrade.RemoveClaim(r.cfg.ClaimDir)
+	}
 	return firstErr
+}
+
+// pinsAlreadyOld is the byte-preserving rollback fast path: after a
+// rename-failure restore the three files already equal the pre-write bytes, so
+// rewriting them would only move Line updated_at and destroy the proof that the
+// restore was complete. Any read/compare failure falls through to the real
+// write.
+func pinsAlreadyOld(root string, old Pins, fromVersion, oldSHA string) bool {
+	got, err := readPins(root, os.Geteuid(), fromVersion, oldSHA)
+	return err == nil && got == old
 }
 
 func restartLineIfActive(ctx context.Context, runner node.CommandRunner) error {
@@ -406,19 +468,23 @@ func restartLineIfActive(ctx context.Context, runner node.CommandRunner) error {
 }
 
 func digestBinaryFile(path string) (string, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	return digestRegularFile(path, maxBinaryBytes)
+}
+
+func digestRegularFile(path string, max int64) (string, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > maxBinaryBytes {
-		return "", errors.New("the binary is not a bounded regular file")
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > max {
+		return "", errors.New("the file is not a bounded regular file")
 	}
 	hasher := sha256.New()
-	n, err := io.Copy(hasher, io.LimitReader(file, maxBinaryBytes+1))
-	if err != nil || n > maxBinaryBytes {
-		return "", errors.New("the binary could not be read within its bound")
+	n, err := io.Copy(hasher, io.LimitReader(file, max+1))
+	if err != nil || n > max {
+		return "", errors.New("the file could not be read within its bound")
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
@@ -495,11 +561,16 @@ func restoreOldBinary(cfg UpdateConfig, record backup.Record) error {
 		return fail(codeRepinFailed, "the old package name is invalid")
 	}
 	sourcePath := filepath.Join(cfg.DataDir, hubupgrade.UpgradeDir, name)
-	source, err := os.Open(sourcePath)
+	source, err := os.OpenFile(sourcePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return fail(codeRepinFailed, "the staged old package is missing")
 	}
 	defer source.Close()
+	info, err := source.Stat()
+	if err != nil || !info.Mode().IsRegular() || !statOwnedBy(info, cfg.Owner) ||
+		info.Size() < 1 || info.Size() > maxBinaryBytes {
+		return fail(codeRepinFailed, "the staged old package is not a private Web-owned regular file")
+	}
 	return installBinaryFrom(source, record.FromAgentSHA256, rootedPath(cfg.Root, node.AgentBinaryPath))
 }
 

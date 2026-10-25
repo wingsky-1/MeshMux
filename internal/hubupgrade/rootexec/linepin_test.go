@@ -6,6 +6,7 @@ package rootexec
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -46,4 +47,30 @@ func TestLineRepinWithoutLine(t *testing.T) {
 	if runner.restarted(lineUnit) {
 		t.Fatalf("restarted a nonexistent Line: %v", runner.calls)
 	}
+}
+
+// TestWritePinsRenameFailureRestoresExactBytes is the direct all-or-nothing
+// proof: the Hub and Line ledgers are renamed before the failure, and the
+// captured old bytes (including Line updated_at) come back unchanged.
+func TestWritePinsRenameFailureRestoresExactBytes(t *testing.T) {
+	f := newUpdateFixture(t)
+	oldPins, err := readPins(f.root, os.Geteuid(), f.from, f.oldSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := advancePins(f.root, oldPins, f.target, f.newSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshotPins(t)
+	failPinRenameAt(t, 3)
+	err = writePins(f.root, next, oldPins)
+	if err == nil {
+		t.Fatal("rename failure was swallowed")
+	}
+	var repinned *repinError
+	if !errors.As(err, &repinned) || repinned.mutated {
+		t.Fatalf("writePins error = %v, want a complete restore", err)
+	}
+	f.requirePinsUnchanged(t, before)
 }

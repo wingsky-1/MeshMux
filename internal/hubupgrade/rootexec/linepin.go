@@ -33,12 +33,15 @@ import (
 // Pins is the hubupgrade pin-set document this executor reads and writes.
 type Pins = hubupgrade.Pins
 
-// Fixed installer paths. They mirror internal/install's unexported constants;
-// the privileged executor may not import a caller-selected path here.
-const (
-	hubLedgerFilePath  = "/var/lib/meshmux-installer/state.json"
-	lineLedgerFilePath = "/var/lib/meshmux-installer/local-line/state.json"
-)
+// lineLedgerFilePath mirrors internal/install's unexported constant; the Hub
+// ledger path is shared with ledger.go. The privileged executor may not import
+// a caller-selected path here.
+const lineLedgerFilePath = "/var/lib/meshmux-installer/local-line/state.json"
+
+// renamePinFile is the one rename point of the pin publisher. It exists as a
+// variable so a B-level test can inject a rename-time failure without relying
+// on a permission trick that root would ignore.
+var renamePinFile = os.Rename
 
 // readPins reads and cross-checks the complete pre-swap pin set for the given
 // running digest. Any missing, malformed, foreign-owned or disagreeing source
@@ -48,7 +51,7 @@ func readPins(root string, expectedOwner int, fromVersion, currentSHA string) (P
 	if !ledgerDigestRE.MatchString(currentSHA) {
 		return pins, fail(codePrecheck, "the current installed binary digest is not SHA-256 hex")
 	}
-	hubPath := rootedPath(root, hubLedgerFilePath)
+	hubPath := rootedPath(root, hubLedgerPath)
 	hub, found, err := install.ReadState(root)
 	if err != nil || !found {
 		return pins, fail(codePrecheck, "the Hub installer ledger is not readable")
@@ -120,15 +123,22 @@ func writePins(root string, next, old Pins) error {
 	if next.HasLine() != old.HasLine() {
 		return &repinError{err: fail(codeRepinFailed, "the Line pin set changed shape")}
 	}
+	// Capture the exact pre-write bytes. A rename-time failure is restored from
+	// these bytes (not by re-rendering the old Pins), so the rollback is
+	// byte-identical to the previous ledgers and agent.json.
+	snapshots, err := capturePinBodies(root, old.HasLine())
+	if err != nil {
+		return &repinError{err: err}
+	}
 	if err := writePinSet(root, next); err != nil {
 		var staged *pinStageError
 		if errors.As(err, &staged) {
 			// Nothing was renamed: every target still holds the old bytes.
 			return &repinError{err: err}
 		}
-		// At least one rename may have happened. Restore the complete old set,
-		// not only the files this call already touched.
-		if restoreErr := writePinSet(root, old); restoreErr != nil {
+		// At least one rename happened. Restore the complete old set, not only
+		// the files this call already touched.
+		if restoreErr := publishPinBodies(snapshots); restoreErr != nil {
 			return &repinError{err: restoreErr, mutated: true}
 		}
 		return &repinError{err: err}
@@ -140,11 +150,7 @@ func validatePinSet(pins Pins) error {
 	if !ledgerDigestRE.MatchString(pins.HubSharedSHA) || !ledgerDigestRE.MatchString(pins.HubManagedSHA) {
 		return fail(codeRepinFailed, "the new Hub pin set is incomplete")
 	}
-	if pins.HasLine() && (!ledgerDigestRE.MatchString(pins.LineSharedSHA) ||
-		!updateVersionRE.MatchString(pins.LineAgentVersion) ||
-		!ledgerDigestRE.MatchString(pins.LineAgentSHA) ||
-		!updateVersionRE.MatchString(pins.AgentJSONVersion) ||
-		!ledgerDigestRE.MatchString(pins.AgentJSONSHA)) {
+	if pins.HasLine() && !pins.CompleteLine() {
 		return fail(codeRepinFailed, "the new Line pin set is incomplete")
 	}
 	if pins.HasLine() && (pins.LineAgentVersion != pins.AgentJSONVersion) {
@@ -184,7 +190,7 @@ type lease struct {
 // A staging failure returns *pinStageError after removing every scratch file.
 func writePinSet(root string, pins Pins) error {
 	owner := os.Geteuid()
-	hubPath := rootedPath(root, hubLedgerFilePath)
+	hubPath := rootedPath(root, hubLedgerPath)
 	hub, found, err := install.ReadState(root)
 	if err != nil || !found {
 		return &pinStageError{err: fail(codeRepinFailed, "the Hub ledger could not be re-read for the pin write")}
@@ -230,6 +236,9 @@ func writePinSet(root string, pins Pins) error {
 		if err != nil {
 			return &pinStageError{err: err}
 		}
+		if got := sha256Of(agentBody); got != pins.LineAgentManagedSHA {
+			return &pinStageError{err: fail(codeRepinFailed, "the rendered agent.json does not match the Line managed pin")}
+		}
 		if line.SharedBinaries == nil {
 			line.SharedBinaries = map[string]install.SharedBinary{}
 		}
@@ -241,7 +250,7 @@ func writePinSet(root string, pins Pins) error {
 		if line.ManagedFiles == nil {
 			line.ManagedFiles = map[string]string{}
 		}
-		line.ManagedFiles[node.AgentConfigPath] = sha256Of(agentBody)
+		line.ManagedFiles[node.AgentConfigPath] = pins.LineAgentManagedSHA
 		lineBody, err := install.EncodeState(line)
 		if err != nil {
 			return &pinStageError{err: fail(codeRepinFailed, "the Line ledger could not be encoded")}
@@ -251,6 +260,35 @@ func writePinSet(root string, pins Pins) error {
 			pinBody{path: agentPath, body: agentBody, mode: 0600})
 	}
 
+	return publishPinBodies(bodies)
+}
+
+// capturePinBodies reads the exact pre-write bytes of every file the pin set
+// owns. It is the rollback source for a rename-time failure.
+func capturePinBodies(root string, hasLine bool) ([]pinBody, error) {
+	paths := []string{rootedPath(root, hubLedgerPath)}
+	if hasLine {
+		paths = append(paths, rootedPath(root, lineLedgerFilePath), rootedPath(root, node.AgentConfigPath))
+	}
+	bodies := make([]pinBody, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, fail(codeRepinFailed, "a pin target is not a regular file")
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fail(codeRepinFailed, "a pin target could not be read for rollback")
+		}
+		bodies = append(bodies, pinBody{path: path, body: body, mode: info.Mode().Perm()})
+	}
+	return bodies, nil
+}
+
+// publishPinBodies stages every body first and only then renames. A stage
+// failure returns *pinStageError (no rename happened); a rename failure leaves
+// the caller to restore the captured bytes.
+func publishPinBodies(bodies []pinBody) error {
 	leases := make([]lease, 0, len(bodies))
 	cleanup := func() {
 		for _, item := range leases {
@@ -268,7 +306,7 @@ func writePinSet(root string, pins Pins) error {
 		leases = append(leases, item)
 	}
 	for i, item := range leases {
-		if err := os.Rename(item.temp, item.target); err != nil {
+		if err := renamePinFile(item.temp, item.target); err != nil {
 			for _, rest := range leases[i:] {
 				_ = os.Remove(rest.temp)
 			}

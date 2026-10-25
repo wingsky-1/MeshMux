@@ -1,6 +1,7 @@
 package hubupgrade
 
-// The crash claim of #11d Task 6 (spec §5.6 step 6, oracle carry R1).
+// The crash claim of #11d Task 6 (plan Task 6; oracle R1 addition to §5.6 —
+// this file is not part of the r6 spec text).
 //
 // A binary swap and the four-pin re-pin are two different writes. A power loss
 // between them leaves the host running the NEW binary while the Hub ledger, the
@@ -54,6 +55,13 @@ const (
 
 	codeClaimInvalid = "HUB_UPGRADE_CLAIM_INVALID"
 	codeClaimWrite   = "HUB_UPGRADE_CLAIM_FAILED"
+)
+
+// The two seams exist so the B-level fixture can prove the production root
+// branch (group resolution and pre-rename ownership) without running as root.
+var (
+	claimEUID    = os.Geteuid
+	claimGroupID = meshmuxGroupID
 )
 
 // Pins is the complete four-source pin set of spec §5.6 step 6 plus the two
@@ -205,6 +213,18 @@ func WriteClaim(dir string, claim Claim) error {
 	if err != nil {
 		return fail(codeClaimInvalid, "the upgrade claim could not be encoded")
 	}
+	// Root must publish the file Web-readable from the first instant it exists.
+	// A missing meshmux group is a broken install, not a reason to fall back to
+	// a root:root claim the boot reconcile could never read: fail closed before
+	// creating any scratch file.
+	gid, isRoot := 0, claimEUID() == 0
+	if isRoot {
+		resolved, ok := claimGroupID()
+		if !ok {
+			return fail(codeClaimWrite, "the meshmux group is unavailable; the claim would not be Web-readable")
+		}
+		gid = resolved
+	}
 	target := filepath.Join(dir, claimName)
 	scratch, err := os.CreateTemp(dir, "."+claimName+".part-*")
 	if err != nil {
@@ -223,6 +243,16 @@ func WriteClaim(dir string, claim Claim) error {
 		cleanup()
 		return fail(codeClaimWrite, "the upgrade claim could not be written")
 	}
+	// Ownership is fixed on the scratch inode BEFORE the rename, so the target
+	// name is never visible with the wrong group even for one instant.
+	if isRoot {
+		if err := scratch.Chown(0, gid); err != nil {
+			cleanup()
+			return fail(codeClaimWrite, "the upgrade claim ownership could not be fixed before publication")
+		}
+	}
+	// The sync is after chown: the persisted inode must already carry the final
+	// owner/mode.
 	if err := scratch.Sync(); err != nil {
 		cleanup()
 		return fail(codeClaimWrite, "the upgrade claim could not be flushed")
@@ -234,16 +264,6 @@ func WriteClaim(dir string, claim Claim) error {
 	if err := os.Rename(scratchName, target); err != nil {
 		_ = os.Remove(scratchName)
 		return fail(codeClaimWrite, "the upgrade claim could not be published")
-	}
-	if err := os.Chmod(target, 0640); err != nil {
-		return fail(codeClaimWrite, "the upgrade claim could not keep its mode")
-	}
-	if os.Geteuid() == 0 {
-		if gid, ok := meshmuxGroupID(); ok {
-			if err := os.Chown(target, 0, gid); err != nil {
-				return fail(codeClaimWrite, "the upgrade claim ownership could not be fixed")
-			}
-		}
 	}
 	if err := syncDirectory(dir); err != nil {
 		return fail(codeClaimWrite, "the claim directory could not be flushed")

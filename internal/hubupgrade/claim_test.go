@@ -90,3 +90,29 @@ func TestClaimRejectsLooseMode(t *testing.T) {
 		t.Fatal("0644 claim was accepted")
 	}
 }
+
+// TestClaimGroupMissingFailsClosed: a production root publisher cannot make the
+// claim Web-readable without the meshmux group. It must publish nothing rather
+// than leave a root:root claim the boot reconcile can never read.
+func TestClaimGroupMissingFailsClosed(t *testing.T) {
+	oldEUID, oldGroup := claimEUID, claimGroupID
+	claimEUID = func() int { return 0 }
+	claimGroupID = func() (int, bool) { return 0, false }
+	defer func() { claimEUID, claimGroupID = oldEUID, oldGroup }()
+
+	dir := t.TempDir()
+	err := WriteClaim(dir, claimFixture())
+	if err == nil || codeOf(err) != codeClaimWrite {
+		t.Fatalf("error = %v, want %s", err, codeClaimWrite)
+	}
+	if _, ok, readErr := ReadClaim(dir); ok || readErr != nil {
+		t.Fatalf("a claim was published: ok=%v err=%v", ok, readErr)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("scratch debris was published: %v", entries)
+	}
+}
