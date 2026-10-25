@@ -14,12 +14,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/a-h/templ"
+	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/jobs"
 	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
@@ -132,6 +135,92 @@ type upgradeSnapshot struct {
 	// The manifest's route_policy_revisions slot is a target release contract and
 	// is deliberately not filled from live state.
 	LivePolicyRevisions map[string]int64
+	// Hub is the read-only Hub self-upgrade block (#11d Task 5). It is the same
+	// journal the reconcile pass advances, rendered without a write.
+	Hub hubUpgradeView
+}
+
+// hubUpgradeView is the read-only Hub self-upgrade block of /tasks (spec
+// §5.4/§5.5/§5.11). Every field is a read: the current operation from the
+// journal, the fixed-path result the root dispatcher wrote, the latest verified
+// per-operation record, the restored marker and the identity snapshot. Errors
+// are captured as stable codes so one unreadable metadata file cannot turn the
+// whole page into a 503.
+type hubUpgradeView struct {
+	Op          hubupgrade.Op
+	HasOp       bool
+	Record      backup.Record
+	HasRecord   bool
+	Result      hubupgrade.Result
+	HasResult   bool
+	Restored    hubupgrade.RestoredMarker
+	HasRestored bool
+	Identity    hubIdentitySnapshot
+	// Err is the journal/marker failure; ResultErr is the (non-authoritative)
+	// result document failure.
+	Err       string
+	ResultErr string
+	// ExpiresAt is updated_at+30m for backing_up/backed_up: the reconcile pass
+	// will fail the row with HUB_BACKUP_ORPHANED then, and the operator should
+	// see that before walking away from a backup.
+	ExpiresAt time.Time
+}
+
+// hubUpgradeView reads the Hub upgrade facts. The journal is the authority
+// (D3): no mirror table is queried, and no directory under database-backup/ is
+// scanned to guess the current record.
+func (app *Server) hubUpgradeView(now time.Time) hubUpgradeView {
+	view := hubUpgradeView{Identity: app.hubIdentity(now)}
+	owner := os.Geteuid()
+	ops, err := hubupgrade.ListOps(app.store.dir, owner)
+	if err != nil {
+		view.Err = errorCodeOf(err)
+		return view
+	}
+	if op, ok := newestUpdateOp(ops); ok {
+		view.Op, view.HasOp = op, true
+		if op.State == hubupgrade.StateBackingUp || op.State == hubupgrade.StateBackedUp {
+			view.ExpiresAt = op.UpdatedAt.Add(hubupgrade.OrphanTimeout)
+		}
+		result, ok, err := hubupgrade.ReadResult(hubupgrade.ResultsDir, op.OperationID)
+		switch {
+		case err != nil:
+			view.ResultErr = errorCodeOf(err)
+		case ok:
+			view.Result, view.HasResult = result, true
+		}
+	}
+	if _, record, ok, err := hubupgrade.LatestBackup(app.store.dir, owner); err == nil && ok {
+		view.Record, view.HasRecord = record, true
+	} else if err != nil && view.Err == "" {
+		view.Err = errorCodeOf(err)
+	}
+	if marker, ok, err := hubupgrade.ReadRestoredMarker(app.store.dir); err == nil && ok {
+		view.Restored, view.HasRestored = marker, true
+	} else if err != nil && view.Err == "" {
+		view.Err = errorCodeOf(err)
+	}
+	return view
+}
+
+// newestUpdateOp is the journal's current update operation: the highest backup
+// generation, then the newest update time. It is journal-backed, so an
+// operation directory no journal names can never become "current".
+func newestUpdateOp(ops []hubupgrade.Op) (hubupgrade.Op, bool) {
+	var newest hubupgrade.Op
+	found := false
+	for _, op := range ops {
+		if op.Kind != hubupgrade.KindUpdate {
+			continue
+		}
+		switch {
+		case !found,
+			op.BackupGeneration > newest.BackupGeneration,
+			op.BackupGeneration == newest.BackupGeneration && op.UpdatedAt.After(newest.UpdatedAt):
+			newest, found = op, true
+		}
+	}
+	return newest, found
 }
 
 // converged compares two Hub-side reports: the newest staged revision is the
@@ -165,6 +254,7 @@ func (app *Server) upgradeView(now time.Time) (upgradeSnapshot, error) {
 	if view.Approved, err = app.store.approvedTargets(); err != nil {
 		return upgradeSnapshot{}, err
 	}
+	view.Hub = app.hubUpgradeView(now)
 	return view, nil
 }
 

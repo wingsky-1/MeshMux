@@ -306,6 +306,45 @@ func DrainAt(requestDir, doneDir *os.File, names []string, rejected bool, now ti
 	return moved, nil
 }
 
+// RemoveRequest unlinks one request document that was never consumed or whose
+// operation timed out (#11d Task 5, spec §5.5). The path unit triggers on
+// DirectoryNotEmpty, so a leftover request keeps the unit disarmed for every
+// later operation: removing the single named document re-arms it.
+//
+// It removes exactly <dir>/<op32hex>.json and nothing else. A symlink is
+// refused (never followed, and not unlinked either, because its target is not
+// ours to touch), a non-regular file and another account's file are refused.
+// The watched directory is 0730 root:meshmux, so it can be traversed but not
+// listed; that is why this is a path operation on the one known name rather
+// than a directory walk. A missing request is success: the dispatcher already
+// drained it, or it was never written.
+func RemoveRequest(dir, operationID string) error {
+	if !opIDRE.MatchString(operationID) {
+		return fail(codeRequestInvalid, "the operation id is not 32 lowercase hex")
+	}
+	if dir == "" || !filepath.IsAbs(dir) {
+		return fail(codeRequestInvalid, "the request directory is not absolute")
+	}
+	path := filepath.Join(dir, operationID+".json")
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fail(codeRequestInvalid, "the request could not be inspected")
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fail(codeRequestInvalid, "the request is not a regular file")
+	}
+	if !ownedBy(os.Geteuid(), info) {
+		return fail(codeRequestInvalid, "the request does not belong to this account")
+	}
+	if err := os.Remove(path); err != nil {
+		return fail(codeRequestWrite, "the request could not be removed")
+	}
+	return nil
+}
+
 func validateRequest(request Request) error {
 	switch {
 	case request.Schema != RequestSchema:
