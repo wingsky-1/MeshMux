@@ -35,7 +35,7 @@ func releaseManifest() upgrade.Manifest {
 // dev source class is not what makes a release acceptable.
 func TestReleaseMeshmuxdPassesTargetGate(t *testing.T) {
 	m := releaseManifest()
-	component, err := validateTarget(m, m.Version)
+	component, err := ValidateTarget(m, m.Version)
 	if err != nil {
 		t.Fatalf("release target refused: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestReleaseMeshmuxdPassesTargetGate(t *testing.T) {
 	// branch is not a widening of what may be executed.
 	foreign := releaseManifest()
 	foreign.Components[0].Source = "https://example.invalid/meshmuxd"
-	if _, err := validateTarget(foreign, foreign.Version); err == nil || codeOf(err) != "MANIFEST_COMPONENT_INVALID" {
+	if _, err := ValidateTarget(foreign, foreign.Version); err == nil || codeOf(err) != "MANIFEST_COMPONENT_INVALID" {
 		t.Fatalf("foreign release source = %v, want MANIFEST_COMPONENT_INVALID", err)
 	}
 	// The transitional dev pin still passes the same gate, so both source
@@ -61,7 +61,7 @@ func TestReleaseMeshmuxdPassesTargetGate(t *testing.T) {
 	dev.Components[0].Dev = true
 	dev.Components[0].Version = "dev-20261023"
 	dev.Components[0].Source = "file:///var/lib/meshmux/dev/meshmuxd"
-	if _, err := validateTarget(dev, dev.Version); err != nil {
+	if _, err := ValidateTarget(dev, dev.Version); err != nil {
 		t.Fatalf("dev target refused: %v", err)
 	}
 }

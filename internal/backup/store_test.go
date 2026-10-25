@@ -377,3 +377,52 @@ func TestGCTrashRenameFailureRetains(t *testing.T) {
 		t.Fatalf("the retained generation is unreadable: %v", err)
 	}
 }
+
+// TestWriteSyncsStoreRoot is the Task 1r review carry: a published generation
+// must be durable, so Write fsyncs the store root after the record rename. The
+// journal of the Hub producer is written after this call; without the root sync a
+// power loss could leave a backed_up journal next to no database-backup/<op>/ at
+// all, which is data loss with no restore source.
+func TestWriteSyncsStoreRoot(t *testing.T) {
+	root := t.TempDir()
+	op := strings.Repeat("a", 32)
+	stagePerOpDB(t, root, op, []byte("fixture database copy\n"))
+
+	var synced []string
+	old := storeRootSync
+	storeRootSync = func(dir string) error {
+		synced = append(synced, dir)
+		// The record must already be published when the root is flushed.
+		if _, err := os.Lstat(filepath.Join(root, op, RecordName)); err != nil {
+			t.Errorf("store root synced before the record was published: %v", err)
+		}
+		return nil
+	}
+	defer func() { storeRootSync = old }()
+
+	if _, err := Write(root, testSpec(op), Payload{Kind: PayloadSingleDB, Check: noCheck}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(synced) != 1 || filepath.Clean(synced[0]) != filepath.Clean(root) {
+		t.Fatalf("store root syncs = %v, want exactly %q", synced, root)
+	}
+}
+
+// TestWriteReportsStoreRootSyncFailure pins that the flush is not best-effort: a
+// store root that cannot be flushed is reported, because a generation the kernel
+// may drop is not a rollback source.
+func TestWriteReportsStoreRootSyncFailure(t *testing.T) {
+	root := t.TempDir()
+	op := strings.Repeat("b", 32)
+	stagePerOpDB(t, root, op, []byte("fixture database copy\n"))
+
+	old := storeRootSync
+	storeRootSync = func(string) error { return errors.New("sync failed") }
+	defer func() { storeRootSync = old }()
+
+	if _, err := Write(root, testSpec(op), Payload{Kind: PayloadSingleDB, Check: noCheck}); err == nil {
+		t.Fatal("a failed store root sync was swallowed")
+	} else if codeOf(err) != CodeCorrupt {
+		t.Fatalf("sync failure code = %s, want %s", codeOf(err), CodeCorrupt)
+	}
+}

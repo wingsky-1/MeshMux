@@ -4,10 +4,10 @@ package backup
 //
 // A tree payload (the Node installer snapshot) is digested as a sorted tree of
 // relative path, size and content, so a 0755 installer binary and its 0600 store
-// copy are the same bytes. A single-database payload (the Hub slot) is digested
-// as the raw SHA-256 of the one database file, because that is exactly what a
-// restore re-hashes before it opens the copy (spec §5.7-2); a tree digest there
-// would prove the wrong thing.
+// copy are the same bytes. A single-database payload (one Hub operation's
+// database copy) is digested as the raw SHA-256 of the one database file,
+// because that is exactly what a restore re-hashes before it opens the copy
+// (spec §5.7-2); a tree digest there would prove the wrong thing.
 //
 // Every function enforces the private-store rule on what it reads back: 0700
 // directories, 0600 files, no symlinks, owned by the account the caller names.
