@@ -463,6 +463,11 @@ func failAndRollback(result InstallResult, state, previous InstallState, hadPrev
 
 func rollbackManaged(ctx context.Context, opts ApplyOptions, snapshots []fileSnapshot, restoreRunning bool) bool {
 	ok := true
+	// The path unit is the armed privileged surface of #11d. A failed install
+	// must not leave it watching the request directory while its service file is
+	// restored or removed (Task 4 review item 5). A repair rollback re-enables
+	// the previously working path below.
+	_, _ = opts.Runner.Run(ctx, "systemctl", "disable", "--now", hubDispatchPathUnit)
 	for _, unit := range []string{"meshmux-caddy.service", "meshmux-web.service", "meshmux-headscale.service"} {
 		_, _ = opts.Runner.Run(ctx, "systemctl", "stop", unit)
 	}
@@ -492,6 +497,16 @@ func rollbackManaged(ctx context.Context, opts ApplyOptions, snapshots []fileSna
 			if _, err := opts.Runner.Run(ctx, "systemctl", "start", unit); err != nil {
 				ok = false
 			}
+		}
+		// Only a previously installed Hub had the path unit. A pre-#11d
+		// installation is restored without it, so enabling a unit the rollback
+		// just removed would turn a successful repair into ROLLBACK_FAILED.
+		if _, err := os.Lstat(rooted(opts.Root, hubDispatchPathPath)); err == nil {
+			if _, err := opts.Runner.Run(ctx, "systemctl", "enable", "--now", hubDispatchPathUnit); err != nil {
+				ok = false
+			}
+		} else if !os.IsNotExist(err) {
+			ok = false
 		}
 		_, _ = opts.Runner.Run(ctx, "fail2ban-client", "reload")
 	} else if !restoreRunning {

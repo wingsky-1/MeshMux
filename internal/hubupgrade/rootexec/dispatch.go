@@ -498,26 +498,38 @@ func writeFailureResult(cfg DispatchConfig, opID, code string, op *hubupgrade.Op
 // the recovery hint is to inspect `systemctl cat meshmux-web.service` and keep
 // data-dir overrides in the /etc drop-in directory.
 func webDataDir(unitPath string, expectedOwner int) (string, error) {
-	body, err := readUnitFile(unitPath, expectedOwner)
+	argv, err := webExecArgv(unitPath, expectedOwner)
 	if err != nil {
 		return "", err
 	}
+	return hubupgrade.DataDirFromArgv(argv)
+}
+
+// webExecArgv is the effective simple ExecStart of the Web unit: the base file
+// plus every root-owned *.conf drop-in in lexicographic order. The restore
+// executor uses the same fold, so the drop-in it writes is read back exactly
+// the way the dispatcher will read it.
+func webExecArgv(unitPath string, expectedOwner int) ([]string, error) {
+	body, err := readUnitFile(unitPath, expectedOwner)
+	if err != nil {
+		return nil, err
+	}
 	argv, err := hubupgrade.ParseWebExecStart(string(body))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	dropDir := unitPath + ".d"
 	entries, err := os.ReadDir(dropDir)
 	if os.IsNotExist(err) {
-		return hubupgrade.DataDirFromArgv(argv)
+		return argv, nil
 	}
 	if err != nil {
-		return "", fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in directory could not be read")
+		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in directory could not be read")
 	}
 	dirInfo, err := os.Lstat(dropDir)
 	if err != nil || dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() ||
 		dirInfo.Mode().Perm()&0022 != 0 || !statOwnedBy(dirInfo, expectedOwner) {
-		return "", fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in directory is not root-owned and private")
+		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in directory is not root-owned and private")
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".conf") {
@@ -526,17 +538,17 @@ func webDataDir(unitPath string, expectedOwner int) (string, error) {
 		path := filepath.Join(dropDir, entry.Name())
 		dropIn, err := readUnitFile(path, expectedOwner)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		argv, err = applyExecStartDropIn(argv, string(dropIn))
+		argv, err = hubupgrade.ApplyExecStartDropIn(argv, string(dropIn))
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 	if len(argv) == 0 {
-		return "", fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit has no effective ExecStart")
+		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit has no effective ExecStart")
 	}
-	return hubupgrade.DataDirFromArgv(argv)
+	return argv, nil
 }
 
 func readUnitFile(path string, expectedOwner int) ([]byte, error) {
@@ -560,44 +572,6 @@ func readUnitFile(path string, expectedOwner int) ([]byte, error) {
 		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit could not be read within its bound")
 	}
 	return body, nil
-}
-
-// applyExecStartDropIn applies the ExecStart assignments of one drop-in to the
-// effective argv. Empty resets, a non-empty line replaces (and a second
-// non-empty line is refused, because a simple service may only have one).
-func applyExecStartDropIn(current []string, unit string) ([]string, error) {
-	section := ""
-	for _, raw := range strings.Split(unit, "\n") {
-		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.TrimSpace(line[1 : len(line)-1])
-			continue
-		}
-		if section != "Service" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(key) != "ExecStart" {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		if value == "" {
-			current = nil
-			continue
-		}
-		if current != nil {
-			return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in adds a second effective ExecStart")
-		}
-		parsed, err := hubupgrade.ParseWebExecStart("[Service]\nExecStart=" + value + "\n")
-		if err != nil {
-			return nil, err
-		}
-		current = parsed
-	}
-	return current, nil
 }
 
 // copyVerifiedPackage validates the staged package by descriptor and copies the

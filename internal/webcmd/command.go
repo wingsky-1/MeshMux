@@ -19,10 +19,12 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/web"
 )
@@ -39,6 +41,16 @@ func Run(args []string) int {
 		}
 		return a
 	}}))
+	// The boot guard is the first persistent statement of a start: it records
+	// an attempt until this process proves it is healthy. A missing runtime
+	// directory (a development run outside systemd) disables only the guard,
+	// never the service.
+	if refuse, err := BootGuard(BootDir, time.Now(), buildinfo.Version); err != nil {
+		logger.Warn("boot_guard_unavailable", "stage", "startup", "error_code", "BOOT_GUARD_UNAVAILABLE")
+	} else if refuse {
+		logger.Error("startup_failed", "stage", "startup", "error_code", CodeBootCrashLoop)
+		return 1
+	}
 	if err := subscriptionOrigin(c); err != nil {
 		logger.Error("startup_failed", "error_code", "SUBSCRIPTION_ORIGIN_INVALID")
 		return 1
@@ -75,8 +87,22 @@ func Run(args []string) int {
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024,
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
+	// Reaching a bound listener is this process's "healthy enough to serve"
+	// signal: a start that dies before it leaves its boot attempt behind.
+	if err := ClearBootAttempts(BootDir); err != nil {
+		logger.Warn("boot_guard_clear_failed", "stage", "startup", "error_code", "BOOT_GUARD_WRITE_FAILED")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	watchdogCtx, watchdogCancel := context.WithCancel(ctx)
+	defer watchdogCancel()
+	if socket := os.Getenv("NOTIFY_SOCKET"); socket != "" {
+		go func() {
+			if err := Watchdog(watchdogCtx, socket, watchdogInterval(), app.Healthy); err != nil && watchdogCtx.Err() == nil {
+				logger.Warn("watchdog_failed", "stage", "watchdog", "error_code", "WATCHDOG_SEND_FAILED")
+			}
+		}()
+	}
 	stopped := make(chan struct{})
 	go func() {
 		<-ctx.Done()
@@ -204,6 +230,22 @@ func discoverInstallArtifact() *web.InstallArtifact {
 		Architecture: runtime.GOARCH,
 		SHA256:       hex.EncodeToString(sum.Sum(nil)),
 	}
+}
+
+// watchdogInterval is one third of systemd's own WatchdogSec, computed from the
+// WATCHDOG_USEC it exports. The fallback matches WatchdogSec=120 in the shipped
+// unit; a unit without a watchdog exports no socket and never starts this loop.
+func watchdogInterval() time.Duration {
+	const fallback = 40 * time.Second
+	usec, err := strconv.ParseInt(os.Getenv("WATCHDOG_USEC"), 10, 64)
+	if err != nil || usec <= 0 {
+		return fallback
+	}
+	interval := time.Duration(usec) * time.Microsecond / 3
+	if interval <= 0 {
+		return fallback
+	}
+	return interval
 }
 
 func isTrustedLocalExecutable(path string) bool {

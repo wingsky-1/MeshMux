@@ -182,7 +182,7 @@ func (app *Server) hubUpgradeView(now time.Time) hubUpgradeView {
 		if op.State == hubupgrade.StateBackingUp || op.State == hubupgrade.StateBackedUp {
 			view.ExpiresAt = op.UpdatedAt.Add(hubupgrade.OrphanTimeout)
 		}
-		result, ok, err := hubupgrade.ReadResult(hubupgrade.ResultsDir, op.OperationID)
+		result, ok, err := hubupgrade.ReadResult(app.hubResultsDirValue(), op.OperationID)
 		switch {
 		case err != nil:
 			view.ResultErr = errorCodeOf(err)
@@ -300,14 +300,103 @@ func upgradePage(p pageData, v upgradeSnapshot) templ.Component {
 			`<input type="hidden" name="csrf" value="` + templ.EscapeString(p.CSRF) + `"/><button class="text-button" type="submit">退出</button></form></div></header>` +
 			`<main id="main" class="content"><div class="page-heading"><div><p class="eyebrow">MESHMUX CONSOLE</p><h1>` +
 			templ.EscapeString(p.Title) + `</h1></div><span class="pill">发行 manifest · 逐台批准</span></div>` +
-			`<p class="subtitle">本页展示发行 manifest 与各节点已回读的 active / staged / 已批准版本。“检查新版本”只是建议；批准只登记目标并排队固定四任务链，执行在目标机本地完成。它不执行 apply、不回滚，也不把已排队说成已生效。</p>`
+			`<p class="subtitle">本页展示发行 manifest 与各节点已回读的 active / staged / 已批准版本。“检查新版本”只是建议；节点批准只登记目标并排队固定四任务链，执行在目标机本地完成。下方的 Hub 自升级区块另有备份、交接与恢复三个写操作，全部走同一会话、Origin 与 CSRF 边界；queued / restoring 都不等于已生效。</p>`
 		if p.Dev {
 			body += `<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>`
 		}
-		body += upgradeCheckHTML(v) + upgradeManifestHTML(v) + upgradeNodesHTML(v, p.CSRF) +
+		body += upgradeCheckHTML(v) + upgradeManifestHTML(v) + hubUpgradeHTML(v.Hub, p.CSRF) + upgradeNodesHTML(v, p.CSRF) +
 			`<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span><a href="/">返回控制台 →</a></span></footer></main></div></div>`
 		return Document(p.Title).Render(templ.WithChildren(ctx, templ.Raw(body)), w)
 	})
+}
+
+// hubUpgradeHTML renders the Hub self-upgrade block of #11d Task 7 (spec §5.11).
+// It is the only place the three Hub write forms live: backup, handoff and
+// restore, each with the existing session/Origin/CSRF mutation boundary. The
+// block is a readback of the journal, the per-operation record, the fixed result
+// and the restored marker; no form can supply a path, digest, argv or unit
+// attribute.
+func hubUpgradeHTML(v hubUpgradeView, csrf string) string {
+	out := `<section class="panel" id="hub-upgrade"><div class="panel-heading"><h2>Hub 自升级</h2><span class="badge accent">journal 唯一权威</span></div>` +
+		`<p class="hint">Hub 自升级只更换 MeshMux 程序与发行包中明确兼容的固定组件；目标 manifest 必须由 root 预置，Web 不能提供字节、摘要或 ExecStart。12e 之前生产目标 manifest 不存在：备份与交接会如实返回 <code>MANIFEST_UNAVAILABLE</code>，不会静默升级。root 也可在无 Web 的控制台按验收文档直接运行旧包的 <code>__internal-hub-restore</code>，或向请求目录投递一份恢复请求。</p>`
+	if v.Err != "" {
+		out += `<div class="error" role="alert">Hub 升级记录不可读：` + templ.EscapeString(v.Err) + `。本区块不猜测状态。</div>`
+	}
+	if v.HasRestored {
+		out += `<div class="error" role="alert"><b>有损恢复（LOSSY）</b>：本数据目录已从操作 <code>` +
+			templ.EscapeString(v.Restored.OperationID) + `</code> 的备份恢复。快照时间 <b>snapshot_at=` +
+			templ.EscapeString(v.Restored.SnapshotAt.UTC().Format(time.RFC3339)) +
+			`</b>；该时间之后的写入已丢失。携带的旧记录只能作诊断，不能作为下一次恢复源；下一次已提交的备份会清除此标记。</div>`
+	}
+	out += `<dl class="details">`
+	if v.HasRecord {
+		out += `<dt>当前备份记录</dt><dd><code>` + templ.EscapeString(v.Record.OperationID) + `</code> · 状态 ` +
+			templ.EscapeString(v.Record.State) + ` · from_version ` + templ.EscapeString(v.Record.FromVersion) +
+			` · db_schema ` + strconv.FormatInt(v.Record.DBSchema, 10) + ` · payload 文件 ` +
+			strconv.Itoa(v.Record.PayloadFiles) + ` · integrity_ok ` + boolLabel(v.Record.IntegrityOK) + `</dd>`
+	} else {
+		out += `<dt>当前备份记录</dt><dd class="muted">尚无 journal 可解析的 per-op 备份记录（不扫描 database-backup/ 目录猜测）</dd>`
+	}
+	if v.HasOp {
+		out += `<dt>当前操作</dt><dd><code>` + templ.EscapeString(v.Op.OperationID) + `</code> · ` +
+			templ.EscapeString(string(v.Op.State)) + ` · from ` + templ.EscapeString(v.Op.FromVersion) +
+			` → target ` + templ.EscapeString(v.Op.TargetVersion) + ` · db_schema ` +
+			strconv.FormatInt(v.Op.DBSchema, 10) + ` · 更新于 ` +
+			templ.EscapeString(v.Op.UpdatedAt.UTC().Format(time.RFC3339)) + `</dd>`
+		if !v.ExpiresAt.IsZero() {
+			out += `<dt>孤儿超时</dt><dd>` + templ.EscapeString(v.ExpiresAt.UTC().Format(time.RFC3339)) +
+				` 之后本操作会被对账判为 <code>HUB_BACKUP_ORPHANED</code>；请不要在备份后离场过久。</dd>`
+		}
+		if v.HasResult {
+			out += `<dt>result 阶段</dt><dd>` + templ.EscapeString(string(v.Result.Phase))
+			if v.Result.ErrorCode != "" {
+				out += ` · <code>` + templ.EscapeString(v.Result.ErrorCode) + `</code>`
+			}
+			out += ` · ` + templ.EscapeString(v.Result.UpdatedAt.UTC().Format(time.RFC3339)) + `</dd>`
+		} else if v.ResultErr != "" {
+			out += `<dt>result 阶段</dt><dd>不可读：<code>` + templ.EscapeString(v.ResultErr) + `</code></dd>`
+		} else {
+			out += `<dt>result 阶段</dt><dd class="muted">尚无 root 执行体写入的 result</dd>`
+		}
+	} else {
+		out += `<dt>当前操作</dt><dd class="muted">尚无 Hub 自升级操作</dd>`
+	}
+	out += `</dl>`
+	if v.HasRecord && v.Record.IrreversibleApproved {
+		out += `<div class="notice" role="status">不可逆确认位：<b>已确认</b>（只表示操作员同意，不表示迁移完成；确认位由 <code>POST /tasks/db-migration/approve</code> 写入）。</div>`
+	} else if v.HasRecord {
+		out += `<p class="hint">不可逆确认位：<b>未确认</b>。若目标 manifest 声明 <code>database_migration=irreversible</code>，交接与恢复会在执行前以 <code>IRREVERSIBLE_CONFIRM_REQUIRED</code> 拒绝。</p>`
+	}
+	if v.HasRecord {
+		out += `<p class="hint">确认位只由 <code>POST /tasks/db-migration/approve</code>（管理员会话 + 精确 Origin + CSRF + 字面值 <code>irreversible_confirm=1</code>）写入；不存在 flag 或环境变量绕过。</p>`
+	}
+	if v.HasOp && v.Op.State == hubupgrade.StateBackedUp {
+		out += `<form action="/tasks/hub-upgrade/apply" method="post"><input type="hidden" name="csrf" value="` +
+			templ.EscapeString(csrf) + `"/><input type="hidden" name="operation_id" value="` +
+			templ.EscapeString(v.Op.OperationID) + `"/><button class="text-button" type="submit">交接升级（排队）</button></form>` +
+			`<p class="hint">交接只校验备份、root manifest 与空间，然后写一份请求给 root dispatcher；<code>queued</code> 不代表已开始或已生效。</p>`
+	}
+	if v.HasOp && (v.Op.State == hubupgrade.StateFailed || v.Op.State == hubupgrade.StatePartial || v.Op.State == hubupgrade.StateVerifying) {
+		out += `<form action="/tasks/hub-upgrade/restore" method="post"><input type="hidden" name="csrf" value="` +
+			templ.EscapeString(csrf) + `"/><input type="hidden" name="operation_id" value="` +
+			templ.EscapeString(v.Op.OperationID) + `"/><button class="text-button" type="submit">从该备份恢复（有损）</button></form>` +
+			`<p class="hint"><b>恢复是有损的（LOSSY）</b>：只按这个失败操作的 per-op 副本恢复到新目录，快照之后写入丢失；不会自动选择更早的 confirmed 代。恢复执行体是旧包，root 也可以在无 Web 时从控制台直接运行。</p>`
+	}
+	out += `<form action="/tasks/hub-upgrade/backup" method="post"><input type="hidden" name="csrf" value="` +
+		templ.EscapeString(csrf) + `"/><label class="field">目标版本 <input name="target_version" placeholder="1.0.1" autocomplete="off" required/></label> ` +
+		`<button class="text-button" type="submit">创建 Hub 数据库备份</button></form>` +
+		`<p class="hint">目标版本必须已有 root 预置的 <code>manifest-&lt;target&gt;.json</code>；备份只写 per-op 记录与载荷，回执中的 operation_id 也是 <code>POST /tasks/db-migration/approve</code> 需要的 <code>backup_operation_id</code>。</p>` +
+		`<p class="hint">已知边界：交接阶段的目标包暂存失败会让 journal 停在 <code>backed_up</code>（备份仍有效、可重试同一操作）；<code>verifying</code> 只由 Web 的启动对账确认，ticker 不会自行确认，因此看到 verifying 时重启一次 Web 触发启动对账；root 执行体在停机前或写入前的失败不写 result，只在 stderr 给出稳定码与 operation id。</p></section>`
+	return out
+}
+
+// boolLabel prints an explicit yes/no instead of relying on a Go boolean's
+// absence to mean "not verified".
+func boolLabel(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 // upgradeCheckHTML is the explicit "check new version" button and its
@@ -389,7 +478,7 @@ func upgradeNodesHTML(v upgradeSnapshot, csrf string) string {
 		}
 		out += `</td><td>` + approvedTargetHTML(v, n, approved, csrf) + `</td><td>` + verdict + `</td></tr>`
 	}
-	return out + `</tbody></table><p class="hint">批准只写入既有 <code>agent_tasks</code> 的目标记录并排队固定四任务链；执行由目标机本地 update 完成，备份指针、兼容回退与 Hub 自升级属后续段。queued 不等于已生效。</p></section>`
+	return out + `</tbody></table><p class="hint">批准只写入既有 <code>agent_tasks</code> 的目标记录并排队固定四任务链；执行由目标机本地 update 完成。Hub 自升级见上方区块：备份、交接与有损恢复是三个独立的、带 operation_id 的写操作。queued / restoring 都不等于已生效。</p></section>`
 }
 
 // approvedTargetHTML renders the newest persisted approval and the single

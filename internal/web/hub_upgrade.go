@@ -18,10 +18,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 )
 
@@ -285,7 +287,7 @@ func (app *Server) hubReconcileConfig(startup bool) hubupgrade.ReconcileConfig {
 		Startup: startup,
 		Now:     app.now,
 		Result: func(operationID string) (hubupgrade.Result, bool, error) {
-			return hubupgrade.ReadResult(hubupgrade.ResultsDir, operationID)
+			return hubupgrade.ReadResult(app.hubResultsDirValue(), operationID)
 		},
 		Confirm: func(_ context.Context, operationID, target, pkg string) error {
 			_, err := hubupgrade.ConfirmAndCollect(dataDir, operationID, target, pkg, app.now().UTC(), hubupgrade.ConfirmHooks{
@@ -353,6 +355,175 @@ func (app *Server) startHubUpgradeReconcile(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// hubRequestDirValue is the fixed request directory unless a test points it at
+// a private fixture. It is not a configuration option: the path unit watches
+// only /run/meshmux-hub/requests.
+func (app *Server) hubRequestDirValue() string {
+	if app.hubRequestDir != "" {
+		return app.hubRequestDir
+	}
+	return hubupgrade.RequestDir
+}
+
+// hubResultsDirValue is the fixed root:meshmux result tree unless a test points
+// it at a private fixture.
+func (app *Server) hubResultsDirValue() string {
+	if app.hubResultsDir != "" {
+		return app.hubResultsDir
+	}
+	return hubupgrade.ResultsDir
+}
+
+// hubRestoreReceipt is the honest restore receipt: a request is queued for the
+// old package's executor. It never claims the database was restored; that fact
+// is the root-written result plus the restored.json marker the page shows.
+type hubRestoreReceipt struct {
+	OK          bool   `json:"ok"`
+	Status      string `json:"status"`
+	OperationID string `json:"operation_id,omitempty"`
+	ErrorCode   string `json:"error_code,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	NextAction  string `json:"next_action,omitempty"`
+}
+
+// tasksHubUpgradeRestore queues one restore of a failed/partial/verifying
+// operation (spec §5.7/§5.11). The gate is journal-only: a live handoff owns the
+// host, a queued request must be consumed first, and a carried record after an
+// earlier restore is never a source. The privileged executor re-derives every
+// byte, schema and pin check on the root side.
+func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request, _ session) {
+	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
+	if !databaseBackupOperationPattern.MatchString(operationID) {
+		app.event(r, "HUB_HANDOFF_REQUEST_INVALID")
+		app.writeJSON(w, http.StatusBadRequest, hubRestoreReceipt{
+			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: operation(r),
+			Detail:     "恢复操作编号不正确。",
+			NextAction: "请从 Hub 自升级区块复制失败操作的 32 位十六进制 operation_id；未写入任何恢复请求。",
+		})
+		return
+	}
+	receipt, err := app.queueHubRestore(operationID)
+	if err != nil {
+		code := errorCodeOf(err)
+		app.event(r, code)
+		app.writeJSON(w, hubRestoreHTTPStatus(code), hubRestoreReceipt{
+			Status: "failed", ErrorCode: code, OperationID: operation(r),
+			Detail:     "Hub 恢复未排队。",
+			NextAction: hubRestoreNextAction(code),
+		})
+		return
+	}
+	app.event(r, "HUB_UPGRADE_RESTORE_QUEUED")
+	app.writeJSON(w, http.StatusOK, receipt)
+}
+
+// queueHubRestore is the unprivileged half of §5.7: prove the journal permits a
+// restore, prove no request is pending and prove the per-op record still holds
+// an integrity-checked copy, then publish exactly one kind=restore request.
+func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error) {
+	op, found, err := hubupgrade.ReadOp(app.store.dir, operationID, os.Geteuid())
+	if err != nil {
+		return hubRestoreReceipt{}, errors.New("HUB_BACKUP_JOURNAL_FAILED: the journal could not be read")
+	}
+	if !found {
+		return hubRestoreReceipt{}, errors.New("UPDATE_BACKUP_MISSING: the operation has no journal entry")
+	}
+	if op.Kind != hubupgrade.KindUpdate {
+		return hubRestoreReceipt{}, errors.New("HUB_HANDOFF_INVALID_STATE: the operation is not an update")
+	}
+	switch op.State {
+	case hubupgrade.StateFailed, hubupgrade.StatePartial, hubupgrade.StateVerifying:
+	default:
+		return hubRestoreReceipt{}, errors.New("HUB_UPGRADE_BUSY: the operation is not failed, partial or verifying")
+	}
+	if _, ok, err := hubupgrade.ReadRestoredMarker(app.store.dir); err != nil {
+		return hubRestoreReceipt{}, err
+	} else if ok {
+		// Any marker means this data directory was produced by a restore. Its
+		// carried records are diagnostic only; a new committed backup clears the
+		// marker before a new operation can fail.
+		return hubRestoreReceipt{}, errors.New("HUB_RESTORE_CARRIED_SOURCE: this data directory was restored; its carried records are not sources")
+	}
+	root := filepath.Join(app.store.dir, hubupgrade.DatabaseBackupDir)
+	record, err := backup.Read(root, op.OperationID, os.Geteuid())
+	if err != nil {
+		return hubRestoreReceipt{}, err
+	}
+	if record.State != backup.StateStaged && record.State != backup.StateConfirmed {
+		return hubRestoreReceipt{}, errors.New("UPDATE_BACKUP_MISMATCH: the record is not a restore source")
+	}
+	if record.OperationID != op.OperationID || record.FromVersion != op.FromVersion || record.DBSchema != op.DBSchema {
+		return hubRestoreReceipt{}, errors.New("UPDATE_BACKUP_MISMATCH: the record and the journal name different operations")
+	}
+	if !record.IntegrityOK || record.PayloadFiles < 1 {
+		return hubRestoreReceipt{}, errors.New("UPDATE_BACKUP_CORRUPT: the record has no verified payload")
+	}
+	pending, err := hubRequestPending(app.hubRequestDirValue())
+	if err != nil {
+		return hubRestoreReceipt{}, err
+	}
+	if pending {
+		return hubRestoreReceipt{}, errors.New("HUB_HANDOFF_BUSY: a request is still queued")
+	}
+	if _, err := hubupgrade.WriteRequest(app.hubRequestDirValue(), hubupgrade.Request{
+		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindRestore,
+		OperationID: op.OperationID, DataDir: app.store.dir,
+	}); err != nil {
+		return hubRestoreReceipt{}, err
+	}
+	return hubRestoreReceipt{OK: true, Status: "restoring", OperationID: op.OperationID}, nil
+}
+
+// hubRequestPending reports whether any non-dot entry exists in the watched
+// request directory. Dot names cannot re-arm the path unit; every other entry
+// means the dispatcher already has work.
+func hubRequestPending(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.New("HUB_HANDOFF_REQUEST_INVALID: the request directory could not be read")
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hubRestoreHTTPStatus(code string) int {
+	switch code {
+	case "HUB_HANDOFF_REQUEST_INVALID":
+		return http.StatusBadRequest
+	case "UPDATE_BACKUP_MISSING":
+		return http.StatusNotFound
+	case "HUB_HANDOFF_BUSY", "HUB_UPGRADE_BUSY", "HUB_HANDOFF_INVALID_STATE",
+		"UPDATE_BACKUP_MISMATCH", "UPDATE_BACKUP_CORRUPT", "HUB_RESTORE_CARRIED_SOURCE":
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func hubRestoreNextAction(code string) string {
+	switch code {
+	case "HUB_HANDOFF_INVALID_STATE":
+		return "该操作不是一次 update；恢复只针对失败的 Hub 升级操作，未写入任何恢复请求。"
+	case "HUB_UPGRADE_BUSY":
+		return "该操作仍在交接或执行中（或已确认/已恢复）；只有 failed/partial/verifying 可排队恢复，未写入任何恢复请求。"
+	case "HUB_HANDOFF_BUSY":
+		return "已有一个请求等待 root dispatcher 消费；请等它完成或超时后重试，未写入任何恢复请求。"
+	case "HUB_RESTORE_CARRIED_SOURCE":
+		return "该数据目录已由恢复产生；随目录携带的旧记录只能作诊断，不能再次恢复。请先完成一次新的 Hub 数据库备份。"
+	case "UPDATE_BACKUP_MISSING", "UPDATE_BACKUP_MISMATCH", "UPDATE_BACKUP_CORRUPT":
+		return "该操作的备份记录不存在或不再可信；恢复必须使用带 integrity_ok 的 staged/confirmed per-op 副本。"
+	default:
+		return "请凭操作编号检查服务日志；未声称恢复已排队或已完成。"
+	}
 }
 
 // stopHubUpgradeReconcile cancels the ticker and waits for the goroutine to

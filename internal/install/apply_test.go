@@ -82,6 +82,45 @@ type installerFixture struct {
 	c      Config
 }
 
+// TestRollbackDisablesHubDispatchPath pins the T4 review item: a failed fresh
+// install must not leave the root path unit armed while its unit files are
+// restored or removed.
+func TestRollbackDisablesHubDispatchPath(t *testing.T) {
+	root := t.TempDir()
+	pathTarget := filepath.Join(root, strings.TrimPrefix(hubDispatchPathPath, "/"))
+	serviceTarget := filepath.Join(root, strings.TrimPrefix(hubDispatchServicePath, "/"))
+	for _, target := range []string{pathTarget, serviceTarget} {
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte("[Unit]\nDescription=fixture\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &fakeInstallerRunner{}
+	snapshots := []fileSnapshot{
+		{Target: pathTarget, Exists: false},
+		{Target: serviceTarget, Exists: false},
+	}
+	if ok := rollbackManaged(context.Background(), ApplyOptions{Root: root, Runner: runner}, snapshots, false); !ok {
+		t.Fatalf("rollback reported failure: %v", runner.calls)
+	}
+	found := false
+	for _, call := range runner.calls {
+		if call == "systemctl disable --now meshmux-hub-dispatch.path" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("rollback did not disable the hub dispatch path: %v", runner.calls)
+	}
+	for _, target := range []string{pathTarget, serviceTarget} {
+		if _, err := os.Stat(target); !os.IsNotExist(err) {
+			t.Fatalf("%s was not removed by the rollback: %v", target, err)
+		}
+	}
+}
+
 func makeInstallerFixture(t *testing.T) installerFixture {
 	t.Helper()
 	root := t.TempDir()
