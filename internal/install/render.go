@@ -141,6 +141,7 @@ RestartSec=5s
 UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
+ReadWritePaths=/run/meshmux-hub/requests
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
@@ -259,7 +260,7 @@ ignoreregex =
 datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\.\d{1,9})?%%z
 journalmatch = _SYSTEMD_UNIT=meshmux-web.service
 `
-	return map[string]string{
+	files := map[string]string{
 		"/etc/meshmux/Caddyfile":                        caddy,
 		"/etc/meshmux/headscale.yaml":                   headscale,
 		"/etc/systemd/system/meshmux-web.service":       webUnit,
@@ -268,7 +269,11 @@ journalmatch = _SYSTEMD_UNIT=meshmux-web.service
 		"/etc/fail2ban/jail.d/meshmux-ssh.local":        sshJail,
 		"/etc/fail2ban/jail.d/meshmux-web.local":        webJail,
 		"/etc/fail2ban/filter.d/meshmux-web.conf":       webFilter,
-	}, nil
+	}
+	for path, body := range hubDispatchFiles() {
+		files[path] = body
+	}
+	return files, nil
 }
 
 func directCaddyArg(c Config) string {

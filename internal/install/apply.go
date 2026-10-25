@@ -328,8 +328,12 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	}
 
 	now := time.Now().UTC()
-	if err := ensureDirectory(rooted(opts.Root, filepath.Dir(installerStatePath)), 0700); err != nil {
-		return fail("stage", "INSTALL_STATE_UNAVAILABLE", "Create a root-owned private installer state directory and retry.")
+	// The installer state root is 0711: the Web must traverse it to read the
+	// root-preset target manifest and the dispatcher result, but it must not be
+	// able to list the tree. Both ledgers below it stay 0600 root and local-line
+	// stays 0700 (spec §5.9, plan ruling 1).
+	if err := ensureHubUpgradeLayout(opts.Root); err != nil {
+		return fail("stage", "INSTALL_STATE_UNAVAILABLE", "Create a root-owned traversable installer state directory and retry.")
 	}
 	operationDir := rooted(opts.Root, "/var/lib/meshmux-installer/operations/"+operationID)
 	if err := ensureDirectory(operationDir, 0700); err != nil {
