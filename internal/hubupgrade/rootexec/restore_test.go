@@ -479,26 +479,48 @@ func TestRestoreMissingOldPackage(t *testing.T) {
 	f.requirePrestopRefusal(t, runner, codeRestoreBinMissing)
 }
 
-func TestRestoreRefusesCarriedRecordAsSource(t *testing.T) {
-	f := newRestoreFixture(t)
+func writeRestoreMarker(t *testing.T, dataDir, operationID string, at time.Time) {
+	t.Helper()
 	marker := hubupgrade.RestoredMarker{
-		Schema: hubupgrade.RestoredSchema, OperationID: f.opID,
-		SnapshotAt: f.now.Add(-time.Hour), Lossy: true,
+		Schema: hubupgrade.RestoredSchema, OperationID: operationID,
+		SnapshotAt: at, Lossy: true,
 	}
 	body, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	markerPath := filepath.Join(f.dataDir, hubupgrade.HubUpgradeDir, "restored.json")
+	markerPath := filepath.Join(dataDir, hubupgrade.HubUpgradeDir, "restored.json")
 	if err := os.MkdirAll(filepath.Dir(markerPath), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(markerPath, body, 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRestoreRefusesCarriedRecordAsSource(t *testing.T) {
+	f := newRestoreFixture(t)
+	writeRestoreMarker(t, f.dataDir, f.opID, f.now.Add(-time.Hour))
 	runner := &restoreRunner{}
 	f.run(t, runner)
 	f.requirePrestopRefusal(t, runner, codeRestoreCarried)
+}
+
+// TestRestoreMarkerForAnotherOperationProceeds pins the op-scoped marker rule:
+// a fresh operation in a data directory that was restored earlier must remain
+// recoverable while the Web is down (the reconcile pass that clears the marker
+// never runs). The marker for the *same* operation is still a refusal, covered
+// by TestRestoreRefusesCarriedRecordAsSource.
+func TestRestoreMarkerForAnotherOperationProceeds(t *testing.T) {
+	f := newRestoreFixture(t)
+	writeRestoreMarker(t, f.dataDir, strings.Repeat("b", 32), f.now.Add(-time.Hour))
+	runner := &restoreRunner{}
+	if err := RunRestore(context.Background(), f.config(), runner); err != nil {
+		t.Fatalf("a marker for another operation blocked a fresh restore: %v", err)
+	}
+	if got := f.result(t); got.Phase != hubupgrade.ResultRestored {
+		t.Fatalf("result = %+v", got)
+	}
 }
 
 func TestRestoreUnitShapeInvalid(t *testing.T) {

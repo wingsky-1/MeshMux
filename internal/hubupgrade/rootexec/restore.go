@@ -155,12 +155,17 @@ func RunRestore(ctx context.Context, cfg RestoreConfig, runner node.CommandRunne
 		return err
 	}
 	// A carried record is an existence-only diagnostic after a restore, never a
-	// source for the next restore (spec §5.7). A new committed backup clears the
-	// marker before this check can run.
-	if _, ok, err := hubupgrade.ReadRestoredMarker(cfg.DataDir); err != nil {
+	// source for the next restore (spec §5.7). The marker is Web-written, so the
+	// root executor names the meshmux account rather than assuming its own euid.
+	// The refusal is op-scoped: a fresh operation in a restored data directory
+	// must still be recoverable when the Web is down and its next reconcile pass
+	// (which would clear the marker) never runs. Carried records of other
+	// operations are already unusable because their payload_path names the old
+	// data directory.
+	if marker, ok, err := hubupgrade.ReadRestoredMarkerFor(cfg.DataDir, cfg.Owner); err != nil {
 		return err
-	} else if ok {
-		return fail(codeRestoreCarried, "this data directory was already restored; its carried records are not restore sources")
+	} else if ok && marker.OperationID == op.OperationID {
+		return fail(codeRestoreCarried, "this operation was already restored; its carried record is not a restore source")
 	}
 
 	record, err := readRestoreRecord(cfg, op)

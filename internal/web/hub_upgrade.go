@@ -460,7 +460,7 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 	if !record.IntegrityOK || record.PayloadFiles < 1 {
 		return hubRestoreReceipt{}, errors.New("UPDATE_BACKUP_CORRUPT: the record has no verified payload")
 	}
-	pending, err := hubRequestPending(app.hubRequestDirValue())
+	pending, err := hubRequestPending(app.hubRequestDirValue(), op.OperationID)
 	if err != nil {
 		return hubRestoreReceipt{}, err
 	}
@@ -476,21 +476,23 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 	return hubRestoreReceipt{OK: true, Status: "restoring", OperationID: op.OperationID}, nil
 }
 
-// hubRequestPending reports whether any non-dot entry exists in the watched
-// request directory. Dot names cannot re-arm the path unit; every other entry
-// means the dispatcher already has work.
-func hubRequestPending(dir string) (bool, error) {
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return false, nil
+// hubRequestPending reports whether this operation's completed request is
+// already in the watched directory. The Web may write but not read the 0730
+// request directory (it has write+execute only), so this must be a single-name
+// Lstat: listing it would fail with EACCES after the journal says the request is
+// live. The dispatcher and the executor re-verify the rest; a request for
+// another operation is not this route's to judge (the dispatcher drains multiple
+// requests with HUB_HANDOFF_BUSY, and the executor independently refuses while a
+// request exists).
+func hubRequestPending(dir, operationID string) (bool, error) {
+	if !databaseBackupOperationPattern.MatchString(operationID) {
+		return false, errors.New("HUB_HANDOFF_REQUEST_INVALID: the operation id is not 32 lowercase hex")
 	}
-	if err != nil {
-		return false, errors.New("HUB_HANDOFF_REQUEST_INVALID: the request directory could not be read")
-	}
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".") {
-			return true, nil
-		}
+	path := filepath.Join(dir, operationID+".json")
+	if _, err := os.Lstat(path); err == nil {
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, errors.New("HUB_HANDOFF_REQUEST_INVALID: the request could not be inspected")
 	}
 	return false, nil
 }

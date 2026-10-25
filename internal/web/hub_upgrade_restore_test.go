@@ -125,6 +125,44 @@ func TestRestoreRejectsLiveOperation(t *testing.T) {
 	}
 }
 
+// TestRestoreRouteDoesNotListRequestDir is the EACCES regression: the watched
+// requests directory is 0730 root:meshmux, so the Web has write+execute and no
+// read. 0330 on the owner reproduces exactly that shape for an unprivileged
+// test. The route must decide via a single-name Lstat, not ReadDir, or a live
+// request turns into HUB_HANDOFF_REQUEST_INVALID after the journal is settled.
+func TestRestoreRouteDoesNotListRequestDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a 0330 directory; the mode simulation needs an unprivileged uid")
+	}
+	b, app := databaseMigrationBrowser(t)
+	parent := t.TempDir()
+	app.hubRequestDir = filepath.Join(parent, "requests")
+	if err := os.Mkdir(app.hubRequestDir, 0730); err != nil {
+		t.Fatal(err)
+	}
+	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StateFailed)
+	if err := os.Chmod(app.hubRequestDir, 0330); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(app.hubRequestDir, 0730) })
+
+	receipt := decodeHubRestore(t, b.post(hubRestorePath,
+		url.Values{"operation_id": {operationID}}), http.StatusOK)
+	if receipt.Status != "restoring" {
+		t.Fatalf("receipt: %+v", receipt)
+	}
+	if _, err := os.Lstat(filepath.Join(app.hubRequestDir, operationID+".json")); err != nil {
+		t.Fatalf("request was not published through a write-only directory: %v", err)
+	}
+
+	// A request already at the known name is busy without listing the dir.
+	busy := decodeHubRestore(t, b.post(hubRestorePath,
+		url.Values{"operation_id": {operationID}}), http.StatusConflict)
+	if busy.ErrorCode != "HUB_HANDOFF_BUSY" {
+		t.Fatalf("existing request receipt: %+v", busy)
+	}
+}
+
 func TestRestoreRejectsCarriedRecord(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	app.hubRequestDir = filepath.Join(t.TempDir(), "requests")
