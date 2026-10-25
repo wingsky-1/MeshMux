@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade/rootexec"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/update"
@@ -43,6 +45,9 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update" {
 		os.Exit(runInternalUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-dispatch" {
+		os.Exit(runInternalHubDispatch(os.Args[2:], os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update-install" {
 		os.Exit(runInternalUpdateInstall(os.Args[2:], os.Stdout, os.Stderr))
@@ -79,6 +84,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	if len(args) > 0 && args[0] == "__internal-update" {
 		return runInternalUpdate(args[1:], stdin, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "__internal-hub-dispatch" {
+		return runInternalHubDispatch(args[1:], stderr)
+	}
 	if len(args) > 0 && args[0] == "__internal-update-install" {
 		return runInternalUpdateInstall(args[1:], stdout, stderr)
 	}
@@ -106,6 +114,36 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 		return 2
 	}
 	return runNodeInstall(role, args[2:], stdin, stdout, stderr, nodes)
+}
+
+// runInternalHubDispatch is the fixed root oneshot entry. The only flag is the
+// fixed request directory of the path unit; it accepts no target, digest, path
+// or unit attribute from a caller. Every privileged decision is re-derived from
+// the frozen journal/record and the root manifest inside rootexec.
+func runInternalHubDispatch(args []string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-hub-dispatch", flag.ContinueOnError)
+	// Never echo caller-supplied arguments: unknown flags print only the fixed
+	// usage line.
+	flags.SetOutput(io.Discard)
+	requestDir := flags.String("request-dir", "", "fixed request directory")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *requestDir != hubupgrade.RequestDir {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-hub-dispatch --request-dir /run/meshmux-hub/requests")
+		return 2
+	}
+	cfg := rootexec.DispatchConfig{
+		ManifestDir: hubupgrade.RootManifestDir,
+		RequestDir:  hubupgrade.RequestDir,
+		DoneDir:     hubupgrade.RequestDoneDir,
+		ExecRoot:    rootexec.DefaultExecRoot,
+		ResultsDir:  hubupgrade.ResultsDir,
+		WebUnit:     rootexec.DefaultWebUnit,
+		Now:         time.Now,
+	}
+	if err := rootexec.RunDispatch(context.Background(), cfg, node.ExecRunner{}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 
 // runInternalUpdate is the private Agent-driven entry. It accepts exactly one

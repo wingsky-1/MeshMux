@@ -1,0 +1,607 @@
+package rootexec
+
+// R-SURFACE tests of the #11d Task 4 dispatcher (spec §5.1). Every refusal must
+// happen before exec and leave a stable-code result; the executed file is the
+// root-only copy whose bytes were hashed while copying, never the Web-writable
+// staged path.
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/install"
+	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/upgrade"
+)
+
+const (
+	fixtureTarget = "2.0.0"
+	fixtureOp     = "0123456789abcdef0123456789abcdef"
+)
+
+type dispatchFixture struct {
+	root        string
+	dataDir     string
+	manifestDir string
+	requestDir  string
+	doneDir     string
+	execRoot    string
+	resultsDir  string
+	webUnit     string
+	now         time.Time
+
+	op          hubupgrade.Op
+	record      backup.Record
+	ledger      install.InstallState
+	pkgBytes    []byte
+	oldBytes    []byte
+	pkgSHA      string
+	oldSHA      string
+	manifestSHA string
+}
+
+func newDispatchFixture(t *testing.T) *dispatchFixture {
+	t.Helper()
+	root := t.TempDir()
+	f := &dispatchFixture{
+		root:        root,
+		dataDir:     filepath.Join(root, "var/lib/meshmux"),
+		manifestDir: filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
+		requestDir:  filepath.Join(root, "run/meshmux-hub/requests"),
+		doneDir:     filepath.Join(root, "run/meshmux-hub/requests.done"),
+		execRoot:    filepath.Join(root, "var/lib/meshmux-installer/upgrade"),
+		resultsDir:  filepath.Join(root, "var/lib/meshmux-installer/hub-upgrade/results"),
+		webUnit:     filepath.Join(root, "etc/systemd/system/meshmux-web.service"),
+		now:         time.Unix(1700000000, 0).UTC(),
+		pkgBytes:    []byte("#!/bin/sh\nexit 0\n"),
+		oldBytes:    []byte("#!/bin/sh\necho old\n"),
+	}
+	for _, dir := range []string{f.dataDir, f.manifestDir, f.requestDir, f.doneDir, f.execRoot, f.resultsDir, filepath.Dir(f.webUnit)} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.pkgSHA = sha256Hex(f.pkgBytes)
+	f.oldSHA = sha256Hex(f.oldBytes)
+
+	// The producer stages both the old and the target package in <data-dir>/upgrade.
+	upgradeDir := filepath.Join(f.dataDir, hubupgrade.UpgradeDir)
+	if err := os.MkdirAll(upgradeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldName, err := hubupgrade.OldPackageName(buildinfo.Version, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upgradeDir, oldName), f.oldBytes, 0755); err != nil {
+		t.Fatal(err)
+	}
+	targetName, err := hubupgrade.PackageName(fixtureTarget, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upgradeDir, targetName), f.pkgBytes, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Root-preset target manifest, pinned by its exact bytes.
+	manifest := upgrade.Manifest{
+		Schema:       upgrade.Schema,
+		Version:      fixtureTarget,
+		Architecture: runtime.GOARCH,
+		PolicySchema: upgrade.PolicySchema,
+		Components: []upgrade.Component{{
+			Name: "meshmuxd", Version: "2.0.0", Architecture: runtime.GOARCH,
+			Source: "https://github.com/wingsky-1/MeshMux/releases/download/v2.0.0/meshmuxd",
+			SHA256: f.pkgSHA,
+		}},
+	}
+	body, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(f.manifestDir, "manifest-"+fixtureTarget+".json")
+	if err := os.WriteFile(manifestPath, body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.manifestSHA = sha256Hex(body)
+
+	// Flat record of the backup the Web queued.
+	flatRoot := filepath.Join(f.dataDir, hubupgrade.DatabaseBackupDir)
+	part := filepath.Join(flatRoot, backup.PayloadPart)
+	if err := os.MkdirAll(part, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(part, backup.SingleDBName), []byte("database-copy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.record, err = backup.Write(flatRoot, backup.Spec{
+		OperationID:       fixtureOp,
+		FromVersion:       buildinfo.Version,
+		TargetVersion:     fixtureTarget,
+		DBSchema:          10,
+		PolicySchema:      upgrade.PolicySchema,
+		ManifestSHA256:    f.manifestSHA,
+		PackageSHA256:     f.pkgSHA,
+		FromPackageSHA256: f.oldSHA,
+		FromAgentSHA256:   f.oldSHA,
+		Now:               func() time.Time { return f.now },
+	}, backup.LayoutFlat, backup.Payload{
+		Kind:  backup.PayloadSingleDB,
+		Check: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f.op = hubupgrade.Op{
+		Schema: hubupgrade.OpSchema, OperationID: fixtureOp, Kind: hubupgrade.KindUpdate,
+		State: hubupgrade.StateQueued, TargetVersion: fixtureTarget, FromVersion: buildinfo.Version,
+		ManifestSHA256: f.manifestSHA, PackageSHA256: f.pkgSHA,
+		DBSchema: 10, BackupGeneration: 1, UpdatedAt: f.now,
+	}
+	f.writeOp(t, nil)
+
+	f.ledger = install.InstallState{
+		Schema: 1, OperationID: fixtureOp, Status: "installed",
+		ManagedFiles: map[string]string{
+			"/usr/local/libexec/meshmuxd": f.oldSHA,
+		},
+		SharedBinaries: map[string]install.SharedBinary{
+			"meshmuxd": {Path: "/usr/local/libexec/meshmuxd", SHA256: f.oldSHA},
+		},
+	}
+	f.writeWebUnit(t, `[Unit]
+Description=MeshMux Hub Web
+
+[Service]
+Type=simple
+User=meshmux
+ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --data-dir `+f.dataDir+`
+
+[Install]
+WantedBy=multi-user.target
+`)
+	return f
+}
+
+func (f *dispatchFixture) writeOp(t *testing.T, mutate func(*hubupgrade.Op)) {
+	t.Helper()
+	op := f.op
+	if mutate != nil {
+		mutate(&op)
+	}
+	if err := hubupgrade.WriteOp(f.dataDir, op); err != nil {
+		t.Fatal(err)
+	}
+	f.op = op
+}
+
+func (f *dispatchFixture) writeWebUnit(t *testing.T, body string) {
+	t.Helper()
+	if err := os.WriteFile(f.webUnit, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *dispatchFixture) writeRequest(t *testing.T, req hubupgrade.Request) {
+	t.Helper()
+	if _, err := hubupgrade.WriteRequest(f.requestDir, req); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *dispatchFixture) config(exec func(string, []string, []string) error) DispatchConfig {
+	owner := os.Geteuid()
+	return DispatchConfig{
+		DataDir:       f.dataDir,
+		ManifestDir:   f.manifestDir,
+		RequestDir:    f.requestDir,
+		DoneDir:       f.doneDir,
+		ExecRoot:      f.execRoot,
+		ResultsDir:    f.resultsDir,
+		WebUnit:       f.webUnit,
+		Now:           func() time.Time { return f.now },
+		Exec:          exec,
+		Owner:         owner,
+		RecordOwner:   owner,
+		ManifestOwner: owner,
+		RootOwner:     owner,
+		ReadLedger: func() (install.InstallState, bool, error) {
+			return f.ledger, true, nil
+		},
+	}
+}
+
+func (f *dispatchFixture) updateRequest() hubupgrade.Request {
+	return hubupgrade.Request{
+		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindUpdate,
+		OperationID: fixtureOp, DataDir: f.dataDir,
+	}
+}
+
+func (f *dispatchFixture) restoreRequest() hubupgrade.Request {
+	return hubupgrade.Request{
+		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindRestore,
+		OperationID: fixtureOp, DataDir: f.dataDir,
+	}
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func errorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	if i := strings.IndexByte(text, ':'); i > 0 {
+		return text[:i]
+	}
+	return text
+}
+
+func readDispatchResult(t *testing.T, dir, operationID string) hubupgrade.Result {
+	t.Helper()
+	result, ok, err := hubupgrade.ReadResult(dir, operationID)
+	if err != nil || !ok {
+		t.Fatalf("result %s = ok %v err %v", operationID, ok, err)
+	}
+	return result
+}
+
+func TestDispatchArgvPinned(t *testing.T) {
+	t.Run("update", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		f.writeRequest(t, f.updateRequest())
+		var gotPath string
+		var gotArgv, gotEnv []string
+		exec := func(path string, argv, env []string) error {
+			gotPath, gotArgv, gotEnv = path, argv, env
+			return nil
+		}
+		if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+			t.Fatal(err)
+		}
+		execPath := filepath.Join(f.execRoot, "exec-"+fixtureOp)
+		want := []string{execPath, "__internal-hub-update", "--target", fixtureTarget,
+			"--expected-sha256", f.pkgSHA, "--operation-id", fixtureOp,
+			"--data-dir", f.dataDir, "--from-version", buildinfo.Version}
+		if gotPath != execPath {
+			t.Fatalf("exec path = %q, want %q", gotPath, execPath)
+		}
+		if strings.Join(gotArgv, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("argv = %#v\nwant %#v", gotArgv, want)
+		}
+		if len(gotEnv) == 0 {
+			t.Fatal("exec environment is empty")
+		}
+	})
+	t.Run("restore", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		f.writeOp(t, func(op *hubupgrade.Op) {
+			op.Kind = hubupgrade.KindRestore
+			op.State = hubupgrade.StateFailed
+		})
+		f.writeRequest(t, f.restoreRequest())
+		var gotPath string
+		var gotArgv []string
+		exec := func(path string, argv, env []string) error {
+			gotPath, gotArgv = path, argv
+			return nil
+		}
+		if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+			t.Fatal(err)
+		}
+		execPath := filepath.Join(f.execRoot, "exec-"+fixtureOp)
+		restoreDir := filepath.Join(f.dataDir, "restore-"+fixtureOp+"-"+strconv.FormatInt(f.now.Unix(), 10))
+		want := []string{execPath, "__internal-hub-restore", "--expected-sha256", f.oldSHA,
+			"--operation-id", fixtureOp, "--data-dir", f.dataDir, "--restore-dir", restoreDir}
+		if gotPath != execPath || strings.Join(gotArgv, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("restore exec = %q %#v\nwant %q %#v", gotPath, gotArgv, execPath, want)
+		}
+	})
+}
+
+func TestDispatchRejectsSymlinkRequest(t *testing.T) {
+	f := newDispatchFixture(t)
+	realPath := filepath.Join(t.TempDir(), "real.json")
+	body, err := json.Marshal(f.updateRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realPath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(f.requestDir, fixtureOp+".json")
+	if err := os.Symlink(realPath, link); err != nil {
+		t.Fatal(err)
+	}
+	executed := false
+	err = RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+		executed = true
+		return nil
+	}), node.ExecRunner{})
+	if err == nil || executed {
+		t.Fatalf("symlinked request: err=%v executed=%v", err, executed)
+	}
+	if code := readDispatchResult(t, f.resultsDir, fixtureOp).ErrorCode; code != codeRequestInvalid {
+		t.Fatalf("result code = %q, want %q", code, codeRequestInvalid)
+	}
+	entries, err := os.ReadDir(f.requestDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("request directory after rejection = %v, %v", entries, err)
+	}
+}
+
+func TestDispatchRejectsForeignDataDir(t *testing.T) {
+	f := newDispatchFixture(t)
+	req := f.updateRequest()
+	req.DataDir = filepath.Join(t.TempDir(), "other")
+	f.writeRequest(t, req)
+	executed := false
+	err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+		executed = true
+		return nil
+	}), node.ExecRunner{})
+	if err == nil || executed {
+		t.Fatalf("foreign data_dir: err=%v executed=%v", err, executed)
+	}
+	if code := readDispatchResult(t, f.resultsDir, fixtureOp).ErrorCode; code != codeDataDirMismatch {
+		t.Fatalf("result code = %q, want %q", code, codeDataDirMismatch)
+	}
+}
+
+func TestDispatchRejectsMoreThanOneRequest(t *testing.T) {
+	f := newDispatchFixture(t)
+	second := strings.Repeat("b", 32)
+	f.writeRequest(t, f.updateRequest())
+	f.writeRequest(t, hubupgrade.Request{
+		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindUpdate,
+		OperationID: second, DataDir: f.dataDir,
+	})
+	executed := false
+	err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+		executed = true
+		return nil
+	}), node.ExecRunner{})
+	if err == nil || !strings.Contains(err.Error(), "HUB_HANDOFF_BUSY") || executed {
+		t.Fatalf("two requests: err=%v executed=%v", err, executed)
+	}
+	entries, err := os.ReadDir(f.requestDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("request directory not drained: %v, %v", entries, err)
+	}
+	done, err := os.ReadDir(f.doneDir)
+	if err != nil || len(done) != 2 {
+		t.Fatalf("done directory = %v, %v", done, err)
+	}
+	for _, op := range []string{fixtureOp, second} {
+		if code := readDispatchResult(t, f.resultsDir, op).ErrorCode; code != "HUB_HANDOFF_BUSY" {
+			t.Fatalf("result %s code = %q, want HUB_HANDOFF_BUSY", op, code)
+		}
+	}
+}
+
+func TestDispatchUnknownTargetNoExec(t *testing.T) {
+	f := newDispatchFixture(t)
+	if err := os.Remove(filepath.Join(f.manifestDir, "manifest-"+fixtureTarget+".json")); err != nil {
+		t.Fatal(err)
+	}
+	f.writeRequest(t, f.updateRequest())
+	executed := false
+	err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+		executed = true
+		return nil
+	}), node.ExecRunner{})
+	if err == nil || executed || errorCode(err) != "MANIFEST_UNAVAILABLE" {
+		t.Fatalf("missing manifest: err=%v executed=%v", err, executed)
+	}
+	if code := readDispatchResult(t, f.resultsDir, fixtureOp).ErrorCode; code != "MANIFEST_UNAVAILABLE" {
+		t.Fatalf("result code = %q", code)
+	}
+}
+
+func TestDispatchStagedDigestMismatchNoExec(t *testing.T) {
+	f := newDispatchFixture(t)
+	name, err := hubupgrade.PackageName(fixtureTarget, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(f.dataDir, hubupgrade.UpgradeDir, name)
+	if err := os.WriteFile(staged, []byte("tampered package"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	f.writeRequest(t, f.updateRequest())
+	executed := false
+	err = RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+		executed = true
+		return nil
+	}), node.ExecRunner{})
+	if err == nil || executed || errorCode(err) != codeDigestMismatch {
+		t.Fatalf("staged digest mismatch: err=%v executed=%v", err, executed)
+	}
+	if code := readDispatchResult(t, f.resultsDir, fixtureOp).ErrorCode; code != codeDigestMismatch {
+		t.Fatalf("result code = %q, want %q", code, codeDigestMismatch)
+	}
+}
+
+func TestDispatchExecsVerifiedCopy(t *testing.T) {
+	f := newDispatchFixture(t)
+	f.writeRequest(t, f.updateRequest())
+	name, err := hubupgrade.PackageName(fixtureTarget, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := filepath.Join(f.dataDir, hubupgrade.UpgradeDir, name)
+	execPath := filepath.Join(f.execRoot, "exec-"+fixtureOp)
+	var executedBytes []byte
+	exec := func(path string, argv, env []string) error {
+		if path != execPath {
+			t.Errorf("exec path = %q, want the root-only copy", path)
+		}
+		executedBytes, err = os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		// The TOCTOU attempt happens after the dispatcher validated and copied
+		// the staged bytes: the executed copy must not follow it.
+		return os.WriteFile(staged, []byte("replaced after validation"), 0755)
+	}
+	if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	if string(executedBytes) != string(f.pkgBytes) {
+		t.Fatalf("executed bytes = %q, want the verified package bytes", executedBytes)
+	}
+	info, err := os.Lstat(execPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0700 {
+		t.Fatalf("exec copy mode = %o, want 0700", info.Mode().Perm())
+	}
+	stagedBytes, err := os.ReadFile(staged)
+	if err != nil || string(stagedBytes) != "replaced after validation" {
+		t.Fatalf("staged replacement did not happen: %q, %v", stagedBytes, err)
+	}
+}
+
+func TestDispatchLedgerIdentity(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*install.InstallState)
+		code   string
+	}{
+		{name: "missing ledger", mutate: func(*install.InstallState) {}, code: "HUB_BACKUP_IDENTITY_MISSING"},
+		{name: "missing managed file", mutate: func(state *install.InstallState) {
+			delete(state.ManagedFiles, "/usr/local/libexec/meshmuxd")
+		}, code: "HUB_BACKUP_IDENTITY_MISSING"},
+		{name: "managed digest mismatch", mutate: func(state *install.InstallState) {
+			state.ManagedFiles["/usr/local/libexec/meshmuxd"] = strings.Repeat("c", 64)
+		}, code: "UPDATE_BACKUP_MISMATCH"},
+		{name: "shared bin drift", mutate: func(state *install.InstallState) {
+			state.SharedBinaries["meshmuxd"] = install.SharedBinary{Path: "/usr/local/libexec/meshmuxd", SHA256: strings.Repeat("d", 64)}
+		}, code: "HUB_BACKUP_IDENTITY_MISSING"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newDispatchFixture(t)
+			f.writeRequest(t, f.updateRequest())
+			state := f.ledger
+			state.ManagedFiles = map[string]string{}
+			for key, value := range f.ledger.ManagedFiles {
+				state.ManagedFiles[key] = value
+			}
+			state.SharedBinaries = map[string]install.SharedBinary{}
+			for key, value := range f.ledger.SharedBinaries {
+				state.SharedBinaries[key] = value
+			}
+			if tc.name == "missing ledger" {
+				state = install.InstallState{}
+			} else {
+				tc.mutate(&state)
+			}
+			cfg := f.config(func(string, []string, []string) error {
+				t.Error("exec ran despite a ledger identity refusal")
+				return nil
+			})
+			if tc.name == "missing ledger" {
+				cfg.ReadLedger = func() (install.InstallState, bool, error) { return install.InstallState{}, false, nil }
+			} else {
+				cfg.ReadLedger = func() (install.InstallState, bool, error) { return state, true, nil }
+			}
+			err := RunDispatch(context.Background(), cfg, node.ExecRunner{})
+			if err == nil || errorCode(err) != tc.code {
+				t.Fatalf("err = %v, want code %s", err, tc.code)
+			}
+			if code := readDispatchResult(t, f.resultsDir, fixtureOp).ErrorCode; code != tc.code {
+				t.Fatalf("result code = %q, want %s", code, tc.code)
+			}
+		})
+	}
+}
+
+func TestDispatchReadsMeshmuxOwnedRecord(t *testing.T) {
+	t.Run("expected owner reads the record", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		f.writeRequest(t, f.updateRequest())
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a foreign expected owner is refused", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		f.writeRequest(t, f.updateRequest())
+		cfg := f.config(func(string, []string, []string) error {
+			t.Error("exec ran with a foreign record owner")
+			return nil
+		})
+		cfg.RecordOwner = os.Geteuid() + 1
+		err := RunDispatch(context.Background(), cfg, node.ExecRunner{})
+		if err == nil {
+			t.Fatal("a record owned by another account was accepted")
+		}
+		if got := errorCode(err); got != backup.CodeCorrupt {
+			t.Fatalf("code = %q, want %q", got, backup.CodeCorrupt)
+		}
+	})
+}
+
+func TestDispatchRefusesNonQueuedJournal(t *testing.T) {
+	for _, state := range []hubupgrade.State{
+		hubupgrade.StateApplying, hubupgrade.StateRestarting, hubupgrade.StateConfirmed,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			f := newDispatchFixture(t)
+			f.writeOp(t, func(op *hubupgrade.Op) { op.State = state })
+			f.writeRequest(t, f.updateRequest())
+			executed := false
+			err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+				executed = true
+				return nil
+			}), node.ExecRunner{})
+			if err == nil || executed || errorCode(err) != codeStateInvalid {
+				t.Fatalf("non-queued journal %s: err=%v executed=%v", state, err, executed)
+			}
+		})
+	}
+}
+
+func TestDispatchAcceptsDropInDataDir(t *testing.T) {
+	f := newDispatchFixture(t)
+	// The base unit still names the pre-restore data directory; the root-written
+	// drop-in resets and names the current one, exactly as Task 7 will.
+	f.writeWebUnit(t, `[Service]
+ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --data-dir `+filepath.Join(f.root, "old")+`
+`)
+	dropDir := f.webUnit + ".d"
+	if err := os.MkdirAll(dropDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dropIn := `[Service]
+ExecStart=
+ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --data-dir ` + f.dataDir + `
+`
+	if err := os.WriteFile(filepath.Join(dropDir, "10-data-dir.conf"), []byte(dropIn), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f.writeRequest(t, f.updateRequest())
+	if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+		t.Fatal(err)
+	}
+}

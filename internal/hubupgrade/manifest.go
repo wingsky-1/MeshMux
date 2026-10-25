@@ -57,6 +57,14 @@ func ReadRootManifest(manifestDir, target string) (TargetManifest, error) {
 	return readRootManifest(manifestDir, target, 0)
 }
 
+// ReadRootManifestFor is the owner-parameterized gate. Production uses
+// ReadRootManifest (root); the root dispatcher names the expected account so a
+// B-level fixture can prove the owner rule without chowning to root, exactly as
+// backup.Read/Verify name their expected account.
+func ReadRootManifestFor(manifestDir, target string, expectedOwner int) (TargetManifest, error) {
+	return readRootManifest(manifestDir, target, expectedOwner)
+}
+
 // readRootManifest is the testable half: the expected account is explicit so a
 // B-level fixture can prove the owner rule without chowning to root.
 func readRootManifest(manifestDir, target string, expectedOwner int) (TargetManifest, error) {
