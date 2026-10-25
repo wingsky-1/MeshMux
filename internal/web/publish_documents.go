@@ -23,6 +23,9 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/compiler"
 )
 
+// clientTailscaleTag is the endpoint tag the client policy renderer emits.
+const clientTailscaleTag = "meshmux-ts"
+
 // assembleSingBoxClient wraps a rendered client route fragment into the native
 // sing-box document shape.
 func assembleSingBoxClient(fragment []byte) ([]byte, error) {
@@ -34,6 +37,22 @@ func assembleSingBoxClient(fragment []byte) ([]byte, error) {
 	if !ok || len(bytes.TrimSpace(route)) == 0 {
 		return nil, errors.New("RENDER_SINGBOX_FAILED: the client fragment has no route")
 	}
+	var routeShape struct {
+		Rules []struct {
+			Outbound string `json:"outbound"`
+		} `json:"rules"`
+		Final string `json:"final"`
+	}
+	if err := json.Unmarshal(route, &routeShape); err != nil {
+		return nil, errors.New("RENDER_SINGBOX_FAILED: the client route is not an object")
+	}
+	usesTailscale := routeShape.Final == clientTailscaleTag
+	for _, rule := range routeShape.Rules {
+		if rule.Outbound == clientTailscaleTag {
+			usesTailscale = true
+			break
+		}
+	}
 	document := map[string]any{
 		"log": map[string]any{"disabled": true},
 		"outbounds": []map[string]any{
@@ -42,8 +61,8 @@ func assembleSingBoxClient(fragment []byte) ([]byte, error) {
 		},
 		"route": json.RawMessage(route),
 	}
-	if bytes.Contains(fragment, []byte(`"meshmux-ts"`)) {
-		document["endpoints"] = []map[string]any{{"type": "tailscale", "tag": "meshmux-ts"}}
+	if usesTailscale {
+		document["endpoints"] = []map[string]any{{"type": "tailscale", "tag": clientTailscaleTag}}
 	}
 	body, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
@@ -127,7 +146,7 @@ func mihomoRuleProviders(pins compiler.RuleSetPins, rules []compiler.Rule) (stri
 		out.WriteString("  " + tag + ":\n")
 		out.WriteString("    type: http\n")
 		out.WriteString("    behavior: " + behavior + "\n")
-		out.WriteString("    url: " + pin.Source + "\n")
+		out.WriteString("    url: " + yamlQuote(pin.Source) + "\n")
 		out.WriteString("    path: ./ruleset/" + tag + ".yaml\n")
 		out.WriteString("    interval: 86400\n")
 	}
@@ -147,4 +166,15 @@ func ruleSetPinFor(pins compiler.RuleSetPins, tag string) (compiler.RulesetPin, 
 	}
 	pin, found := pins.Remote[tag]
 	return pin, found
+}
+
+// yamlQuote renders one YAML double-quoted scalar. JSON string escaping is a
+// valid subset of YAML double-quoted scalars, so a URL can never terminate the
+// scalar or start a comment.
+func yamlQuote(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
 }

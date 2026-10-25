@@ -377,6 +377,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	activeCandidate, candidateConfig := finalized.activeCandidate, finalized.candidateConfig
 	managed, stagedManaged := finalized.managed, finalized.stagedManaged
+	repairNotice := finalized.repairNotice
 
 	applyFailures := nodeApplyErrors{
 		accountCreate:     &InstallError{Stage: "apply", Code: "ACCOUNT_CREATE_FAILED", Recovery: "Inspect meshmux-singbox and meshmux-agent accounts before retrying."},
@@ -415,7 +416,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		finalLedger:          &InstallError{Stage: "verify", Code: "INSTALL_STATE_WRITE_FAILED", Recovery: "The data plane and Agent are active but the final ledger failed; preserve them and repair state."},
 		journalVerifyPass:    &InstallError{Stage: "verify", Code: "OPERATION_LOG_FAILED", Recovery: "The Node is active but the journal write failed; repair only state/logging."},
 	}
-	if verifyErr := nodeVerifyTail(ctx, &result, &state, &opts, layout, record, repair, cfg, installedCfg, activeCandidate, candidateConfig, checks, artifacts, stageDir, backupDir, verifyFailures); verifyErr != nil {
+	if verifyErr := nodeVerifyTail(ctx, &result, &state, &opts, layout, record, repair, cfg, installedCfg, activeCandidate, candidateConfig, repairNotice, checks, artifacts, stageDir, backupDir, verifyFailures); verifyErr != nil {
 		return result, verifyErr
 	}
 	return result, nil

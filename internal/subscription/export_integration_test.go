@@ -76,6 +76,26 @@ func TestSubscriptionClientImport(t *testing.T) {
 
 	runClientConfigCheck(t, "sing-box", singBoxBinary, "check", "-c", singBoxConfigPath)
 	runClientConfigCheck(t, "mihomo", mihomoBinary, "-t", "-f", mihomoConfigPath, "-d", workDir)
+
+	// The device-scoped document of 9c is separately imported. Its endpoint
+	// fields (including the purpose-pinned accept_routes) are only proven
+	// against the real 1.14.3 parser here; this says nothing about reaching a
+	// tailnet or a peer subnet.
+	meshConfig, err := ExportMeshDevice(MeshDeviceInput{
+		DisplayName: "import-mesh",
+		Hostname:    "mesh-import",
+		Purpose:     MeshPurposeProxyMesh,
+		ControlURL:  "https://headscale.example.invalid",
+		AuthKey:     "hskey-auth-import-example",
+		Lines:       lines,
+		Credentials: credentials,
+	})
+	if err != nil {
+		t.Fatalf("error_code=%s ExportMeshDevice returned an error", codeExportSingBoxFailed)
+	}
+	meshConfigPath := filepath.Join(workDir, "mesh-client.json")
+	writeImportConfig(t, meshConfigPath, meshConfig)
+	runClientConfigCheck(t, "sing-box", singBoxBinary, "check", "-c", meshConfigPath)
 }
 
 // clientImportBinaries resolves both client binaries. Both unset skips the

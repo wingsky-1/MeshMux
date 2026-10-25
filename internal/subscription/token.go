@@ -87,10 +87,3 @@ func (t SubscriptionToken) Validate() error {
 	}
 	return nil
 }
-
-// Rotate issues a fresh token record and bearer for the same Subscriber. The
-// returned hash is independent of the previous hash and of every UUID. The
-// caller must revoke the old record; Rotate itself performs no persistence.
-func (t SubscriptionToken) Rotate() (SubscriptionToken, string, error) {
-	return NewSubscriptionToken(t.SubscriberID)
-}

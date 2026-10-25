@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
@@ -29,7 +30,15 @@ func shellQuote(value string) string {
 }
 
 func (s *Server) agentFail(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
-	s.event(r, code)
+	s.agentFailWithReason(w, r, status, code, code, message, next)
+}
+
+// agentFailWithReason writes one failure whose body names code, while the Hub
+// log records reason. The two differ only where the response must not say what
+// the log may: an unauthenticated caller must not be able to tell two refusals
+// apart by their status or body, but an operator reading the operation_id must.
+func (s *Server) agentFailWithReason(w http.ResponseWriter, r *http.Request, status int, code, reason, message, next string) {
+	s.event(r, reason)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "operation_id": operation(r), "stage": "agent", "message": message, "next_action": next})
@@ -286,6 +295,20 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 // pairAgent exchanges a one-time pairing code for a node-scoped identity.
 // The code and the issued token never appear in logs; only operation_id and
 // stable error codes are recorded.
+//
+// Two properties matter here beyond the exchange itself:
+//
+//   - The endpoint spends work before any session exists, so it carries its own
+//     budget (pair_limiter.go). The refusal needs no database access, which keeps
+//     an anonymous flood off the single SQLite connection.
+//   - An unknown code, an expired code and an already-spent code all answer the
+//     same 401 PAIRING_INVALID. The response is therefore not an oracle for a
+//     code's history: a caller cannot learn from it whether a guessed code ever
+//     existed, when it lapsed or that it was used. Only the Hub log keeps the
+//     distinction (PAIRING_EXPIRED / PAIRING_CONSUMED), reachable through the
+//     operation_id the response carries. A wrong role stays a distinct 403
+//     because it is a fact about the caller's own configuration, not about a
+//     secret, and an operator needs it to fix a wrong-role install.
 func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req protocol.PairingRequest
@@ -293,29 +316,48 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 400, "PAIRING_INVALID", "配对请求不正确。", "请使用 Web 显示的一次性配对指令重试。")
 		return
 	}
+	// Charge the budget before the store is touched. A malformed body costs no
+	// budget (it never reaches the database either), while every well-formed
+	// attempt is bounded before it can hash a code or open a transaction.
+	if ok, retry := s.pairing.spend(s.now()); !ok {
+		seconds := int((retry + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.agentFail(w, r, 429, "PAIRING_RATE_LIMITED", "配对尝试过于频繁。",
+			"配对预算为 "+strconv.Itoa(pairBudget)+" 次 / 分钟，约 "+retryText(seconds)+"后可再试；已配对身份、心跳与任务不受影响，请勿反复重试。")
+		return
+	}
 	token, err := s.store.consumePairing(req.NodeID, req.Role, req.PairingCode, req.AgentVersion, req.KernelVersion, s.now())
 	if err != nil {
 		msg := err.Error()
-		code := "PAIRING_INVALID"
-		status := 401
+		// Default: one neutral refusal, whatever the code's history. The log
+		// reason is the precise one so the operator can still diagnose it.
+		code, status, reason := "PAIRING_INVALID", 401, "PAIRING_INVALID"
+		message, next := "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。"
 		switch {
 		case strings.HasPrefix(msg, "ROLE_MISMATCH"):
-			code = "ROLE_MISMATCH"
-			status = 403
+			code, status, reason = "ROLE_MISMATCH", 403, "ROLE_MISMATCH"
 		case strings.HasPrefix(msg, "PAIRING_EXPIRED"):
-			code = "PAIRING_EXPIRED"
-			status = 410
+			reason = "PAIRING_EXPIRED"
 		case strings.HasPrefix(msg, "PAIRING_CONSUMED"):
-			code = "PAIRING_CONSUMED"
-			status = 409
+			reason = "PAIRING_CONSUMED"
 		case strings.HasPrefix(msg, "VERSION_INVALID"):
-			code = "VERSION_INVALID"
-			status = 400
+			code, status, reason = "VERSION_INVALID", 400, "VERSION_INVALID"
+		case strings.HasPrefix(msg, "DATABASE_UNAVAILABLE"):
+			// A database outage is not a rejected credential. Reporting it as one
+			// would send an operator to reissue a code that was never the problem.
+			code, status, reason = "DATABASE_UNAVAILABLE", 503, "DATABASE_UNAVAILABLE"
+			message, next = "暂时无法验证配对。", "请检查数据库与服务日志，稍后重试。"
+		case strings.HasPrefix(msg, "IDENTITY_ISSUE_FAILED"):
+			code, status, reason = "IDENTITY_ISSUE_FAILED", 500, "IDENTITY_ISSUE_FAILED"
+			message, next = "无法签发节点身份。", "请凭操作编号检查服务日志后重试；配对码未被消费。"
 		}
 		// Never echo node IDs, roles or secrets in the error body beyond the code.
-		s.agentFail(w, r, status, code, "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。")
+		s.agentFailWithReason(w, r, status, code, reason, message, next)
 		return
 	}
+	// A spent code is the pairing analogue of a proven password: the exchange
+	// succeeded, so the failures a flood produced no longer hold the budget.
+	s.pairing.clear()
 	s.event(r, "AGENT_PAIRED")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"node_id": req.NodeID, "identity_token": token, "operation_id": operation(r)})
@@ -372,6 +414,49 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "paired", "operation_id": operation(r)})
 }
 
+// The install artifact is served in fixed-size chunks, so one download holds a
+// single chunk plus the hash state instead of the whole file. The previous
+// io.ReadAll buffered up to 128 MiB per download, and its growing slice could
+// briefly hold close to twice that; memory here is flat in the artifact size and
+// grows only by the chunk per concurrent download.
+//
+// The file is read twice rather than buffered: the first pass verifies the
+// pinned digest before any byte or Content-Length is promised to the client, so
+// a changed artifact still gets its honest 503 refusal. The second pass sends
+// the file while hashing it again, so a file rewritten between the two passes
+// cannot be delivered as verified. Both passes share one chunk buffer.
+const installArtifactChunkBytes = 32 << 10
+
+// errInstallArtifactChanged separates "these bytes are not the pinned artifact"
+// from a read or write failure. It is never sent: the first pass turns it into a
+// 503 before the response starts, and the second pass aborts a response that has
+// already started.
+var errInstallArtifactChanged = errors.New("INSTALL_ARTIFACT_CHANGED")
+
+// copyArtifactVerified copies exactly size bytes from r to w and hashes the same
+// bytes in the same pass, in order. Memory is one chunk plus the hash state, so
+// it does not follow the artifact size. A read or write failure is returned
+// as-is, because the caller can no longer retract what was already sent; a copy
+// that ended early is io.ErrUnexpectedEOF, and only a complete copy whose digest
+// differs is errInstallArtifactChanged.
+//
+// Passing io.Discard as w runs the same verification without sending anything,
+// which is how the handler checks the pinned digest before it promises a body.
+func copyArtifactVerified(w io.Writer, r io.Reader, size int64, want string, chunk []byte) (int64, error) {
+	hasher := sha256.New()
+	written, err := io.CopyBuffer(io.MultiWriter(w, hasher), io.LimitReader(r, size), chunk)
+	if err != nil {
+		return written, err
+	}
+	if written != size {
+		return written, io.ErrUnexpectedEOF
+	}
+	if hex.EncodeToString(hasher.Sum(nil)) != want {
+		return written, errInstallArtifactChanged
+	}
+	return written, nil
+}
+
 func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request, _ session) {
 	artifact := s.cfg.InstallArtifact
 	if artifact == nil {
@@ -389,24 +474,45 @@ func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request,
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > 128<<20 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > installArtifactMaxBytes {
 		s.fail(w, r, 503, "INSTALL_ARTIFACT_INVALID", "安装制品大小或类型不安全。", "请重新安装匹配版本。")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(f, 128<<20+1))
-	if err != nil || int64(len(body)) != info.Size() || len(body) > 128<<20 {
+	// The size observed on the open descriptor bounds both passes: bytes
+	// appended after Stat can neither extend the response nor the digest input.
+	size := info.Size()
+	chunk := make([]byte, installArtifactChunkBytes)
+	if _, err := copyArtifactVerified(io.Discard, f, size, artifact.SHA256, chunk); err != nil {
+		if errors.Is(err, errInstallArtifactChanged) {
+			s.fail(w, r, 503, "INSTALL_ARTIFACT_CHANGED", "安装制品校验和不匹配。", "请重新安装匹配版本。")
+			return
+		}
 		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品读取不完整。", "请重新安装匹配版本。")
 		return
 	}
-	sum := sha256.Sum256(body)
-	if hex.EncodeToString(sum[:]) != artifact.SHA256 {
-		s.fail(w, r, 503, "INSTALL_ARTIFACT_CHANGED", "安装制品校验和不匹配。", "请重新安装匹配版本。")
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品暂时不可读。", "请检查服务安装文件。")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="meshmux"`)
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	_, _ = w.Write(body)
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	if _, err := copyArtifactVerified(w, f, size, artifact.SHA256, chunk); err != nil {
+		if errors.Is(err, errInstallArtifactChanged) || errors.Is(err, io.ErrUnexpectedEOF) {
+			// A file rewritten between the two passes. The bytes are already on the
+			// wire, so no handler can take them back: the enforcement is the
+			// installer's fixed sha256sum -c, which rejects the file. Abort so a
+			// rewrite that also shortened the file cannot look like a complete
+			// download, and record INSTALL_ARTIFACT_CHANGED for the operator instead
+			// of letting the response end as if it were the pinned artifact.
+			s.event(r, "INSTALL_ARTIFACT_CHANGED")
+			panic(http.ErrAbortHandler)
+		}
+		// A read error or a client that stopped reading leaves the declared
+		// Content-Length unfilled. HTTP clients and the installer's fixed
+		// sha256sum both see a truncated download; there is no clean JSON status
+		// left once bytes are on the wire.
+	}
 }
 
 func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {

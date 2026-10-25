@@ -123,6 +123,15 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if !verifier.hasSingBoxDocument(`"outbound": "out"`) {
 		t.Fatal("the gated Line document does not carry the Out rule")
 	}
+	// The gated document must declare the tag its route names, or the kernel
+	// would resolve the AI rule against a missing egress. The Out itself is a
+	// block stub until the Out access path owns the real body.
+	if !verifier.hasSingBoxDocument(`"tag": "out"`) {
+		t.Fatal("the gated Line document does not declare the out outbound")
+	}
+	if !verifier.hasSingBoxDocument(`"type": "block"`) {
+		t.Fatal("the gated Line document does not carry the fail-closed block stub")
+	}
 
 	// State 3: the Out is unhealthy. The publication fails closed and stores
 	// nothing, and no kernel check runs on a document that must not exist.
@@ -193,6 +202,161 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 	if _, err := parsePolicyPublishRequest(json.RawMessage(`{"fallback_to_line":true}`)); err == nil ||
 		!strings.HasPrefix(err.Error(), "POLICY_OPERATION_REQUIRED") {
 		t.Fatalf("empty operation id = %v", err)
+	}
+}
+
+// TestPublishAssemblyAggregatesEveryLineEgress is the I3 regression: a
+// publication targets every Line, but the receipt used to take the first Line's
+// egress state and present it for the whole fleet. A healthy Line next to a
+// fail-closed Line must read as "mixed" while each Line keeps its own state.
+func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
+	f := newPublishFixture(t)
+	healthy := pairedStoreNode(t, f.store, "out", f.now)
+	markLineOnline(t, f.store, healthy, f.now)
+	if err := f.store.setOutBindingAt(OutBinding{OutID: healthy, LineID: f.line, Enabled: true}, f.now); err != nil {
+		t.Fatal(err)
+	}
+	settleTasks(t, f.store, healthy)
+	confirmChain(t, f.store, healthy, f.now)
+
+	// The second Line has a bound Out that stopped reporting: its own state is
+	// fail-closed, which must not be replaced by the healthy Line's "out".
+	second := pairedStoreNode(t, f.store, "edge", f.now)
+	settings := testLine(second, "line-b")
+	settings.Server = "198.51.100.9"
+	settings.ServerName = "line-b.example.invalid"
+	settings.SortOrder = 2
+	if _, err := f.store.setLine(settings, f.now); err != nil {
+		t.Fatal(err)
+	}
+	markLineOnline(t, f.store, second, f.now)
+	offline := pairedStoreNode(t, f.store, "out", f.now)
+	markLineOnline(t, f.store, offline, f.now)
+	if err := f.store.setOutBindingAt(OutBinding{OutID: offline, LineID: second, Enabled: true}, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.db.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
+		t.Fatal(err)
+	}
+
+	// The policy does not select the Out, so the offline Out is a reported
+	// per-Line state rather than a refusal: the publication still assembles.
+	f.activatePolicy(t, PolicyLayerServer, publishServerDirect, "")
+	request, err := parsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-publish"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := f.store.assemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	if err != nil {
+		t.Fatalf("mixed assembly: %v", err)
+	}
+	if assembly.EgressState != policyEgressMixed {
+		t.Fatalf("egress_state = %q, want %q for a healthy and a fail-closed line", assembly.EgressState, policyEgressMixed)
+	}
+	if assembly.EgressCode != route.CodeOutOfflineFailClosed {
+		t.Fatalf("egress_code = %q, want %q", assembly.EgressCode, route.CodeOutOfflineFailClosed)
+	}
+	perLine := map[string]string{}
+	for _, target := range assembly.Targets {
+		perLine[target.LineID] = target.Egress
+	}
+	if perLine[f.line] != route.AIEgressOut || perLine[second] != policyEgressFailClosed {
+		t.Fatalf("per-line egress = %v", perLine)
+	}
+}
+
+// TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer pins the other
+// first-only artifact: the assembly used to return the first Line's route
+// fragment as if it were the published one. An explicit fallback on one Line
+// next to a healthy Out renders different bytes, so no shared fragment can be
+// reported and each candidate keeps its own.
+func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
+	f := newPublishFixture(t)
+	healthy := pairedStoreNode(t, f.store, "out", f.now)
+	markLineOnline(t, f.store, healthy, f.now)
+	if err := f.store.setOutBindingAt(OutBinding{OutID: healthy, LineID: f.line, Enabled: true}, f.now); err != nil {
+		t.Fatal(err)
+	}
+	settleTasks(t, f.store, healthy)
+	confirmChain(t, f.store, healthy, f.now)
+
+	second := pairedStoreNode(t, f.store, "edge", f.now)
+	settings := testLine(second, "line-b")
+	settings.Server = "198.51.100.9"
+	settings.ServerName = "line-b.example.invalid"
+	settings.SortOrder = 2
+	if _, err := f.store.setLine(settings, f.now); err != nil {
+		t.Fatal(err)
+	}
+	markLineOnline(t, f.store, second, f.now)
+	offline := pairedStoreNode(t, f.store, "out", f.now)
+	markLineOnline(t, f.store, offline, f.now)
+	if err := f.store.setOutBindingAt(OutBinding{OutID: offline, LineID: second, Enabled: true}, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.db.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
+		t.Fatal(err)
+	}
+
+	f.activatePolicy(t, PolicyLayerServer,
+		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
+	request, err := parsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-fallback","fallback_to_line":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := f.store.assemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	if err != nil {
+		t.Fatalf("fallback assembly: %v", err)
+	}
+	if assembly.EgressState != policyEgressMixed {
+		t.Fatalf("egress_state = %q, want mixed", assembly.EgressState)
+	}
+	if assembly.RouteFragment != nil {
+		t.Fatalf("a mixed fleet reported one shared fragment: %s", assembly.RouteFragment)
+	}
+	perLine := map[string]publishTarget{}
+	for _, target := range assembly.Targets {
+		perLine[target.LineID] = target
+	}
+	if perLine[f.line].Egress != route.AIEgressOut ||
+		!strings.Contains(string(perLine[f.line].Candidate.Route), `"outbound": "out"`) {
+		t.Fatalf("healthy line target = %+v", perLine[f.line])
+	}
+	if perLine[second].Egress != route.AIEgressLineFallback ||
+		strings.Contains(string(perLine[second].Candidate.Route), `"outbound": "out"`) {
+		t.Fatalf("fallback line target = %+v", perLine[second])
+	}
+}
+
+// TestAggregatePolicyEgress pins the precedence rule directly: identical states
+// pass through, any disagreement is mixed, and the reported code is a real
+// reason from one of the Lines.
+func TestAggregatePolicyEgress(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		states []string
+		codes  []string
+		want   string
+		code   string
+	}{
+		{"empty", nil, nil, "", ""},
+		{"one line", []string{route.AIEgressLine}, []string{""}, route.AIEgressLine, ""},
+		{"every line direct", []string{route.AIEgressLine, route.AIEgressLine}, []string{"", ""}, route.AIEgressLine, ""},
+		{"every line out", []string{route.AIEgressOut, route.AIEgressOut}, []string{"", ""}, route.AIEgressOut, ""},
+		{"healthy and fail-closed", []string{route.AIEgressOut, policyEgressFailClosed},
+			[]string{"", route.CodeOutOfflineFailClosed}, policyEgressMixed, route.CodeOutOfflineFailClosed},
+		{"fail-closed first", []string{policyEgressFailClosed, route.AIEgressOut},
+			[]string{route.CodeOutOfflineFailClosed, ""}, policyEgressMixed, route.CodeOutOfflineFailClosed},
+		{"out and line", []string{route.AIEgressOut, route.AIEgressLine}, []string{"", ""}, policyEgressMixed, ""},
+		{"fallback and out", []string{route.AIEgressLineFallback, route.AIEgressOut},
+			[]string{route.CodeOutOfflineFailClosed, ""}, policyEgressMixed, route.CodeOutOfflineFailClosed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, code := aggregatePolicyEgress(tc.states, tc.codes)
+			if state != tc.want || code != tc.code {
+				t.Fatalf("aggregate = %q/%q, want %q/%q", state, code, tc.want, tc.code)
+			}
+		})
 	}
 }
 

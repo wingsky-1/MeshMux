@@ -134,7 +134,7 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<div><p class=\"eyebrow\">YOUR NETWORK. YOUR CONTROL.</p><h1>连接每一处。<br><span>从这里开始。</span></h1><p class=\"lead\">代理、私有组网与路由策略，<br>一个清晰的管理入口。</p></div><p class=\"muted\">开发预览 · Web 安全基座<br>代理与 Mesh 功能尚未实现</p></section><main class=\"auth-card\"><div class=\"pill\">本地管理员</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<div><p class=\"eyebrow\">YOUR NETWORK. YOUR CONTROL.</p><h1>连接每一处。<br><span>从这里开始。</span></h1><p class=\"lead\">代理、私有组网与路由策略，<br>一个清晰的管理入口。</p></div><p class=\"muted\">开发预览 · Web 安全基座<br>代理与 Mesh 状态：pending-verification</p></section><main class=\"auth-card\"><div class=\"pill\">本地管理员</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -428,7 +428,7 @@ func Dashboard(p pageData) templ.Component {
 				}
 			}
 			if p.Path == "/" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "<p class=\"subtitle\">欢迎回来。控制台已就绪，从这里查看后续纳管状态。</p><section class=\"stats\" aria-label=\"资源概览\"><article><div class=\"stat-label\">代理节点 <span>◇</span></div><strong>0</strong><p>尚未纳管 Line / Out</p></article><article><div class=\"stat-label\">订阅用户 <span>◎</span></div><strong>0</strong><p>尚未创建订阅</p></article><article><div class=\"stat-label\">Mesh 设备 <span>⌘</span></div><strong>0</strong><p>尚未连接私有网络</p></article><article><div class=\"stat-label\">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器尚未实现</p></article></section><div class=\"overview-grid\"><section class=\"panel network-panel\"><div class=\"panel-heading\"><h2>网络状态</h2><span class=\"badge\">未部署</span></div><div class=\"empty-network\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h3>你的网络，从第一个节点开始</h3><p>节点纳管将在后续阶段开放。<br>当前没有连接任何代理或 Mesh 服务。</p><a href=\"/nodes\">查看代理节点 <span aria-hidden=\"true\">→</span></a></div></section><section class=\"panel\"><div class=\"panel-heading\"><h2>控制台状态</h2><span class=\"badge accent\">本机</span></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "<p class=\"subtitle\">欢迎回来。控制台已就绪，从这里查看后续纳管状态。</p><section class=\"stats\" aria-label=\"资源概览\"><article><div class=\"stat-label\">代理节点 <span>◇</span></div><strong>0</strong><p>尚未纳管 Line / Out</p></article><article><div class=\"stat-label\">订阅用户 <span>◎</span></div><strong>0</strong><p>尚未创建订阅</p></article><article><div class=\"stat-label\">Mesh 设备 <span>⌘</span></div><strong>0</strong><p>尚未连接私有网络</p></article><article><div class=\"stat-label\">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器 · pending-verification</p></article></section><div class=\"overview-grid\"><section class=\"panel network-panel\"><div class=\"panel-heading\"><h2>网络状态</h2><span class=\"badge\">未部署</span></div><div class=\"empty-network\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h3>你的网络，从第一个节点开始</h3><p>节点纳管将在后续阶段开放。<br>当前没有连接任何代理或 Mesh 服务。</p><a href=\"/nodes\">查看代理节点 <span aria-hidden=\"true\">→</span></a></div></section><section class=\"panel\"><div class=\"panel-heading\"><h2>控制台状态</h2><span class=\"badge accent\">本机</span></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -454,7 +454,7 @@ func Dashboard(p pageData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><label for=\"current\">当前密码</label><input id=\"current\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\"><label for=\"new\">新密码</label><input id=\"new\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符，最多 256 字节。</p><button type=\"submit\">修改密码并退出登录</button></form></section><section class=\"panel\"><h2>认证边界</h2><dl class=\"details\"><dt>账号</dt><dd>admin · 单管理员</dd><dt>会话</dt><dd>最长 8 小时 / 空闲 30 分钟</dd><dt>并行登录</dt><dd>新登录替换旧会话</dd><dt>登录保护</dt><dd>全局 10 次 / 10 分钟</dd><dt>代理 IP 信任</dt><dd>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><label for=\"current\">当前密码</label><input id=\"current\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\"><label for=\"new\">新密码</label><input id=\"new\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符，最多 256 字节。</p><button type=\"submit\">修改密码并退出登录</button></form></section><section class=\"panel\"><h2>认证边界</h2><dl class=\"details\"><dt>账号</dt><dd>admin · 单管理员</dd><dt>会话</dt><dd>最长 8 小时 / 空闲 30 分钟</dd><dt>并行登录</dt><dd>新登录替换旧会话</dd><dt>登录保护</dt><dd>全局 10 次 / 10 分钟 · 成功认证即清零</dd><dt>代理 IP 信任</dt><dd>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -469,7 +469,7 @@ func Dashboard(p pageData) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</dd><dt>Fail2ban</dt><dd>候选配置 · 未验证主机状态</dd></dl><p class=\"hint\">软件升级与 Web 备份功能尚未实现。</p></section></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</dd><dt>Fail2ban</dt><dd>候选配置 · 未验证主机状态</dd></dl><p class=\"hint\">软件升级与 Web 备份 · pending-verification。</p></section></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -492,7 +492,7 @@ func Dashboard(p pageData) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "将在后续开发阶段开放。</p><section class=\"panel empty-page\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h2>尚未实现</h2><p>当前仅提供 Web 安全基座。<br>尚未纳管节点、生成订阅、连接 Headscale 或发布路由配置。</p><a href=\"/\">返回概览 →</a></section>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "将在后续开发阶段开放。</p><section class=\"panel empty-page\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h2>pending-verification</h2><p>此入口尚无可用页面。<br>状态以各功能页和任务记录为准。</p><a href=\"/\">返回概览 →</a></section>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1620,14 +1620,14 @@ func Status(checked string) templ.Component {
 			templ_7745c5c3_Var87 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 143, "<div id=\"web-status\" aria-live=\"polite\"><dl class=\"status-list\"><div><dt><span class=\"dot\"></span> Web 服务</dt><dd>运行中</dd></div><div><dt>代理服务</dt><dd class=\"muted\">尚未实现</dd></div><div><dt>Mesh 网络</dt><dd class=\"muted\">尚未实现</dd></div><div><dt>公网与协议验证</dt><dd class=\"muted\">未验证</dd></div></dl><p class=\"hint\">更新于 ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 143, "<div id=\"web-status\" aria-live=\"polite\"><dl class=\"status-list\"><div><dt><span class=\"dot\"></span> Web 服务</dt><dd>运行中</dd></div><div><dt>代理服务</dt><dd class=\"muted\">unknown</dd></div><div><dt>Mesh 网络</dt><dd class=\"muted\">unknown</dd></div><div><dt>公网与协议验证</dt><dd class=\"muted\">pending-verification</dd></div></dl><p class=\"hint\">更新于 ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var88 string
 		templ_7745c5c3_Var88, templ_7745c5c3_Err = templ.JoinStringErrs(checked)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 316, Col: 385}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 316, Col: 386}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var88))
 		if templ_7745c5c3_Err != nil {

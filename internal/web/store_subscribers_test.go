@@ -1,7 +1,9 @@
 package web
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +24,52 @@ func subscriberStoreFixture(t *testing.T) (*store, time.Time) {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s, time.Unix(1_700_000_000, 0)
+}
+
+// resolveBearer is the test-side read of the bearer contract: only an active
+// token of an active subscriber resolves. The production download path resolves
+// the same rows inside one snapshot transaction.
+func resolveBearer(t *testing.T, s *store, token string) (subscription.Subscriber, error) {
+	t.Helper()
+	if err := subscription.ValidateToken(token); err != nil {
+		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+	}
+	var subscriberID string
+	err := s.db.QueryRow(`SELECT subscriber_id FROM subscription_tokens WHERE token_hash=? AND revoked=0`,
+		subscription.TokenHash(token)).Scan(&subscriberID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+	}
+	if err != nil {
+		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+	}
+	sub, err := s.getSubscriber(subscriberID)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "SUBSCRIBER_NOT_FOUND") {
+			return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+		}
+		return subscription.Subscriber{}, err
+	}
+	if sub.State != subscription.StateActive {
+		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+	}
+	return sub, nil
+}
+
+// readStoredLine returns one stored Line through the production list path. It
+// keeps the old single-row assertions while the single-row getter is gone.
+func readStoredLine(t *testing.T, s *store, nodeID string) (subscription.Line, error) {
+	t.Helper()
+	lines, err := s.listLines()
+	if err != nil {
+		return subscription.Line{}, err
+	}
+	for _, line := range lines {
+		if line.NodeID == nodeID {
+			return line, nil
+		}
+	}
+	return subscription.Line{}, errors.New("LINE_NOT_FOUND: unknown line")
 }
 
 // createEdgeNode inserts one edge node so it can be used as a proxy Line.
@@ -133,7 +181,7 @@ func TestSubscriberCreateStoresCredentialAndToken(t *testing.T) {
 		t.Fatalf("bearer is not canonical: %v", err)
 	}
 	// The bearer resolves to exactly this subscriber.
-	resolved, err := s.resolveTokenSubscriber(bearer)
+	resolved, err := resolveBearer(t, s, bearer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +269,7 @@ func TestSubscriberRenameKeepsIdentityAndLeavesOtherSubscriberUntouched(t *testi
 	}
 	// Both bearers still work; a rename never revokes a token.
 	for _, bearer := range []string{aliceToken, bobToken} {
-		if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+		if _, err := resolveBearer(t, s, bearer); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,14 +300,14 @@ func TestSubscriberTokenRotationRevokesOldBearerOnly(t *testing.T) {
 	if rotated == aliceToken {
 		t.Fatal("rotation returned the same bearer")
 	}
-	if _, err := s.resolveTokenSubscriber(rotated); err != nil {
+	if _, err := resolveBearer(t, s, rotated); err != nil {
 		t.Fatalf("new bearer rejected: %v", err)
 	}
-	if _, err := s.resolveTokenSubscriber(aliceToken); err == nil {
+	if _, err := resolveBearer(t, s, aliceToken); err == nil {
 		t.Fatal("old bearer still accepted")
 	}
 	// The other subscriber keeps his bearer.
-	if _, err := s.resolveTokenSubscriber(bobToken); err != nil {
+	if _, err := resolveBearer(t, s, bobToken); err != nil {
 		t.Fatal(err)
 	}
 	// A rotation never touches the VLESS credential.
@@ -299,7 +347,7 @@ func TestSubscriberStateChangeRevokesTokensInSameTransaction(t *testing.T) {
 			t.Fatalf("state = %s, want %s", updated.State, state)
 		}
 		// A non-active subscriber can never download.
-		if _, err := s.resolveTokenSubscriber(aliceToken); err == nil {
+		if _, err := resolveBearer(t, s, aliceToken); err == nil {
 			t.Fatalf("token still accepted in state %s", state)
 		}
 		// The revocation is persisted, not only filtered at read time.
@@ -311,7 +359,7 @@ func TestSubscriberStateChangeRevokesTokensInSameTransaction(t *testing.T) {
 			t.Fatalf("revoked tokens = %d, want 1", revoked)
 		}
 		// The other subscriber is unaffected.
-		if _, err := s.resolveTokenSubscriber(bobToken); err != nil {
+		if _, err := resolveBearer(t, s, bobToken); err != nil {
 			t.Fatal(err)
 		}
 		bobSubscriber, err := s.getSubscriber(bob.ID)
@@ -516,7 +564,7 @@ func TestSetLinePreservesTransportIdentity(t *testing.T) {
 	if updated.PrivateKey != stored.PrivateKey || updated.PublicKey != stored.PublicKey || updated.ShortID != stored.ShortID {
 		t.Fatal("transport identity was replaced")
 	}
-	reloaded, err := s.getLine(edge)
+	reloaded, err := readStoredLine(t, s, edge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +628,7 @@ func TestSubscriberTokenRevocationIsIndependentOfCredential(t *testing.T) {
 	if err := s.revokeTokens(sub.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.resolveTokenSubscriber(bearer); err == nil {
+	if _, err := resolveBearer(t, s, bearer); err == nil {
 		t.Fatal("revoked bearer still accepted")
 	}
 	after, err := s.listSubscriberCredentials(sub.ID)
@@ -604,7 +652,7 @@ func TestUnknownBearerIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, token := range []string{"", "short", "not-a-token"} {
-		if _, err := s.resolveTokenSubscriber(token); err == nil {
+		if _, err := resolveBearer(t, s, token); err == nil {
 			t.Fatalf("invalid token accepted: %q", token)
 		}
 	}
@@ -613,16 +661,16 @@ func TestUnknownBearerIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.resolveTokenSubscriber(unknown); err == nil {
+	if _, err := resolveBearer(t, s, unknown); err == nil {
 		t.Fatal("unknown token accepted")
 	}
 }
 
-// TestResolveTokenSubscriberReportsDatabaseFailure verifies that a database
+// TestBearerResolutionReportsDatabaseFailure verifies that a database
 // failure is never disguised as an invalid token. A closed database must be
 // reported as a database problem, because a client that retries after a
 // transient failure has to be able to tell the two cases apart.
-func TestResolveTokenSubscriberReportsDatabaseFailure(t *testing.T) {
+func TestBearerResolutionReportsDatabaseFailure(t *testing.T) {
 	s, now := subscriberStoreFixture(t)
 	edge := createEdgeNode(t, s, now)
 	configureLine(t, s, edge, "line-a", now)
@@ -631,13 +679,13 @@ func TestResolveTokenSubscriberReportsDatabaseFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The bearer is valid and known before the database goes away.
-	if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+	if _, err := resolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.resolveTokenSubscriber(bearer)
+	_, err = resolveBearer(t, s, bearer)
 	if err == nil {
 		t.Fatal("closed database reported a resolved subscriber")
 	}
@@ -670,14 +718,14 @@ func TestRevokeTokensRejectsUnknownSubscriber(t *testing.T) {
 		t.Fatalf("error %q does not carry code SUBSCRIBER_NOT_FOUND", err)
 	}
 	// The known subscriber keeps his bearer: the failed call revoked nothing.
-	if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+	if _, err := resolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 	// The known subscriber can still be revoked normally.
 	if err := s.revokeTokens(sub.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.resolveTokenSubscriber(bearer); err == nil {
+	if _, err := resolveBearer(t, s, bearer); err == nil {
 		t.Fatal("revoked bearer still accepted")
 	}
 }
@@ -749,7 +797,7 @@ func TestCorruptLineSettingsAreRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := s.getLine(edge)
+	_, err := readStoredLine(t, s, edge)
 	if err == nil {
 		t.Fatal("corrupt line was returned by getLine")
 	}
@@ -860,7 +908,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+	if _, err := resolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.getSubscriber(sub.ID); err != nil {
@@ -1004,7 +1052,7 @@ func TestSubscriberStateChangeIsIdempotent(t *testing.T) {
 	if revisionAfter != revisionBefore {
 		t.Fatalf("revision changed on an idempotent call: %d -> %d", revisionBefore, revisionAfter)
 	}
-	if _, err := s.resolveTokenSubscriber(bearer); err != nil {
+	if _, err := resolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1015,7 +1063,7 @@ func TestSubscriberStateChangeIsIdempotent(t *testing.T) {
 	if _, err = s.setSubscriberState(sub.ID, subscription.StateDeleting, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.resolveTokenSubscriber(bearer); err == nil {
+	if _, err := resolveBearer(t, s, bearer); err == nil {
 		t.Fatal("token accepted after a repeated deleting state")
 	}
 	var revoked int
@@ -1036,7 +1084,7 @@ func TestSetLineRejectsPortMismatch(t *testing.T) {
 		t.Fatal("port mismatch accepted")
 	}
 	// The rejected line was not stored.
-	if _, err := s.getLine(edge); err == nil {
+	if _, err := readStoredLine(t, s, edge); err == nil {
 		t.Fatal("rejected line was stored")
 	}
 }
@@ -1060,7 +1108,7 @@ func TestSetLineRejectsInvalidRealitySettings(t *testing.T) {
 	}
 
 	// Nothing was stored by the rejected attempts.
-	if _, err := s.getLine(edge); err == nil {
+	if _, err := readStoredLine(t, s, edge); err == nil {
 		t.Fatal("rejected line was stored")
 	}
 }
@@ -1080,7 +1128,7 @@ func TestSetLineCanonicalizesLowercaseHosts(t *testing.T) {
 	if stored.ServerName != "line.example.invalid" || stored.HandshakeServer != "handshake.example.invalid" {
 		t.Fatalf("hosts were not canonicalized: %q %q", stored.ServerName, stored.HandshakeServer)
 	}
-	reloaded, err := s.getLine(edge)
+	reloaded, err := readStoredLine(t, s, edge)
 	if err != nil {
 		t.Fatal(err)
 	}

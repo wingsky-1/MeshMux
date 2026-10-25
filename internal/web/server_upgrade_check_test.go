@@ -89,37 +89,24 @@ func approveUpgrade(t *testing.T, b *browser, nodeID, version string) *httptest.
 	return b.post("/tasks/approve", url.Values{"node_id": {nodeID}, "version": {version}})
 }
 
-// seedRouteCandidate stores one v3 candidate for the node, the way a policy
-// publication would: the next approval carries that route forward, so the
-// mixed-version gate has a v3 document to judge.
-func seedRouteCandidate(t *testing.T, app *Server, nodeID string) int64 {
+// seedUpgradeRouteIntent gives one node a configured Line transport and an
+// active server policy, so the next approval re-derives a resolved v3 route
+// from the live intent (the approval no longer copies a previous candidate's
+// route).
+func seedUpgradeRouteIntent(t *testing.T, app *Server, nodeID string) {
 	t.Helper()
 	now := app.now()
-	line := testLine(nodeID, "upgrade-line")
-	if _, err := app.store.setLine(line, now); err != nil {
+	if _, err := app.store.setLine(testLine(nodeID, "upgrade-line"), now); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := app.store.db.Begin()
+	created, err := app.store.createRoutePolicy(PolicyLayerServer, "升级服务端策略",
+		json.RawMessage(publishServerDirect), nil, "op-upgrade-policy", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
-	revision, err := nextCandidateRevisionTx(tx, nodeID)
-	if err != nil {
+	if _, err := app.store.activateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := buildLineCandidateTx(tx, nodeID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate.Route = json.RawMessage(`{"rules":[],"final":"direct"}`)
-	if err := insertCandidateTx(tx, candidate, now.Unix()); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	return revision
 }
 
 // TestCheckUpdateIsAdvisoryOnly pins the explicit button: one operator click
@@ -355,16 +342,14 @@ func TestUpgradeMixedVersionGate(t *testing.T) {
 		t.Fatal("a mixed-version node was hidden instead of labelled")
 	}
 
-	// End to end: a v3 route is carried forward by the approval, and an older
-	// node is refused instead of being force-published.
+	// End to end: the approval resolves a v3 route from the live policy, and an
+	// older node is refused instead of being force-published.
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
 	manifest, err := upgrade.ForArch(runtime.GOARCH)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revision := seedRouteCandidate(t, app, nodeID); revision < 2 {
-		t.Fatalf("seeded route candidate revision = %d", revision)
-	}
+	seedUpgradeRouteIntent(t, app, nodeID)
 	before := latestRevision(t, app, nodeID)
 	refusal := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusConflict)
 	if refusal.OK || refusal.ErrorCode != codeUpgradeAgentIncompatible {

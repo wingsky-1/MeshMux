@@ -14,6 +14,8 @@
 | DNS_RESOLUTION_FAILED | 网络 | DNS 与 A/AAAA |
 | ARTIFACT_CHECKSUM_MISMATCH | 供应链 | manifest/来源验证 |
 | AGENT_PAIRING_REJECTED | 鉴权 | code 失效、Hub 身份/TLS |
+| PAIRING_RATE_LIMITED | 鉴权 | 配对端点进程内预算 20 次/分钟已耗尽（429 + `Retry-After`）；核对 Node ID/角色后等窗口结束，勿用已配身份重试 |
+| PAIRING_INVALID | 鉴权 | 未知/过期/已消费的码共用此码（响应不区分，避免码历史 oracle）；凭 `operation_id` 查日志得 `PAIRING_EXPIRED`/`PAIRING_CONSUMED` |
 | CONFIG_VALIDATION_FAILED | 代理配置 | sing-box check 日志 |
 | PUBLIC_PORT_UNREACHABLE | 公网入口 | 本机监听 vs 云侧安全组 |
 | OUT_ACL_UNATTESTED | Out 授权 | 来源集合/远端 ACL 状态 |
@@ -60,6 +62,7 @@
 | OUT_BOUND | Out 绑定保存成功 | operation_id + 稳定码 |
 | OUT_UNBOUND | 解绑（含从未绑定的 no-op） | operation_id + 稳定码 |
 | OUT_DELETED | Out 路由删除且 ACL 清空已发布 | operation_id + 稳定码；未下发时改记 OUT_SYNC_PENDING |
+| MESH_ROUTE_UNTRACKED_DROPPED | Mesh 子网路由批准/撤销批准时，Headscale 已批准集合中存在适配器会拒绝、无法随整表替换发送的条目（退出路由 /0、带主机位等），该条目被移出集合 | operation_id + 稳定码，逐条记录；不含前缀本身。批准/撤销请求本身仍成功，页面以计数披露 |
 
 说明：`LINE_NOT_RETIRED` 由 #8-C 引入，此处只补登记、不改归属；`BOOTSTRAP_ACL_UNAVAILABLE` / `BOOTSTRAP_ACL_INVALID` 只在 #8-B 的中间提交存在过，同一 PR 内随「bootstrap 只做形状断言、不以受管文件自证」修正被删除，从未进入 `main`。**本表不声称覆盖全部稳定码**：`internal/install` 与 `internal/node` 的阶段码（`ACL_*`、`OUT_ACL_READBACK_FAILED`、`LKG_*`、`BOOTSTRAP_*` 等）以对应包的返回值与任务结果为准；`OUT_ACL_UNATTESTED` 仍保留在基础表，用于「远端 ACL 无法 attest」这一独立事实。
 

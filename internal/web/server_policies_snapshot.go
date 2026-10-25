@@ -5,8 +5,6 @@ package web
 // here stores or publishes a policy; writes are 10d-2a and publication 10d-2b.
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -69,18 +67,12 @@ func (app *Server) activePolicyIntent(layer PolicyLayer) (RoutePolicy, routePoli
 }
 
 // activePolicyIntent reads one layer's active revision and decodes its payload.
-// It is the single reader of the active intent, so the page and the publish
-// pipeline can never disagree about which revision is live.
+// It is the single reader of the active intent, so the page, the publish
+// pipeline and an implicit route derivation can never disagree about which
+// revision is live.
 func (s *store) activePolicyIntent(layer PolicyLayer) (RoutePolicy, routePolicyPayload, error) {
 	record, err := s.activeRoutePolicy(layer)
-	if err != nil {
-		return RoutePolicy{}, routePolicyPayload{}, err
-	}
-	var intent routePolicyPayload
-	if err := json.Unmarshal(record.Payload, &intent); err != nil {
-		return record, routePolicyPayload{}, errors.New("POLICY_CORRUPT: the active payload is not valid intent JSON")
-	}
-	return record, intent, nil
+	return activePolicyIntentOf(record, err)
 }
 
 // policyFallbackView is the draft fallback before any active revision or mesh
@@ -149,14 +141,16 @@ func policyClientRows(policy compiler.ClientPolicy) []policyRuleView {
 			Match:  policyMatcherLabel(rule.Match),
 			Action: policyActionLabel(rule.Action),
 			Note:   policyRuleNote(rule),
-			State:  "启用",
+			// The client layer has no consumer in this release, so its rows
+			// read as preview instead of claiming they are in effect.
+			State: "预览",
 		})
 	}
 	return append(rows, policyRuleView{
 		Match:  "兜底（未命中任何规则）",
 		Action: policyActionLabel(policy.Default),
 		Note:   "客户端层兜底固定为 Line，规则停用后流量回到兜底而不是断网。",
-		State:  "启用",
+		State:  "预览",
 	})
 }
 

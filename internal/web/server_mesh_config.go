@@ -89,7 +89,7 @@ func (app *Server) meshConfigPreflight(record MeshDeviceRecord, now time.Time) (
 	lines, credentials, err := app.store.subscriptionForSubscriber(record.SubscriberID, now)
 	if err != nil {
 		if errors.Is(err, errSubscriptionStoreUnavailable) {
-			return meshConfigPlan{}, errors.New("DATABASE_UNAVAILABLE")
+			return meshConfigPlan{}, errors.New(codeDatabaseUnavailable)
 		}
 		return meshConfigPlan{}, meshError(codeMeshEndpointSubscriberUnavailable,
 			"the bound subscriber cannot serve a mesh config")
@@ -98,6 +98,7 @@ func (app *Server) meshConfigPreflight(record MeshDeviceRecord, now time.Time) (
 		DeviceID:    record.ID,
 		DisplayName: record.DisplayName,
 		Hostname:    record.NodeName,
+		Purpose:     subscription.MeshPurpose(record.Purpose),
 		ControlURL:  app.cfg.HeadscaleOrigin,
 		Lines:       lines,
 		Credentials: credentials,
@@ -129,6 +130,7 @@ func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user hea
 		DeviceID:    plan.Record.ID,
 		DisplayName: plan.Record.DisplayName,
 		Hostname:    plan.Model.Hostname,
+		Purpose:     subscription.MeshPurpose(plan.Record.Purpose),
 		ControlURL:  plan.Model.ControlURL,
 		AuthKey:     authKey,
 		Lines:       plan.Lines,
@@ -169,6 +171,99 @@ func (app *Server) meshCreateDisclosure(ctx context.Context, record MeshDeviceRe
 	return app.issueMeshKeyDisclosure(record.ID, now, "")
 }
 
+// meshRekeyStage is one re-enrollment prepared entirely in memory: the Hub-side
+// key is a record plus its plaintext, and a proxy_mesh document also carries a
+// Headscale pre-auth key that exists only inside the response. Nothing is
+// stored until store.applyMeshRekey installs the Hub key, which is why a refusal
+// at any point before it leaves the device's current live key intact.
+type meshRekeyStage struct {
+	Disclosure   *meshKeyDisclosure
+	Key          mesh.EnrollmentKey
+	ConfigNotice string
+	preAuth      *headscale.PreAuthKey
+}
+
+// stageMeshRekey prepares the one-time material of a re-enrollment without
+// writing it. It keeps meshCreateDisclosure's fallback contract: a proxy+mesh
+// device whose combined document cannot be produced still gets a Hub-side key,
+// with the refusal code as ConfigNotice, because losing the ability to enroll is
+// worse than losing the combined document.
+func (app *Server) stageMeshRekey(ctx context.Context, record MeshDeviceRecord, user headscale.User, now time.Time) (meshRekeyStage, error) {
+	if record.Purpose == mesh.PurposeProxyMesh && app.cfg.HeadscaleOrigin != "" {
+		plan, preflightErr := app.meshConfigPreflight(record, now)
+		if preflightErr == nil {
+			stage, configErr := app.stageMeshConfig(ctx, plan, user, now)
+			if configErr == nil {
+				return stage, nil
+			}
+			return app.stageMeshKey(record, now, meshErrorCode(configErr))
+		}
+		return app.stageMeshKey(record, now, meshErrorCode(preflightErr))
+	}
+	return app.stageMeshKey(record, now, "")
+}
+
+// stageMeshConfig builds the device-scoped document of a re-enrollment in
+// memory: the Headscale key is minted, the Hub key is minted but not stored, and
+// neither is persisted as plaintext. A failure after the Headscale key exists
+// expires that key; the Hub key never reached storage, so nothing is left behind.
+func (app *Server) stageMeshConfig(ctx context.Context, plan meshConfigPlan, user headscale.User, now time.Time) (meshRekeyStage, error) {
+	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, headscale.PreAuthKeyRequest{
+		UserID:   user.ID,
+		Validity: mesh.KeyTTL,
+	})
+	if err != nil {
+		return meshRekeyStage{}, err
+	}
+	stage, err := app.stageMeshKey(plan.Record, now, "")
+	if err != nil {
+		app.compensateMeshConfig(ctx, key, "")
+		return meshRekeyStage{}, fmt.Errorf("%s: %w", codeMeshEndpointKeyIssueFailed, err)
+	}
+	input := subscription.MeshDeviceInput{
+		DeviceID:    plan.Record.ID,
+		DisplayName: plan.Record.DisplayName,
+		Hostname:    plan.Model.Hostname,
+		Purpose:     subscription.MeshPurpose(plan.Record.Purpose),
+		ControlURL:  plan.Model.ControlURL,
+		AuthKey:     authKey,
+		Lines:       plan.Lines,
+		Credentials: plan.Credentials,
+	}
+	body, err := subscription.ExportMeshDevice(input)
+	if err != nil {
+		app.compensateMeshConfig(ctx, key, "")
+		return meshRekeyStage{}, fmt.Errorf("%s: %w", codeMeshEndpointRenderFailed, err)
+	}
+	stage.Disclosure.Config = string(body)
+	stage.preAuth = &key
+	return stage, nil
+}
+
+// stageMeshKey mints only the Hub-side one-time key, in memory.
+func (app *Server) stageMeshKey(record MeshDeviceRecord, now time.Time, noticeCode string) (meshRekeyStage, error) {
+	key, secret, err := mesh.NewEnrollmentKey(record.ID, now.UTC().Truncate(time.Second))
+	if err != nil {
+		return meshRekeyStage{}, err
+	}
+	return meshRekeyStage{
+		Disclosure:   app.meshDisclosure(record, secret, key.ExpiresAt),
+		Key:          key,
+		ConfigNotice: noticeCode,
+	}, nil
+}
+
+// discardMeshRekeyStage withdraws the Headscale key of a staged re-enrollment
+// that will not be installed, so an uninstalled attempt leaves no live secret
+// nobody was shown. The Hub key was never stored, so the Hub side needs no
+// compensation. Cleanup is best effort: the key keeps its fixed short lifetime
+// and the caller reports the refusal that stopped the attempt.
+func (app *Server) discardMeshRekeyStage(ctx context.Context, stage meshRekeyStage) {
+	if stage.preAuth != nil {
+		_ = app.mesh.ExpirePreAuthKey(ctx, stage.preAuth.ID)
+	}
+}
+
 // issueMeshKeyDisclosure mints only the Hub-side one-time key.
 func (app *Server) issueMeshKeyDisclosure(deviceID string, now time.Time, noticeCode string) (*meshKeyDisclosure, string, error) {
 	key, secret, err := app.store.issueMeshEnrollmentKey(deviceID, now)
@@ -205,7 +300,7 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 		return
 	}
 	if record.Status != mesh.StatusPending {
-		app.fail(w, r, http.StatusConflict, "MESH_DEVICE_NOT_REENROLLABLE",
+		app.fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable,
 			"只有待注册设备可以签发设备配置。", "请刷新页面确认状态；已过期设备需先重新签发一次性 Key。")
 		return
 	}

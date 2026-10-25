@@ -107,23 +107,6 @@ func (s *store) setLine(line subscription.Line, now time.Time) (subscription.Lin
 	return line, nil
 }
 
-func (s *store) getLine(nodeID string) (subscription.Line, error) {
-	if err := subscription.ValidateID(nodeID); err != nil {
-		return subscription.Line{}, errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
-	}
-	line, err := scanLine(s.db.QueryRow(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings WHERE node_id=?`, nodeID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Line{}, errors.New("LINE_NOT_FOUND: unknown line")
-	}
-	if errors.Is(err, errLineSettingsCorrupt) {
-		return subscription.Line{}, err
-	}
-	if err != nil {
-		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return line, nil
-}
-
 // listLines returns every stored Line ordered by its sort order.
 func (s *store) listLines() ([]subscription.Line, error) {
 	rows, err := s.db.Query(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)

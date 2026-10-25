@@ -15,7 +15,13 @@ import (
 
 const sessionLifetime = 8 * time.Hour
 const idleLifetime = 30 * time.Minute
-const anonymousLifetime = 15 * time.Minute
+
+// The durable global authentication budget: ten attempts per rolling ten
+// minutes, shared by setup, login and password change. The window opens at its
+// first attempt and is measured from that instant, so spending a slot never
+// extends the lockout, and restarting the service does not clear it.
+const authWindow = 10 * time.Minute
+const authBudget = 10
 
 type store struct {
 	db   *sql.DB
@@ -317,35 +323,11 @@ func (s *store) prepareBootstrap(now time.Time) error {
 	return err
 }
 
-func (s *store) newSession(auth bool, now time.Time) (string, session, error) {
-	token := randomToken()
-	duration := anonymousLifetime
-	if auth {
-		duration = sessionLifetime
-	}
-	sess := session{Hash: tokenHash(token), CSRF: randomToken(), Auth: auth, Expires: now.Add(duration).Unix()}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return "", sess, err
-	}
-	defer tx.Rollback()
-	if _, err = tx.Exec("DELETE FROM sessions WHERE expires<=? OR seen<=?", now.Unix(), now.Add(-idleLifetime).Unix()); err != nil {
-		return "", sess, err
-	}
-	// Bound anonymous sessions even when clients repeatedly discard their cookies.
-	var count int
-	if err = tx.QueryRow("SELECT count(*) FROM sessions WHERE authenticated=0").Scan(&count); err != nil {
-		return "", sess, err
-	}
-	if !auth && count >= 256 {
-		return "", sess, errors.New("SESSION_CAPACITY")
-	}
-	_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,?,?,?)", sess.Hash, sess.CSRF, auth, sess.Expires, now.Unix())
-	if err != nil {
-		return "", sess, err
-	}
-	return token, sess, tx.Commit()
-}
+// newSession is gone: the login and setup forms no longer store an anonymous
+// row (see form_token.go), and the single administrator session is inserted by
+// login in its own transaction. `sessions` therefore only ever holds
+// authenticated rows, so no anonymous flood can fill a cap and lock the
+// administrator out of the page that exists to restore access (#113 3-3).
 
 func (s *store) session(token string, now time.Time) (session, error) {
 	var sess session
@@ -366,11 +348,36 @@ func (s *store) session(token string, now time.Time) (session, error) {
 
 // A durable global budget protects the single administrator and bounds KDF cost,
 // including when a proxy hides addresses. Never keyed by an untrusted header.
-func (s *store) attempt(now time.Time) (bool, error) {
+//
+// The window opens at its first attempt and is measured from that instant, so a
+// spent slot never extends the lockout and a restart does not clear it. A denied
+// attempt reports how long the caller must wait; that is the only actionable
+// information, and it never depends on whether a password was correct.
+func (s *store) attempt(now time.Time) (bool, time.Duration, error) {
 	var attempts int
+	var started int64
 	err := s.db.QueryRow(`UPDATE auth_limit SET
  attempts=CASE WHEN started<=? THEN 1 ELSE attempts+1 END,
  started=CASE WHEN started<=? THEN ? ELSE started END
- WHERE id=1 RETURNING attempts`, now.Add(-10*time.Minute).Unix(), now.Add(-10*time.Minute).Unix(), now.Unix()).Scan(&attempts)
-	return attempts <= 10, err
+ WHERE id=1 RETURNING attempts, started`, now.Add(-authWindow).Unix(), now.Add(-authWindow).Unix(), now.Unix()).Scan(&attempts, &started)
+	if err != nil {
+		return false, 0, err
+	}
+	if attempts <= authBudget {
+		return true, 0, nil
+	}
+	retry := time.Unix(started, 0).Add(authWindow).Sub(now)
+	if retry <= 0 {
+		retry = time.Second
+	}
+	return false, retry, nil
+}
+
+// resetAuthBudget clears the shared budget. It is called in the same
+// transaction as the write that proved the credential, so a successful
+// authentication cannot fail halfway into a self-inflicted lockout. Only proof
+// of a credential resets it; a wrong password never does.
+func resetAuthBudget(tx *sql.Tx) error {
+	_, err := tx.Exec("UPDATE auth_limit SET started=0, attempts=0 WHERE id=1")
+	return err
 }

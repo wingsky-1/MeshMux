@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,12 +29,26 @@ import (
 var assets embed.FS
 
 type Server struct {
-	cfg      Config
-	store    *store
-	log      *slog.Logger
-	handler  http.Handler
-	now      func() time.Time
-	authSlot chan struct{}
+	cfg     Config
+	store   *store
+	log     *slog.Logger
+	handler http.Handler
+	now     func() time.Time
+	// kdfSlot bounds the password KDF: at most one Argon2id operation (64 MiB)
+	// runs at a time, so a burst of login/setup/password requests cannot
+	// multiply the hash memory. It is deliberately held by those three routes
+	// only: a publication that gates kernels for minutes used to keep the slot,
+	// turning an unrelated node creation into a 429.
+	kdfSlot chan struct{}
+	// pairing is the unauthenticated pairing budget (see pair_limiter.go). It is
+	// process-local on purpose: the store has one connection, and a shared
+	// database counter on this path would either contend that connection or let
+	// an anonymous flood spend the administrator's login budget.
+	pairing pairLimiter
+	// formKey signs the stateless CSRF token of the unauthenticated login and
+	// setup forms (see form_token.go). It is process-local, so a restart only
+	// invalidates forms that were open across it.
+	formKey []byte
 	// mesh is the narrow Headscale control-plane adapter behind the mesh
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.
@@ -86,7 +101,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 		s.Close()
 		return nil, err
 	}
-	app := &Server{cfg: c, store: s, log: logger, now: time.Now, authSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner()}
+	app := &Server{cfg: c, store: s, log: logger, now: time.Now, kdfSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner(), formKey: []byte(randomToken())}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -98,10 +113,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
 	r.Get("/login", app.loginPage)
 	r.Get("/setup", app.setupPage)
-	r.Post("/login", app.mutation(app.login, false))
-	r.Post("/setup", app.mutation(app.setup, false))
+	r.Post("/login", app.mutation(app.kdfGuard(app.login), false))
+	r.Post("/setup", app.mutation(app.kdfGuard(app.setup), false))
 	r.Post("/logout", app.mutation(app.logout, true))
-	r.Post("/password", app.mutation(app.password, true))
+	r.Post("/password", app.mutation(app.kdfGuard(app.password), true))
 	r.Get("/api/status", jsonAPI(app.authenticated(app.status)))
 	r.Get("/status", app.authenticated(app.statusFragment))
 	r.Get("/nodes", app.authenticated(func(w http.ResponseWriter, r *http.Request, sess session) {
@@ -227,7 +242,15 @@ func (s *Server) boundary(next http.Handler) http.Handler {
 		// router fallbacks use; the failure writer itself never inspects a path.
 		jsonBody := jsonNamespace(r.URL.Path)
 		defer func() {
-			if recover() != nil {
+			if recovered := recover(); recovered != nil {
+				// http.ErrAbortHandler is the documented way for a handler to
+				// abandon a response whose bytes already started, such as a
+				// streamed artifact that stopped matching its pinned digest.
+				// Re-panic it so net/http closes the connection instead of this
+				// writer appending a 500 to a body that promised its length.
+				if recovered == http.ErrAbortHandler {
+					panic(recovered)
+				}
 				s.failAs(w, r, 500, "INTERNAL_ERROR", "请求未完成。", "请凭操作编号检查服务日志。", jsonBody)
 			}
 		}()
@@ -382,41 +405,46 @@ func (s *Server) authPage(w http.ResponseWriter, r *http.Request, setup bool) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
-			return
-		}
-		token, newSess, e := s.store.newSession(false, s.now())
-		if e != nil {
-			s.fail(w, r, 503, "SESSION_UNAVAILABLE", "暂时无法建立登录会话。", "请稍后重试或检查服务日志。")
-			return
-		}
-		sess = newSess
-		s.cookie(w, token, sess.Expires)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
+		return
 	}
-	s.render(w, r, 200, AuthPage(setup, sess.CSRF, s.cfg.DevHTTP, "", ""))
+	// The unauthenticated form needs a CSRF value, never a stored session. The
+	// double-submit cookie is the only state it adds, so no amount of anonymous
+	// traffic can fill a row cap and take this page away from the administrator
+	// who needs it to get back in.
+	form, ferr := s.formSession(r, s.now())
+	if ferr != nil {
+		form = s.newFormSession(w, s.now())
+	}
+	s.render(w, r, 200, AuthPage(setup, form.CSRF, s.cfg.DevHTTP, "", ""))
 }
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) { s.authPage(w, r, false) }
 func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) { s.authPage(w, r, true) }
 
 func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session), auth bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Serialize security mutations, bounding Argon2 to one 64 MiB operation.
-		select {
-		case s.authSlot <- struct{}{}:
-			defer func() { <-s.authSlot }()
-		default:
-			w.Header().Set("Retry-After", "2")
-			s.fail(w, r, 429, "AUTH_BUSY", "认证请求正在处理中。", "请稍后重试。")
-			return
-		}
 		sess, err := s.current(r)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
 			return
 		}
-		if err != nil || (auth && !sess.Auth) || (!auth && sess.Auth) {
+		if !auth {
+			// The login and setup forms are CSRF-protected by the stateless
+			// double-submit token, not by a stored session (#113 3-3). They never
+			// needed a row, and requiring one let anonymous traffic fill the
+			// session cap and take the login page away. An authenticated session
+			// still may not post to them.
+			if err == nil && sess.Auth {
+				s.fail(w, r, 401, "SESSION_INVALID", "会话无效或已过期。", "请重新打开登录页面。")
+				return
+			}
+			if sess, err = s.formSession(r, s.now()); err != nil {
+				s.fail(w, r, 401, "SESSION_INVALID", "会话无效或已过期。", "请重新打开登录页面。")
+				return
+			}
+		}
+		if err != nil || (auth && !sess.Auth) {
 			s.fail(w, r, 401, "SESSION_INVALID", "会话无效或已过期。", "请重新打开登录页面。")
 			return
 		}
@@ -449,18 +477,57 @@ func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session)
 	}
 }
 
+// kdfGuard bounds the password KDF to one Argon2id operation (64 MiB) at a
+// time. Only the three routes that prove or derive a password go through it:
+// login, setup and password change.
+//
+// The slot is deliberately not held by any other mutation. It used to wrap
+// every management POST, so a publication that gates kernels for minutes kept
+// the slot and made an unrelated node creation answer 429. A password hash is
+// the only unbounded memory cost that needs serializing; everything else has
+// its own narrower guard.
+//
+// The guard runs after the mutation wrapper has checked the session, form and
+// CSRF token, so unauthenticated or forged requests never occupy the slot.
+func (s *Server) kdfGuard(next func(http.ResponseWriter, *http.Request, session)) func(http.ResponseWriter, *http.Request, session) {
+	return func(w http.ResponseWriter, r *http.Request, sess session) {
+		select {
+		case s.kdfSlot <- struct{}{}:
+			defer func() { <-s.kdfSlot }()
+		default:
+			w.Header().Set("Retry-After", "2")
+			s.fail(w, r, 429, "AUTH_KDF_BUSY", "另一个密码运算正在进行中。", "请稍后重试；该限制只影响登录、初始化与改密，其他操作不受影响。")
+			return
+		}
+		next(w, r, sess)
+	}
+}
+
 func (s *Server) budget(w http.ResponseWriter, r *http.Request) bool {
-	ok, err := s.store.attempt(s.now())
+	ok, retry, err := s.store.attempt(s.now())
 	if err != nil {
 		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法验证登录频率。", "请检查数据库。")
 		return false
 	}
 	if !ok {
-		w.Header().Set("Retry-After", "600")
-		s.fail(w, r, 429, "AUTH_RATE_LIMITED", "认证尝试过于频繁。", "请等待十分钟后再试。")
+		// Report the remaining window instead of a constant, so a locked-out
+		// administrator knows when the next attempt can succeed. This reveals
+		// nothing about a password: the budget is consumed by right and wrong
+		// attempts alike, and a success clears it.
+		seconds := int((retry + time.Second - 1) / time.Second)
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		s.fail(w, r, 429, "AUTH_RATE_LIMITED", "认证尝试过于频繁。", "鉴权预算为 10 次 / 10 分钟，约 "+retryText(seconds)+"后可再试；成功认证会立即清零。已登录会话、只读页面与退出不受此预算影响，请勿反复重试。")
 		return false
 	}
 	return true
+}
+
+// retryText renders a wait in the unit an administrator can act on.
+func retryText(seconds int) string {
+	if seconds < 120 {
+		return strconv.Itoa(seconds) + " 秒"
+	}
+	return strconv.Itoa((seconds+59)/60) + " 分钟"
 }
 
 func (s *Server) authFailure(w http.ResponseWriter, r *http.Request, sess session, setup bool) {
@@ -524,6 +591,12 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 	if _, err = tx.Exec("INSERT INTO admin VALUES(1,?)", hash); err == nil {
 		_, err = tx.Exec("DELETE FROM bootstrap; DELETE FROM sessions;")
 	}
+	// The bootstrap secret and the new password were both proven, so the shared
+	// budget is cleared with the same commit: the operator's first login must
+	// not inherit the initialization attempt.
+	if err == nil {
+		err = resetAuthBudget(tx)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -535,6 +608,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 		s.event(r, "BOOTSTRAP_FILE_CLEANUP_FAILED")
 	}
 	s.cookie(w, "", 0)
+	s.clearFormCookie(w)
 	s.event(r, "ADMIN_INITIALIZED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -563,9 +637,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec("DELETE FROM sessions WHERE authenticated=1 OR token_hash=?", sess.Hash)
+	// Every row is replaced, including any anonymous row left by a build that
+	// still minted one for the login form. A successful login is the moment the
+	// stored session stops being needed at all.
+	_, err = tx.Exec("DELETE FROM sessions")
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,1,?,?)", tokenHash(token), csrf, expires, s.now().Unix())
+	}
+	// The password was proven, so the shared budget is cleared in this same
+	// transaction: ten routine logins never lock the only administrator out,
+	// and a session that failed to persist cannot leave a half-applied reset.
+	if err == nil {
+		err = resetAuthBudget(tx)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -575,6 +658,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	s.cookie(w, token, expires)
+	// The unauthenticated form token is spent: the session now carries its own
+	// CSRF value, so the double-submit cookie is dropped rather than left to
+	// outlive the form it protected.
+	s.clearFormCookie(w)
 	s.event(r, "LOGIN_SUCCEEDED")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -585,6 +672,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	s.cookie(w, "", 0)
+	s.clearFormCookie(w)
 	s.event(r, "LOGOUT_SUCCEEDED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -622,6 +710,12 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 	if err == nil {
 		_, err = tx.Exec("DELETE FROM sessions")
 	}
+	// The current password was proven and every session is about to be revoked,
+	// so the budget is cleared here: otherwise the operator's next login could
+	// hit the limit that this successful change just consumed.
+	if err == nil {
+		err = resetAuthBudget(tx)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -630,6 +724,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 		return
 	}
 	s.cookie(w, "", 0)
+	s.clearFormCookie(w)
 	s.event(r, "PASSWORD_CHANGED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -647,7 +742,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) status(w http.ResponseWriter, r *http.Request, _ session) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"web": "running", "proxy": "not_implemented", "mesh": "not_implemented", "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"web": "running", "proxy": "unknown", "mesh": "unknown", "operation_id": operation(r)})
 }
 func (s *Server) statusFragment(w http.ResponseWriter, r *http.Request, _ session) {
 	s.render(w, r, 200, Status(s.now().UTC().Format("15:04:05 UTC")))

@@ -122,14 +122,14 @@ func partialChainFailure(t *testing.T, s *store, nodeID string, revision int64, 
 
 // desiredPublishedRevision asserts that the desired snapshot of one Line is
 // exactly the latest published candidate and returns that candidate revision.
-func desiredPublishedRevision(t *testing.T, s *store, nodeID string) int64 {
+func desiredPublishedRevision(t *testing.T, s *store, nodeID string, now time.Time) int64 {
 	t.Helper()
 	tx, err := s.db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	desired, err := desiredLineDigestTx(tx, nodeID)
+	desired, err := desiredLineDigestTx(tx, nodeID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 			if err := s.prepareSubscriberSync(alice.ID, now); err != nil {
 				t.Fatal(err)
 			}
-			revision := desiredPublishedRevision(t, s, edge)
+			revision := desiredPublishedRevision(t, s, edge, now)
 			settleChainForRevision(t, s, edge, revision, now)
 			if status, code, err := s.subscriberSyncStatus(alice.ID, now); err != nil || status != subscriberSyncHealthy || code != "" {
 				t.Fatalf("confirmed status = %s/%s err=%v, want healthy", status, code, err)
@@ -232,7 +232,7 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 	if err := s.prepareSubscriberSync(alice.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	first := desiredPublishedRevision(t, s, edge)
+	first := desiredPublishedRevision(t, s, edge, now)
 	settleChainForRevision(t, s, edge, first, now)
 	partialChainFailure(t, s, edge, first, protocol.KindConfigCheck, "CONFIG_CHECK_FAILED")
 
@@ -242,7 +242,7 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 	if err := s.prepareSubscriberSync(alice.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	second := desiredPublishedRevision(t, s, edge)
+	second := desiredPublishedRevision(t, s, edge, now)
 	if second <= first {
 		t.Fatalf("newer publication revision = %d, want > %d", second, first)
 	}
@@ -312,7 +312,7 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 	if err := s.prepareSubscriberSync(alice.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	first := desiredPublishedRevision(t, s, edge)
+	first := desiredPublishedRevision(t, s, edge, now)
 	settleChainForRevision(t, s, edge, first, now)
 
 	if _, err := s.setSubscriberState(alice.ID, "deleting", now); err != nil {
@@ -321,7 +321,7 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 	if err := s.prepareSubscriberSync(alice.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	second := desiredPublishedRevision(t, s, edge)
+	second := desiredPublishedRevision(t, s, edge, now)
 	if second <= first {
 		t.Fatalf("deletion publication revision = %d, want > %d", second, first)
 	}

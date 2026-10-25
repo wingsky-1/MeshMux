@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -416,6 +417,78 @@ func stagedCandidatePath(root string, revision int64) string {
 
 func stagedConfigPath(root string, revision int64) string {
 	return rooted(root, fmt.Sprintf("%s/%020d-config.json", stagedDir, revision))
+}
+
+// stagedKeepRevisions is how many staged revisions survive a healthy
+// apply+readback: the revision that just became the LKG and the one before it.
+// The LKG candidate is read back from staged/<revision>-candidate.json, so the
+// current revision is never collected; the previous revision stays as the
+// window a revert can return to, mirroring the N-1 rule of the 11c-3 rollback
+// store (update.backupKeepConfirmed = 1). Without this bound the directory grew
+// by one candidate/config pair per applied revision, forever.
+const stagedKeepRevisions = 2
+
+// stagedRevisionSuffixes are the two files of one staged revision. They are
+// collected as a pair: a crash can leave only one of them behind, and half a
+// revision is never usable.
+var stagedRevisionSuffixes = []string{"-candidate.json", "-config.json"}
+
+// stagedRevisionName parses the revision out of a staged file name. Anything
+// else in the directory is foreign and never collected.
+func stagedRevisionName(name string) (int64, bool) {
+	for _, suffix := range stagedRevisionSuffixes {
+		digits, ok := strings.CutSuffix(name, suffix)
+		if !ok || len(digits) != 20 {
+			continue
+		}
+		revision, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil || revision < 1 {
+			return 0, false
+		}
+		return revision, true
+	}
+	return 0, false
+}
+
+// gcStagedRevisions removes the staged candidate/config pairs that fell out of
+// the retention window. current is the revision state.json now records as the
+// LKG and previous the revision it recorded before this apply (0 when there is
+// none). Both are always retained: the current revision is what loadLKGCandidate
+// and every readback read, and the previous one is the release a revert restores
+// — a Hub that jumps revisions (5 → 9) must not leave that anchor without its
+// staged candidate. Beyond them, the newest keep revisions are retained; an
+// older entry that is not a regular file (a symlink, a directory) is left alone
+// instead of being followed or removed recursively. A missing staged directory
+// is not an error: a fresh host has nothing to collect.
+func gcStagedRevisions(root string, current, previous int64, keep int) ([]string, error) {
+	if current < 1 || keep < 1 {
+		return nil, errors.New("STAGED_GC_FAILED")
+	}
+	dir := rooted(root, stagedDir)
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, errors.New("STAGED_GC_FAILED")
+	}
+	oldest := current - int64(keep) + 1
+	var removed []string
+	for _, entry := range entries {
+		revision, ok := stagedRevisionName(entry.Name())
+		if !ok || revision >= oldest || revision == current || revision == previous {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
+			return removed, errors.New("STAGED_GC_FAILED")
+		}
+		removed = append(removed, entry.Name())
+	}
+	return removed, nil
 }
 
 func temporaryCandidatePath(root string) (string, *os.File, error) {

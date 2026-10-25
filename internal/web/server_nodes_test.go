@@ -117,11 +117,21 @@ func TestPairingSingleUseExpiryAndRole(t *testing.T) {
 	if w.Header().Get("X-Operation-ID") == "" {
 		t.Fatal("missing operation id")
 	}
-	// Replay with the same one-time code is rejected.
+	// Replay with the same one-time code is rejected. The body cannot say the
+	// code was already spent: expired, unknown and consumed all look identical,
+	// so the response is not an oracle for a code's history.
 	w = pairJSON(t, app, node.ID, "edge", code)
-	requireStatus(t, w, 409)
-	if !strings.Contains(w.Body.String(), "PAIRING_CONSUMED") {
-		t.Fatalf("replay not marked consumed: %.200s", w.Body.String())
+	requireStatus(t, w, 401)
+	if !strings.Contains(w.Body.String(), "PAIRING_INVALID") {
+		t.Fatalf("replay not refused as a generic rejection: %.200s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "PAIRING_CONSUMED") || strings.Contains(w.Body.String(), "PAIRING_EXPIRED") {
+		t.Fatalf("replay body disclosed the code's history: %.200s", w.Body.String())
+	}
+	// The operator can still tell the two apart from the log, keyed by the
+	// operation_id the response carries.
+	if !strings.Contains(logs.String(), `"error_code":"PAIRING_CONSUMED"`) {
+		t.Fatal("consumed replay was not recorded for the operator")
 	}
 	// Wrong role is an explicit rejection, not a silent bind.
 	node2, code2 := createPendingNode(t, app, "out", "out-01", 9443, 2223)
@@ -130,15 +140,19 @@ func TestPairingSingleUseExpiryAndRole(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "ROLE_MISMATCH") {
 		t.Fatalf("wrong role not rejected: %.200s", w.Body.String())
 	}
-	// Expired codes cannot be revived.
+	// Expired codes cannot be revived, and their refusal is the same neutral
+	// 401 as an unknown code.
 	node3, code3 := createPendingNode(t, app, "edge", "line-03", 8444, 2224)
 	if _, err := app.store.db.Exec(`UPDATE node_pairing SET expires=0 WHERE node_id=?`, node3.ID); err != nil {
 		t.Fatal(err)
 	}
 	w = pairJSON(t, app, node3.ID, "edge", code3)
-	requireStatus(t, w, 410)
-	if !strings.Contains(w.Body.String(), "PAIRING_EXPIRED") {
+	requireStatus(t, w, 401)
+	if !strings.Contains(w.Body.String(), "PAIRING_INVALID") {
 		t.Fatalf("expiry not enforced: %.200s", w.Body.String())
+	}
+	if !strings.Contains(logs.String(), `"error_code":"PAIRING_EXPIRED"`) {
+		t.Fatal("expired attempt was not recorded for the operator")
 	}
 	// Forged Hub identity (unknown token) fails closed on every agent call.
 	w = bearerReq(app, "GET", "/api/agent/tasks", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", nil)

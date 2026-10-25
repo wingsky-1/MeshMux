@@ -29,6 +29,10 @@ type nodeCandidateFinalized struct {
 	candidateConfig []byte
 	managed         map[string]nodeManagedFile
 	stagedManaged   map[string]string
+	// repairNotice is the declared outcome of a repair whose downloaded
+	// candidate differs from the recorded one. It is empty when the repair
+	// kept the candidate the Hub offered, and for every fresh install.
+	repairNotice string
 }
 
 // nodeFinalizeCandidate selects the active candidate (the recorded one for a
@@ -48,6 +52,10 @@ func nodeFinalizeCandidate(ctx context.Context, result *InstallResult, state *In
 			activeCandidate = existing
 		}
 	}
+	// The repair decision is declared where it is taken: when the recorded
+	// candidate wins over the downloaded one, the operation records that it
+	// did not converge instead of leaving the divergence silent.
+	repairNotice := repairCandidateNotice(repair, candidate, activeCandidate)
 	if activeCandidate.Schema == "" {
 		activeCandidate = node.NewCandidateDocument(node.Candidate{
 			NodeID: cfg.NodeID, Role: cfg.Role, Revision: 1,
@@ -90,5 +98,15 @@ func nodeFinalizeCandidate(ctx context.Context, result *InstallResult, state *In
 	if err := record("stage", "candidate_validated", ""); err != nil {
 		return fail(failures.operationLog)
 	}
-	return nodeCandidateFinalized{activeCandidate: activeCandidate, candidateConfig: candidateConfig, managed: managed, stagedManaged: stagedManaged}, nil
+	if repairNotice != "" {
+		// The journal is the durable half of the declaration: an operator
+		// reading this operation later can see that the repair deliberately
+		// kept the recorded candidate, not that it forgot to apply one. The
+		// status names the event and error_code stays empty, because this
+		// repair succeeded; the stable code lives in the next_action prefix.
+		if err := record("stage", "candidate_not_converged", ""); err != nil {
+			return fail(failures.operationLog)
+		}
+	}
+	return nodeCandidateFinalized{activeCandidate: activeCandidate, candidateConfig: candidateConfig, managed: managed, stagedManaged: stagedManaged, repairNotice: repairNotice}, nil
 }

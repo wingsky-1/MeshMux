@@ -20,7 +20,6 @@ package web
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -63,62 +62,7 @@ func (s *store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, er
 		return OutEgressFacts{}, errors.New("DATABASE_UNAVAILABLE")
 	}
 	defer tx.Rollback()
-	var role string
-	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return OutEgressFacts{}, errors.New("LINE_NOT_FOUND: unknown line node")
-	}
-	if err != nil {
-		return OutEgressFacts{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	if role != "edge" {
-		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an ai egress")
-	}
-	facts := OutEgressFacts{LineID: lineID}
-	outs, err := enabledOutIDsForLineTx(tx, lineID)
-	if err != nil {
-		return OutEgressFacts{}, err
-	}
-	if len(outs) == 0 {
-		// No Out is the configured direct egress. This is the only path that
-		// is allowed to send AI traffic down the Line without an explicit
-		// administrator decision.
-		return facts, nil
-	}
-	facts.Configured = true
-	facts.OutID = outs[0]
-	// An Out that stopped reporting cannot apply or prove the authorization.
-	// The synchronization projection alone would call a confirmed chain
-	// healthy, so the offline window is checked separately and reported as
-	// OUT_OFFLINE instead of a stale healthy.
-	for _, outID := range outs {
-		offline, err := subscriberLineNodeOfflineTx(tx, outID, now)
-		if err != nil {
-			return OutEgressFacts{}, err
-		}
-		if offline {
-			facts.Code = "OUT_OFFLINE"
-			return facts, nil
-		}
-	}
-	state, code, err := lineOutEgressStatusTx(tx, lineID, now)
-	if err != nil {
-		return OutEgressFacts{}, err
-	}
-	switch state {
-	case lineEgressHealthy:
-		facts.Available = true
-		facts.Code = ""
-	case lineEgressDirect:
-		// The bindings are enabled but the projection reports direct, which
-		// cannot happen for a real enabled binding. Fail closed rather than
-		// claiming a healthy Ai path the Out never confirmed.
-		facts.Code = codeOutSyncPending
-	default:
-		facts.Available = false
-		facts.Code = firstStableCode(code, codeOutSyncPending)
-	}
-	return facts, nil
+	return outEgressFactsTx(tx, lineID, now)
 }
 
 // aiEgressPlan pairs one resolved decision with the facts it was derived from,

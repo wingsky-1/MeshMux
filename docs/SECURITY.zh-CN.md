@@ -3,9 +3,14 @@
 ## 安全边界
 
 - 外网：Caddy HTTPS 是唯一 Hub Web 入口；Web Go HTTP 服务必须以非 root 身份监听 loopback。
-- Web：单管理员（无自助注册），强密码哈希（Argon2id），服务端会话、Secure/HttpOnly/SameSite cookie，精确 Origin + CSRF 验证，身份失败限速及注销/失效。
+- Web：单管理员（无自助注册），强密码哈希（Argon2id），服务端会话、Secure/HttpOnly/SameSite cookie，精确 Origin + CSRF 验证，身份失败限速及注销/失效。认证预算是一次**成功即清零**的全局 10 次/10 分钟窗口：只有已证明的凭据能清零，错误密码永不清零，因此暴力破解成本不因成功路径降低。
+- **密码 KDF 的单槽只属于密码路由（#113 3-2）：** 进程内 `kdfSlot`（容量 1）只由 `POST /login`、`POST /setup`、`POST /password` 持有，保证同一时刻最多一个 Argon2id（64 MiB）运算。过去它包裹**所有**管理 POST，于是 `/policies/publish` 在门禁里等内核几分钟时会一直占着槽，期间创建节点、Out 绑定等无密码运算的请求被 429 拒绝——那是把内核检查的时长错记在密码成本上。现在只有真正哈希密码的三条路由经过它，槽在会话/表单/CSRF 校验通过后才获取，未认证或伪造请求不占槽；占用期间密码请求返回 `429 AUTH_KDF_BUSY` + `Retry-After`，与预算耗尽的 `AUTH_RATE_LIMITED` 分开，运维能区分“稍等”和“等窗口”。发布等长任务各自的并发约束由它们自己的守卫（revision/在途链/事务）负责，不借用 KDF 槽。
+- **登录页不为匿名表单建会话（#113 3-3）：** `/login` 与 `/setup` 过去会插入一条匿名 `sessions` 行只为保存 CSRF 值，并限制 256 条。匿名洪水丢掉 cookie 即可填满上限，之后管理员自己的登录页返回 `503 SESSION_UNAVAILABLE`——恢复访问的页面被从不认证的请求拿走。存储行从来不是“表单来自本服务”的证据。现在这两个页面只下发 `__Host-meshmux-form` 双提交 cookie（Secure/HttpOnly/Strict/host-only），值由进程内密钥签名的“过期时间 + nonce + HMAC-SHA256”组成，服务端校验签名与过期；POST 仍需精确 Origin、唯一 cookie 与同值表单字段。`sessions` 因此只保存已认证会话，匿名流量不消耗任何有界持久资源；只要管理员状态可读，登录页在匿名洪水或认证预算耗尽时仍正常渲染。代价显式接受：重启让打开的登录表单失效（重新加载即可，已登录会话不受影响），令牌不与客户端身份绑定（依赖 CSRF 不可读性与 Origin 校验，与既有双提交模型一致）；旧版本遗留的匿名行在下一次登录时随 `DELETE FROM sessions` 清除。
+- **认证预算的 DoS 取舍（显式接受）：** 全局预算不按键或 IP 分摊，持续攻击者可以短暂耗尽它，让真正的管理员暂时无法提交密码。这是为了在无法可信区分来源（Cloudflare/CDN/共享出口）时仍能限制 Argon2id 成本而付出的代价，属于**已知的可用性风险，不是缺陷**。缓解与边界：预算持久化在 SQLite，服务重启不清零；已登录会话的只读访问、页面浏览和退出不受预算影响，管理员不会因此被踢出；429 返回窗口剩余时间而不是固定等待，成功登录/改密在同一事务内清零预算；窗口从首次尝试起算，失败尝试不会延长锁定。该预算不承担抗 DDoS 职责，公网 DDoS 需由 Caddy/前置网络层处理。
 - Privilege boundary：Web API 不直接执行 root 命令；通过固定 schema/allowlist 的特权执行器或 Agent 权限边界访问 systemd、Headscale 与 sing-box；不得提供任意 Shell、下载 URL、进程参数或文件路径。Node Agent 实际为受限 root，只允许固定任务/路径/argv；独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行。不能把该 Agent 描述为 unprivileged。Agent 的 systemd capability 集合为 `CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE`；其中 `CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash，`CAP_DAC_READ_SEARCH` 用于 `ss -p` 解析非 root 进程的监听映射（无 `CAP_DAC_OVERRIDE`）。权限边界和该 capability 的真实必要性仍需 Debian 13 VM 验证，当前不宣称已证明全部权限最小。
 - Node pairing：短期一次性注册码仅首次使用，可信 TLS 验证，配对后升级为节点专属可轮换和可吊销身份，所有任务携带单调修订/超时/审计 ID。用户 CLI 的 `edge|out` 不接受 pairing-code/token flag；43 字符 code 只在 plan 与确认后从 stdin 单行读取，并只传给安装调用，不写入 argv、URL、Node config、InstallState、日志或结果输出。
+- **配对端点的预算与不可枚举（#113 3-4）：** `/api/agent/pair` 是唯一在会话存在前就消耗秘密的端点，因此自带**进程内** 20 次/分钟预算，独立于登录预算。不复用 `auth_limit` 有两条理由：匿名洪水不能花掉管理员的登录预算；存储池是 `SetMaxOpenConns(1)`，共享计数行会把每次配对排到那一条连接上。预算不按键或 IP 分摊（Hub 无法可信区分来源，按地址建表会被攻击者输入撑大），窗口从首次尝试起算、失败不延长、**配对成功即清零**（成功一次证明的是码本身，且该码一次性不可重放）；429 返回窗口剩余时间与 `PAIRING_RATE_LIMITED`，已配对身份的心跳/任务/配置端点完全不受影响。格式错误的请求在触库前被拒，不消耗预算。
+- **配对响应不是码历史的 oracle（#113 3-4）：** 未知码、已过期码与已消费码一律返回同一个 `401 PAIRING_INVALID`（同一 body 与 `stage`），因此响应无法回答“这个猜到的码曾经存在过吗、何时失效、是否已被使用”。区别只进 Hub 日志（`PAIRING_EXPIRED` / `PAIRING_CONSUMED`），凭响应携带的 `operation_id` 可查。角色不匹配仍是独立 `403 ROLE_MISMATCH`：它是调用方自身配置的事实、不涉及秘密，且运维需要它修正错角色的安装。数据库不可用与身份签发失败分别返回 `503 DATABASE_UNAVAILABLE` / `500 IDENTITY_ISSUE_FAILED`，不伪装成“码被拒绝”，以免运维去重签一个从未有问题的码。
 - Auth secrets、数据库、Headscale 身份及 REALITY 私钥保持本地 0600 root/服务账户边界，备份加密、可恢复，不在公开 Git、诊断包或通用日志中。
 
 ## Fail2ban 与端口
@@ -32,14 +37,18 @@ v2 候选携带的用户 UUID 与 REALITY 私钥属节点秘密：只经已认�
 
 发行制品版本固定并有 manifest 与 SHA-256；可信发布源、制品检验和 Host/Agent 升级操作必须绑定目标版本。下载失败、签名/哈希异常或运行状态与期望不符，禁止继续启动新配置；保留可回退版本。GitHub Actions 仅在受限工作流里发行，不在通用 PR 作业执行安装到生产主机。
 
+**同源 CLI 下载不把制品读进内存（#113 3-5）。** `/api/nodes/cli` 过去用 `io.ReadAll` 把最多 128 MiB 的制品整块读入，再在增长切片中复制，单个下载的峰值接近两倍文件大小且随并发线性叠加；Hub 常与 Line 同机，这条路径足以把管理面推进 OOM。现在改为固定 32 KiB 分块：先对打开的描述符按 `Stat` 得到的大小做一次流式 SHA-256 预检（不符仍在响应开始前返回 `503 INSTALL_ARTIFACT_CHANGED`），再 `Seek(0)` 用 `io.MultiWriter(响应, sha256)` 边发边算。第二遍摘要不符时字节已经在链路上，任何 handler 都无法收回，因此真正的强制点是安装器固定的 `sha256sum -c`；handler 记录 `INSTALL_ARTIFACT_CHANGED` 并 `panic(http.ErrAbortHandler)` 结束该响应，而不是让它以“成功”收尾。边界仍由 `Stat` 的 128 MiB 上限给出，`Stat` 之后追加的字节既不能延长响应也不能进入摘要。代价是每个下载读两次文件（本地顺序读，远小于一次网络传输），换来每下载恒定 32 KiB 缓冲。
+
 ## Node 安装与 runtime 边界
 
 Node 安装先执行配置校验和真实 preflight，再展示 plan；未通过精确确认或 `--yes`，不进入 apply。即使 `--yes` 也不能绕过 Debian 13、root 和失败检查。`--plan` 不消费 code、不调用安装事务、不写宿主。`--repair` 优先复用私有 identity，只有安装器明确要求 pairing 时才提示重新签发 code。
 
-Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，锁只在事务期间持有，不是常驻服务锁。Agent 离线或控制平面失联不会自动停止独立 kernel；恢复只尝试已有有效 LKG，恢复后必须严格 readback，失败保持 `partial` 而不是成功。
+Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，锁只在事务期间持有，不是常驻服务锁。Agent 启动等待该锁的上界是 60s（与安装器无人值守窗口一致），超过即以稳定码 `RUNTIME_LOCK_TIMEOUT` 退出，由 systemd 重启重试，而不是无限挂起；首启 bootstrap readback 的瞬时重试同样有界（复用 `agentLockTimeout` 预算且可取消），因此启动持锁时间有上界。Agent 离线或控制平面失联不会自动停止独立 kernel；恢复只尝试已有有效 LKG，恢复后必须严格 readback，失败保持 `partial` 而不是成功。
+
+启动时的 journal 恢复失败不再以非零退出交给 systemd 无限重启：可重试的宿主瞬态保留 journal、以 `recovery_required` 降级启动（动态写返回 `RECOVERY_REQUIRED`），轮询在锁内按上界重试后收敛；确定性失败（journal 损坏、LKG 候选缺失、ACL/readback 宿主漂移）以 `partial` + 稳定 `error_code` 落盘上报并移除 journal，节点保持可管理。恢复证明成功但 Hub 未看到 `applying` 时回执用 `partial` 而非 `rolled_back`，避免 `pending → rolled_back` 被 Hub 拒绝后无限重投。
 
 ## 阶段一已实现边界
 
-Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
+Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速（成功即清零，取舍见上文）、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
 
 Issue #6 已关闭，Node/Agent 边界以上文固定通道为准。Issue #7 PR-A 已合入订阅域模型（schema 4、仅哈希 Token、per-Line 安全 UUIDv4）与严格 v2 REALITY 编译器；Web 用户操作、双格式下载、跨 Line 收敛与 Hub 共存已随 PR-B/PR-C 合入（含 CI 与隔离 VM 证据），也不得据此宣称真实公网握手或客户端可用。

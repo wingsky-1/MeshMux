@@ -21,7 +21,7 @@ umask 077
 cat .local-state/bootstrap.token
 ```
 
-在页面输入该凭据和管理员密码（至少 12 个字符、最多 256 UTF-8 字节）。账号固定为 `admin`。凭据有效期 30 分钟；未初始化时重启会轮换凭据，限速计数不会重置。初始化成功会删除引导文件、关闭初始化入口并清空匿名会话，然后使用密码登录。没有公开注册、密码找回、默认密码或认证绕过开关。
+在页面输入该凭据和管理员密码（至少 12 个字符、最多 256 UTF-8 字节）。账号固定为 `admin`。凭据有效期 30 分钟；未初始化时重启会轮换凭据，限速计数不会重置。初始化成功会删除引导文件、关闭初始化入口并清空会话，然后使用密码登录。没有公开注册、密码找回、默认密码或认证绕过开关。
 
 登录后可以浏览八个导航页面、刷新本机 Web 状态，在设置中修改密码并退出。修改密码会撤销所有会话；再次登录也替换上一次登录会话。代理、订阅、Mesh 与路由页面只有明确空状态；任务/日志页显示带“模拟”标记的 SSH 预检失败示例，未读取真实 SSH 配置。
 
@@ -61,16 +61,26 @@ systemd 验证需要候选 `ExecStart` 路径存在；开发时可复制到临�
 | 密码 | x/crypto Argon2id，64 MiB / 3 次 / 4 路，16 字节随机盐、32 字节结果；固定 PHC 格式，拒绝损坏/超大成本参数 |
 | 初始化 | 256 bit 随机本地凭据，DB 只存 SHA-256，30 分钟过期，仅允许一名管理员 |
 | 会话 | 256 bit 随机令牌，DB 只存 SHA-256；独立 CSRF 值；登录旋转令牌，最长 8 小时、空闲 30 分钟 |
-| 并发登录 | 同时只保留一个管理员登录；新登录撤销旧会话。匿名会话最长 15 分钟、最多 256 条，到期时回收 |
-| POST | 包括登录/初始化，必须精确 Origin、有效会话和 CSRF；拒绝跨站、重复 Origin/表单字段、URL 表单参数、非表单 Content-Type、大于 4 KiB 的请求体 |
-| Cookie | 生产 `__Host-`、Secure、HttpOnly、Strict；重复同名 Cookie、未知/过期/已撤销令牌拒绝 |
+| 并发登录 | 同时只保留一个管理员登录；新登录撤销旧会话。`sessions` 只存已认证会话，登录/初始化表单不再写入匿名行 |
+| POST | 包括登录/初始化，必须精确 Origin、有效 CSRF；拒绝跨站、重复 Origin/表单字段、URL 表单参数、非表单 Content-Type、大于 4 KiB 的请求体 |
+| Cookie | 生产 `__Host-`、Secure、HttpOnly、Strict；重复同名 Cookie、未知/过期/已撤销令牌拒绝。登录/初始化表单另用 `__Host-meshmux-form` 双提交令牌承载 CSRF，不写入 `sessions` |
 | 未认证 | `/` 跳登录；受保护页面和 API 返回 401；静态资产、初始化/登录表单和本机 healthz 允许匿名 |
-| 限速 | 初始化、登录、改密共用持久化全局预算，10 次/10 分钟（包含成功尝试）；第 11 次返回 429 / Retry-After；一次只执行一个密码运算 |
+| 未认证表单 | 登录/初始化页只签发 15 分钟的表单令牌（`__Host-meshmux-form`，HttpOnly/Strict/进程内签名），不新建会话行，因此匿名请求无法耗尽 `sessions` 而让登录页返回 503；令牌无效/过期/重复时 POST 仍 `401 SESSION_INVALID`，CSRF 不匹配仍 `403 CSRF_REJECTED` |
+| 限速 | 初始化、登录、改密共用持久化全局预算，10 次/10 分钟；窗口从首次尝试起算，服务重启不清零；第 11 次返回 429 + 窗口剩余等待时间。初始化成功、登录成功、改密成功在同一事务内清零预算——只有已证明的凭据能清零，错误密码永不清零，因此 10 次成功登录不会锁住唯一管理员；一次只执行一个密码运算 |
+| 密码运算槽 | 进程内单槽只由 `POST /login`、`POST /setup`、`POST /password` 持有，保证同一时刻最多一个 Argon2id（64 MiB）运算；占用时密码请求返回 `429 AUTH_KDF_BUSY` + `Retry-After: 2`。其他管理 POST（发布、建节点、Out 绑定、订阅写入等）不占此槽，因此长任务进行中它们不会被拒；槽在会话/表单/CSRF 校验通过后才获取 |
+| 配对限速 | `/api/agent/pair` 用**独立的进程内**预算（20 次/分钟，窗口从首次尝试起算、失败不延长、配对成功即清零），第 21 次返回 429 `PAIRING_RATE_LIMITED` + `Retry-After`。它不共用 `auth_limit`：匿名洪水不能花掉登录预算，也不占用 `SetMaxOpenConns(1)` 的唯一连接（预算判定本身零数据库访问）。格式错误的请求在触库前被拒，不计费。配对成功后已配发身份的心跳/任务/配置端点不受任何配对预算影响 |
+| 配对拒绝 | 未知、过期、已消费的码一律 `401 PAIRING_INVALID`（相同 body），响应不是码历史的 oracle；`PAIRING_EXPIRED`/`PAIRING_CONSUMED` 只进 `web_event` 日志，凭 `operation_id` 可查。角色不匹配仍是 `403 ROLE_MISMATCH`；数据库不可用为 `503 DATABASE_UNAVAILABLE`，身份签发失败为 `500 IDENTITY_ISSUE_FAILED`，都不伪装成码被拒绝 |
 | 失败封闭 | 数据库故障时不会跳过认证或限速，返回 503；退出失败不声称会话已经撤销 |
 | 响应 | CSP 禁止外部资源/内联脚本/eval，no-store、same-origin Referrer（不向外站发送）、nosniff、frame-ancestors none；templ 转义文本 |
 | 日志 | slog JSON 白名单字段；不记录 URL、请求体、Header、Cookie、密码、引导凭据或原始 HTTP 错误；服务日志 UTC |
 
-全局限速适合单管理员，不依赖可能伪造或共享的 IP。代价是持续攻击者可以暂时耗尽登录预算；已经登录的只读访问和退出不受该预算影响。匿名表单会话数量受限，持续请求可能导致新表单短时返回 503，过期后回收；不是公网 DDoS 防护承诺。
+全局限速适合单管理员，不依赖可能伪造或共享的 IP。代价是持续攻击者可以暂时耗尽登录预算；已经登录的只读访问和退出不受该预算影响。登录/初始化表单不占用任何持久行，所以匿名请求不会让登录页本身变成 503；它不是公网 DDoS 防护承诺。
+
+**登录页不再为匿名表单建会话（#113 3-3）。** 过去 `/login` 和 `/setup` 会往 `sessions` 插一条匿名行只为了存 CSRF 值，并限制最多 256 条。匿名洪水只要丢掉 cookie 就能填满这个上限，之后管理员自己的登录页收到 `503 SESSION_UNAVAILABLE`——用来恢复访问的页面被从不认证的请求拿走了。会话行本来就不是“表单来自本服务”的证据，随机令牌才是：现在表单改用 `__Host-meshmux-form` 双提交 cookie（Secure、HttpOnly、Strict、host-only），值由进程内密钥签名的“过期时间 + nonce + HMAC”组成，POST 仍需精确 Origin、单个 cookie 与同值表单字段。`sessions` 因此只保存已认证会话，匿名流量无法消耗任何有界资源。代价是重启会让打开的登录表单失效（重新加载页面即可，已登录会话不受影响），且令牌不与客户端身份绑定——攻击者无法读取它（no-store、same-origin referrer、CSP），也无法在不持有密钥时伪造它。旧版本遗留的匿名行会被下一次登录的 `DELETE FROM sessions` 清掉。
+
+**预算成功即清零是显式取舍（#113 3-1）。** 每天正常登录或改密的次数远低于 10 次，成功清零保证管理员不会被自己的正常操作锁在门外，也让 429 恢复路径可执行：成功一次就立即恢复，不必等满十分钟。反过来的代价必须说明：攻击者若确实知道密码，第一次成功就会拿到新预算；但这等同于已经取得管理员凭据，此时限速已不是防线。对**不知道密码**的攻击者，清零不改变任何成本——只有错误尝试消耗配额、永不重置，故暴力破解仍被 10 次/10 分钟、从首次尝试起算的窗口限制。清零与凭据验证的写入在同一事务提交，失败不会留下“半重置”状态，也不会把会话失败误报成成功。429 页面给出剩余等待时间与“已登录会话/只读页面/退出不受影响”，不提示密码是否正确。这套机制是应用层 KDF 成本边界，不是抗 DDoS 承诺。
+
+**配对预算单独成账是显式取舍（#113 3-4）。** `/api/agent/pair` 在任何会话存在前就消耗秘密，所以它既不能落在登录预算上，也不能落在 `SetMaxOpenConns(1)` 的那条连接上：前者让匿名洪水直接锁住管理员登录，后者让每次配对排进 Hub 唯一的数据库连接。实现因此是进程内 20 次/分钟（窗口从首次尝试起算、失败不延长、配对成功即清零），判定路径零数据库访问，`TestPairingFloodNeverContendsForTheSingleConnection` 在持有唯一连接时仍能拿到 429 来固定这一点。代价与登录预算同款：持续攻击者可以短暂拒绝真实配对；窗口只有一分钟且 429 给出剩余时间，服务重启会重置计数（远端请求无法触发重启）。代价是显式接受的可用性风险，不是缺陷。三个“这个码不能用”的答案合并为同一个 `401 PAIRING_INVALID`，因为分开返回会让端点变成码历史的 oracle（曾存在/何时过期/已被使用）；日志保留精确原因，凭 `operation_id` 可查。
 
 应用的本机边界信任服务账户、root 和本机反代。不能以此抵御已控制主机或同一服务账户的攻击者。没有通用 Shell、任意文件操作或远程进程控制入口。
 
@@ -120,9 +130,11 @@ sqlite3 /path/to/private-restored/meshmux.db \
 
 ## 日志和健康检查
 
-`GET /healthz` 仅返回本机 Web/数据库探针 `{"status":"ok"}`；DB 不可用返回 503，不包含版本、凭据或主机信息，Caddy 候选拒绝公网访问。登录后 `GET /api/status` 返回真实 Web 状态及明确的 `not_implemented` 业务状态。
+`GET /healthz` 仅返回本机 Web/数据库探针 `{"status":"ok"}`；DB 不可用返回 503，不包含版本、凭据或主机信息，Caddy 候选拒绝公网访问。登录后 `GET /api/status` 返回真实 Web 状态，代理与 Mesh 等未实测业务状态按 OBSERVABILITY 标为 `unknown` / `pending-verification`。
 
-响应带 `X-Operation-ID`。失败页面/JSON 包含 `operation_id`、`stage`、稳定 `error_code` 和下一步建议。常见错误包括 `AUTH_REQUIRED`、`SESSION_INVALID`、`CSRF_REJECTED`、`ORIGIN_REJECTED`、`HOST_REJECTED`、`FORM_INVALID`、`AUTH_FAILED`、`AUTH_RATE_LIMITED`、`DATABASE_UNAVAILABLE`。日志也记录初始化、登录、退出、改密完成事件；原始数据库/请求内容不会写入日志。启动期的本地配置/权限错误保留原因以便管理员定位，不包含凭据值。
+响应带 `X-Operation-ID`。失败页面/JSON 包含 `operation_id`、`stage`、稳定 `error_code` 和下一步建议。常见错误包括 `AUTH_REQUIRED`、`SESSION_INVALID`、`CSRF_REJECTED`、`ORIGIN_REJECTED`、`HOST_REJECTED`、`FORM_INVALID`、`AUTH_FAILED`、`AUTH_RATE_LIMITED`、`AUTH_KDF_BUSY`、`DATABASE_UNAVAILABLE`。日志也记录初始化、登录、退出、改密完成事件；原始数据库/请求内容不会写入日志。启动期的本地配置/权限错误保留原因以便管理员定位，不包含凭据值。
+
+`AUTH_KDF_BUSY` 与 `AUTH_RATE_LIMITED` 是两件事（#113 3-2）：前者表示另一个密码运算正占着进程内的单槽，只影响登录/初始化/改密，几秒后重试即可；后者是持久化全局预算被错误密码耗尽，需等窗口剩余时间。发布、建节点、Out 绑定等不哈希密码的 POST 既不受前者影响，也不消耗后者。
 
 ## 订阅同步的 offline 码表
 

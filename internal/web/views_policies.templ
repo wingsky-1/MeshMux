@@ -35,7 +35,7 @@ templ PoliciesPage(p pageData, v policyPageView) {
 						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
 					}
 					<link rel="stylesheet" href="/assets/policies.css"/>
-					<p class="subtitle">路由策略分两层：客户端层决定设备上的流量走向，服务端层决定 Line 上的转发走向。每层从上到下匹配，先命中先生效。</p>
+					<p class="subtitle">路由策略分两层：客户端层决定设备上的流量走向，服务端层决定 Line 上的转发走向。每层从上到下匹配，先命中先生效。当前版本只有服务端层会下发到 Line；客户端层仅做预览与门禁校验。</p>
 					if v.Draft {
 						<div class="notice">当前没有可用的真实策略数据（需要已纳管 Line 与已收敛的 Mesh 订阅）；以下为设计示例，不写入配置，也不发布策略。</div>
 					}
@@ -61,8 +61,9 @@ templ PoliciesPage(p pageData, v policyPageView) {
 
 					<div class="policy-split">
 						<section class="panel">
-							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ policyCountLabel(len(v.Client), v.ClientDefault) }</span></div>
-							<p class="muted">客户端层规则决定设备配置中的分流。设备只有在启用 TUN / auto_route 时才会导入这些规则；未启用时设备只使用代理订阅本身，避免代理回环。本页展示已激活的客户端策略；尚未激活时按默认意图预览。发布走 `POST /policies/publish`：先渲染并交 sing-box / Mihomo 门禁，再下发；客户端层只做门禁，订阅下载时按同一 active 版本渲染。</p>
+							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ policyPreviewLabel(len(v.Client), v.ClientDefault) }</span></div>
+							<p class="muted">客户端层规则决定设备端是否分流，但当前版本<b>没有消费者</b>：标准订阅下载由固定导出器按 Line 与凭据生成，不读取客户端层，也不包含这些规则；发布客户端层只会渲染文档并交 sing-box / Mihomo 门禁，用于校验策略本身是否可渲染，不生成节点候选、不改变任何订阅字节。</p>
+							<p class="muted">因此本页展示已激活的客户端策略时只作为预览；尚未激活时按默认意图预览。需要真正改变设备流量时，当前版本应使用服务端层。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Client {
 									<li>
@@ -106,7 +107,7 @@ templ PoliciesPage(p pageData, v policyPageView) {
 						</section>
 						<section class="panel">
 							<div class="panel-heading"><h2>命中说明</h2><span class="badge">只读查询</span></div>
-							<p class="muted">输入域名或 IP，按“规则 → 动作 → 实际出口 → DNS”四段链展示第一条命中的客户端规则；未命中任何规则时展示兜底。geo 与远端 ruleset 需要已锁定的数据，本页不猜测结果。</p>
+							<p class="muted">输入域名或 IP，按“规则 → 动作 → 实际出口 → DNS”四段链展示第一条命中的客户端规则；未命中任何规则时展示兜底。这是客户端层预览的命中说明，不改变订阅内容。geo 与远端 ruleset 需要已锁定的数据，本页不猜测结果。</p>
 							<form class="policy-explain" method="get" action="/policies/explain">
 								<label for="policy_target">目标域名或 IP</label>
 								<input id="policy_target" name="target" type="text" maxlength="253" value={ v.Target } placeholder="news.example.invalid"/>
@@ -136,7 +137,7 @@ templ PoliciesPage(p pageData, v policyPageView) {
 
 					<section class="panel mobile-loop">
 						<div class="panel-heading"><h2>移动端提示</h2><span class="badge">防回环</span></div>
-						<p class="hint">设备未开启 TUN / auto_route 时不会导入客户端层分流规则，仅使用代理订阅本身，因此不会出现代理回环。Out 未配置或故障时，下发配置不会生成引用 Out 的规则，避免产生无法启动的无效配置。</p>
+						<p class="hint">标准订阅只包含 Line 与凭据，不含客户端层规则，因此导入后不会出现代理回环；客户端层分流需等消费该层的下发路径落地后才生效。Out 未配置或故障时，下发配置不会生成引用 Out 的规则，避免产生无法启动的无效配置。</p>
 					</section>
 
 					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer>

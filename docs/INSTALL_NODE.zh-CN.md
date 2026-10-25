@@ -95,6 +95,7 @@ install out
 
 - 有可用持久 identity 时，repair 不要求旧配对码，也不会重复消费 code。
 - repair 在成功复用 identity 后读取 Hub metadata 和既有 candidate，并重新执行本地检查、文件校验和数据平面恢复。
+- **repair 不把节点拉齐到本次下载的候选。** 它保留已记录的 active candidate 与对应的已校验编译配置：候选的落地属于 Agent 的 `config.apply → config.readback` 链，并由 11c-3 的确认/回退记录锚定；安装器若在 repair 中悄悄换到另一个 revision，这些锚点就会指向宿主并未运行的发行。该决定是写死的，不是遗漏：当下载候选与记录候选不同时，结果以 `installed`、空 `error_code` 结束，并在 `next_action` 中以稳定码 `REPAIR_CANDIDATE_NOT_CONVERGED` 点名保留的 revision 与未应用的候选，`events.jsonl` 同时记 `stage/candidate_not_converged`。要真正换配置，请用 Web 的固定四任务链，而不是 repair。
 - 只有安装器返回稳定 `PAIRING_CODE_REQUIRED` 或 `PAIRING_REQUIRED` 时，CLI 才提示管理员到 Hub Web 重签，并从 stdin 读取新 code；第二次调用继续使用同一个 operation ID。
 - 缺少 identity 的 repair 返回 `IDENTITY_MISSING`，不会把已消费的旧 code 当成可重复凭据。
 - 已有有效 LKG 的 repair 不为了“修布局”而覆盖 LKG；只有候选与已编译 active config 一致且文件权限正确时，LKG 才被视为有效。
@@ -126,7 +127,7 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 | `/var/lib/meshmux-agent/identity.json` | 节点专属私有 identity |
 | `/var/lib/meshmux-agent/state.json` | Agent runtime 状态与 LKG |
 | `/var/lib/meshmux-agent/active-candidate.json` | 当前 active candidate 元数据 |
-| `/var/lib/meshmux-agent/staged/` | runtime 暂存目录 |
+| `/var/lib/meshmux-agent/staged/` | runtime 暂存目录（按 revision 保留 candidate/config；健康 apply+readback 后只保留当前 revision、上一 revision 与最近窗口，失败/回退的暂存不回收） |
 | `/var/lib/meshmux-singbox/config.json` | active sing-box 配置 |
 | `/var/lib/meshmux-agent/out.nft` | Out ACL 脚本 |
 | `/etc/systemd/system/meshmux-agent.service` | Agent 服务 |
@@ -141,7 +142,9 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 
 `InstallState.ManagedFiles` 记录的是本次 MeshMux 静态受管文件的 SHA-256；identity、active candidate、active config 和 runtime LKG 属于受保护的动态路径，不作为普通静态 ledger 项。已有第三方文件、symlink、未经 ledger 记录的非 MeshMux 路径、其他 nftables 表都不会被自动接管。
 
-`runtime.lock` 只在动态写事务期间持有，不伴随 Agent 进程生命周期。Agent 离线不会自动停止独立运行的 `meshmux-sing-box.service`，也不会以“离线”为由删除 identity、candidate 或配置。
+`runtime.lock` 只在动态写事务期间持有，不伴随 Agent 进程生命周期。Agent 离线不会自动停止独立运行的 `meshmux-sing-box.service`，也不会以“离线”为由删除 identity、candidate 或配置。Agent 启动对该锁的等待有 60s 上界：超过后以稳定码 `RUNTIME_LOCK_TIMEOUT` 退出，由 systemd 重启重试；首启 bootstrap readback 的瞬时重试同样有界且可取消，预算复用 `agentLockTimeout`。
+
+Agent 启动发现未完成的 apply journal 时，恢复失败**不会**退出进程（否则 systemd 会把它拖进无限重启，且失败回执从未落盘）：可重试的宿主瞬态保留 journal，以 `recovery_required` 降级启动，`config.check`/`config.stage`/`config.apply` 以稳定码 `RECOVERY_REQUIRED` 拒绝动态写，轮询在 `runtime.lock` 内按上界重试；确定性失败（journal 损坏、缺少有效 LKG、LKG 候选缺失、ACL/readback 宿主漂移）以 `partial` + 稳定 `error_code` 落盘并上报后收敛、移除 journal，节点仍可被后续链修复。在这条恢复路径上，只有 state 无法持久化时才拒绝启动。
 
 ## partial、failed 与有限恢复
 
@@ -153,7 +156,7 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 - rollback 本身失败、恢复不完整或 readback 不一致时仍是 `partial`，绝不提升为 success。
 - repair 与回滚不自动恢复 nftables 表：快照只覆盖受管文件，`nft -f` 应用过的 Out 表失败时保持 fail closed（unit 停掉、文件保留），由管理员按恢复指引手动处理，不做自动 `nft delete/flush`。
 
-Agent runtime 的 `config.check`、`config.stage`、`config.apply`、`config.readback` 使用固定任务类型，params 只允许 `revision`。apply 在 runtime lock 内校验暂存配置、执行 `sing-box check`、原子替换、受控重启并严格读回进程、listener、配置 hash 和 binary hash。只有存在有效 LKG 时才尝试恢复；恢复后仍要求完整 readback，失败则报告 `partial`。plan 或 check 成功不代表 apply 成功。
+Agent runtime 的 `config.check`、`config.stage`、`config.apply`、`config.readback` 使用固定任务类型，params 只允许 `revision`。apply 在 runtime lock 内校验暂存配置、执行 `sing-box check`、原子替换、受控重启并严格读回进程、listener、配置 hash 和 binary hash。只有存在有效 LKG 时才尝试恢复；恢复后仍要求完整 readback，失败则报告 `partial`。启动恢复失败同样以 `partial` 落盘并上报，而不是退出让 systemd 重启循环；未被 Hub 看到 `applying` 的 journal 用 `partial`（而非 `rolled_back`）作为回执，因为 Hub 的 pending 行只接受前者。plan 或 check 成功不代表 apply 成功。
 
 ## Web 固定操作与离线状态
 

@@ -45,8 +45,6 @@ const (
 	CodeKeySecretInvalid = "MESH_ENROLLMENT_KEY_SECRET_INVALID"
 	// CodeKeyGenerationFailed: crypto/rand was unavailable, so no key exists.
 	CodeKeyGenerationFailed = "MESH_ENROLLMENT_KEY_GENERATION_FAILED"
-	// CodeKeyDuplicate: the same key record id or digest appears twice.
-	CodeKeyDuplicate = "MESH_ENROLLMENT_KEY_DUPLICATE"
 	// CodeKeyAlreadyActive: an unexpired issued key already exists for the
 	// device, so a second one would break the single-active rule.
 	CodeKeyAlreadyActive = "MESH_ENROLLMENT_KEY_ALREADY_ACTIVE"
@@ -296,39 +294,4 @@ func (k EnrollmentKey) Revoke() (EnrollmentKey, error) {
 	default:
 		return k, failure(CodeKeyStateInvalid, "state must be issued, consumed, expired or revoked")
 	}
-}
-
-// ValidateKeySet enforces the set-level rules a persistence layer must
-// reproduce: every record valid, no repeated record id or digest, and at most
-// one issued key per device (the single-active rule). Consumed, expired and
-// revoked keys never block a new issue. A lapsed key that is still recorded as
-// issued does block one, so the caller retires it with Expire first: the
-// alternative would be to let an unusable record silently coexist with a live
-// key.
-func ValidateKeySet(keys []EnrollmentKey) error {
-	ids := make(map[string]struct{}, len(keys))
-	hashes := make(map[string]struct{}, len(keys))
-	active := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		if err := key.Validate(); err != nil {
-			return err
-		}
-		if _, ok := ids[key.ID]; ok {
-			return failure(CodeKeyDuplicate, "each key record id may appear once")
-		}
-		ids[key.ID] = struct{}{}
-		digest := string(key.Hash)
-		if _, ok := hashes[digest]; ok {
-			return failure(CodeKeyDuplicate, "each key digest may appear once")
-		}
-		hashes[digest] = struct{}{}
-		if key.State != KeyIssued {
-			continue
-		}
-		if _, ok := active[key.DeviceID]; ok {
-			return failure(CodeKeyAlreadyActive, "a device may hold only one issued enrollment key")
-		}
-		active[key.DeviceID] = struct{}{}
-	}
-	return nil
 }

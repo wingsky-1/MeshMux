@@ -23,8 +23,17 @@ const (
 	// agentLockTimeout bounds one poll cycle's wait for the shared runtime
 	// lock. It is well under the 30s poll interval, so a lock held by an
 	// install/repair costs one retry and never delays the next heartbeat
-	// (spec §4.9).
+	// (spec §4.9). The startup readback retry reuses this same budget: while
+	// the lock is held for bootstrap, the Agent must not wait longer than one
+	// contended poll cycle.
 	agentLockTimeout = 5 * time.Second
+	// runtimeStartupLockTimeout bounds the startup wait for that same lock. It
+	// is the installer's own unattended window (install.installLockWait, 60s),
+	// so startup survives exactly one ordinary install/repair and no more; a
+	// host still holding the lock after that needs an operator, not a longer
+	// wait. Expiry is RUNTIME_LOCK_TIMEOUT, never RUNTIME_BUSY: startup has no
+	// next poll to be redelivered on (spec §4.9 / D7).
+	runtimeStartupLockTimeout = 60 * time.Second
 )
 
 // CommandRunner is the fixed process boundary used by the Agent. Implementors
@@ -87,10 +96,33 @@ func AcquireRuntimeLock(ctx context.Context, root string) (io.Closer, error) {
 }
 
 // acquireRuntimeLock takes the shared lock. With wait=false a busy lock is
-// RUNTIME_BUSY at once; with wait=true it polls until ctx ends or, when timeout
-// is positive, until that bound expires (also RUNTIME_BUSY). The Agent passes
-// agentLockTimeout so a contended lock costs one poll cycle at most.
+// RUNTIME_BUSY at once; with wait=true it polls until ctx ends
+// (RUNTIME_LOCK_CANCELLED) or, when timeout is positive, until that bound
+// expires (RUNTIME_BUSY). The Agent passes agentLockTimeout for a poll cycle, so
+// a contended lock costs one cycle at most.
 func acquireRuntimeLock(ctx context.Context, root string, wait bool, timeout time.Duration) (io.Closer, error) {
+	return acquireRuntimeLockWithin(ctx, root, wait, timeout, "RUNTIME_BUSY")
+}
+
+// acquireStartupRuntimeLock takes the shared lock for startup, where the wait is
+// bounded by runtimeStartupLockTimeout. Exhausting it is RUNTIME_LOCK_TIMEOUT,
+// not RUNTIME_BUSY: a poll cycle is redelivered on the next poll, while a
+// startup that could not take the lock has no next cycle and must name its own
+// refusal. The installer's own lock-wait policy is untouched (spec §4.9 / D7).
+func acquireStartupRuntimeLock(ctx context.Context, root string, timeout time.Duration) (io.Closer, error) {
+	lock, err := acquireRuntimeLockWithin(ctx, root, true, timeout, "RUNTIME_LOCK_TIMEOUT")
+	if err != nil && errorCode(err) == "RUNTIME_LOCK_TIMEOUT" {
+		// The exit line names the refusal itself: there is no task receipt to
+		// carry it and no next poll to retry on.
+		return nil, stableError("RUNTIME_LOCK_TIMEOUT")
+	}
+	return lock, err
+}
+
+// acquireRuntimeLockWithin takes the lock, reporting expiryCode when a positive
+// timeout runs out. Every attempt is LOCK_NB, so a wedged holder can never block
+// a caller past its own bound.
+func acquireRuntimeLockWithin(ctx context.Context, root string, wait bool, timeout time.Duration, expiryCode string) (io.Closer, error) {
 	path := rooted(root, RuntimeLockPath)
 	if err := ensureNoSymlinkAncestors(root, path); err != nil {
 		return nil, errors.New("RUNTIME_LOCK_UNSAFE")
@@ -131,7 +163,7 @@ func acquireRuntimeLock(ctx context.Context, root string, wait bool, timeout tim
 		}
 		if !deadline.IsZero() && !time.Now().Before(deadline) {
 			file.Close()
-			return nil, errors.New("RUNTIME_BUSY")
+			return nil, errors.New(expiryCode)
 		}
 		poll := 50 * time.Millisecond
 		if !deadline.IsZero() {
@@ -261,6 +293,7 @@ func RunCommand(args []string, stderr io.Writer, options ...RunOption) int {
 		"AGENT_IDENTITY_MISMATCH",
 		"AGENT_EXECUTABLE_MISMATCH",
 		"AGENT_KERNEL_MISMATCH",
+		"RUNTIME_LOCK_TIMEOUT",
 		"RUNTIME_STATE_UNSAFE",
 	} {
 		if errors.Is(err, stableError(stable)) {
@@ -361,7 +394,7 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer, options []RunOptio
 	for _, option := range options {
 		option(&runtimeOpts)
 	}
-	agentRuntime, err := NewRuntime(cfg, identity, runtimeOpts)
+	agentRuntime, err := NewRuntimeContext(ctx, cfg, identity, runtimeOpts)
 	if err != nil {
 		return err
 	}

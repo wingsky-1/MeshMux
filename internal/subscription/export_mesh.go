@@ -22,6 +22,18 @@ import (
 //	endpoint. Everything else uses the selector over the proxy Lines, so a
 //	tailnet destination can never be sent through a proxy Line.
 //
+// The document belongs to one purpose. MeshPurposeProxyMesh is the only
+// renderable one; a mesh_only or subnet_router device keeps its stock Tailscale
+// client and is refused here rather than handed a document that would claim a
+// proxy subscription or a route advertisement it does not have.
+//
+// The endpoint never accepts subnet routes advertised by other nodes
+// (accept_routes is pinned false by meshPurposeDocumentFor). The document has no
+// TUN and one Tailscale rule keyed by the CGNAT prefixes, so an accepted LAN
+// prefix would have no egress path; client-side remote-LAN intent is a #10
+// decision, and a subnet_router keeps the stock Tailscale client, which owns
+// its own --accept-routes choice.
+//
 // The auth key is a one-shot Headscale pre-auth key. It is part of the input
 // only, never a field of MeshConfigModel, never persisted by this package and
 // never logged. The renderer is pure: the caller mints the key, renders once,
@@ -66,7 +78,57 @@ const (
 	// CodeMeshPolicyInvalid: a policy-supplied tailnet prefix is not one
 	// canonical CIDR network.
 	CodeMeshPolicyInvalid = "EXPORT_MESH_POLICY_INVALID"
+	// CodeMeshPurposeUnsupported: the device purpose is missing or is not
+	// proxy_mesh. Only a proxy_mesh device combines a proxy subscription with a
+	// Mesh endpoint; a mesh_only device uses a stock Tailscale client and a
+	// subnet_router advertises LAN prefixes, so handing either one this
+	// document would state a proxy subscription or a route advertisement the
+	// device does not have.
+	CodeMeshPurposeUnsupported = "EXPORT_MESH_PURPOSE_UNSUPPORTED"
 )
+
+// MeshPurpose is the stored Mesh device purpose an export is rendered for.
+// internal/mesh owns the values, but that package imports this one, so the
+// caller converts its purpose to this type instead of the exporter importing
+// the domain.
+type MeshPurpose string
+
+const (
+	// MeshPurposeProxyMesh is the only renderable purpose.
+	MeshPurposeProxyMesh MeshPurpose = "proxy_mesh"
+	// MeshPurposeMeshOnly keeps the stock Tailscale client.
+	MeshPurposeMeshOnly MeshPurpose = "mesh_only"
+	// MeshPurposeSubnetRouter advertises LAN prefixes through the stock client.
+	MeshPurposeSubnetRouter MeshPurpose = "subnet_router"
+)
+
+// meshPurposeDocument is what one device purpose means for the rendered
+// document. It exists so the exporter never carries a literal whose meaning
+// depends on the caller: a purpose either has a profile here or is refused.
+type meshPurposeDocument struct {
+	// acceptRoutes is the tailscale endpoint's accept_routes value.
+	acceptRoutes bool
+}
+
+// meshPurposeDocumentFor returns the document contract of one purpose.
+func meshPurposeDocumentFor(purpose MeshPurpose) (meshPurposeDocument, error) {
+	switch purpose {
+	case MeshPurposeProxyMesh:
+		// Pinned false, and documented rather than incidental (FEATURES
+		// "单 VPN"): 9c renders no TUN and its only Tailscale rule matches the
+		// tailnet CGNAT prefixes, so a subnet route accepted from another node
+		// would have no egress path. Remote-LAN intent for this document is a
+		// #10 decision; until it exists the document says it does not accept
+		// peer routes instead of accepting traffic it cannot carry.
+		return meshPurposeDocument{acceptRoutes: false}, nil
+	case MeshPurposeMeshOnly, MeshPurposeSubnetRouter:
+		return meshPurposeDocument{}, errors.New(CodeMeshPurposeUnsupported +
+			": only proxy_mesh renders a device document; this purpose keeps the stock Tailscale client")
+	default:
+		return meshPurposeDocument{}, errors.New(CodeMeshPurposeUnsupported +
+			": the device purpose is required and must be proxy_mesh")
+	}
+}
 
 // MeshPolicy is the client-side routing policy of one mesh configuration. Its
 // zero value is the 9c policy: the two built-in tailnet ranges are routed to
@@ -92,6 +154,10 @@ type MeshDeviceInput struct {
 	// NodeName is accepted as an alias for Hostname so callers can pass the
 	// stored device field directly. Hostname wins when both are set.
 	NodeName string
+	// Purpose is the stored device purpose. It is required and decides which
+	// document, if any, can be rendered; a zero value is refused rather than
+	// assumed to be proxy_mesh.
+	Purpose MeshPurpose
 	// ControlURL is the exact Headscale HTTPS origin.
 	ControlURL string
 	// HeadscaleOrigin is accepted as an alias for ControlURL.
@@ -138,10 +204,13 @@ type MeshConfigModel struct {
 
 // NewMeshConfigModel validates the non-secret half of a mesh export and
 // returns the view model. It performs no I/O and mints nothing; the Web layer
-// calls it before CreatePreAuthKey, so an invalid subscriber, Line set or
-// control URL fails with zero Headscale key creations.
+// calls it before CreatePreAuthKey, so an unsupported purpose, invalid
+// subscriber, Line set or control URL fails with zero Headscale key creations.
 func NewMeshConfigModel(input MeshDeviceInput, policies ...MeshPolicy) (MeshConfigModel, error) {
 	input = input.normalized()
+	if _, err := meshPurposeDocumentFor(input.Purpose); err != nil {
+		return MeshConfigModel{}, err
+	}
 	policy := meshPolicyFor(input, policies)
 	prefixes, err := meshPolicyPrefixes(policy)
 	if err != nil {
@@ -174,27 +243,19 @@ func NewMeshConfigModel(input MeshDeviceInput, policies ...MeshPolicy) (MeshConf
 	}, nil
 }
 
-// BuildMeshConfigModel is the descriptive alias of NewMeshConfigModel used by
-// callers that name the view-first step explicitly.
-func BuildMeshConfigModel(input MeshDeviceInput, policies ...MeshPolicy) (MeshConfigModel, error) {
-	return NewMeshConfigModel(input, policies...)
-}
-
-// ValidateMeshDevice checks the non-secret half of a mesh export without
-// requiring the one-shot auth key. The Web layer uses it before CreatePreAuthKey.
-func ValidateMeshDevice(input MeshDeviceInput, policies ...MeshPolicy) error {
-	_, err := NewMeshConfigModel(input, policies...)
-	return err
-}
-
 // ExportMeshDevice renders one deterministic sing-box 1.14.3 client document
 // for one proxy+mesh device. The output is byte-identical for the same input.
+// A device of any other purpose is refused with CodeMeshPurposeUnsupported.
 //
 // The optional policy argument is accepted so a caller can supply the tailnet
 // ranges explicitly; omitting it uses the zero-value 9c policy (and
 // MeshDeviceInput.Policy when that is set).
 func ExportMeshDevice(input MeshDeviceInput, policies ...MeshPolicy) ([]byte, error) {
 	input = input.normalized()
+	purpose, err := meshPurposeDocumentFor(input.Purpose)
+	if err != nil {
+		return nil, err
+	}
 	model, err := NewMeshConfigModel(input, policies...)
 	if err != nil {
 		return nil, err
@@ -225,7 +286,7 @@ func ExportMeshDevice(input MeshDeviceInput, policies ...MeshPolicy) ([]byte, er
 			AuthKey:      input.AuthKey,
 			ControlURL:   model.ControlURL,
 			Hostname:     model.Hostname,
-			AcceptRoutes: false,
+			AcceptRoutes: purpose.acceptRoutes,
 			Ephemeral:    false,
 		}},
 		Route: meshClientRoute{

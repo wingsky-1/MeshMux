@@ -49,6 +49,7 @@ func meshTestInput(t *testing.T) MeshDeviceInput {
 		DeviceID:    "0123456789abcdef0123456789abcdef",
 		DisplayName: "alice-iphone",
 		Hostname:    "mesh-alice-iphone",
+		Purpose:     MeshPurposeProxyMesh,
 		ControlURL:  "https://headscale.example.invalid",
 		AuthKey:     "hskey-auth-example-once",
 		Lines:       []Line{line},
@@ -101,6 +102,68 @@ func TestExportMeshDeviceUsesOnly1413EndpointFields(t *testing.T) {
 		if strings.Contains(string(body), `"`+forbidden+`"`) {
 			t.Fatalf("mesh document contains TUN key %q", forbidden)
 		}
+	}
+}
+
+// TestExportMeshDeviceAcceptRoutesFollowsPurpose pins #113 2-5 rather than the
+// literal it replaced. The proxy_mesh document is the only renderable one and
+// states accept_routes=false on purpose: 9c has no TUN and its only Tailscale
+// rule matches the tailnet prefixes, so a subnet route accepted from a peer
+// would have no egress path (CLIENT_CAPABILITIES "不含 SSID 与远程家庭网段").
+// A mesh_only or subnet_router device keeps the stock Tailscale client, which
+// owns its own route choice, so the exporter refuses those purposes instead of
+// rendering a document that claims a proxy subscription or an advertisement it
+// does not have.
+func TestExportMeshDeviceAcceptRoutesFollowsPurpose(t *testing.T) {
+	input := meshTestInput(t)
+	if input.Purpose != MeshPurposeProxyMesh {
+		t.Fatalf("proxy_mesh is the renderable purpose, fixture says %q", input.Purpose)
+	}
+	body, err := ExportMeshDevice(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := decodeMeshDocument(t, body)["endpoints"].([]any)[0].(map[string]any)
+	if acceptRoutes, ok := endpoint["accept_routes"].(bool); !ok || acceptRoutes {
+		t.Fatalf("proxy_mesh accept_routes = %#v, want the pinned false of 9c", endpoint["accept_routes"])
+	}
+
+	for _, purpose := range []MeshPurpose{MeshPurposeMeshOnly, MeshPurposeSubnetRouter, "", "unknown_purpose"} {
+		t.Run("purpose="+string(purpose), func(t *testing.T) {
+			refused := meshTestInput(t)
+			refused.Purpose = purpose
+			if _, err := ExportMeshDevice(refused); err == nil ||
+				!strings.Contains(err.Error(), CodeMeshPurposeUnsupported) {
+				t.Fatalf("purpose %q was not refused with %s: %v", purpose, CodeMeshPurposeUnsupported, err)
+			}
+			// The view model runs before any key is minted, so the Web layer can
+			// refuse the same purpose with zero Headscale key creations.
+			if _, err := NewMeshConfigModel(refused); err == nil ||
+				!strings.Contains(err.Error(), CodeMeshPurposeUnsupported) {
+				t.Fatalf("model for purpose %q was not refused: %v", purpose, err)
+			}
+		})
+	}
+}
+
+// TestMeshPurposeProfilesAreClosed keeps the purpose table the single decision
+// point: adding a purpose without a document contract is a build-time visible
+// gap, and the zero value never silently becomes proxy_mesh.
+func TestMeshPurposeProfilesAreClosed(t *testing.T) {
+	proxy, err := meshPurposeDocumentFor(MeshPurposeProxyMesh)
+	if err != nil {
+		t.Fatalf("proxy_mesh profile: %v", err)
+	}
+	if proxy.acceptRoutes {
+		t.Fatal("the 9c profile must not accept peer subnet routes without a TUN egress")
+	}
+	for _, purpose := range []MeshPurpose{MeshPurposeMeshOnly, MeshPurposeSubnetRouter} {
+		if _, err := meshPurposeDocumentFor(purpose); err == nil {
+			t.Fatalf("%q has a document profile but FEATURES keeps it on the stock client", purpose)
+		}
+	}
+	if _, err := meshPurposeDocumentFor(""); err == nil {
+		t.Fatal("the zero purpose was accepted")
 	}
 }
 

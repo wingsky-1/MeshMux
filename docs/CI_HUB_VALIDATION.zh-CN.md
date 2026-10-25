@@ -26,6 +26,7 @@ Issue #6 Node 的 L1/L2/L3 状态见 [验收标准](ACCEPTANCE.zh-CN.md#issue-6-
 - 启动 `debian:13` 容器，从 GitHub 固定发行 URL 下载 Caddy **2.11.7** 与 Headscale **0.29.5**，按代码锁定的同一 SHA-256 校验。
 - 从实际 `CandidateFiles` 生成候选配置；隔离 Headscale 的 SQLite、Noise/DERP 私钥、Unix Socket 到容器临时路径。
 - 官方 `caddy validate`、`headscale configtest`、`systemd-analyze verify` 和 `fail2ban-client -t`。
+- 同一个已按 in-tree pin 校验的 sing-box 1.14.3 还跑 Line 候选的真实 `sing-box check`（有 Out / 无 Out / `block` 三种路由）与发布门禁（存储的 Out 候选），见 `scripts/ci-node-reality.sh`；这是文档 schema 校验，不是流量证据。
 - 任一步失败则 CI 失败；无条件保留 root 或 apt 日志并非必须，失效时上传脱敏定位信息即可。
 - 这是组件 **配置校验**，**不是**真正的宿主机/systemd/公网验收。没有运行 Headscale 控制连接或 DERP/STUN。
 

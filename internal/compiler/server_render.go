@@ -3,6 +3,11 @@ package compiler
 // Server route fragment: RenderServerRoute assembles only route.rules,
 // route.rule_set and route.final; the "out" outbound body belongs to the Out
 // access path.
+//
+// The fragment names a tag, it does not create it. node.CompileCandidateWithRoute
+// declares every tag the fragment references, so the published candidate is
+// schema-complete; until the Out access path owns the real body that tag is a
+// fail-closed block stub, never a silent Line fallback.
 
 import (
 	"encoding/json"

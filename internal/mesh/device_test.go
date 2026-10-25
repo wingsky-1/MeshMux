@@ -60,9 +60,6 @@ func TestNewMeshDeviceNormalizesLabelNameAndUser(t *testing.T) {
 	if device.HeadscaleUser != "meshmux" {
 		t.Fatalf("headscale user = %q, want canonical lowercase", device.HeadscaleUser)
 	}
-	if device.NodeNameKey() != "meshmux/home-nas" {
-		t.Fatalf("node name key = %q", device.NodeNameKey())
-	}
 }
 
 func TestPlatformIsOnlyADisplayHint(t *testing.T) {
@@ -345,83 +342,6 @@ func TestRevokeIntentGuards(t *testing.T) {
 	}
 	if device.Status != StatusPending {
 		t.Fatalf("a refused intent changed the status to %q", device.Status)
-	}
-}
-
-func TestNodeNameUniquenessWhileOccupied(t *testing.T) {
-	first := testDevice(t, specFor(PurposeMeshOnly, ""))
-	second := testDevice(t, specFor(PurposeMeshOnly, ""))
-	if first.ID == second.ID {
-		t.Fatal("two devices share an id")
-	}
-	duplicate := second
-	duplicate.NodeName = first.NodeName
-	if err := ValidateNodeNameUniqueness([]MeshDevice{first, duplicate}); err == nil {
-		t.Fatal("duplicate node name accepted while both are pending")
-	} else {
-		assertCode(t, err, CodeNodeNameDuplicate)
-	}
-
-	// A different Headscale user is a different namespace.
-	otherUser := duplicate
-	otherUser.HeadscaleUser = "second"
-	if err := ValidateNodeNameUniqueness([]MeshDevice{first, otherUser}); err != nil {
-		t.Fatalf("same name in another user refused: %v", err)
-	}
-
-	// Once the name is released the same name may be reused.
-	registered, err := first.MarkRegistered(3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revoking, _, err := registered.ApplyRevoke(RevokeIntent{DeviceID: registered.ID, Reason: "USER_DELETE"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !revoking.Status.OccupiesNodeName() {
-		t.Fatal("revoking must keep the name reserved until revocation is confirmed")
-	}
-	if err := ValidateNodeNameUniqueness([]MeshDevice{revoking, duplicate}); err == nil {
-		t.Fatal("duplicate name accepted while revocation is pending")
-	}
-	revoked, err := revoking.Transition(StatusRevoked)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateNodeNameUniqueness([]MeshDevice{revoked, duplicate}); err != nil {
-		t.Fatalf("released name still refused: %v", err)
-	}
-
-	// expired and failed release the name as well.
-	expired := testDevice(t, specFor(PurposeMeshOnly, ""))
-	expired, err = expired.MarkRegistered(24)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expired, err = expired.Transition(StatusExpired)
-	if err != nil {
-		t.Fatal(err)
-	}
-	failed := testDevice(t, specFor(PurposeMeshOnly, ""))
-	failed, err = failed.Transition(StatusFailed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, released := range []MeshDevice{expired, failed} {
-		candidate := testDevice(t, specFor(PurposeMeshOnly, ""))
-		candidate.NodeName = released.NodeName
-		if err := ValidateNodeNameUniqueness([]MeshDevice{released, candidate}); err != nil {
-			t.Fatalf("%q did not release the node name: %v", released.Status, err)
-		}
-	}
-}
-
-func TestNodeNameUniquenessRejectsDuplicateIDs(t *testing.T) {
-	device := testDevice(t, specFor(PurposeMeshOnly, ""))
-	if err := ValidateNodeNameUniqueness([]MeshDevice{device, device}); err == nil {
-		t.Fatal("duplicate device ids accepted")
-	} else {
-		assertCode(t, err, CodeDeviceDuplicateID)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/netip"
 	"os"
 	"runtime"
@@ -262,8 +261,11 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 		return Readback{}, err
 	}
 	if kernelHash != r.cfg.KernelSHA256 {
-		return Readback{}, fmt.Errorf("SINGBOX_RUNNING_BINARY_MISMATCH exe=%s running=%s want=%s",
-			runningExecutableTarget(props.MainPID, r.procRoot), hashPrefix(kernelHash), hashPrefix(r.cfg.KernelSHA256))
+		// The code is fixed; which executable was running and both digests are
+		// log fields, so a mismatch report never carries a path or a digest into
+		// the operator-facing error contract.
+		r.logRunningBinaryMismatch(ctx, props.MainPID, kernelHash, r.cfg.KernelSHA256)
+		return Readback{}, errors.New(codeSingboxRunningBinaryMismatch)
 	}
 	configPath := rooted(r.root, ActiveConfigPath)
 	info, err := os.Lstat(configPath)
@@ -304,6 +306,23 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 		OutDefaultDeny: outDeny,
 	}
 	return readback, validateReadbackEvidence(readback, role)
+}
+
+// logRunningBinaryMismatch records the diagnostic facts of a wrong running
+// kernel binary. The path and both digests are log fields only: the returned
+// error carries the stable code alone, so a log-safe code never has to be
+// reconstructed from a formatted message.
+func (r *Runtime) logRunningBinaryMismatch(ctx context.Context, pid int, running, want string) {
+	if r.logger == nil {
+		return
+	}
+	r.logger.ErrorContext(ctx, "sing-box running binary mismatch",
+		"operation_id", currentOperation(ctx),
+		"error_code", codeSingboxRunningBinaryMismatch,
+		"pid", pid,
+		"exe", runningExecutableTarget(pid, r.procRoot),
+		"running_sha256", hashPrefix(running),
+		"want_sha256", hashPrefix(want))
 }
 
 func (r *Runtime) verifyUnitExecStart(ctx context.Context) error {

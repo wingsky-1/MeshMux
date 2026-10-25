@@ -40,6 +40,20 @@ const (
 	codePublishNoPolicy = "POLICY_NOT_FOUND"
 )
 
+// Aggregate AI egress states of one server publication. A publication targets
+// every Line, so its receipt describes the whole fleet: the per-Line states of
+// route.AIEgressLine, route.AIEgressOut and route.AIEgressLineFallback stay as
+// they are, and a fleet whose Lines disagree is reported as mixed instead of
+// hiding every Line behind the first one.
+const (
+	// policyEgressFailClosed: the Line has a bound Out that cannot carry the
+	// AI traffic and no explicit Line fallback was taken.
+	policyEgressFailClosed = "fail-closed"
+	// policyEgressMixed: the target Lines resolved to different egress states,
+	// so no single state describes the publication.
+	policyEgressMixed = "mixed"
+)
+
 // publishTarget is one Line the assembled server route is published to.
 type publishTarget struct {
 	LineID     string
@@ -53,11 +67,22 @@ type publishTarget struct {
 // policyAssembly is the gated result of one publication attempt. It carries no
 // secret: the rendered fragments, digests and stable codes only.
 type policyAssembly struct {
-	OperationID          string
-	Layer                string
-	EgressState          string
-	EgressCode           string
-	RouteFragment        []byte
+	OperationID string
+	Layer       string
+	// EgressState is the aggregate of every target Line's AI egress
+	// projection, not the first Line's: a fleet whose Lines disagree reads as
+	// "mixed" instead of hiding one Line behind another. Each Line keeps its
+	// own state in Targets.
+	EgressState string
+	EgressCode  string
+	// RouteFragment is the shared route fragment when every target Line
+	// resolved to the same bytes; nil when the Lines rendered different routes
+	// (for example a Line fallback next to a healthy Out), because one field
+	// cannot honestly stand for several fragments.
+	RouteFragment []byte
+	// ClientDocument and MihomoDocument are the rendered preview documents of
+	// the client layer. They are gated as evidence and never stored: the
+	// client layer has no consumer in the standard subscription export.
 	ClientDocument       []byte
 	MihomoDocument       []byte
 	Targets              []publishTarget
@@ -162,9 +187,10 @@ func (s *store) assemblePolicyPublication(ctx context.Context, verifier publishV
 	}
 	// layer="" publishes the server layer plus any active client layer. The
 	// Line candidate is the only publication artifact the Hub stores; the
-	// client documents are rendered and gated as evidence because a client
-	// layer without its kernel check would be a publication the Hub cannot
-	// prove.
+	// client documents are rendered and gated as a preview because a client
+	// layer without its kernel check would be a claim the Hub cannot prove.
+	// They have no consumer: the standard subscription export is generated
+	// from lines and credentials only.
 	publishClient := request.Layer == "" || request.Layer == string(PolicyLayerClient)
 	publishServer := request.Layer == "" || request.Layer == string(PolicyLayerServer)
 	if request.Layer == "" {
@@ -207,7 +233,8 @@ func (s *store) assemblePolicyPublication(ctx context.Context, verifier publishV
 }
 
 // publishClientDocuments validates the active client revision and assembles
-// the sing-box and Mihomo documents the gate checks.
+// the sing-box and Mihomo preview documents the gate checks. The documents are
+// evidence only: nothing stores them and no download path reads them.
 func (s *store) publishClientDocuments() (int64, []byte, []byte, error) {
 	record, intent, err := s.activePolicyIntent(PolicyLayerClient)
 	if err != nil {
@@ -246,6 +273,11 @@ func (s *store) publishClientDocuments() (int64, []byte, []byte, error) {
 // The Out facts are read per Line: no enabled binding is a configured direct
 // egress, while an unhealthy bound Out fails closed unless the caller opted in.
 // The operation id reaches the resolver so an explicit fallback is auditable.
+//
+// The returned egress state is the aggregate of every Line, never the first
+// one: Lines that do not agree read as "mixed" while each target keeps its own
+// state, and a fail-closed Line is never summarized away. The shared fragment
+// is returned only while every Line rendered the same bytes.
 func (s *store) publishServerRoute(fallbackToLine bool, operationID string, now time.Time) ([]byte, int64, string, string, []publishTarget, error) {
 	record, intent, err := s.activePolicyIntent(PolicyLayerServer)
 	if err != nil {
@@ -268,7 +300,9 @@ func (s *store) publishServerRoute(fallbackToLine bool, operationID string, now 
 		return nil, record.Revision, "", "", nil, errors.New(codePublishNoLines + ": no line carries stored transport")
 	}
 	var fragment []byte
-	var egressState, egressCode string
+	fragmentsMatch := true
+	states := make([]string, 0, len(lineIDs))
+	codes := make([]string, 0, len(lineIDs))
 	targets := make([]publishTarget, 0, len(lineIDs))
 	for _, lineID := range lineIDs {
 		facts, err := s.OutEgressFacts(lineID, now)
@@ -295,15 +329,29 @@ func (s *store) publishServerRoute(fallbackToLine bool, operationID string, now 
 		if err != nil {
 			return nil, record.Revision, state, code, nil, err
 		}
-		if fragment == nil {
-			fragment, egressState, egressCode = lineFragment, state, code
+		// Every Line keeps its own fragment: a fallback next to a healthy Out
+		// renders different bytes, so the shared field is only filled while all
+		// Lines still agree.
+		switch {
+		case fragment == nil:
+			fragment = lineFragment
+		case !bytes.Equal(fragment, lineFragment):
+			fragmentsMatch = false
 		}
+		states = append(states, state)
+		codes = append(codes, code)
 		target, err := s.publishTarget(lineID, lineFragment, facts.Configured, state, code)
 		if err != nil {
 			return nil, record.Revision, state, code, nil, err
 		}
 		targets = append(targets, target)
 	}
+	if !fragmentsMatch {
+		// One field cannot stand for several fragments; the per-Line targets
+		// above are the publication's real artifact.
+		fragment = nil
+	}
+	egressState, egressCode := aggregatePolicyEgress(states, codes)
 	return fragment, record.Revision, egressState, egressCode, targets, nil
 }
 
@@ -382,7 +430,40 @@ func policyEgressState(facts OutEgressFacts, fallback bool) (string, string) {
 	if fallback {
 		return route.AIEgressLineFallback, route.CodeOutOfflineFailClosed
 	}
-	return "fail-closed", route.CodeOutOfflineFailClosed
+	return policyEgressFailClosed, route.CodeOutOfflineFailClosed
+}
+
+// aggregatePolicyEgress reduces the per-Line states of one publication to the
+// single state its receipt reports.
+//
+// Each Line keeps its own state: route.AIEgressLine, route.AIEgressOut,
+// route.AIEgressLineFallback or policyEgressFailClosed. The receipt reports
+// that state only when every Line agrees; as soon as the Lines differ the
+// result is policyEgressMixed, because one Line's egress must never be
+// presented as every Line's egress. Fail-closed is not loosened by the
+// aggregate: a Line whose bound Out cannot carry the traffic still fails the
+// publication through compiler.ResolveServerPolicy (or, when the policy does
+// not use the Out, keeps its own fail-closed row in Targets). The reported
+// code is the first real reason among the Lines, so it always names a state
+// one Line actually reported.
+func aggregatePolicyEgress(states, codes []string) (string, string) {
+	if len(states) == 0 {
+		return "", ""
+	}
+	code := ""
+	for _, candidate := range codes {
+		if candidate != "" {
+			code = candidate
+			break
+		}
+	}
+	aggregate := states[0]
+	for _, state := range states[1:] {
+		if state != aggregate {
+			return policyEgressMixed, code
+		}
+	}
+	return aggregate, code
 }
 
 func decodePolicyPins(raw json.RawMessage) (compiler.RuleSetPins, error) {

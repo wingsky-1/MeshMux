@@ -70,6 +70,13 @@ func TestMeshExportTailnetPrefixesMatchDomain(t *testing.T) {
 			subscription.MeshTailnetIPv4Prefix, subscription.MeshTailnetIPv6Prefix,
 			mesh.TailnetIPv4Prefix, mesh.TailnetIPv6Prefix)
 	}
+	// server_mesh_config.go converts the stored purpose to the exporter's own
+	// type, so the two spellings must stay identical.
+	for _, purpose := range []mesh.Purpose{mesh.PurposeProxyMesh, mesh.PurposeMeshOnly, mesh.PurposeSubnetRouter} {
+		if got := subscription.MeshPurpose(purpose); string(got) != string(purpose) {
+			t.Fatalf("subscription purpose %q does not match domain purpose %q", got, purpose)
+		}
+	}
 }
 
 func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
@@ -188,6 +195,38 @@ func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 	}
 }
 
+// TestMeshConfigPurposeReachesTheExporter proves the stored purpose travels
+// into the pure renderer instead of the exporter assuming proxy_mesh (#113
+// 2-5). The 9c document is proxy_mesh-only and states accept_routes=false; a
+// subnet_router keeps the stock Tailscale client, so the same field set with
+// that purpose is refused by the exporter rather than rendered.
+func TestMeshConfigPurposeReachesTheExporter(t *testing.T) {
+	app, _, _, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
+	now := app.now()
+	device, err := app.store.createMeshDevice(meshSpec("nas", mesh.PurposeSubnetRouter, ""), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := subscription.MeshDeviceInput{
+		DeviceID:   device.ID,
+		Hostname:   device.NodeName,
+		Purpose:    subscription.MeshPurpose(device.Purpose),
+		ControlURL: testHeadscaleOrigin,
+		AuthKey:    "hskey-auth-example-once",
+	}
+	if _, err = subscription.NewMeshConfigModel(input); err == nil ||
+		!strings.Contains(err.Error(), subscription.CodeMeshPurposeUnsupported) {
+		t.Fatalf("subnet_router reached the renderer as a proxy document: %v", err)
+	}
+	// The missing-purpose case is the fail-closed counterpart: a caller that
+	// forgets the field cannot silently get the proxy_mesh document.
+	input.Purpose = ""
+	if _, err = subscription.ExportMeshDevice(input); err == nil ||
+		!strings.Contains(err.Error(), subscription.CodeMeshPurposeUnsupported) {
+		t.Fatalf("an input without a purpose rendered a document: %v", err)
+	}
+}
+
 func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, "")
 	now := app.now()
@@ -271,6 +310,9 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.nodes = []headscale.Node{{ID: 77, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser, Online: true}}
+	if _, _, err = app.store.issueMeshEnrollmentKey(device.ID, app.now()); err != nil {
+		t.Fatalf("fixture key: %v", err)
+	}
 
 	page := b.req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
@@ -294,6 +336,23 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	}
 	if after.Status != mesh.StatusRegistered || after.HeadscaleNodeID != 77 {
 		t.Fatalf("claim did not record the observation: %+v", after)
+	}
+	// Claim is the production path that proves registration, so it spends the
+	// device's one-time key in the same transaction: the row is consumed and its
+	// digest is gone, which is what makes the key one-time.
+	keys, err := app.store.listMeshEnrollmentKeys(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].State != mesh.KeyConsumed || keys[0].ConsumedAt == 0 {
+		t.Fatalf("claim left the key history %+v, want one consumed key", keys)
+	}
+	var digests int
+	if err = app.store.db.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
+		t.Fatal(err)
+	}
+	if digests != 0 {
+		t.Fatalf("a spent key kept its digest: %d non-NULL digests", digests)
 	}
 	if !strings.Contains(logs.String(), "MESH_DEVICE_CLAIMED") {
 		t.Fatal("claim audit event missing")

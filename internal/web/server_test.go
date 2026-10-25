@@ -24,6 +24,7 @@ var csrfPattern = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
 type browser struct {
 	app    *Server
 	cookie *http.Cookie
+	form   *http.Cookie
 	csrf   string
 }
 
@@ -51,6 +52,9 @@ func (b *browser) req(method, path string, form url.Values, headers http.Header)
 	if b.cookie != nil {
 		r.AddCookie(b.cookie)
 	}
+	if b.form != nil {
+		r.AddCookie(b.form)
+	}
 	if method == "POST" {
 		r.Header.Set("Origin", testOrigin)
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -63,6 +67,13 @@ func (b *browser) req(method, path string, form url.Values, headers http.Header)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == b.app.cookieName() {
 			b.cookie = c
+		}
+		if c.Name == b.app.formCookieName() {
+			if c.MaxAge < 0 {
+				b.form = nil
+			} else {
+				b.form = c
+			}
 		}
 	}
 	if m := csrfPattern.FindStringSubmatch(w.Body.String()); len(m) > 1 {
@@ -252,14 +263,26 @@ func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {
 	}
 	token, _ = os.ReadFile(filepath.Join(app.store.dir, "bootstrap.token"))
 	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {"short"}}), 400)
-	// Simulate a second already-open setup tab; its token must become unusable.
+	// Simulate a second already-open setup tab; its form token is still valid,
+	// but the initialization entry is closed and the bootstrap secret is gone,
+	// so it can never create the admin.
 	other := &browser{app: app}
 	requireStatus(t, other.req("GET", "/setup", nil, nil), 200)
 	initialize(t, b)
-	requireStatus(t, other.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 401)
-	app.authSlot <- struct{}{}
-	requireStatus(t, b.req("POST", "/login", url.Values{}, nil), 429)
-	<-app.authSlot
+	w := other.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}})
+	requireStatus(t, w, 403)
+	if !strings.Contains(w.Body.String(), "SETUP_CLOSED") {
+		t.Fatalf("second setup tab was not refused as closed: %.200s", w.Body.String())
+	}
+	// The password slot is taken after the session/form/CSRF checks, so only a
+	// well-formed login is refused while another hash holds it; a forged or
+	// session-less request is refused earlier with its own code.
+	anon := &browser{app: app}
+	requireStatus(t, anon.req("GET", "/login", nil, nil), 200)
+	app.kdfSlot <- struct{}{}
+	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 429)
+	<-app.kdfSlot
+	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 303)
 }
 
 func TestDurableRateLimitAndProxyLog(t *testing.T) {
@@ -267,8 +290,9 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
-	// One attempt was used by setup. Forwarded headers must not affect the budget.
-	for range 9 {
+	// Initialization proved the bootstrap secret and cleared the shared budget,
+	// so ten wrong attempts now exhaust it. Forwarded headers must not affect it.
+	for range 10 {
 		requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-Forwarded-For": {"192.0.2.5"}, "X-MeshMux-Client-Ip": {"192.0.2.6"}}), 401)
 	}
 	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
@@ -283,6 +307,10 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	}
 	defer again.Close()
 	b.app = again
+	// The form token is process-local, so the restart invalidates the open form
+	// (a page reload) while the durable budget survives it. Re-open the page to
+	// show that the persisted limit, not the form, is what refuses.
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
 	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
 	again.now = func() time.Time { return time.Now().Add(11 * time.Minute) }
 	again.cfg.DirectProxy = true
@@ -297,6 +325,90 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	if !found {
 		t.Fatal("missing explicit direct-Caddy candidate")
 	}
+}
+
+func TestSuccessfulLoginsResetTheGlobalBudget(t *testing.T) {
+	app, _ := testApp(t)
+	initialize(t, &browser{app: app})
+	// Ten routine logins inside one window must never lock the only
+	// administrator out: every proven password clears the shared budget, so the
+	// run below keeps succeeding past the nominal limit.
+	for i := range 12 {
+		b := &browser{app: app}
+		requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+		if w := b.post("/login", url.Values{"password": {testPassword}}); w.Code != 303 {
+			t.Fatalf("login %d status %d want 303: %.200s", i+1, w.Code, w.Body.String())
+		}
+	}
+	var attempts int
+	if err := app.store.db.QueryRow("SELECT attempts FROM auth_limit WHERE id=1").Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts after a successful login = %d, want 0", attempts)
+	}
+}
+
+func TestOnlyAProvenPasswordResetsTheBudget(t *testing.T) {
+	app, _ := testApp(t)
+	initialize(t, &browser{app: app})
+	attempt := func(password string) *httptest.ResponseRecorder {
+		t.Helper()
+		b := &browser{app: app}
+		requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+		return b.post("/login", url.Values{"password": {password}})
+	}
+	// Nine failures leave exactly one slot; the proven password may spend it.
+	for range 9 {
+		requireStatus(t, attempt("wrong"), 401)
+	}
+	requireStatus(t, attempt(testPassword), 303)
+	// A failed attempt never refills the budget: ten fresh failures are again
+	// needed before the next refusal, which proves the reset followed the
+	// successful proof rather than the mere passage of requests.
+	for range 10 {
+		requireStatus(t, attempt("wrong"), 401)
+	}
+	requireStatus(t, attempt(testPassword), 429)
+}
+
+func TestRateLimitRefusalStatesWhenToRetry(t *testing.T) {
+	app, _ := testApp(t)
+	base := time.Now()
+	app.now = func() time.Time { return base }
+	initialize(t, &browser{app: app})
+	b := &browser{app: app}
+	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
+	wrong := func() *httptest.ResponseRecorder {
+		return b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, nil)
+	}
+	for range 10 {
+		requireStatus(t, wrong(), 401)
+	}
+	w := wrong()
+	requireStatus(t, w, 429)
+	// A constant "600" would be wrong after four minutes: the refusal must state
+	// the remainder of the window that already started.
+	if got := w.Header().Get("Retry-After"); got != "600" {
+		t.Fatalf("Retry-After at the start of the window = %q, want 600", got)
+	}
+	for _, want := range []string{"AUTH_RATE_LIMITED", "约 10 分钟后", "成功认证会立即清零", "只读页面与退出不受"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("refusal page lacks %q", want)
+		}
+	}
+	app.now = func() time.Time { return base.Add(4 * time.Minute) }
+	w = wrong()
+	requireStatus(t, w, 429)
+	if got := w.Header().Get("Retry-After"); got != "360" {
+		t.Fatalf("Retry-After four minutes in = %q, want 360", got)
+	}
+	if !strings.Contains(w.Body.String(), "约 6 分钟后") {
+		t.Fatal("refusal page does not state the remaining wait")
+	}
+	// The window reopens on its own; a failed attempt does not slide it.
+	app.now = func() time.Time { return base.Add(11 * time.Minute) }
+	requireStatus(t, wrong(), 401)
 }
 
 func TestDatabaseFailureClosedAndHeaders(t *testing.T) {
@@ -321,19 +433,7 @@ func TestDatabaseFailureClosedAndHeaders(t *testing.T) {
 	requireStatus(t, b.req("GET", "/api/status", nil, nil), 503)
 }
 
-func TestSessionCapacityAndMigrationRollback(t *testing.T) {
-	app, _ := testApp(t)
-	for range 256 {
-		if _, _, err := app.store.newSession(false, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, _, err := app.store.newSession(false, time.Now()); err == nil {
-		t.Fatal("unbounded anonymous sessions")
-	}
-	if _, _, err := app.store.newSession(false, time.Now().Add(16*time.Minute)); err != nil {
-		t.Fatal("expired rows not reclaimed", err)
-	}
+func TestMigrationRollback(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "broken")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
