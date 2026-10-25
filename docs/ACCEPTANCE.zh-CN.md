@@ -151,9 +151,9 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | B | used-by 互锁：被订阅引用的规则删除由规则库拒绝并列出订阅名；被订阅选择的 Out 删除被拒；组网设备引用可查 | [x] `TestRuleDeleteRefusedWithSubscriptionName`、`TestSelectionUsedByNames`、`TestWizardMeshGroupRefusesRevokedDevice` |
 | C | 真实 `sing-box check` 组合产物、真实双跳流量、Mihomo 固定版本门禁 | [x] 单测内真实 `sing-box 1.14.3` 通过（`TestWizardGateUsesRealSingBox`、`TestComposeSubscriptionRulesReachBothDocuments`，需 `MESHMUX_SINGBOX_TEST_BINARY`）；[ ] 真实双跳流量与 Mihomo 固定版本实测未含 |
 
-## 订阅聚合重构（Task 5：授权迁移 —— 按订阅边派生 Out ACL）
+## 订阅聚合重构（Task 5：授权迁移 —— 删除 `out_bindings`，Out ACL 改节点成员制）
 
-本节登记“删除 `out_bindings` + 派生替代”的同 PR 原子切换证据。**C 级真机（现网 VPS、公网入口、客户端 App）仍未含**，只到 C-（真实内核 + loopback 拓扑）。
+本节登记“删除 `out_bindings` + 授权改节点成员制（Ruling R10）”的同 PR 原子切换证据。**C 级真机（现网 VPS、公网入口、客户端 App）仍未含**，只到 C-（真实内核 + loopback 拓扑）。
 
 | 层级 | 待验范围 | 状态 |
 | --- | --- | --- |

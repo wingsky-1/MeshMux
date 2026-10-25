@@ -61,7 +61,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 
 - 组装器是纯函数 `ComposeSubscription(lines, outs, rules, network) → (docs, diagnostics)`（`internal/subscription/compose.go`）：同输入同字节；geo/ruleset 双内核校验；mihomo 缺席时降级（不静默跳过必需门禁）。
 - 预览 fail-fast 四层校验：输入提醒（`!`）/ 保存严格校验 / 组装冲突 / out 槽位非空与内核门禁（`✖` 阻断）。
-- 服务端 Out 路由与 ACL 派生已由 Task 5 按 §3 订阅边派生；`out_bindings` 表与读写路径在同一变更内删除（schema 14），不留授权空窗。
+- 服务端 Out 路由与 ACL 授权已由 Task 5 按 §3 落地为**节点成员制**（Ruling R10，见 §3 首条）；`out_bindings` 表与读写路径在同一变更内删除（schema 14），不留授权空窗。
 
 ## 后果
 

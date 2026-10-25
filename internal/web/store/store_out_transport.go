@@ -277,10 +277,13 @@ func (s *Store) ListOutTransports() ([]OutTransport, error) {
 // stays in the private table and only enters the paired Line candidates and the
 // Out's own v4 document.
 //
-// The selection is read through the subscription edges, so the pool and the ACL
-// derivation cannot disagree about which Lines an Out serves. A subscriber that is
-// not active contributes no Line: it is not served by any Out, which is the same
-// rule the allowlist applies.
+// The selection is a projection of the subscription edges: which Out the wizard may
+// offer, and which Lines currently route through it. The ACL is NOT read from here —
+// under Ruling R10 it is node membership (every enrolled Line is accepted by every
+// enrolled Out), so the two are independent by construction rather than by sharing a
+// query. Consequence a reader must not get wrong: a subscriber that is not active still
+// contributes no Line to this projection, but the Lines it serves remain authorized at
+// every Out (pausing a subscription never narrows an allowlist).
 func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
 	rows, err := s.DB.Query(`
 SELECT n.id, n.display_name, n.vless_port, n.status, n.last_heartbeat,

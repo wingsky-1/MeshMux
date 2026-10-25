@@ -48,12 +48,15 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 	case strings.HasPrefix(err.Error(), store.CodeOutReferenced):
 		return 409, store.CodeOutReferenced, "该 Out 仍被订阅选中。", "请在订阅向导中先解除这些订阅的 Out 选择，再删除出口。"
 	case strings.HasPrefix(err.Error(), store.CodeOutSyncPending):
-		// The only caller that reaches this mapping is the non-delete release path
-		// (outUnbindPage -> RetryOutSync), where the Out itself survives and only the
-		// host's empty-guard publication is deferred. It is NOT a delete outcome: a
-		// delete that cannot prove the empty guard is a 409 refusal with nothing
-		// destroyed, handled before this switch in both delete handlers.
-		return 202, store.CodeOutSyncPending, "主机 ACL 的空授权下发待同步。", "Out 上线后会自动完成；也可在节点页重试。"
+		// Defensive fallback only: no production caller reaches this case today.
+		// Both delete handlers intercept ErrOutCleanupPending above and answer 409 (a
+		// delete that cannot prove the guard is refused, never half-done), and
+		// outUnbindPage explicitly skips OUT_SYNC_PENDING so it can render the pending
+		// notice on the nodes page instead. The case is kept so an unexpected path
+		// degrades to a stable code instead of OUT_MANAGEMENT_FAILED; the wording says
+		// only that the hub-side publication is still unconfirmed — under Ruling R10 the
+		// set being published is the node membership, not an empty authorization.
+		return 202, store.CodeOutSyncPending, "该 Out 授权的下发待同步。", "Out 上线后会自动完成；也可在节点页重试。"
 	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
 		return 400, "OUT_BINDING_INVALID", "Out 参数不正确。", "请检查 Out 标识后重试。"
 	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):

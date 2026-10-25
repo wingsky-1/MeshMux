@@ -65,15 +65,16 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess sess
 		s.event(r, store.CodeOutReferenced)
 		s.fail(w, r, 409, store.CodeOutReferenced,
 			"该 Out 仍被订阅选中："+strings.Join(usedBy, "、")+"。",
-			"请在订阅向导中取消这些订阅的 Out 选择；ACL 会随订阅自动重算。")
+			"请在订阅向导中取消这些订阅的 Out 选择后重试。ACL 由节点成员制决定（纳管即互通），订阅变更不会重算 ACL。")
 		return
 	}
-	// Nothing selects it: republish the empty guard so a host that still carries
-	// the last authorization is brought back to default-deny. The drain is a no-op
-	// when the newest chain already names the empty set, and a chain still in
-	// flight defers the republish — the intent is already durable and the next Out
-	// event completes it, so the page reports the pending state instead of an error
-	// the operator cannot fix.
+	// Nothing selects it. This action does NOT empty the Out's allowlist: under
+	// Ruling R10 the authorization is node membership, so publishing here re-derives
+	// the member set (which is non-empty as long as any Line is enrolled). All this
+	// call can do is republish the current authorization, which is a no-op when the
+	// newest chain already carries it; a chain still in flight defers the republish —
+	// the intent is durable and the next Out event completes it, so the page reports
+	// the pending state instead of an error the operator cannot fix.
 	retryErr := s.store.RetryOutSync(outID, now)
 	if retryErr != nil && !strings.HasPrefix(retryErr.Error(), store.CodeOutSyncPending) {
 		status, code, message, next := outBindingFailure(retryErr)
@@ -81,10 +82,10 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess sess
 		return
 	}
 	s.event(r, "OUT_UNBOUND")
-	notice := "已解除：没有任何订阅选中该 Out，ACL 已按空授权重算。"
+	notice := "已解除：没有任何订阅选中该 Out。Out 的 ACL 由节点成员制决定（纳管即互通），订阅变更不会重算 ACL；本次已按当前成员集重新下发。"
 	if retryErr != nil {
 		s.event(r, store.CodeOutSyncPending)
-		notice = "已解除：没有任何订阅选中该 Out；主机 ACL 的空授权下发待同步（OUT_SYNC_PENDING），Out 上线后自动完成。"
+		notice = "已解除：没有任何订阅选中该 Out。Out 的 ACL 由节点成员制决定，订阅变更不会重算 ACL；本次下发的确认待同步（OUT_SYNC_PENDING），Out 上线后自动完成。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }

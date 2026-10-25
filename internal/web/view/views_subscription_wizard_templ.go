@@ -714,7 +714,7 @@ func SubscriptionWizardPage(p PageData, v SubscriptionWizardView) templ.Componen
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "<p class=\"hint\">Out 选择参与 Line 路由片段渲染并过内核门禁；服务端 Out 授权仍走既有绑定路径，按订阅边派生的切换待 1.1。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>三 · 规则</h2><span class=\"badge\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "<p class=\"hint\">Out 选择只决定 Line 路由片段渲染的出口并过内核门禁；服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>三 · 规则</h2><span class=\"badge\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

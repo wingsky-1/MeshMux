@@ -135,8 +135,9 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 		t.Fatalf("unbind of a selected out = %.300s", w.Body.String())
 	}
 
-	// Once the subscription stops selecting it, the release action succeeds: the ACL
-	// is republished as an explicit empty authorization.
+	// Once the subscription stops selecting it, the release action succeeds. It does
+	// NOT empty the ACL: the published set is the node membership (Ruling R10), so the
+	// page only reports that the hub-side publication was refreshed.
 	clearOutForLine(t, app.store, lineID, now)
 	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
@@ -151,5 +152,59 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	members, err := app.store.OutMembershipLineIDs(outID)
 	if err != nil || len(members) != 1 || members[0] != lineID {
 		t.Fatalf("release changed the membership set: %v err=%v", members, err)
+	}
+}
+
+// TestOutUnbindCopyNamesMembership is the R2 copy lock: every operator-facing string
+// the release action can render has to describe the authorization as node membership
+// (Ruling R10). The action cannot empty an allowlist — it republishes the current
+// member set — so any copy that promises an "empty authorization recompute" or an
+// "ACL follows the subscription" is a lie about the authorization source, not a
+// cosmetic wording preference.
+func TestOutUnbindCopyNamesMembership(t *testing.T) {
+	app, b, lineID, outID := nodesOutTestApp(t)
+	now := time.Now()
+	configureOut(t, app.store, outID, now)
+	markLineOnline(t, app.store, lineID, now)
+	markLineOnline(t, app.store, outID, now)
+	enableOutForLine(t, app.store, outID, lineID, now)
+	settleTasks(t, app.store, outID)
+	confirmChain(t, app.store, outID, now)
+
+	// A live reference is refused; the refusal must not claim a subscription-driven
+	// ACL recompute would follow.
+	w := b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	requireStatus(t, w, 409)
+	refusal := w.Body.String()
+	for _, lie := range []string{"ACL 会随订阅自动重算", "随订阅自动重算", "ACL 已按空授权"} {
+		if strings.Contains(refusal, lie) {
+			t.Fatalf("the refusal still promises %q: %.500s", lie, refusal)
+		}
+	}
+	if !strings.Contains(refusal, "节点成员制") {
+		t.Fatalf("the refusal does not name the real authorization source: %.500s", refusal)
+	}
+
+	// Released: the action succeeds and reports what it actually did.
+	clearOutForLine(t, app.store, lineID, now)
+	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	requireStatus(t, w, 200)
+	notice := w.Body.String()
+	for _, lie := range []string{"空授权重算", "空授权下发", "ACL 会随订阅", "随订阅自动重算"} {
+		if strings.Contains(notice, lie) {
+			t.Fatalf("the release notice still claims %q: %.500s", lie, notice)
+		}
+	}
+	if !strings.Contains(notice, "节点成员制") {
+		t.Fatalf("the release notice does not name the real authorization source: %.500s", notice)
+	}
+	// The claim is also checked against the data plane: the release left the Line
+	// authorized, which is exactly why the notice must not say the list was emptied.
+	allowed, err := app.store.DeriveOutAllowlist(outID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allowed) != 1 || allowed[0] != "203.0.113.7/32" {
+		t.Fatalf("the release changed the authorized membership: %v", allowed)
 	}
 }
