@@ -47,6 +47,32 @@ func TestRequestRoundTrip(t *testing.T) {
 	}
 }
 
+// TestWriteRequestPinsOperationIDInName makes the writer's own invariant local:
+// the published name must parse back to the same operation id with the same
+// parser the dispatcher uses. Otherwise the writer could publish a document the
+// reader refuses (an accepted WriteRequest that no dispatcher will ever pick
+// up), and the mismatch would only surface as a timed-out handoff.
+func TestWriteRequestPinsOperationIDInName(t *testing.T) {
+	// The reader's parser is the single authority for the name shape; assert the
+	// round trip both ways so a change on either side fails here.
+	for _, id := range []string{testRequestOp, strings.Repeat("f", 32)} {
+		name := id + ".json"
+		if parsed, ok := requestNameOperationID(name); !ok || parsed != id {
+			t.Fatalf("requestNameOperationID(%q) = %q, %v; the writer and reader disagree", name, parsed, ok)
+		}
+	}
+	// Upper-case hex is accepted by no reader, so the writer must refuse it too.
+	upper := strings.ToUpper(testRequestOp)
+	if _, err := WriteRequest(t.TempDir(), Request{
+		Schema: RequestSchema, Kind: KindUpdate, OperationID: upper, DataDir: "/var/lib/meshmux",
+	}); err == nil {
+		t.Fatal("WriteRequest accepted an operation id the reader cannot map to a file name")
+	}
+	if _, ok := requestNameOperationID(upper + ".json"); ok {
+		t.Fatal("the name parser accepts non-lowercase hex")
+	}
+}
+
 func TestRequestRejectsTrailingData(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, testRequestOp+".json")

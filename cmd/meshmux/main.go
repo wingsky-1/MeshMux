@@ -139,7 +139,7 @@ func runInternalHubDispatch(args []string, stderr io.Writer) int {
 		WebUnit:     rootexec.DefaultWebUnit,
 		Now:         time.Now,
 	}
-	if err := rootexec.RunDispatch(context.Background(), cfg, node.ExecRunner{}); err != nil {
+	if err := rootexec.RunDispatch(context.Background(), cfg); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

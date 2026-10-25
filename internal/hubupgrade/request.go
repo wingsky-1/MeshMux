@@ -44,9 +44,11 @@ const (
 	// directory: a restore flips --data-dir but cannot move this unit.
 	RequestDir = "/run/meshmux-hub/requests"
 	// RequestStagingDir is the unwatched sibling where a request is completed
-	// before it becomes visible. The Web creates it on demand inside the
-	// already Web-writable /run/meshmux-hub, so no unit or tmpfiles change is
-	// needed; it never appears inside the watched directory.
+	// before it becomes visible. It must be declared in the web unit's
+	// ReadWritePaths and created by the tmpfiles drop-in *before* the unit
+	// starts: ProtectSystem=strict makes an undeclared write EROFS, and a
+	// declared-but-absent path fails the unit with status=226/NAMESPACE. The
+	// MkdirAll below is only a same-uid convenience for fixtures and repairs.
 	RequestStagingDir = "/run/meshmux-hub/staging"
 	// RequestDoneDir holds consumed requests. It is root:root 0700; the Web
 	// can neither read nor replace a dispatched intent.
@@ -85,6 +87,14 @@ func WriteRequest(dir string, r Request) (string, error) {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return "", fail(codeRequestWrite, "the request directory is not absolute")
 	}
+	// The file name is the only key the dispatcher has, so the writer proves its
+	// own name before publishing: the same parser the reader uses must map the
+	// name back to this operation. A future name change that drifts from the
+	// parser fails here instead of producing a request no dispatcher accepts.
+	name := r.OperationID + ".json"
+	if parsed, ok := requestNameOperationID(name); !ok || parsed != r.OperationID {
+		return "", fail(codeRequestInvalid, "the request file name does not name the operation")
+	}
 	if err := os.MkdirAll(dir, requestDirMode); err != nil {
 		return "", fail(codeRequestWrite, "the request directory is unavailable")
 	}
@@ -115,7 +125,7 @@ func WriteRequest(dir string, r Request) (string, error) {
 			}
 		}
 	}
-	target := filepath.Join(dir, r.OperationID+".json")
+	target := filepath.Join(dir, name)
 	scratch, err := os.CreateTemp(staging, "."+r.OperationID+".json.part-*")
 	if err != nil {
 		return "", fail(codeRequestWrite, "the request scratch file could not be created")

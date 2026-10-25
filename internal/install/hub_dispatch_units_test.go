@@ -72,6 +72,7 @@ func TestHubDispatchUnitsPinned(t *testing.T) {
 	for _, line := range []string{
 		"d /run/meshmux-hub 0730 root meshmux",
 		"d /run/meshmux-hub/requests 0730 root meshmux",
+		"d /run/meshmux-hub/staging 0730 root meshmux",
 		"d /run/meshmux-hub/requests.done 0700 root root",
 		"d /var/lib/meshmux-installer 0711 root root",
 		"d /var/lib/meshmux-installer/hub-upgrade 0755 root root",
@@ -91,8 +92,73 @@ func TestHubDispatchUnitsPinned(t *testing.T) {
 	}
 
 	web := files["/etc/systemd/system/meshmux-web.service"]
-	if !strings.Contains(web, "ReadWritePaths=/run/meshmux-hub/requests\n") {
-		t.Fatalf("web unit cannot write the request directory:\n%s", web)
+	// Both runtime directories must be writable: the Web completes a request in
+	// staging/ and renames it into requests/, and ProtectSystem=strict makes an
+	// undeclared path EROFS while a declared-but-absent one fails the unit with
+	// 226/NAMESPACE.
+	if !strings.Contains(web, "ReadWritePaths=/run/meshmux-hub/requests /run/meshmux-hub/staging\n") {
+		t.Fatalf("web unit does not declare the request and staging directories writable:\n%s", web)
+	}
+}
+
+// TestHubRuntimeDirsDeclaredWritable is the blocker-1 fix regression of the T4r
+// review round. The Web publishes a request through an unwatched staging sibling
+// and only renames the finished document into requests/, so *both* directories
+// must be writable for the Web identity in every three places that can grant it:
+//
+//  1. the shipped web unit (ProtectSystem=strict means an undeclared path is
+//     EROFS, and a declared-but-absent path makes the unit fail 226/NAMESPACE);
+//  2. the tmpfiles drop-in that creates the tree on boot;
+//  3. the installer preflight layout that creates it before any unit can start.
+func TestHubRuntimeDirsDeclaredWritable(t *testing.T) {
+	files, err := CandidateFiles(hubFixtureConfig(), []int{60794})
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := files["/etc/systemd/system/meshmux-web.service"]
+	var readWritePaths []string
+	for _, line := range strings.Split(web, "\n") {
+		if !strings.HasPrefix(line, "ReadWritePaths=") {
+			continue
+		}
+		readWritePaths = append(readWritePaths, strings.Fields(strings.TrimPrefix(line, "ReadWritePaths="))...)
+	}
+	if len(readWritePaths) == 0 {
+		t.Fatalf("the web unit declares no ReadWritePaths:\n%s", web)
+	}
+	for _, want := range []string{"/run/meshmux-hub/requests", "/run/meshmux-hub/staging"} {
+		found := false
+		for _, path := range readWritePaths {
+			if path == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the web unit does not declare %s writable (writes there are EROFS): %v", want, readWritePaths)
+		}
+	}
+
+	tmpfiles := files[hubTmpfilesPath]
+	for _, line := range []string{
+		"d /run/meshmux-hub/staging 0730 root meshmux",
+	} {
+		if !strings.Contains(tmpfiles, line+"\n") {
+			t.Fatalf("the tmpfiles drop-in does not create %q:\n%s", line, tmpfiles)
+		}
+	}
+
+	root := t.TempDir()
+	if err := ensureHubUpgradeLayout(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"/run/meshmux-hub", "/run/meshmux-hub/requests", "/run/meshmux-hub/staging"} {
+		info, err := os.Lstat(filepath.Join(root, strings.TrimPrefix(dir, "/")))
+		if err != nil {
+			t.Fatalf("the installer layout does not pre-create %s (the web unit then fails 226/NAMESPACE): %v", dir, err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0730 {
+			t.Fatalf("%s mode = %v %o, want a 0730 directory", dir, info.IsDir(), info.Mode().Perm())
+		}
 	}
 }
 

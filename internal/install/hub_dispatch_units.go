@@ -75,10 +75,15 @@ WantedBy=paths.target
 // tree. /var/lib/meshmux-installer is 0711 so the Web can traverse to the root
 // manifest and result files without being able to list the directory; the two
 // ledgers below it stay 0600 root files outside this drop-in.
+//
+// staging/ is the unwatched sibling the Web completes a request in; it must be
+// declared here (and in the web unit's ReadWritePaths) or the publish fails
+// EROFS under ProtectSystem=strict.
 const hubTmpfiles = `# MeshMux Hub upgrade runtime and dispatcher state (#11d).
 # The installer tree is traversable (0711) but not listable; ledgers stay 0600 root.
 d /run/meshmux-hub 0730 root meshmux
 d /run/meshmux-hub/requests 0730 root meshmux
+d /run/meshmux-hub/staging 0730 root meshmux
 d /run/meshmux-hub/requests.done 0700 root root
 d /var/lib/meshmux-installer 0711 root root
 d /var/lib/meshmux-installer/hub-upgrade 0755 root root
@@ -102,11 +107,18 @@ func hubDispatchFiles() map[string]string {
 //	/var/lib/meshmux-installer/upgrade    0755 root:root  (root manifests)
 //	/var/lib/meshmux-installer/hub-upgrade 0755 root:root
 //	.../hub-upgrade/results               0750 root:meshmux (Web reads only)
+//	/run/meshmux-hub                      0730 root:meshmux (Web publishes)
+//	/run/meshmux-hub/requests             0730 root:meshmux (path unit watches)
+//	/run/meshmux-hub/staging              0730 root:meshmux (Web completes here)
 //
 // InstallHub creates this shape at preflight so a fresh install is correct even
 // before systemd-tmpfiles runs; the tmpfiles drop-in keeps the same shape on
 // boot, and ensureHubUpgradeOwnership fixes ownership once the meshmux account
 // exists.
+//
+// The two runtime directories must exist *before* the web unit starts: a
+// ReadWritePaths entry that does not exist makes systemd fail the unit with
+// status=226/NAMESPACE, and ProtectSystem=strict makes an undeclared one EROFS.
 func ensureHubUpgradeLayout(root string) error {
 	installerDir := rooted(root, "/var/lib/meshmux-installer")
 	if err := ensureDirectory(installerDir, 0711); err != nil {
@@ -124,12 +136,24 @@ func ensureHubUpgradeLayout(root string) error {
 	if err := ensureDirectory(manifestDir, 0755); err != nil {
 		return err
 	}
+	runtimeDir := rooted(root, "/run/meshmux-hub")
+	if err := ensureDirectory(runtimeDir, 0730); err != nil {
+		return err
+	}
+	for _, name := range []string{"requests", "staging"} {
+		if err := ensureDirectory(filepath.Join(runtimeDir, name), 0730); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // ensureHubUpgradeOwnership fixes the root owner and the meshmux-readable result
 // group after the service accounts exist. The preflight layout call runs before
 // the fresh-install account creation, so the group lookup lives here instead.
+// The runtime request tree needs the same treatment: preflight creates it
+// root:root, and the Web (group meshmux) can only publish there once the group
+// is set.
 func ensureHubUpgradeOwnership(root string) error {
 	if root != "" && root != "/" {
 		return nil
@@ -154,6 +178,12 @@ func ensureHubUpgradeOwnership(root string) error {
 	}
 	if err := os.Chown(resultsDir, 0, gid); err != nil {
 		return errors.New("HUB_UPGRADE_STATE_LAYOUT_FAILED")
+	}
+	runtimeDir := rooted(root, "/run/meshmux-hub")
+	for _, dir := range []string{runtimeDir, filepath.Join(runtimeDir, "requests"), filepath.Join(runtimeDir, "staging")} {
+		if err := os.Chown(dir, 0, gid); err != nil {
+			return errors.New("HUB_UPGRADE_STATE_LAYOUT_FAILED")
+		}
 	}
 	return nil
 }

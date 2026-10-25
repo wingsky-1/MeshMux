@@ -24,7 +24,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -298,7 +297,7 @@ func TestDispatchArgvPinned(t *testing.T) {
 			gotPath, gotArgv, gotEnv = path, argv, env
 			return nil
 		}
-		if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+		if err := RunDispatch(context.Background(), f.config(exec)); err != nil {
 			t.Fatal(err)
 		}
 		execPath := filepath.Join(f.execRoot, "exec-"+fixtureOp)
@@ -328,7 +327,7 @@ func TestDispatchArgvPinned(t *testing.T) {
 			gotPath, gotArgv = path, argv
 			return nil
 		}
-		if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+		if err := RunDispatch(context.Background(), f.config(exec)); err != nil {
 			t.Fatal(err)
 		}
 		execPath := filepath.Join(f.execRoot, "exec-"+fixtureOp)
@@ -359,7 +358,7 @@ func TestDispatchRejectsSymlinkRequest(t *testing.T) {
 	err = RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 		executed = true
 		return nil
-	}), node.ExecRunner{})
+	}))
 	if err == nil || executed {
 		t.Fatalf("symlinked request: err=%v executed=%v", err, executed)
 	}
@@ -400,7 +399,7 @@ func TestDispatchRejectsUnsafeRequestDir(t *testing.T) {
 		err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 			executed = true
 			return nil
-		}), node.ExecRunner{})
+		}))
 		if err == nil || executed {
 			t.Fatalf("symlinked request directory: err=%v executed=%v", err, executed)
 		}
@@ -418,7 +417,7 @@ func TestDispatchRejectsUnsafeRequestDir(t *testing.T) {
 		err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 			executed = true
 			return nil
-		}), node.ExecRunner{})
+		}))
 		if err == nil || executed {
 			t.Fatalf("0770 request directory: err=%v executed=%v", err, executed)
 		}
@@ -431,7 +430,7 @@ func TestDispatchRejectsUnsafeRequestDir(t *testing.T) {
 			return nil
 		})
 		cfg.RootOwner = os.Geteuid() + 1
-		if err := RunDispatch(context.Background(), cfg, node.ExecRunner{}); err == nil {
+		if err := RunDispatch(context.Background(), cfg); err == nil {
 			t.Fatal("a request directory owned by another account was accepted")
 		}
 	})
@@ -452,7 +451,7 @@ func TestDispatchIgnoresUnstagedResidue(t *testing.T) {
 		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 			executed = true
 			return nil
-		}), node.ExecRunner{}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 		if executed {
@@ -471,11 +470,121 @@ func TestDispatchIgnoresUnstagedResidue(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.writeRequest(t, f.updateRequest())
-		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil })); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Lstat(filepath.Join(f.requestDir, fixtureOp+".json")); !os.IsNotExist(err) {
 			t.Fatalf("the consumed request is still in the watched directory: %v", err)
+		}
+	})
+}
+
+// TestDispatchDrainsUnknownEntries is the path-unit re-arm regression of the
+// T4r review round. requests/ is Web-writable, so the Web can plant a name the
+// dispatcher never publishes itself. DirectoryNotEmpty ignores dot-names but not
+// these, so an ignored entry keeps the directory non-empty: every completion
+// re-triggers the unit, and after TriggerLimitBurst the path unit is disarmed
+// for good — a silent, permanent upgrade outage. Unknown non-dot names are
+// therefore drained into requests.done as rejected-* debris.
+func TestDispatchDrainsUnknownEntries(t *testing.T) {
+	t.Run("unknown entry is drained beside a completed request", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		if err := os.WriteFile(filepath.Join(f.requestDir, "planted.txt"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		f.writeRequest(t, f.updateRequest())
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil })); err != nil {
+			t.Fatal(err)
+		}
+		entries, err := os.ReadDir(f.requestDir)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("the watched directory did not end empty (the path unit never re-arms): %v, %v", entries, err)
+		}
+		done, err := os.ReadDir(f.doneDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rejected bool
+		for _, entry := range done {
+			if strings.HasPrefix(entry.Name(), "rejected-"+strconv.FormatInt(f.now.Unix(), 10)+"-planted.txt") {
+				rejected = true
+			}
+		}
+		if !rejected {
+			t.Fatalf("the planted entry was not drained as rejected debris: %v", done)
+		}
+		// The valid request beside the debris is still executed normally, and the
+		// completed document wins: no failure evidence is written over it.
+		if _, err := os.Lstat(filepath.Join(f.execRoot, "exec-"+fixtureOp)); err != nil {
+			t.Fatalf("the valid request was not executed: %v", err)
+		}
+		if _, ok, err := hubupgrade.ReadResult(f.resultsDir, fixtureOp); err != nil || ok {
+			t.Fatalf("a completed request got failure evidence from adjacent debris: ok=%v err=%v", ok, err)
+		}
+	})
+	t.Run("debris of the same operation does not shadow a completed request", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		if err := os.WriteFile(filepath.Join(f.requestDir, fixtureOp+".json.tmp"), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		f.writeRequest(t, f.updateRequest())
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil })); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(f.execRoot, "exec-"+fixtureOp)); err != nil {
+			t.Fatalf("debris beside the real request blocked the exec: %v", err)
+		}
+		if _, ok, err := hubupgrade.ReadResult(f.resultsDir, fixtureOp); err != nil || ok {
+			t.Fatalf("a completed request got failure evidence: ok=%v err=%v", ok, err)
+		}
+	})
+	t.Run("unknown entry naming an operation gets a rejected result", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		// A Web crash between fsync and rename can leave this shape behind; the
+		// name still names an operation, so the operator gets a stable code
+		// instead of a silently ignored handoff.
+		if err := os.WriteFile(filepath.Join(f.requestDir, fixtureOp+".json.tmp"), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		executed := false
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+			executed = true
+			return nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if executed {
+			t.Fatal("a non-request name was executed")
+		}
+		if code := readDispatchResult(t, f.resultsDir, fixtureOp).ErrorCode; code != codeRequestInvalid {
+			t.Fatalf("result code = %q, want %q", code, codeRequestInvalid)
+		}
+		entries, err := os.ReadDir(f.requestDir)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("an attributable debris entry was left in the watched directory: %v, %v", entries, err)
+		}
+	})
+	t.Run("unknown entry alone is drained and executes nothing", func(t *testing.T) {
+		f := newDispatchFixture(t)
+		if err := os.WriteFile(filepath.Join(f.requestDir, ".hidden"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.requestDir, "subdir"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		executed := false
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
+			executed = true
+			return nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if executed {
+			t.Fatal("debris was executed")
+		}
+		entries, err := os.ReadDir(f.requestDir)
+		if err != nil || len(entries) != 1 || entries[0].Name() != ".hidden" {
+			t.Fatalf("watched directory = %v, %v; want only the dot-name left (DirectoryNotEmpty ignores it)", entries, err)
 		}
 	})
 }
@@ -489,7 +598,7 @@ func TestDispatchRejectsForeignDataDir(t *testing.T) {
 	err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 		executed = true
 		return nil
-	}), node.ExecRunner{})
+	}))
 	if err == nil || executed {
 		t.Fatalf("foreign data_dir: err=%v executed=%v", err, executed)
 	}
@@ -510,7 +619,7 @@ func TestDispatchRejectsMoreThanOneRequest(t *testing.T) {
 	err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 		executed = true
 		return nil
-	}), node.ExecRunner{})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "HUB_HANDOFF_BUSY") || executed {
 		t.Fatalf("two requests: err=%v executed=%v", err, executed)
 	}
@@ -539,7 +648,7 @@ func TestDispatchUnknownTargetNoExec(t *testing.T) {
 	err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 		executed = true
 		return nil
-	}), node.ExecRunner{})
+	}))
 	if err == nil || executed || errorCode(err) != "MANIFEST_UNAVAILABLE" {
 		t.Fatalf("missing manifest: err=%v executed=%v", err, executed)
 	}
@@ -563,7 +672,7 @@ func TestDispatchStagedDigestMismatchNoExec(t *testing.T) {
 	err = RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 		executed = true
 		return nil
-	}), node.ExecRunner{})
+	}))
 	if err == nil || executed || errorCode(err) != codeDigestMismatch {
 		t.Fatalf("staged digest mismatch: err=%v executed=%v", err, executed)
 	}
@@ -594,7 +703,7 @@ func TestDispatchExecsVerifiedCopy(t *testing.T) {
 		// the staged bytes: the executed copy must not follow it.
 		return os.WriteFile(staged, []byte("replaced after validation"), 0755)
 	}
-	if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+	if err := RunDispatch(context.Background(), f.config(exec)); err != nil {
 		t.Fatal(err)
 	}
 	if string(executedBytes) != string(f.pkgBytes) {
@@ -657,7 +766,7 @@ func TestDispatchLedgerIdentity(t *testing.T) {
 			} else {
 				cfg.ReadLedger = func() (install.InstallState, bool, error) { return state, true, nil }
 			}
-			err := RunDispatch(context.Background(), cfg, node.ExecRunner{})
+			err := RunDispatch(context.Background(), cfg)
 			if err == nil || errorCode(err) != tc.code {
 				t.Fatalf("err = %v, want code %s", err, tc.code)
 			}
@@ -672,7 +781,7 @@ func TestDispatchReadsMeshmuxOwnedRecord(t *testing.T) {
 	t.Run("expected owner reads the record", func(t *testing.T) {
 		f := newDispatchFixture(t)
 		f.writeRequest(t, f.updateRequest())
-		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+		if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil })); err != nil {
 			t.Fatal(err)
 		}
 		// The read is <root>/<op>/record.json. A flat pointer copy is never
@@ -692,7 +801,7 @@ func TestDispatchReadsMeshmuxOwnedRecord(t *testing.T) {
 			return nil
 		})
 		cfg.RecordOwner = os.Geteuid() + 1
-		err := RunDispatch(context.Background(), cfg, node.ExecRunner{})
+		err := RunDispatch(context.Background(), cfg)
 		if err == nil {
 			t.Fatal("a record owned by another account was accepted")
 		}
@@ -736,7 +845,7 @@ func TestDispatchReadsRequestedOperation(t *testing.T) {
 		gotPath, gotArgv = path, argv
 		return nil
 	}
-	if err := RunDispatch(context.Background(), f.config(exec), node.ExecRunner{}); err != nil {
+	if err := RunDispatch(context.Background(), f.config(exec)); err != nil {
 		t.Fatal(err)
 	}
 	execPath := filepath.Join(f.execRoot, "exec-"+fixtureOp)
@@ -769,7 +878,7 @@ func TestDispatchReadDoesNotWriteDataDir(t *testing.T) {
 	f := newDispatchFixture(t)
 	before := snapshotTree(t, f.dataDir)
 	f.writeRequest(t, f.updateRequest())
-	if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+	if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil })); err != nil {
 		t.Fatal(err)
 	}
 	after := snapshotTree(t, f.dataDir)
@@ -829,7 +938,7 @@ func TestDispatchNeverTakesProduceLock(t *testing.T) {
 	defer unlock()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{})
+		done <- RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }))
 	}()
 	select {
 	case err := <-done:
@@ -853,7 +962,7 @@ func TestDispatchRefusesNonQueuedJournal(t *testing.T) {
 			err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error {
 				executed = true
 				return nil
-			}), node.ExecRunner{})
+			}))
 			if err == nil || executed || errorCode(err) != codeStateInvalid {
 				t.Fatalf("non-queued journal %s: err=%v executed=%v", state, err, executed)
 			}
@@ -880,7 +989,7 @@ ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --d
 		t.Fatal(err)
 	}
 	f.writeRequest(t, f.updateRequest())
-	if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil }), node.ExecRunner{}); err != nil {
+	if err := RunDispatch(context.Background(), f.config(func(string, []string, []string) error { return nil })); err != nil {
 		t.Fatal(err)
 	}
 }

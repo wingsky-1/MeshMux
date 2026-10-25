@@ -6,7 +6,9 @@ package rootexec
 // /run; PID 1 starts this fixed oneshot from a path unit. This file turns that
 // request into exactly one exec of a root-owned copy:
 //
-//  1. >1 request: drain everything, write HUB_HANDOFF_BUSY results, never exec;
+//  1. drain every non-request entry (so the path unit can re-arm) and, when
+//     more than one request is queued, drain those too with HUB_HANDOFF_BUSY;
+//     never exec in either case;
 //  2. parse the Web unit (including drop-ins) and require request.data_dir to
 //     equal its --data-dir;
 //  3. read the journal and the operation's own record with expectedOwner =
@@ -42,7 +44,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
 const (
@@ -111,7 +112,7 @@ type DispatchConfig struct {
 // Web (it must publish there), so a path-based pass could be redirected by
 // renaming the directory away and substituting a symlink or another directory
 // between the check and the use.
-func RunDispatch(ctx context.Context, cfg DispatchConfig, _ node.CommandRunner) error {
+func RunDispatch(ctx context.Context, cfg DispatchConfig) error {
 	if err := normalizeDispatchConfig(&cfg); err != nil {
 		return err
 	}
@@ -128,18 +129,26 @@ func RunDispatch(ctx context.Context, cfg DispatchConfig, _ node.CommandRunner) 
 		return fail(codeRequestInvalid, "the request directory could not be read")
 	}
 	// Only <op32hex>.json is a request. The writer stages in the unwatched
-	// sibling, so no half-written document can appear here; any other name is
-	// unsupported debris and is deliberately left alone rather than guessed at.
-	// It cannot widen the boundary (nothing is executed without a validated
-	// request), but it does keep the path unit non-empty, so a later queued
-	// operation times out with HUB_HANDOFF_TIMEOUT instead of re-arming.
-	var requests []string
+	// sibling, so no half-written document can appear here. A dot-name is
+	// ignored by systemd's DirectoryNotEmpty, so it cannot re-arm the path unit.
+	// Any *other* name is debris the Web (which can write this directory) may
+	// plant; leaving it in place would keep the directory non-empty, re-trigger
+	// the unit on every completion and eventually exhaust TriggerLimitBurst so
+	// the path unit never fires again. Such entries are therefore drained below,
+	// before anything is executed, and never parsed.
+	var requests, unknown []string
 	for _, entry := range entries {
-		if _, ok := requestOperationID(entry.Name()); ok {
-			requests = append(requests, entry.Name())
+		name := entry.Name()
+		if _, ok := requestOperationID(name); ok {
+			requests = append(requests, name)
+			continue
 		}
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		unknown = append(unknown, name)
 	}
-	if len(requests) == 0 {
+	if len(requests) == 0 && len(unknown) == 0 {
 		return nil
 	}
 
@@ -148,6 +157,36 @@ func RunDispatch(ctx context.Context, cfg DispatchConfig, _ node.CommandRunner) 
 		return err
 	}
 	defer doneDir.Close()
+
+	if len(unknown) > 0 {
+		// An unknown name carries no *valid* request, but it often still names an
+		// operation (<op>.json.tmp, <op>.json.part-7). Those get a rejected result
+		// so the operator sees why their handoff never ran; a name that yields no
+		// operation id cannot be attributed to a result document and is drained
+		// as rejected-<unix>-<name> debris only. When the same operation also has
+		// a completed <op>.json beside the debris, the completed document is
+		// authoritative and no failure evidence is written. Nothing is parsed,
+		// nothing is executed: the drain is the whole action.
+		queued := make(map[string]bool, len(requests))
+		for _, name := range requests {
+			if opID, ok := requestOperationID(name); ok {
+				queued[opID] = true
+			}
+		}
+		for _, name := range unknown {
+			opID, ok := embeddedOperationID(name)
+			if !ok || queued[opID] {
+				continue
+			}
+			writeFailureResult(cfg, opID, codeRequestInvalid, nil)
+		}
+		if _, err := hubupgrade.DrainAt(requestDir, doneDir, unknown, true, cfg.Now()); err != nil {
+			return err
+		}
+	}
+	if len(requests) == 0 {
+		return nil
+	}
 
 	if len(requests) > 1 {
 		for _, name := range requests {
@@ -363,6 +402,22 @@ func requestOperationID(name string) (string, bool) {
 	}
 	id := strings.TrimSuffix(name, ".json")
 	return id, dispatchOpIDRE.MatchString(id)
+}
+
+// embeddedOperationID finds a 32-hex operation id in a name this dispatcher
+// would not accept as a request (<op>.json.tmp, <op>.json.9, .<op>.json.part-3).
+// It only exists to attribute a rejected result to an operation the operator can
+// look up; it never authorizes anything, and a name without an id stays
+// unattributed.
+func embeddedOperationID(name string) (string, bool) {
+	for _, field := range strings.FieldsFunc(name, func(r rune) bool {
+		return r == '.' || r == '-' || r == '_'
+	}) {
+		if dispatchOpIDRE.MatchString(field) {
+			return field, true
+		}
+	}
+	return "", false
 }
 
 func dispatchStateAllowed(op hubupgrade.Op) bool {
