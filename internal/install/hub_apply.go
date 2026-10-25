@@ -72,6 +72,11 @@ func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *Instal
 		}
 		return failErr(false, nil, "apply", failures.accountCreate)
 	}
+	// The preflight layout ran before the fresh-install meshmux account existed;
+	// now that it does, fix the result directory's group so the Web can read it.
+	if err := ensureHubUpgradeOwnership(opts.Root); err != nil {
+		return fail(false, nil, "apply", "HUB_UPGRADE_STATE_LAYOUT_FAILED", "Create the meshmux account and inspect /var/lib/meshmux-installer ownership.")
+	}
 	if err := ensureDataDirectories(ctx, opts); err != nil {
 		return failErr(false, nil, "apply", failures.dataDirectory)
 	}
@@ -142,6 +147,9 @@ func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *Instal
 		rooted(opts.Root, "/etc/systemd/system/meshmux-headscale.service"),
 		rooted(opts.Root, "/etc/systemd/system/meshmux-caddy.service"),
 	}
+	for _, path := range hubDispatchManagedTargets() {
+		units = append(units, rooted(opts.Root, path))
+	}
 	if unitErr := validateStagedUnits(ctx, opts.Runner, units, failures.systemdUnit, failures.fail2banConfig); unitErr != nil {
 		return failErr(true, snapshots, unitErr.Stage, unitErr)
 	}
@@ -150,6 +158,16 @@ func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *Instal
 	}
 	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
 		return failErr(true, snapshots, "apply", failures.systemdReload)
+	}
+	// Create the root-owned request/result tree before the path unit can fire.
+	// The drop-in is applied with the rest of the managed files above.
+	if _, err := opts.Runner.Run(ctx, "systemd-tmpfiles", "--create", hubTmpfilesPath); err != nil {
+		return fail(true, snapshots, "apply", "SYSTEMD_TMPFILES_FAILED", "Install the MeshMux tmpfiles drop-in and inspect systemd-tmpfiles output.")
+	}
+	// Only the path unit is enabled: the oneshot has no [Install] section and is
+	// started by the path trigger, never at boot on its own.
+	if _, err := opts.Runner.Run(ctx, "systemctl", "enable", "--now", hubDispatchPathUnit); err != nil {
+		return fail(true, snapshots, "apply", "HUB_DISPATCH_ENABLE_FAILED", "Inspect meshmux-hub-dispatch.path and systemd state.")
 	}
 	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service"} {
 		if err := activateUnit(ctx, opts.Runner, unit, repair); err != nil {
