@@ -181,7 +181,7 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if hexDigest(manifestBody) != cfg.ManifestSHA256 {
 		return Result{}, fail("UPDATE_DIGEST_MISMATCH", "the manifest does not match the approved SHA-256")
 	}
-	c, err := validateTarget(m, cfg.Target)
+	c, err := ValidateTarget(m, cfg.Target)
 	if err != nil {
 		return Result{}, err
 	}
@@ -372,7 +372,7 @@ func installedNodeConfig() (node.Config, error) {
 	return cfg, nil
 }
 
-// validateTarget is the gate for a *target* release, which is by definition not
+// ValidateTarget is the gate for a *target* release, which is by definition not
 // the table of the running build. It therefore checks what an upgrade must
 // honour rather than table equality: the target's own schema, its
 // architecture, and a pinned meshmuxd component whose source class matches its
@@ -380,7 +380,7 @@ func installedNodeConfig() (node.Config, error) {
 // is the migration contract rather than a manifest-shape check.
 // upgrade.Manifest.Validate stays the running-build self-check and is not
 // applied here.
-func validateTarget(m upgrade.Manifest, target string) (upgrade.Component, error) {
+func ValidateTarget(m upgrade.Manifest, target string) (upgrade.Component, error) {
 	if m.Schema != upgrade.Schema {
 		return upgrade.Component{}, fail("MANIFEST_SCHEMA_INVALID", "the target names another manifest schema")
 	}
@@ -410,7 +410,20 @@ func trustedSource(c upgrade.Component) bool {
 	return strings.HasPrefix(c.Source, "https://github.com/")
 }
 
-func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) (string, error) {
+// FetchVerifiedSource copies one manifest-pinned component into dir under
+// fileName, accepting only the two source classes a manifest may declare. The
+// bytes are read within the same 128 MiB bound, verified against the component
+// SHA-256 before anything is written, then published as fileName.part ->
+// fileName (0700). The Hub's target-package stage (Task 5) reuses this function
+// so the source-class and size rules cannot drift from the Agent's fetch.
+//
+// fileName is a base name, never a caller path: the fixed naming helper of the
+// caller picks it, and a value that escapes dir is refused.
+func FetchVerifiedSource(ctx context.Context, dir, fileName string, c upgrade.Component) (string, error) {
+	if fileName == "" || fileName == "." || fileName == ".." || filepath.Base(fileName) != fileName ||
+		strings.ContainsAny(fileName, `/\`) {
+		return "", fail("UPDATE_STAGE_FAILED", "the staged package name is not a plain file name")
+	}
 	data, err := readSource(ctx, c.Source)
 	if err != nil {
 		return "", err
@@ -421,12 +434,7 @@ func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) 
 	if os.MkdirAll(dir, 0700) != nil {
 		return "", fail("UPDATE_STAGE_FAILED", "the private staging directory could not be created")
 	}
-	// The unit's ExecStart and the staged file share one name helper, so the
-	// bytes verified here are exactly the bytes the unit later executes.
-	final, err := transientStagedPath(dir, target, c.Architecture)
-	if err != nil {
-		return "", err
-	}
+	final := filepath.Join(dir, fileName)
 	if os.WriteFile(final+".part", data, 0700) != nil {
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be written")
 	}
@@ -435,6 +443,17 @@ func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) 
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be published")
 	}
 	return final, nil
+}
+
+// fetchPackage is the Agent's thin wrapper: the staged name remains the one
+// transientStagedPath derives, so the unit's ExecStart and these bytes continue
+// to share one naming helper.
+func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) (string, error) {
+	final, err := transientStagedPath(dir, target, c.Architecture)
+	if err != nil {
+		return "", err
+	}
+	return FetchVerifiedSource(ctx, dir, filepath.Base(final), c)
 }
 
 // readSource accepts only the two source classes a manifest may declare: a

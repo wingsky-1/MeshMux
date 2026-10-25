@@ -53,6 +53,11 @@ type Manifest struct {
 	PolicySchema         int              `json:"policy_schema"`
 	RoutePolicyRevisions map[string]int64 `json:"route_policy_revisions,omitempty"`
 	Components           []Component      `json:"components"`
+	// DatabaseMigration is the hub target's migration class (#11d spec §5.8):
+	// empty is additive. It rides the target gate in internal/update, not
+	// Validate below, because Validate is the running build's self-check. The
+	// field is part of the manifest bytes, so manifest_sha256 pins it.
+	DatabaseMigration string `json:"database_migration,omitempty"`
 }
 
 // mihomo is the pinned subscription client of the publish gate. It is not a node

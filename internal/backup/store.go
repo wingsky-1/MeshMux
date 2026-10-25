@@ -272,6 +272,26 @@ func Read(root, operationID string, layout Layout, expectedOwner int) (Record, e
 	return ReadRecord(dir, operationID, expectedOwner)
 }
 
+// ReadFlat returns the record of the single flat slot without an operation id.
+// The producer needs the current generation's irreversible bit before it starts
+// a new one, and the flat slot has exactly one generation, so requiring its id
+// would force a second reader over the same document.
+//
+// Like every flat entry this runs recoverFlatSlot and may rename a retired
+// payload back into place. The caller must hold the process-wide flat-slot lock
+// (internal/hubupgrade.LockFlatSlot) around this call and around any publish
+// that must not interleave with it.
+func ReadFlat(root string, expectedOwner int) (Record, error) {
+	dir, err := flatSlot(root, expectedOwner, false)
+	if err != nil {
+		return Record{}, err
+	}
+	if err := rejectPerOpResidue(dir); err != nil {
+		return Record{}, err
+	}
+	return readRecordFile(dir, expectedOwner)
+}
+
 // Confirm writes the confirmed state of one staged record. It checks the
 // readback anchors before the idempotent confirmed short-circuit, so a stale or
 // foreign readback can never re-confirm a record; it re-reads the payload from

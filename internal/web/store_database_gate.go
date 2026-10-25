@@ -41,6 +41,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 )
 
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
@@ -259,6 +260,12 @@ type databaseMigrationApproval struct {
 // migration itself (that is 11d). The write is staged and renamed so a reader
 // sees either the old or the new record, never half of one.
 func (s *store) approveIrreversibleMigration(operationID string, confirmed bool) (databaseMigrationApproval, error) {
+	// The read-time recovery of the flat slot renames a retired payload back
+	// into place; a publish must never interleave with it (Task-1 carry 2).
+	// The producer takes the same process-wide lock, so this read and its
+	// in-place record write are one critical section.
+	unlock := hubupgrade.LockFlatSlot()
+	defer unlock()
 	if !confirmed {
 		return databaseMigrationApproval{}, errors.New("IRREVERSIBLE_CONFIRM_REQUIRED: an irreversible database migration requires the explicit Web confirmation")
 	}

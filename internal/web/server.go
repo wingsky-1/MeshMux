@@ -23,6 +23,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/headscale"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
@@ -88,6 +89,11 @@ type Server struct {
 	digestOnce sync.Once
 	digest     string
 	digestErr  error
+	// hubBackup is the producer seam of the Hub backup route (#11d Task 3).
+	// Production leaves it nil so hubupgrade.CreateBackup always runs; an HTTP
+	// test replaces it to prove the boundary and receipt without a root-owned
+	// manifest. It is never a caller-supplied callback.
+	hubBackup func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error)
 }
 
 type requestKey int
@@ -225,6 +231,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// explicit operator bit on the Hub database backup record consumed by 11d.
 	// It performs no migration and no database edit.
 	r.Post("/tasks/db-migration/approve", jsonAPI(app.mutation(app.tasksDatabaseMigrationApprove, true)))
+	// The Hub backup producer (#11d Task 3): one authenticated mutation that
+	// reads a root-owned target manifest and writes the flat staged record.
+	// Apply/restore are Task 5/7; this route never hands off and never upgrades.
+	r.Post("/tasks/hub-upgrade/backup", jsonAPI(app.mutation(app.tasksHubUpgradeBackup, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
