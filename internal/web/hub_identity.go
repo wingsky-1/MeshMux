@@ -23,9 +23,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 )
 
 const (
@@ -65,6 +67,28 @@ type databaseIdentity struct {
 // the caller has none: the journal admits at most one verifying operation, so
 // the adapter resolves that one and may ignore the argument.
 type opTargetFunc func(operationID string) (version, digest string, ok bool)
+
+// hubOpTarget is the Task 5 journal adapter of that seam. It resolves the one
+// verifying update operation (single-flight means at most one) and returns the
+// target and package digest frozen by its backup. It reads only: a corrupt
+// journal yields ok=false, because the readback is advisory and must not turn
+// an unreadable operation record into a confirmed identity.
+func (app *Server) hubOpTarget(operationID string) (version, digest string, ok bool) {
+	ops, err := hubupgrade.ListOps(app.store.dir, os.Geteuid())
+	if err != nil {
+		return "", "", false
+	}
+	for _, op := range ops {
+		if op.Kind != hubupgrade.KindUpdate || op.State != hubupgrade.StateVerifying {
+			continue
+		}
+		if operationID != "" && op.OperationID != operationID {
+			continue
+		}
+		return op.TargetVersion, op.PackageSHA256, true
+	}
+	return "", "", false
+}
 
 // hubIdentitySnapshot is the management view of this build's identity. Code is
 // empty when the identity is confirmed; otherwise it is exactly one of the

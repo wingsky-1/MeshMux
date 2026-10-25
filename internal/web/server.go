@@ -94,6 +94,16 @@ type Server struct {
 	// test replaces it to prove the boundary and receipt without a root-owned
 	// manifest. It is never a caller-supplied callback.
 	hubBackup func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error)
+	// hubApply is the handoff seam of the Hub apply route (#11d Task 5). Same
+	// rule as hubBackup: production leaves it nil, a test replaces it.
+	hubApply func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error)
+	// reconcileMu guards the reconcile ticker handles. The ticker runs one
+	// journal pass every 30s; only the startup pass may judge identity and
+	// confirm (spec §5.5).
+	reconcileMu       sync.Mutex
+	reconcileCancel   context.CancelFunc
+	reconcileDone     chan struct{}
+	reconcileInterval time.Duration
 }
 
 type requestKey int
@@ -109,11 +119,24 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The journal adapter must exist before the identity refresher starts: the
+	// refresher compares every snapshot against the verifying operation, so a
+	// seam assigned later would race it (Task 2 carry). It is a read-only
+	// adapter over the same journal the reconcile pass advances.
+	app.opTarget = app.hubOpTarget
+	// The startup pass is the only one allowed to judge an identity and confirm
+	// (spec §5.5): a ticker in the old process cannot tell "not swapped yet"
+	// from "swapped and failed". It runs before the refresher so the first
+	// published snapshot already sees the confirmed journal state.
+	app.reconcileHubUpgrade(context.Background(), true)
 	// The read-only identity refresher of #11d (spec §5.4) runs for the life of
 	// the process and stops in Close. Observation never depends on a browser
 	// request, and the refresher never gates /healthz and never writes: the
 	// confirmed row was written once, by openStore, before this point.
 	app.startHubIdentityRefresh(context.Background())
+	// The journal state machine advances on its own 30s bound (spec §5.5); it
+	// never confirms, because only a startup pass may.
+	app.startHubUpgradeReconcile(context.Background())
 	return app, nil
 }
 
@@ -236,6 +259,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// database backup plus its existence-only flat pointer. Apply/restore are
 	// Task 5/7; this route never hands off and never upgrades.
 	r.Post("/tasks/hub-upgrade/backup", jsonAPI(app.mutation(app.tasksHubUpgradeBackup, true)))
+	// The Hub handoff (#11d Task 5): one authenticated mutation that re-verifies
+	// a backed-up operation, stages the root-pinned target package and queues one
+	// request under /run. It never waits for the upgrade and never claims one.
+	r.Post("/tasks/hub-upgrade/apply", jsonAPI(app.mutation(app.tasksHubUpgradeApply, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
@@ -263,6 +290,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 }
 
 func (s *Server) Close() error {
+	s.stopHubUpgradeReconcile()
 	s.stopHubIdentityRefresh()
 	return s.store.Close()
 }

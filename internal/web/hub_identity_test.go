@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 )
 
 // identityState is everything a readback must leave untouched: the SQLite
@@ -316,5 +317,63 @@ func TestUnprimedSnapshotIsNotConfirmed(t *testing.T) {
 	app.refreshHubIdentity()
 	if got := app.currentHubIdentity(); !got.Confirmed() {
 		t.Fatalf("primed snapshot = %+v, want confirmed", got)
+	}
+}
+
+// TestReadbackComparesVerifyingOpTarget pins the Task 5 half of the seam: the
+// real journal adapter resolves the one verifying operation, and its frozen
+// target must name both this build and the running package digest. The whole
+// comparison is read-only, including the journal it reads.
+func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
+	app, _ := testApp(t)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	before := observeIdentity(t, app)
+	digest, err := buildinfo.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.opTarget = app.hubOpTarget
+
+	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+		t.Fatalf("an empty journal reported %+v", snapshot)
+	}
+
+	operationID := strings.Repeat("a", 32)
+	op := hubupgrade.Op{
+		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
+		State: hubupgrade.StateVerifying, TargetVersion: buildinfo.Version, FromVersion: "0.9.0",
+		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: digest,
+		DBSchema: 10, BackupGeneration: 1, UpdatedAt: now,
+	}
+	if err := hubupgrade.WriteOp(app.store.dir, op); err != nil {
+		t.Fatal(err)
+	}
+	if version, pkg, ok := app.opTarget(strings.Repeat("b", 32)); ok || version != "" || pkg != "" {
+		t.Fatalf("the adapter resolved another operation: %q/%q/%v", version, pkg, ok)
+	}
+	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+		t.Fatalf("a matching verifying target reported %+v", snapshot)
+	}
+	requireIdentityUntouched(t, app, before, "the matching verifying target")
+
+	// The row still names this build, so only the journal target comparison can
+	// catch a release the Hub is not actually running.
+	op.TargetVersion = "1.0.1"
+	if err := hubupgrade.WriteOp(app.store.dir, op); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := app.hubIdentity(now); snapshot.Code != codeDatabaseVersionMismatch {
+		t.Fatalf("another target: code = %q, want %q", snapshot.Code, codeDatabaseVersionMismatch)
+	}
+	requireIdentityUntouched(t, app, before, "a mismatching verifying target")
+
+	// A non-verifying operation is never the seam's input: the build's own
+	// identity stands.
+	op.State, op.TargetVersion = hubupgrade.StateBackedUp, buildinfo.Version
+	if err := hubupgrade.WriteOp(app.store.dir, op); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+		t.Fatalf("a backed_up operation was compared: %+v", snapshot)
 	}
 }
