@@ -28,21 +28,19 @@ package web
 // bit lives on the record and no approval table is added.
 
 import (
-	"bytes"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/update"
 )
 
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
@@ -55,14 +53,12 @@ const (
 	// The Hub database backup is independent of the node rollback store
 	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to
 	// the database, in the same private 0700 data directory, so a restore never
-	// needs a path outside the deployment boundary.
+	// needs a path outside the deployment boundary. The record and payload names
+	// come from the neutral record package, so the Hub slot and the Node store
+	// cannot drift apart.
 	databaseBackupDirName        = "database-backup"
-	databaseBackupPayloadDirName = "payload"
-	databaseBackupRecordName     = "record.json"
-	databaseBackupRecordPart     = "record.json.part"
-
-	// databaseBackupRecordMaxBytes bounds the metadata file a reader parses.
-	databaseBackupRecordMaxBytes = 64 << 10
+	databaseBackupPayloadDirName = backup.PayloadDir
+	databaseBackupRecordName     = backup.RecordName
 )
 
 // databaseBackupOperationPattern is the fixed operation id shape of one Hub
@@ -157,35 +153,36 @@ func (s *store) schemaTooNew(version int) error {
 // same private-file rules as the node rollback records. Unknown fields are
 // refused: a future record schema must not be silently truncated into today's
 // approval semantics.
-func readDatabaseBackupRecord(path, operationID string) (update.BackupRecord, error) {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_MISSING: no verified Hub database backup record exists")
-	}
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
-		info.Mode().Perm() != 0600 || !ownedByCurrentUser(info) || info.Size() > databaseBackupRecordMaxBytes {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record is not a private 0600 file")
-	}
-	data, err := os.ReadFile(path)
+//
+// This is the thin adapter over the neutral record package (#11d Task 1): the
+// strict decoding, the private-mode rule and the "belongs to this operation"
+// check come from backup.Read with LayoutFlat, and the Web keeps only what is
+// its own policy — the DB_BACKUP_* stable codes and the extra refusal of a record
+// that names no source database schema.
+func readDatabaseBackupRecord(root, operationID string) (backup.Record, error) {
+	record, err := backup.Read(root, operationID, backup.LayoutFlat, os.Geteuid())
 	if err != nil {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record is not readable")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var record update.BackupRecord
-	if err := decoder.Decode(&record); err != nil {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record is not valid JSON")
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record carries trailing data")
-	}
-	if record.Schema != update.BackupRecordSchema || record.OperationID != operationID {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record does not belong to this operation")
+		return backup.Record{}, databaseBackupRecordError(err)
 	}
 	if record.DBSchema <= 0 {
-		return update.BackupRecord{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record names no source database schema")
+		return backup.Record{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record names no source database schema")
 	}
 	return record, nil
+}
+
+// databaseBackupRecordError maps the record layer's stable codes onto the Hub
+// gate's DB_BACKUP_* vocabulary. The mapping is by code, never by message text,
+// so a detail that happens to start with the same words cannot change behaviour.
+func databaseBackupRecordError(err error) error {
+	code, detail, _ := strings.Cut(err.Error(), ": ")
+	switch code {
+	case backup.CodeMissing:
+		return errors.New("DB_BACKUP_RECORD_MISSING: no verified Hub database backup record exists")
+	case backup.CodeCorrupt:
+		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record is not a private, verified record: " + detail)
+	default:
+		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record could not be read: " + detail)
+	}
 }
 
 // verifyDatabaseBackupPayload closes the vacuous-gate class Task 2 fixed: a
@@ -194,7 +191,7 @@ func readDatabaseBackupRecord(path, operationID string) (update.BackupRecord, er
 // database file, so this check is metadata-only (presence, private modes and the
 // recorded file count), not a re-hash on every operator click; 11d's restore step
 // still runs PRAGMA integrity_check on the copy it opens.
-func verifyDatabaseBackupPayload(record update.BackupRecord, root string) error {
+func verifyDatabaseBackupPayload(record backup.Record, root string) error {
 	if record.PayloadFiles <= 0 {
 		return errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup holds no payload files")
 	}
@@ -239,7 +236,7 @@ func verifyDatabaseBackupPayload(record update.BackupRecord, root string) error 
 
 // databaseMigrationApproval is the accepted confirmation plus its stored record.
 type databaseMigrationApproval struct {
-	Record          update.BackupRecord
+	Record          backup.Record
 	RecordPath      string
 	AlreadyApproved bool
 }
@@ -263,12 +260,11 @@ func (s *store) approveIrreversibleMigration(operationID string, confirmed bool)
 		}
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup directory is not private")
 	}
-	recordPath := filepath.Join(root, databaseBackupRecordName)
-	record, err := readDatabaseBackupRecord(recordPath, operationID)
+	record, err := readDatabaseBackupRecord(root, operationID)
 	if err != nil {
 		return databaseMigrationApproval{}, err
 	}
-	if record.State != update.BackupStateStaged {
+	if record.State != backup.StateStaged {
 		return databaseMigrationApproval{}, fmt.Errorf("DB_BACKUP_RECORD_NOT_STAGED: the Hub database backup record is %q", record.State)
 	}
 	if !record.IntegrityOK {
@@ -277,39 +273,16 @@ func (s *store) approveIrreversibleMigration(operationID string, confirmed bool)
 	if err := verifyDatabaseBackupPayload(record, root); err != nil {
 		return databaseMigrationApproval{}, err
 	}
-	out := databaseMigrationApproval{Record: record, RecordPath: recordPath}
+	out := databaseMigrationApproval{Record: record, RecordPath: filepath.Join(root, databaseBackupRecordName)}
 	if record.IrreversibleApproved {
 		out.AlreadyApproved = true
 		return out, nil
 	}
 	record.IrreversibleApproved = true
-	data, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return databaseMigrationApproval{}, errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record could not be encoded")
-	}
-	// Remove any stale scratch path first: os.WriteFile would follow a planted
-	// symlink, while Remove unlinks the link itself inside the 0700 directory.
-	part := filepath.Join(root, databaseBackupRecordPart)
-	if err := os.Remove(part); err != nil && !os.IsNotExist(err) {
-		return databaseMigrationApproval{}, errors.New("DB_BACKUP_APPROVAL_FAILED: the confirmation scratch path could not be cleared")
-	}
-	file, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return databaseMigrationApproval{}, errors.New("DB_BACKUP_APPROVAL_FAILED: the confirmation could not be staged")
-	}
-	_, writeErr := file.Write(data)
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	if closeErr := file.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	if writeErr != nil {
-		_ = os.Remove(part)
-		return databaseMigrationApproval{}, errors.New("DB_BACKUP_APPROVAL_FAILED: the confirmation could not be staged")
-	}
-	if err := os.Rename(part, recordPath); err != nil {
-		_ = os.Remove(part)
+	// The bit is written through the record layer's single encoder and its
+	// staged-then-renamed publish, so an approval can never publish half a record
+	// or a record the record layer would refuse to read back.
+	if err := backup.WriteRecord(root, record); err != nil {
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_APPROVAL_FAILED: the confirmation could not be stored")
 	}
 	out.Record = record

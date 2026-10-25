@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/update"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -57,7 +57,7 @@ func userVersion(t *testing.T, dir string) int {
 // irreversible-confirmation action read. It is metadata only and 0600; the
 // payload is one private database copy, because an approval must never confirm a
 // record that holds nothing to restore.
-func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*update.BackupRecord)) (string, update.BackupRecord) {
+func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*backup.Record)) (string, backup.Record) {
 	t.Helper()
 	root := filepath.Join(dataDir, databaseBackupDirName)
 	payload := filepath.Join(root, databaseBackupPayloadDirName)
@@ -68,13 +68,13 @@ func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*u
 	if err := os.WriteFile(filepath.Join(payload, "meshmux.db"), []byte("fixture database copy"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	record := update.BackupRecord{
-		Schema: update.BackupRecordSchema, OperationID: operationID,
+	record := backup.Record{
+		Schema: backup.RecordSchema, OperationID: operationID,
 		FromVersion: "1.0.0", TargetVersion: "1.0.1",
 		DBSchema: databaseSchemaVersion - 1, PolicySchema: upgrade.PolicySchema,
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("b", 64),
 		PayloadPath: payload, PayloadSHA256: strings.Repeat("c", 64),
-		PayloadFiles: 1, IntegrityOK: true, State: update.BackupStateStaged,
+		PayloadFiles: 1, IntegrityOK: true, State: backup.StateStaged,
 		CreatedAt: time.Now().UTC(),
 	}
 	if mutate != nil {
@@ -91,13 +91,13 @@ func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*u
 	return path, record
 }
 
-func readStoredDatabaseRecord(t *testing.T, path string) update.BackupRecord {
+func readStoredDatabaseRecord(t *testing.T, path string) backup.Record {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var record update.BackupRecord
+	var record backup.Record
 	if err := json.Unmarshal(data, &record); err != nil {
 		t.Fatalf("stored record is not JSON: %v", err)
 	}
