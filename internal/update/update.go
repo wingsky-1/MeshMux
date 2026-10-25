@@ -181,7 +181,7 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	if hexDigest(manifestBody) != cfg.ManifestSHA256 {
 		return Result{}, fail("UPDATE_DIGEST_MISMATCH", "the manifest does not match the approved SHA-256")
 	}
-	c, err := validateTarget(m, cfg.Target)
+	c, err := ValidateTarget(m, cfg.Target)
 	if err != nil {
 		return Result{}, err
 	}
@@ -372,7 +372,7 @@ func installedNodeConfig() (node.Config, error) {
 	return cfg, nil
 }
 
-// validateTarget is the gate for a *target* release, which is by definition not
+// ValidateTarget is the gate for a *target* release, which is by definition not
 // the table of the running build. It therefore checks what an upgrade must
 // honour rather than table equality: the target's own schema, its
 // architecture, and a pinned meshmuxd component whose source class matches its
@@ -380,7 +380,7 @@ func installedNodeConfig() (node.Config, error) {
 // is the migration contract rather than a manifest-shape check.
 // upgrade.Manifest.Validate stays the running-build self-check and is not
 // applied here.
-func validateTarget(m upgrade.Manifest, target string) (upgrade.Component, error) {
+func ValidateTarget(m upgrade.Manifest, target string) (upgrade.Component, error) {
 	if m.Schema != upgrade.Schema {
 		return upgrade.Component{}, fail("MANIFEST_SCHEMA_INVALID", "the target names another manifest schema")
 	}
@@ -411,6 +411,27 @@ func trustedSource(c upgrade.Component) bool {
 }
 
 func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) (string, error) {
+	final, err := transientStagedPath(dir, target, c.Architecture)
+	if err != nil {
+		return "", err
+	}
+	return FetchVerifiedSource(ctx, dir, filepath.Base(final), c)
+}
+
+// FetchVerifiedSource copies one manifest-pinned component into dir under
+// fileName, accepting only the two source classes a manifest may declare. The
+// bytes are read within the same 128 MiB bound, verified against the component
+// SHA-256 before anything is written, then published as fileName.part ->
+// fileName (0700). The Hub's target-package stage (Task 5) reuses this function
+// so the source-class and size rules cannot drift from the Agent's fetch.
+//
+// fileName is a base name, never a caller path: the fixed naming helper of the
+// caller picks it, and a value that escapes dir is refused.
+func FetchVerifiedSource(ctx context.Context, dir, fileName string, c upgrade.Component) (string, error) {
+	if fileName == "" || fileName == "." || fileName == ".." || filepath.Base(fileName) != fileName ||
+		strings.ContainsAny(fileName, `/\`) {
+		return "", fail("UPDATE_STAGE_FAILED", "the staged package name is not a plain file name")
+	}
 	data, err := readSource(ctx, c.Source)
 	if err != nil {
 		return "", err
@@ -421,20 +442,53 @@ func fetchPackage(ctx context.Context, dir, target string, c upgrade.Component) 
 	if os.MkdirAll(dir, 0700) != nil {
 		return "", fail("UPDATE_STAGE_FAILED", "the private staging directory could not be created")
 	}
-	// The unit's ExecStart and the staged file share one name helper, so the
-	// bytes verified here are exactly the bytes the unit later executes.
-	final, err := transientStagedPath(dir, target, c.Architecture)
-	if err != nil {
-		return "", err
-	}
-	if os.WriteFile(final+".part", data, 0700) != nil {
+	final := filepath.Join(dir, fileName)
+	part := final + ".part"
+	if err := writeStagedPackage(part, data); err != nil {
+		_ = os.Remove(part)
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be written")
 	}
-	if os.Rename(final+".part", final) != nil {
-		_ = os.Remove(final + ".part")
+	if os.Rename(part, final) != nil {
+		_ = os.Remove(part)
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be published")
 	}
 	return final, nil
+}
+
+// stagedFileSync is the fsync seam of a staged package. Production syncs the
+// real file; the test proves the flush happens while the .part name is still in
+// place, before the rename publishes it (spec §5.8 durable ordering).
+var stagedFileSync = func(file *os.File) error { return file.Sync() }
+
+// writeStagedPackage writes one verified package into a private scratch name
+// and flushes it before returning. The later rename therefore publishes bytes
+// that were already fsynced, rather than leaving a page-cache-only file under
+// the final executable name.
+func writeStagedPackage(path string, data []byte) error {
+	// A previous crash leaves a scratch file; it is never trusted, only
+	// replaced (and a planted symlink is unlinked, not followed).
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := stagedFileSync(file); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 // readSource accepts only the two source classes a manifest may declare: a

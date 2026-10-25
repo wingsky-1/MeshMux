@@ -133,8 +133,21 @@ func Write(root string, spec Spec, payload Payload) (Record, error) {
 	if err := WriteRecord(dir, record); err != nil {
 		return Record{}, err
 	}
+	// The operation directory's entry is created by Dir; syncing the store root
+	// here is what makes the published generation durable across power loss.
+	// Without it the journal could claim backed_up while database-backup/<op>/
+	// was never durable, which is data loss with no restore source (T1r review
+	// carry).
+	if err := storeRootSync(root); err != nil {
+		return Record{}, fail(CodeCorrupt, "the rollback store directory could not be flushed")
+	}
 	return record, nil
 }
+
+// storeRootSync is the store-root fsync seam of a successful Write. Production
+// syncs the real directory; a test replaces it to prove the flush happens after
+// the record is published and that a failure is reported rather than swallowed.
+var storeRootSync = syncDir
 
 // Verify is the handoff and restore precondition: it reads the record and the
 // payload back from disk under the private-mode rules and refuses a missing

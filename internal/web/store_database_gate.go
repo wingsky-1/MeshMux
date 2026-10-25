@@ -51,11 +51,12 @@ const (
 	databaseSchemaVersion = 10
 
 	// The Hub database backup is independent of the node rollback store
-	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to
-	// the database, in the same private 0700 data directory, so a restore never
-	// needs a path outside the deployment boundary. The record and payload names
-	// come from the neutral record package, so the Hub slot and the Node store
-	// cannot drift apart.
+	// (spec §4.1 "Hub DB 记录独立"). Verified per-operation backups are kept next
+	// to the database, in the same private 0700 data directory, so a restore
+	// never needs a path outside the deployment boundary. The record and payload
+	// names come from the neutral record package, so the Hub store and the Node
+	// store cannot drift apart. The flat <root>/record.json is an existence-only
+	// pointer for this file's schemaTooNew check; nothing here reads it.
 	databaseBackupDirName        = "database-backup"
 	databaseBackupPayloadDirName = backup.PayloadDir
 	databaseBackupRecordName     = backup.RecordName
