@@ -28,24 +28,15 @@ import (
 	"strconv"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
 var artifactSHA256 = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-// installArtifactMaxBytes bounds both the configured CLI artifact and the
-// download response. The download streams in chunks (see
-// installArtifactDownload), so this limit is a correctness boundary rather than
-// a memory budget.
-const installArtifactMaxBytes = 128 << 20
-
-// InstallArtifact is the current same-origin CLI binary made available by the
-// private Web runtime. Path never enters HTTP responses or logs.
-type InstallArtifact struct {
-	Path         string
-	Version      string
-	Architecture string
-	SHA256       string
-}
+// InstallArtifact is view.InstallArtifact: the type lives in the view package
+// so templates, handlers and assembly share one definition.
+type InstallArtifact = view.InstallArtifact
 
 // Config is local operator configuration, never accepted from an HTTP request.
 type Config struct {
@@ -134,7 +125,7 @@ func (c Config) Validate(uid int) error {
 			return errors.New("INSTALL_ARTIFACT_INVALID: unsupported architecture")
 		}
 		info, err := os.Lstat(a.Path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 1 || info.Size() > installArtifactMaxBytes {
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 1 || info.Size() > handler.InstallArtifactMaxBytes {
 			return errors.New("INSTALL_ARTIFACT_INVALID: require a regular executable of at most 128 MiB")
 		}
 	}
