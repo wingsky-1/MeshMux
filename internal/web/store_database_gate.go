@@ -166,13 +166,14 @@ func (s *store) schemaTooNew(version int) error {
 // refused: a future record schema must not be silently truncated into today's
 // approval semantics.
 //
-// This is the thin adapter over the neutral record package (#11d Task 1): the
+// This is the thin adapter over the neutral record package (#11d Task 1r): the
 // strict decoding, the private-mode rule and the "belongs to this operation"
-// check come from backup.Read with LayoutFlat, and the Web keeps only what is
-// its own policy — the DB_BACKUP_* stable codes and the extra refusal of a record
-// that names no source database schema.
+// check come from backup.Read on <root>/<operationID>/record.json, and the Web
+// keeps only what is its own policy — the DB_BACKUP_* stable codes and the extra
+// refusal of a record that names no source database schema. The flat
+// <root>/record.json pointer is never read here.
 func readDatabaseBackupRecord(root, operationID string) (backup.Record, error) {
-	record, err := backup.Read(root, operationID, backup.LayoutFlat, os.Geteuid())
+	record, err := backup.Read(root, operationID, os.Geteuid())
 	if err != nil {
 		return backup.Record{}, databaseBackupRecordError(err)
 	}
@@ -203,11 +204,11 @@ func databaseBackupRecordError(err error) error {
 // database file, so this check is metadata-only (presence, private modes and the
 // recorded file count), not a re-hash on every operator click; 11d's restore step
 // still runs PRAGMA integrity_check on the copy it opens.
-func verifyDatabaseBackupPayload(record backup.Record, root string) error {
+func verifyDatabaseBackupPayload(record backup.Record, operationDir string) error {
 	if record.PayloadFiles <= 0 {
 		return errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup holds no payload files")
 	}
-	payload := filepath.Join(root, databaseBackupPayloadDirName)
+	payload := filepath.Join(operationDir, backup.PayloadDir)
 	if filepath.Clean(record.PayloadPath) != payload {
 		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record names another payload path")
 	}
@@ -282,10 +283,14 @@ func (s *store) approveIrreversibleMigration(operationID string, confirmed bool)
 	if !record.IntegrityOK {
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup has no integrity readback")
 	}
-	if err := verifyDatabaseBackupPayload(record, root); err != nil {
+	operationDir, err := backup.Dir(root, operationID)
+	if err != nil {
+		return databaseMigrationApproval{}, databaseBackupRecordError(err)
+	}
+	if err := verifyDatabaseBackupPayload(record, operationDir); err != nil {
 		return databaseMigrationApproval{}, err
 	}
-	out := databaseMigrationApproval{Record: record, RecordPath: filepath.Join(root, databaseBackupRecordName)}
+	out := databaseMigrationApproval{Record: record, RecordPath: filepath.Join(operationDir, backup.RecordName)}
 	if record.IrreversibleApproved {
 		out.AlreadyApproved = true
 		return out, nil
@@ -294,7 +299,7 @@ func (s *store) approveIrreversibleMigration(operationID string, confirmed bool)
 	// The bit is written through the record layer's single encoder and its
 	// staged-then-renamed publish, so an approval can never publish half a record
 	// or a record the record layer would refuse to read back.
-	if err := backup.WriteRecord(root, record); err != nil {
+	if err := backup.WriteRecord(operationDir, record); err != nil {
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_APPROVAL_FAILED: the confirmation could not be stored")
 	}
 	out.Record = record

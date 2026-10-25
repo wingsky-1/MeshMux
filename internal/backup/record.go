@@ -1,12 +1,9 @@
 // Package backup is the neutral owner of the upgrade rollback record (#11d
-// Task 1, spec C1-C3/C9/C18). It holds the frozen 11c-3 record schema 1, its
-// single encoder, and the two on-disk layouts that share it:
-//
-//   - LayoutPerOp is the Node store: one 0700 directory per operation under the
-//     rollback root, holding record.json and a copied payload tree.
-//   - LayoutFlat is the Hub slot: one generation directly under the slot root,
-//     holding record.json and one 0700 payload directory. A new backup replaces
-//     the generation atomically; the slot never keeps a second one.
+// Task 1r, spec C1-C3/C9/C18). It holds the frozen 11c-3 record schema 1, its
+// single encoder, and the one per-operation store both the Node and the Hub use:
+// one 0700 directory per operation under the rollback root, holding record.json
+// and a copied payload tree or database copy. The record is the same bytes for
+// either producer; only its payload_path and payload digest differ.
 //
 // The record is metadata only: no key, token or subscription URL is ever written
 // into it. The payload may contain secrets (Reality keys, the subscription
@@ -43,26 +40,21 @@ const (
 	RecordPart = "record.json.part"
 	// PayloadDir is the fixed payload directory inside a holding directory.
 	PayloadDir = "payload"
-	// PayloadPart is the producer's scratch payload directory. A flat producer
-	// VACUUMs the database copy here; Write publishes it.
+	// PayloadPart is the producer's scratch payload directory inside the
+	// operation directory. A single-database producer VACUUMs the database copy
+	// here and Write verifies and publishes it.
 	PayloadPart = "payload.part"
-	// PayloadTrashPrefix and PayloadOrphanPrefix name the retired and displaced
-	// payload directories of the flat slot's crash recovery.
-	PayloadTrashPrefix  = "payload.trash-"
-	PayloadOrphanPrefix = "payload.orphan-"
-	// RecordTrashPrefix names a record retired by an explicit flat cleanup.
-	RecordTrashPrefix = "record.json.trash-"
 	// SingleDBName is the one database copy of a PayloadSingleDB payload.
 	SingleDBName = "meshmux.db"
 
 	// RecordMaxBytes bounds the metadata file a reader will parse.
 	RecordMaxBytes = 64 << 10
 
-	// KeepConfirmed is N-1: after a confirmed upgrade the store keeps the single
-	// newest confirmed generation, because that is the release a revert must be
-	// able to go back to. Failed and staged records are always retained (D1,
-	// spec §4.20). The flat Hub slot holds one generation, so its GC is a no-op
-	// at this keep count (spec C18, plan ruling 3).
+	// KeepConfirmed is N-1 for the Node store: after a confirmed upgrade it
+	// keeps the single newest confirmed generation, because that is the release
+	// a revert must be able to go back to. Failed and staged records are always
+	// retained (D1, spec §4.20). The Hub passes keep=2 at its call site
+	// (spec C18); this package keeps the count caller-supplied.
 	KeepConfirmed = 1
 
 	// TreeFileMaxBytes bounds one file of a copied payload tree. It mirrors the
@@ -81,9 +73,9 @@ const (
 	StateFailed    = "failed"
 )
 
-// Stable error codes. The record layer keeps the 11c-3 vocabulary: both layouts
-// answer with the same codes so the Web gate and the Agent's receipt do not
-// change when the record moves into this package.
+// Stable error codes. The record layer keeps the 11c-3 vocabulary: the Web gate
+// and the Agent's receipt answer with the same codes, so neither changes when
+// the record moves into this package.
 const (
 	// CodeMissing means no record (or no store) exists at all.
 	CodeMissing = "UPDATE_BACKUP_MISSING"
@@ -104,17 +96,6 @@ const (
 	CodeConfirmRefused = "UPDATE_CONFIRM_REFUSED"
 )
 
-// Layout selects where one generation lives. It never changes how a record is
-// encoded: that is the single-encoder rule (spec C2/N4).
-type Layout int
-
-const (
-	// LayoutPerOp is the Node store: <root>/<op32hex>/{record.json,payload}.
-	LayoutPerOp Layout = iota
-	// LayoutFlat is the Hub slot: <root>/{record.json,payload}.
-	LayoutFlat
-)
-
 // PayloadKind selects how the payload bytes reach the store.
 type PayloadKind int
 
@@ -130,8 +111,9 @@ const (
 // package fetch and re-verified before the handoff; restore reads the payload
 // through PayloadPath and checks PayloadSHA256 before applying any byte.
 //
-// The field order, tags and JSON encoding are frozen by 11c-3 (schema 1) and
-// shared by both layouts: only PayloadPath differs between them.
+// The field order, tags and JSON encoding are frozen by 11c-3 (schema 1); the
+// payload kind is not a field, so only PayloadPath and the payload digest differ
+// between a tree payload and a single-database payload.
 type Record struct {
 	Schema        int    `json:"schema"`
 	OperationID   string `json:"operation_id"`
@@ -186,16 +168,16 @@ type Spec struct {
 	PackageSHA256     string
 	FromPackageSHA256 string
 	FromAgentSHA256   string
-	// SnapshotDir is the installer-provided snapshot of the per-operation
-	// layout. It is retained for the frozen update.BackupSpec alias; Write takes
-	// the payload source from Payload, so a caller that still fills this field
-	// must mirror it there.
+	// SnapshotDir is the installer-provided snapshot the Node copies into its
+	// per-operation payload. It is retained for the frozen update.BackupSpec
+	// alias; Write takes the payload source from Payload, so a caller that still
+	// fills this field must mirror it there.
 	SnapshotDir string
 	// Now is the clock seam. A nil Now means time.Now.
 	Now func() time.Time
 }
 
-// Payload is the bytes one generation stores, independent of the layout.
+// Payload is the bytes one operation stores.
 type Payload struct {
 	Kind PayloadKind
 	// SnapshotDir is the source tree of a PayloadTree. An empty value is a real
@@ -207,13 +189,11 @@ type Payload struct {
 	Check func(payloadDir string) error
 }
 
-// Paths returns the record and payload paths inside one holding directory. For
-// LayoutFlat the directory is the slot root itself; for LayoutPerOp it is the
-// operation directory returned by Dir. Both layouts use the same two fixed names
-// inside their directory, which is exactly why a record only differs in
-// PayloadPath.
-func Paths(root string, _ Layout) (recordPath, payloadPath string) {
-	return filepath.Join(root, RecordName), filepath.Join(root, PayloadDir)
+// Paths returns the record and payload paths inside one operation directory. It
+// is the only place the two fixed names are joined, so every caller agrees on
+// <dir>/record.json and <dir>/payload.
+func Paths(dir string) (recordPath, payloadPath string) {
+	return filepath.Join(dir, RecordName), filepath.Join(dir, PayloadDir)
 }
 
 func (spec Spec) validate() error {
@@ -258,7 +238,7 @@ func (record Record) sameIdentity(spec Spec) bool {
 
 // newRecord builds the staged record of one written payload. It is the only
 // place a Record literal is created, so the frozen schema and the initial state
-// cannot drift between layouts.
+// cannot drift between the Node and Hub producers.
 func newRecord(spec Spec, payloadPath, digest string, files int, now time.Time) Record {
 	return Record{
 		Schema: RecordSchema, OperationID: spec.OperationID,
