@@ -57,3 +57,26 @@ func TestDigestUnavailable(t *testing.T) {
 		})
 	}
 }
+
+// TestDigestRejectsOversize pins the size bound: a regular file larger than
+// maxExecutableBytes is HUB_DIGEST_UNAVAILABLE before any byte is hashed. The
+// read bound (n > maxExecutableBytes) is the same refusal for a file that grows
+// between the stat and the read; a stable regular file cannot reach it, so it
+// stays defence in depth rather than a reachable test fixture.
+func TestDigestRejectsOversize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oversize")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxExecutableBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := digestFile(path); err == nil || !strings.HasPrefix(err.Error(), "HUB_DIGEST_UNAVAILABLE") {
+		t.Fatalf("digestFile(oversize) err = %v, want HUB_DIGEST_UNAVAILABLE", err)
+	}
+}

@@ -80,8 +80,9 @@ type hubIdentitySnapshot struct {
 }
 
 // Confirmed reports whether this database proved it belongs to the running
-// build. It is true only when no event applies.
-func (s hubIdentitySnapshot) Confirmed() bool { return s.Code == "" }
+// build. It is true only when no event applies and a readback has actually
+// happened: the zero value is "not primed yet", not "confirmed".
+func (s hubIdentitySnapshot) Confirmed() bool { return s.Code == "" && !s.CheckedAt.IsZero() }
 
 // readDatabaseIdentityFrom reads the two identity facts over an explicit
 // handle. The row comes from the existing lastGoodDatabaseVersion reader, so
@@ -247,7 +248,7 @@ func (app *Server) startHubIdentityRefresh(ctx context.Context) {
 	go func() {
 		defer close(done)
 		// Prime once so the management snapshot never waits for the first tick.
-		app.publishHubIdentity(now(), nil)
+		app.publishHubIdentity(now(), app.opTarget)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -255,7 +256,7 @@ func (app *Server) startHubIdentityRefresh(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				app.publishHubIdentity(now(), nil)
+				app.publishHubIdentity(now(), app.opTarget)
 			}
 		}
 	}()

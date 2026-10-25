@@ -93,7 +93,7 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 	}
 	check(t, codeDatabaseUnconfirmed, 200)
 
-	if _, err := app.store.db.Exec(`PRAGMA user_version=11`); err != nil {
+	if _, err := app.store.db.Exec("PRAGMA user_version=" + strconv.Itoa(databaseSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
 	check(t, codeSchemaReadbackFailed, 200)
@@ -189,7 +189,10 @@ func TestReadbackMatrix(t *testing.T) {
 	}{
 		{"confirmed identity", func(*testing.T, *Server) {}, ""},
 		{"schema readback failed", func(t *testing.T, app *Server) {
-			if _, err := app.store.db.Exec(`PRAGMA user_version=11`); err != nil {
+			// One above the schema this build owns, never a literal: Task 5
+			// moves databaseSchemaVersion to 11, and the assertion must stay
+			// "a newer schema", not "the next release's schema".
+			if _, err := app.store.db.Exec("PRAGMA user_version=" + strconv.Itoa(databaseSchemaVersion+1)); err != nil {
 				t.Fatal(err)
 			}
 		}, codeSchemaReadbackFailed},
@@ -296,4 +299,22 @@ func TestIdentityRefreshIsBoundedAndStopsOnClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.stopHubIdentityRefresh()
+}
+
+// TestUnprimedSnapshotIsNotConfirmed pins that "no readback has happened yet"
+// is not "the identity is confirmed": the zero-value snapshot has an empty
+// Code, so Confirmed must also require a captured CheckedAt. newServer (used by
+// testApp) does not start the refresher; only New does.
+func TestUnprimedSnapshotIsNotConfirmed(t *testing.T) {
+	if (hubIdentitySnapshot{}).Confirmed() {
+		t.Fatal("zero-value snapshot reads as confirmed")
+	}
+	app, _ := testApp(t)
+	if got := app.currentHubIdentity(); got.Confirmed() {
+		t.Fatalf("unprimed server snapshot reads as confirmed: %+v", got)
+	}
+	app.refreshHubIdentity()
+	if got := app.currentHubIdentity(); !got.Confirmed() {
+		t.Fatalf("primed snapshot = %+v, want confirmed", got)
+	}
 }

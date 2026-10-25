@@ -78,7 +78,9 @@ type Server struct {
 	// opTarget is the read-only journal seam for the identity readback. Task 2
 	// leaves it nil (no journal yet); Task 5 wires it. It is a field rather
 	// than a parameter so the ticker and a page render compare against the
-	// same source.
+	// same source. Task 5 must inject it before startHubIdentityRefresh starts
+	// the refresher: the goroutine reads the field every tick, so assigning it
+	// afterwards would both race and leave published snapshots uncompared.
 	opTarget opTargetFunc
 	// digest is the running executable's SHA-256, computed at most once and
 	// only when a verifying operation needs it. It is read-only identity, not
