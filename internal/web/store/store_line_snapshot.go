@@ -16,14 +16,16 @@ const maxLineCandidateUsers = 1024
 // the caller's transaction.
 //
 // The frozen baseline always carries the node identity, role, revision, VLESS
-// port and pinned kernel version. An Out node never receives credentials or a
-// REALITY block. An Edge node without stored Line settings keeps the baseline
-// too. Only an Edge node with stored transport settings extends the candidate
+// port and pinned kernel version. An Out node never receives user credentials
+// or a REALITY block; with configured transport it carries the SS link key
+// (v4) for its guard listener, otherwise it keeps the baseline too. An Edge
+// node without stored Line settings keeps the baseline as well.
+// Only an Edge node with stored transport settings extends the candidate
 // with the REALITY listener and the desired user set: every active credential
 // of every active subscriber of this Line, ordered by credential ID.
 //
 // A Line with an enabled Out binding additionally carries the Out egress: the
-// selected Out node's dial address/port plus the Hub-issued link credential.
+// selected Out node's dial address/port plus the Hub-issued SS link key.
 // The endpoint comes from the Out's own configured transport and the first
 // enabled binding in node-id order, so the candidate is deterministic while
 // the 1.0 model binds one Out at a time. A bound Out without transport leaves
@@ -48,8 +50,16 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 		VLESSPort:     vlessPort,
 		KernelVersion: node.KernelVersion,
 	}
-	// An Out node never carries a proxy transport or credentials.
+	// An Out node never carries a proxy transport or user credentials. With
+	// configured transport it carries the link key (a v4 document) so its
+	// Agent renders the SS guard; without transport it keeps the frozen v1
+	// baseline, so its stored digest still verifies.
 	if node.Role(role) == node.RoleOut {
+		if egress, configured, err := outEgressTx(tx, nodeID); err != nil {
+			return node.Candidate{}, err
+		} else if configured {
+			candidate.Out = &egress
+		}
 		return validateLineCandidate(candidate)
 	}
 	if node.Role(role) != node.RoleEdge {

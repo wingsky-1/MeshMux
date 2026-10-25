@@ -347,16 +347,17 @@ func (s *Store) DeriveOutAllowlist(outID string) ([]string, error) {
 }
 
 // outCandidateAtRevisionTx is the compiled digest the Hub expects for one Out
-// revision. An Out carries no users and no REALITY block, but its baseline tag is
-// revision-scoped, so the digest is built at the exact revision under test
-// instead of being treated as revision independent.
+// revision. An Out carries no users and no REALITY block, but it may carry
+// the link key (v4) for its SS guard; its baseline tag is revision-scoped,
+// so the digest is built at the exact revision under test instead of being
+// treated as revision independent.
 func outCandidateAtRevisionTx(tx *sql.Tx, outID string, revision int64) (string, error) {
 	candidate, err := BuildLineCandidateTx(tx, outID, revision)
 	if err != nil {
 		return "", err
 	}
 	if candidate.Role != node.RoleOut || candidate.Reality != nil || len(candidate.Users) != 0 {
-		return "", errors.New("OUT_CANDIDATE_INVALID: an out candidate must be the credential-free baseline")
+		return "", errors.New("OUT_CANDIDATE_INVALID: an out candidate must be the baseline or the link-key document")
 	}
 	return compiledCandidateHash(candidate)
 }

@@ -68,9 +68,10 @@ func (f publishFixture) activatePolicy(t *testing.T, layer store.PolicyLayer, pa
 const publishServerDirect = `{"default":"direct","rules":[]}`
 
 // assertRealOutEgress proves the assembled Line document carries the Hub's
-// Out access path: the "out" tag is a VLESS outbound that dials the selected
-// Out node's configured address/port with a Hub-issued credential, not the
-// fail-closed block stub.
+// Out access path: the "out" tag is a Shadowsocks outbound (Ruling R7: the
+// bare-VLESS double-hop is gone) that dials the selected Out node's
+// configured address/port with the Hub-issued link key, not the fail-closed
+// block stub.
 func assertRealOutEgress(t *testing.T, document []byte) {
 	t.Helper()
 	var decoded struct {
@@ -79,7 +80,8 @@ func assertRealOutEgress(t *testing.T, document []byte) {
 			Tag        string `json:"tag"`
 			Server     string `json:"server,omitempty"`
 			ServerPort int    `json:"server_port,omitempty"`
-			UUID       string `json:"uuid,omitempty"`
+			Method     string `json:"method,omitempty"`
+			Password   string `json:"password,omitempty"`
 		} `json:"outbounds"`
 	}
 	if err := json.Unmarshal(document, &decoded); err != nil {
@@ -89,15 +91,18 @@ func assertRealOutEgress(t *testing.T, document []byte) {
 		if outbound.Tag != "out" {
 			continue
 		}
-		if outbound.Type != "vless" {
-			t.Fatalf("assembled out outbound type = %q, want vless", outbound.Type)
+		if outbound.Type != "shadowsocks" {
+			t.Fatalf("assembled out outbound type = %q, want shadowsocks", outbound.Type)
+		}
+		if outbound.Method != "2022-blake3-aes-128-gcm" {
+			t.Fatalf("assembled out method = %q, want the pinned SS method", outbound.Method)
 		}
 		if outbound.Server != "out.example.invalid" || outbound.ServerPort != 8443 {
 			t.Fatalf("assembled out endpoint = %s:%d, want the configured Out node address/port",
 				outbound.Server, outbound.ServerPort)
 		}
-		if outbound.UUID == "" {
-			t.Fatal("assembled out outbound carries no Hub-issued credential")
+		if outbound.Password == "" {
+			t.Fatal("assembled out outbound carries no Hub-issued link key")
 		}
 		return
 	}

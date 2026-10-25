@@ -7,12 +7,11 @@ import (
 	"time"
 
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
-// Out transport (Task 2): the operator-entered dial address of one Out node
-// plus the Hub-issued link credential the Line presents when it egresses
-// through that Out.
+// Out transport: the operator-entered dial address of one Out node plus the
+// Hub-issued SS link key the Line presents when it egresses through that Out
+// (Ruling R7: the double-hop is Shadowsocks, never bare VLESS).
 //
 // The table is created idempotently without a user_version bump: the
 // subscription-aggregation schema numbers (12/13/14) are reserved for Task
@@ -22,29 +21,86 @@ import (
 // contracts intact. ensureOutTransportTable runs on every open, so fresh and
 // existing databases converge without a version step.
 //
-// The credential is a node secret in the same class as the per-Line VLESS
-// UUIDs: it is rendered into the bound Line candidates (the private
-// Hub<->Agent channel) and never appears in a list projection, a log line or
-// a subscription artifact.
+// Under Ruling R7 the link key is the SS key (16 random bytes,
+// base64-std), not the void Task-2 UUID. The migration drops the old column
+// and reissues a fresh key for every configured Out: old credentials are
+// void, not carried over (1.0 is unreleased, so no backward compat is owed).
+// Fresh databases are created with the new shape directly.
+//
+// The key is a node secret in the same class as the per-Line VLESS UUIDs:
+// it is rendered into the bound Line candidates and the Out's own v4
+// document (the private Hub<->Agent channel) and never appears in a list
+// projection, a log line or a subscription artifact.
 func ensureOutTransportTable(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 CREATE TABLE IF NOT EXISTS out_settings (
   node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
   server TEXT NOT NULL,
   port INTEGER NOT NULL,
-  link_uuid TEXT NOT NULL,
+  link_key TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 `); err != nil {
 		return err
 	}
+	// Void the Task-2 UUID column when it exists: the SS switch does not
+	// carry old credentials over.
+	var legacy int
+	if err := tx.QueryRow(`SELECT count(*) FROM pragma_table_info('out_settings') WHERE name='link_uuid'`).Scan(&legacy); err != nil {
+		return err
+	}
+	if legacy != 0 {
+		if _, err := tx.Exec(`ALTER TABLE out_settings DROP COLUMN link_uuid`); err != nil {
+			return err
+		}
+	}
+	var keyed int
+	if err := tx.QueryRow(`SELECT count(*) FROM pragma_table_info('out_settings') WHERE name='link_key'`).Scan(&keyed); err != nil {
+		return err
+	}
+	if keyed == 0 {
+		if _, err := tx.Exec(`ALTER TABLE out_settings ADD COLUMN link_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	// Reissue: every configured Out whose row predates the SS switch (or a
+	// fresh row) gets a fresh link key. Drains converge the affected Line
+	// and Out candidates on their next event.
+	rows, err := tx.Query(`SELECT node_id FROM out_settings WHERE link_key=''`)
+	if err != nil {
+		return err
+	}
+	var bare []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		bare = append(bare, id)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range bare {
+		key, err := nodedomain.NewOutLinkKey()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE out_settings SET link_key=? WHERE node_id=?`, key, id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // OutTransport is the operator-visible half of one Out's dial parameters.
-// LinkUUID never leaves this package: list projections and the Web UI only
-// see the address, never the credential.
+// The link key never leaves this package: list projections and the Web UI only
+// see the address, never the key.
 type OutTransport struct {
 	OutID     string `json:"out_id"`
 	Server    string `json:"server"`
@@ -69,10 +125,11 @@ type OutPoolEntry struct {
 
 // SetOutTransport stores the dial address of one Out node. The node must
 // exist with the immutable out role; the port must equal the Out's VLESS
-// port, mirroring the Line port-match rule. The link credential is issued on
+// port, mirroring the Line port-match rule. The link key is issued on
 // first set and preserved afterwards, mirroring the REALITY key preservation
 // of SetLine: renaming the address never invalidates the egress the bound
-// Line already dials with.
+// Line already dials with. Setting transport on a migrated-empty row mints
+// the key now.
 func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
 	if !validBindingNodeID(outID) {
@@ -99,27 +156,35 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 	if port != vlessPort {
 		return OutTransport{}, errors.New("OUT_PORT_MISMATCH: the out port must match the vless port of the node")
 	}
-	var linkUUID string
-	err = tx.QueryRow(`SELECT link_uuid FROM out_settings WHERE node_id=?`, outID).Scan(&linkUUID)
+	var linkKey string
+	err = tx.QueryRow(`SELECT link_key FROM out_settings WHERE node_id=?`, outID).Scan(&linkKey)
 	switch {
 	case err == nil:
 	case errors.Is(err, sql.ErrNoRows):
-		linkUUID, err = subscription.NewUUID()
+		linkKey, err = nodedomain.NewOutLinkKey()
 		if err != nil {
-			return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the link credential could not be issued")
+			return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the link key could not be issued")
 		}
 	default:
 		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
 	}
-	egress := nodedomain.OutEgress{Server: server, Port: port, UUID: linkUUID}
+	// A migrated row carries link_key='' until the ensure step reissues it;
+	// a set on such a row mints the key now instead of storing a void one.
+	if linkKey == "" {
+		linkKey, err = nodedomain.NewOutLinkKey()
+		if err != nil {
+			return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the link key could not be issued")
+		}
+	}
+	egress := nodedomain.OutEgress{Server: server, Port: port, Key: linkKey}
 	if err := egress.Validate(); err != nil {
 		return OutTransport{}, errors.New("OUT_TRANSPORT_INVALID: need one hostname or IP address without scheme, path, port or credentials")
 	}
 	stamp := now.Unix()
-	if _, err = tx.Exec(`INSERT INTO out_settings(node_id, server, port, link_uuid, created_at, updated_at)
+	if _, err = tx.Exec(`INSERT INTO out_settings(node_id, server, port, link_key, created_at, updated_at)
 	 VALUES(?,?,?,?,?,?)
-	 ON CONFLICT(node_id) DO UPDATE SET server=excluded.server, port=excluded.port, updated_at=excluded.updated_at`,
-		outID, server, port, linkUUID, stamp, stamp); err != nil {
+	 ON CONFLICT(node_id) DO UPDATE SET server=excluded.server, port=excluded.port, link_key=excluded.link_key, updated_at=excluded.updated_at`,
+		outID, server, port, linkKey, stamp, stamp); err != nil {
 		return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the out transport was not stored")
 	}
 	if err = tx.Commit(); err != nil {
@@ -137,7 +202,7 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 }
 
 // GetOutTransport reads the operator-visible half of one Out's dial
-// parameters. The link credential is never returned.
+// parameters. The link key is never returned.
 func (s *Store) GetOutTransport(outID string) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
 	if !validBindingNodeID(outID) {
@@ -157,13 +222,13 @@ func (s *Store) GetOutTransport(outID string) (OutTransport, error) {
 }
 
 // outEgressTx is the single derivation of one Out's dial body for candidate
-// rendering: the configured server/port plus the Hub-issued credential. The
+// rendering: the configured server/port plus the Hub-issued link key. The
 // boolean is false when the Out has no transport yet; callers render the
 // fail-closed block stub in that case instead of inventing an endpoint.
 func outEgressTx(tx *sql.Tx, outID string) (nodedomain.OutEgress, bool, error) {
 	var egress nodedomain.OutEgress
-	err := tx.QueryRow(`SELECT server, port, link_uuid FROM out_settings WHERE node_id=?`, outID).
-		Scan(&egress.Server, &egress.Port, &egress.UUID)
+	err := tx.QueryRow(`SELECT server, port, link_key FROM out_settings WHERE node_id=?`, outID).
+		Scan(&egress.Server, &egress.Port, &egress.Key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nodedomain.OutEgress{}, false, nil
 	}
@@ -200,8 +265,9 @@ func (s *Store) ListOutTransports() ([]OutTransport, error) {
 }
 
 // OutPool lists every enrolled Out node with its transport and binding state
-// at one clock. It never returns a credential: the link UUID stays in the
-// private table and only enters the bound Line candidates.
+// at one clock. It never returns a key: the link key stays in the
+// private table and only enters the bound Line candidates and the Out's own
+// v4 document.
 func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
 	rows, err := s.DB.Query(`
 SELECT n.id, n.display_name, n.vless_port, n.status, n.last_heartbeat,

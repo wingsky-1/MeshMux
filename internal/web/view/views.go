@@ -21,7 +21,7 @@ type PageData struct {
 type NodesData struct {
 	// Pool lists every enrolled Out with its transport and binding state. It
 	// is the selection datasource Task 4 consumes; it never carries the
-	// Hub-issued link credential.
+	// Hub-issued SS link key.
 	Pool []store.OutPoolEntry
 	// ByOut indexes Pool by Out id for the card lookup.
 	ByOut map[string]store.OutPoolEntry

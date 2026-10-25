@@ -184,27 +184,42 @@ func numericDottedHost(value string) bool {
 	return true
 }
 
-// validateV2Fields validates the optional v2 blocks of a candidate. The v1
-// baseline (no users, no REALITY block, no route and no Out egress) stays
-// valid, users require a REALITY block, and all blocks belong to edge nodes
-// only. The Out egress is validated by shape whenever present; a route that
-// names "out" without an attached egress stays legal and renders the
-// fail-closed block stub, so a stored document never becomes unreadable just
-// because its egress was not attached yet.
+// validateV2Fields validates the optional v2 blocks and the Out egress of a
+// candidate. The v1 baseline (no users, no REALITY block, no route and no Out
+// egress) stays valid. Users require a REALITY block; an edge Out egress
+// requires one too. An Out-role candidate carries only the link key (the v4
+// document); everything else belongs to edge nodes. A route that names "out"
+// without an attached egress stays legal and renders the fail-closed block
+// stub, so a stored document never becomes unreadable just because its egress
+// was not attached yet.
 func (c Candidate) validateV2Fields() error {
 	if c.Reality == nil && len(c.Users) == 0 && len(c.Route) == 0 && c.Out == nil {
 		return nil
 	}
-	if c.Role != RoleEdge {
+	if c.Role != RoleEdge && c.Role != RoleOut {
 		return errors.New("CANDIDATE_INVALID: users, reality, a route and an out egress are only valid for edge nodes")
 	}
 	if c.Out != nil {
 		if err := c.Out.Validate(); err != nil {
 			return err
 		}
+		if c.Role == RoleOut {
+			if c.Reality != nil || len(c.Users) != 0 || len(c.Route) != 0 {
+				return errors.New("CANDIDATE_INVALID: an out node carries only the link key")
+			}
+			// The void UUID history never belonged to an Out document: an Out
+			// node only renders its guard from the link key.
+			if c.Out.Key == "" {
+				return errors.New("OUT_EGRESS_INVALID: an out node needs the link key")
+			}
+			return nil
+		}
 		if c.Reality == nil {
 			return errors.New("REALITY_REQUIRED: reality is required when an out egress is present")
 		}
+	}
+	if c.Role != RoleEdge {
+		return errors.New("CANDIDATE_INVALID: users, reality, a route and an out egress are only valid for edge nodes")
 	}
 	if c.Reality == nil {
 		return errors.New("REALITY_REQUIRED: reality is required when users or a route are present")
@@ -295,9 +310,12 @@ func hasOutField(obj map[string]json.RawMessage) bool {
 	return ok
 }
 
-// decodeOutEgress decodes the optional out egress of a v2/v3 document. An
-// absent key means no Out egress; a present one is one object with exactly the
-// server, port and uuid fields.
+// decodeOutEgress decodes the optional out egress of a v2/v3/v4 document. An
+// absent key means no Out egress; a present one is one object with the server,
+// the port and exactly one credential: the SS link key ("key") for new
+// egresses, the void VLESS UUID ("uuid") only for documents stored before the
+// SS switch. Both shapes decode so immutable history keeps verifying; new
+// writes always carry the key.
 func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
 	const malformed = "CANDIDATE_INVALID: malformed candidate JSON"
 	if len(raw) == 0 {
@@ -311,8 +329,7 @@ func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
 	if err != nil {
 		return nil, errors.New(malformed)
 	}
-	required := []string{"server", "port", "uuid"}
-	if len(obj) != len(required) {
+	if len(obj) != 3 {
 		return nil, errors.New(malformed)
 	}
 	var egress OutEgress
@@ -324,8 +341,19 @@ func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
 		return nil, errors.New("CANDIDATE_INVALID: out port must be an integer")
 	}
 	egress.Port = int(port)
-	if err := decodeStringField(obj["uuid"], &egress.UUID); err != nil {
-		return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+	_, hasKey := obj["key"]
+	_, hasUUID := obj["uuid"]
+	if hasKey == hasUUID {
+		return nil, errors.New(malformed)
+	}
+	if hasKey {
+		if err := decodeStringField(obj["key"], &egress.Key); err != nil {
+			return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+		}
+	} else {
+		if err := decodeStringField(obj["uuid"], &egress.UUID); err != nil {
+			return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+		}
 	}
 	return &egress, nil
 }

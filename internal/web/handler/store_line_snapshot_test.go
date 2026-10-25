@@ -144,6 +144,30 @@ func TestBuildLineCandidateOutStaysBaseline(t *testing.T) {
 	if candidate.Users != nil || candidate.Reality != nil {
 		t.Fatalf("out candidate carried v2 blocks: users=%v reality=%v", candidate.Users, candidate.Reality)
 	}
+	if candidate.Out != nil {
+		t.Fatalf("transport-free out candidate carried an egress: %+v", candidate.Out)
+	}
+}
+
+// TestBuildLineCandidateOutWithTransportCarriesLinkKey pins the Ruling R7
+// Out side: an Out with configured transport carries the link key in a v4
+// document, so its Agent renders the SS guard instead of the VLESS baseline.
+func TestBuildLineCandidateOutWithTransportCarriesLinkKey(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	out := createOutNode(t, s, now)
+	configureOut(t, s, out, now)
+
+	candidate := buildLineCandidateFixture(t, s, out)
+	if candidate.Out == nil || candidate.Out.Key == "" {
+		t.Fatalf("configured out candidate carries no link key: %+v", candidate.Out)
+	}
+	if candidate.Users != nil || candidate.Reality != nil || len(candidate.Route) != 0 {
+		t.Fatalf("out candidate carried non-v4 blocks: %+v", candidate)
+	}
+	document := node.NewCandidateDocument(candidate)
+	if document.Schema != node.CandidateSchemaV4 {
+		t.Fatalf("out document schema = %q, want meshmux-node/v4", document.Schema)
+	}
 }
 
 func TestBuildLineCandidateWithoutLineSettingsStaysBaseline(t *testing.T) {
