@@ -64,7 +64,7 @@ v1.0.0 必须打通节点纳管、组网配置、规则管理、订阅生成（�
 
 ## 后果
 
-- Task 1（组网）、Task 2（节点 + Out 池 + Out 接入真实 VLESS 出站）、Task 3（规则库 + 预置 + 互锁）可并行：三轨只生产本 ADR 定义的数据源（设备 id/名称/在线/子网；Line 候选含真实 out 出站；`rule_revision_id`），不直接写订阅边表。
+- Task 1（组网）、Task 2（节点 + Out 池 + Out 接入真实 SS 出站，2022-blake3-aes-128-gcm/16B link key，R7）、Task 3（规则库 + 预置 + 互锁）可并行：三轨只生产本 ADR 定义的数据源（设备 id/名称/在线/子网；Line 候选含真实 out 出站；`rule_revision_id`），不直接写订阅边表。
 - Task 4 消费三轨接口，实现边表 + 快照 + 组装器 + 预览 fail-fast + used-by 图；Task 5 做授权原子切换（含 AI 双跳 E2E 证据）；Task 6 做死代码删除 + 文档同步；Task 7（web 包分层搬迁）为纯机械 PR，11d 合入后第一个做。
 - 任一任务发现契约缺口，先修订本 ADR 再实现；不接受“实现先行、ADR 后补”。
 
