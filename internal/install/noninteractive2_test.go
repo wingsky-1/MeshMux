@@ -48,7 +48,7 @@ func fixtureReadback(t *testing.T, f *nodeFixture) func(context.Context, node.Co
 	digest := sumBytes(compiled)
 	return func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
 		return node.Readback{
-			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: f.candidate.Revision,
 			ConfigSHA256: digest, LocalActive: true,

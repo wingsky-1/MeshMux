@@ -197,7 +197,7 @@ templ NodesPage(p pageData, nodes []Node, created *Node, pairAction string, pair
 					}
 					<div class="settings-grid">
 						<section class="panel"><h2>创建待纳管节点</h2><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><label for="role">角色</label><select id="role" name="role" required><option value="edge">Line（edge）· 客户端入口</option><option value="out">Out · 可选私有出口</option></select><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" required placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" required placeholder="例如 2222"/><p class="hint">SSH 端口由你在目标主机上准备，安装器会在安装开放后检测它。VLESS 与 SSH 端口必须不同。配对码 15 分钟过期、一次性使用，不记日志。</p><button type="submit">创建并签发配对码 →</button></form></section>
-						<section class="panel"><h2>安装制品</h2><dl class="details"><dt>Agent 版本</dt><dd><code>{ nodedomain.CurrentAgentVersion }</code></dd><dt>内核</dt><dd><code>{ nodedomain.KernelVersion }</code></dd>
+						<section class="panel"><h2>安装制品</h2><dl class="details"><dt>Agent 版本</dt><dd><code>{ nodedomain.CurrentAgentVersion() }</code></dd><dt>内核</dt><dd><code>{ nodedomain.KernelVersion }</code></dd>
 							if artifact != nil {
 								<dt>当前架构</dt><dd>{ artifact.Architecture }</dd><dt>CLI SHA-256</dt><dd><code>{ artifact.SHA256 }</code></dd>
 								<p class="hint">只提供当前 Hub 架构的同一运行中 CLI。其他架构必须使用同源、已核验的构建；不使用 latest 或 curl | sh。</p>

@@ -112,7 +112,7 @@ func newRevertFixture(t *testing.T) *revertFixture {
 	op := strings.Repeat("c", 32)
 	oldCfg := node.Config{HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
 		Role: node.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
-		AgentVersion: node.CurrentAgentVersion, AgentSHA256: digestOf("old agent\n"),
+		AgentVersion: node.CurrentAgentVersion(), AgentSHA256: digestOf("old agent\n"),
 		KernelSHA256: digestOf("old kernel\n")}
 	oldConfigJSON, err := json.Marshal(oldCfg)
 	if err != nil {

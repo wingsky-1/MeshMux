@@ -259,7 +259,7 @@ func buildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 		Architecture: architecture, Config: cfg, Checks: checks,
 		Artifacts: artifacts,
 		Components: []Component{
-			{Name: "MeshMux Agent", Version: node.CurrentAgentVersion, Distribution: agentDistribution},
+			{Name: "MeshMux Agent", Version: node.CurrentAgentVersion(), Distribution: agentDistribution},
 			{Name: "sing-box", Version: node.KernelVersion, Distribution: "pinned official GitHub archive; archive and binary SHA-256 verified"},
 			{Name: "Fail2ban", Version: "Debian 13 package", Distribution: "official Debian repository"},
 			{Name: "nftables", Version: "Debian 13 package", Distribution: "official Debian repository"},

@@ -134,7 +134,7 @@ func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		return 3
 	}
 	cfg.WorkDir, cfg.FetchManifest = update.DefaultWorkDir, update.HubManifest
-	cfg.CurrentVersion = node.CurrentAgentVersion
+	cfg.CurrentVersion = node.CurrentAgentVersion()
 	cfg.BackupSource = func() (string, error) {
 		// The record must name what this host is running RIGHT NOW, including
 		// the Agent's live LKG bytes, so capture/refresh the durable snapshot

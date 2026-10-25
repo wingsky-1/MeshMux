@@ -1,0 +1,299 @@
+package web
+
+// Tests for the read-only Hub identity readback of #11d Task 2 (spec §5.4).
+//
+// The review gate is the pair TestHealthzSelectOneOnly and
+// TestReadbackNeverWrites: the health path never gains identity semantics and
+// the management readback never writes. TestReadbackMatrix pins the four rows
+// of spec §5.4 with exactly the three codes that section allows.
+
+import (
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+)
+
+// identityState is everything a readback must leave untouched: the SQLite
+// change counter, the storage schema and the confirmed row's stored values.
+type identityState struct {
+	Changes     int64
+	UserVersion int
+	Row         string
+}
+
+func observeIdentity(t *testing.T, app *Server) identityState {
+	t.Helper()
+	var state identityState
+	if err := app.store.db.QueryRow(`SELECT total_changes()`).Scan(&state.Changes); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.db.QueryRow(`PRAGMA user_version`).Scan(&state.UserVersion); err != nil {
+		t.Fatal(err)
+	}
+	var version, confirmed string
+	var schema int
+	err := app.store.db.QueryRow(`SELECT quote(last_good_version), last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
+		Scan(&version, &schema, &confirmed)
+	if errors.Is(err, sql.ErrNoRows) {
+		state.Row = "absent"
+	} else if err != nil {
+		t.Fatal(err)
+	} else {
+		state.Row = version + "|" + strconv.Itoa(schema) + "|" + confirmed
+	}
+	return state
+}
+
+func requireIdentityUntouched(t *testing.T, app *Server, before identityState, stage string) {
+	t.Helper()
+	if after := observeIdentity(t, app); after != before {
+		t.Fatalf("%s changed the database: before %+v after %+v", stage, before, after)
+	}
+}
+
+// TestHealthzSelectOneOnly pins the contract Caddy and the installer depend on:
+// an identity mismatch, a missing row and an abnormal user_version all keep
+// /healthz at 200, only an unusable database turns it into 503, and health
+// writes nothing.
+func TestHealthzSelectOneOnly(t *testing.T) {
+	app, _ := testApp(t)
+	b := &browser{app: app}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	check := func(t *testing.T, wantCode string, wantStatus int) {
+		t.Helper()
+		before := observeIdentity(t, app)
+		if got := app.hubIdentity(now).Code; got != wantCode {
+			t.Fatalf("identity code = %q, want %q", got, wantCode)
+		}
+		w := b.req("GET", "/healthz", nil, nil)
+		requireStatus(t, w, wantStatus)
+		if wantStatus == 200 && w.Body.String() != "{\"status\":\"ok\"}\n" {
+			t.Fatalf("health body = %q, want the fixed SELECT 1 shape", w.Body.String())
+		}
+		requireIdentityUntouched(t, app, before, "one /healthz request")
+	}
+
+	check(t, "", 200)
+
+	if _, err := app.store.db.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	check(t, codeDatabaseVersionMismatch, 200)
+
+	if _, err := app.store.db.Exec(`DELETE FROM database_versions`); err != nil {
+		t.Fatal(err)
+	}
+	check(t, codeDatabaseUnconfirmed, 200)
+
+	if _, err := app.store.db.Exec(`PRAGMA user_version=11`); err != nil {
+		t.Fatal(err)
+	}
+	check(t, codeSchemaReadbackFailed, 200)
+
+	// Only a database that cannot answer SELECT 1 is a health failure.
+	if err := app.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, b.req("GET", "/healthz", nil, nil), 503)
+}
+
+// TestReadbackNeverWrites is the review gate for the "health path never writes"
+// rule. It observes the database, runs the readback and one refresh, and
+// observes again. It then repeats the read through a `mode=ro` connection:
+// SQLite refuses every write there, so a successful read proves the statements
+// are read-only rather than merely quiet on this fixture.
+func TestReadbackNeverWrites(t *testing.T) {
+	app, _ := testApp(t)
+	before := observeIdentity(t, app)
+	if before.Row == "absent" {
+		t.Fatal("a started Hub must have confirmed its row")
+	}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	identity, err := app.store.readDatabaseIdentity()
+	if err != nil {
+		t.Fatalf("readDatabaseIdentity: %v", err)
+	}
+	if identity.UserVersion != databaseSchemaVersion || !identity.HasRow {
+		t.Fatalf("identity = %+v, want the confirmed schema %d", identity, databaseSchemaVersion)
+	}
+	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+		t.Fatalf("snapshot = %+v, want confirmed", snapshot)
+	}
+	app.refreshHubIdentity()
+	if got := app.currentHubIdentity(); got.Code != "" {
+		t.Fatalf("published snapshot = %+v, want confirmed", got)
+	}
+	// A real refresh tick must be as quiet as the on-demand read.
+	app.identityInterval = time.Millisecond
+	app.startHubIdentityRefresh(t.Context())
+	first := app.currentHubIdentity().CheckedAt
+	deadline := time.Now().Add(5 * time.Second)
+	for !app.currentHubIdentity().CheckedAt.After(first) {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresher never ticked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	app.stopHubIdentityRefresh()
+	requireIdentityUntouched(t, app, before, "the readback, one refresh and one tick")
+
+	// Strongest form of "zero writes": SQLite itself refuses writes on this
+	// connection. A readback and a tick that still succeed under query_only
+	// cannot have executed a writing statement.
+	if _, err := app.store.db.Exec(`PRAGMA query_only=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.store.readDatabaseIdentity(); err != nil {
+		t.Fatalf("readback under query_only: %v", err)
+	}
+	if snapshot := app.publishHubIdentity(now, nil); !snapshot.Confirmed() {
+		t.Fatalf("snapshot under query_only = %+v", snapshot)
+	}
+	if _, err := app.store.db.Exec(`PRAGMA query_only=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	requireIdentityUntouched(t, app, before, "a readback under query_only")
+
+	readOnly, err := sql.Open("sqlite", "file:"+filepath.Join(app.store.dir, "meshmux.db")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	readOnly.SetMaxOpenConns(1)
+	if _, err := readDatabaseIdentityFrom(readOnly); err != nil {
+		t.Fatalf("the readback issued a write statement: %v", err)
+	}
+	if _, err := readOnly.Exec(`UPDATE database_versions SET last_good_version='x' WHERE id=1`); err == nil {
+		t.Fatal("the read-only connection accepted a write; the fixture proves nothing")
+	}
+	requireIdentityUntouched(t, app, before, "a readback through a read-only connection")
+}
+
+// TestReadbackMatrix is the spec §5.4 table: each row yields exactly one code,
+// no row yields a write, and a confirmed identity is the only empty code.
+func TestReadbackMatrix(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name   string
+		mutate func(t *testing.T, app *Server)
+		want   string
+	}{
+		{"confirmed identity", func(*testing.T, *Server) {}, ""},
+		{"schema readback failed", func(t *testing.T, app *Server) {
+			if _, err := app.store.db.Exec(`PRAGMA user_version=11`); err != nil {
+				t.Fatal(err)
+			}
+		}, codeSchemaReadbackFailed},
+		{"database unconfirmed", func(t *testing.T, app *Server) {
+			if _, err := app.store.db.Exec(`DELETE FROM database_versions`); err != nil {
+				t.Fatal(err)
+			}
+		}, codeDatabaseUnconfirmed},
+		{"database version mismatch", func(t *testing.T, app *Server) {
+			if _, err := app.store.db.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
+				t.Fatal(err)
+			}
+		}, codeDatabaseVersionMismatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app, _ := testApp(t)
+			tc.mutate(t, app)
+			before := observeIdentity(t, app)
+			snapshot := app.hubIdentity(now)
+			if snapshot.Code != tc.want {
+				t.Fatalf("code = %q, want %q (%+v)", snapshot.Code, tc.want, snapshot)
+			}
+			if snapshot.Confirmed() != (tc.want == "") {
+				t.Fatalf("Confirmed() = %v with code %q", snapshot.Confirmed(), snapshot.Code)
+			}
+			if snapshot.Version != buildinfo.Version || snapshot.Schema != databaseSchemaVersion {
+				t.Fatalf("snapshot names %q/%d, want %q/%d", snapshot.Version, snapshot.Schema, buildinfo.Version, databaseSchemaVersion)
+			}
+			if !snapshot.CheckedAt.Equal(now) {
+				t.Fatalf("CheckedAt = %v, want %v", snapshot.CheckedAt, now)
+			}
+			requireIdentityUntouched(t, app, before, "the "+tc.name+" readback")
+		})
+	}
+}
+
+// TestOpTargetSeamLeavesReadbackReadOnly pins the Task 2 half of the Task 5
+// seam: with no journal the readback is still read-only and still confirmed,
+// and a mismatching target (when a future caller wires one) is reported as
+// DATABASE_VERSION_MISMATCH without a write.
+func TestOpTargetSeamLeavesReadbackReadOnly(t *testing.T) {
+	app, _ := testApp(t)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	before := observeIdentity(t, app)
+
+	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+		t.Fatalf("nil seam reported %+v", snapshot)
+	}
+	requireIdentityUntouched(t, app, before, "the nil op-target seam")
+
+	digest, err := buildinfo.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, version, digest string
+		ok                    bool
+		want                  string
+	}{
+		{"another version", "9.9.9", digest, true, codeDatabaseVersionMismatch},
+		{"another package digest", buildinfo.Version, strings.Repeat("0", 64), true, codeDatabaseVersionMismatch},
+		{"no verifying operation", "", "", false, ""},
+		{"matching version and digest", buildinfo.Version, digest, true, ""},
+	} {
+		app.opTarget = func(string) (string, string, bool) { return tc.version, tc.digest, tc.ok }
+		if snapshot := app.hubIdentity(now); snapshot.Code != tc.want {
+			t.Fatalf("%s: code = %q, want %q", tc.name, snapshot.Code, tc.want)
+		}
+		requireIdentityUntouched(t, app, before, tc.name)
+	}
+}
+
+// TestIdentityRefreshIsBoundedAndStopsOnClose proves the refresher is one
+// goroutine that Close stops, and that concurrent readers see a coherent
+// snapshot while it refreshes.
+func TestIdentityRefreshIsBoundedAndStopsOnClose(t *testing.T) {
+	app, _ := testApp(t)
+	app.identityInterval = time.Millisecond
+	app.startHubIdentityRefresh(t.Context())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for app.currentHubIdentity().CheckedAt.IsZero() {
+		if time.Now().After(deadline) {
+			t.Fatal("the refresher never published a snapshot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				if got := app.currentHubIdentity(); got.Schema != databaseSchemaVersion {
+					t.Errorf("snapshot schema = %d", got.Schema)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+	app.stopHubIdentityRefresh()
+}

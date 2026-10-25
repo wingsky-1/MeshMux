@@ -123,7 +123,7 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	}
 	release, _ := node.KernelReleaseFor("amd64")
 	evidence := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: release.Version,
 		KernelSHA256: release.BinarySHA256, ActiveRevision: latest.Revision,
 		ConfigSHA256: latest.ConfigSHA256, LocalActive: true, OutDefaultDeny: true,

@@ -200,7 +200,7 @@ func discoverInstallArtifact() *web.InstallArtifact {
 	}
 	return &web.InstallArtifact{
 		Path:         path,
-		Version:      node.CurrentAgentVersion,
+		Version:      node.CurrentAgentVersion(),
 		Architecture: runtime.GOARCH,
 		SHA256:       hex.EncodeToString(sum.Sum(nil)),
 	}

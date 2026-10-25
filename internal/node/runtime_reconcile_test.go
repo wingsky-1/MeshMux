@@ -136,7 +136,7 @@ func crashWindowFixture(t *testing.T) (root string, oldCfg Config, selfHash, ope
 	selfHash = sha256Hex(newBinary)
 
 	operationID = strings.Repeat("c", 32)
-	writeRawHandoffFile(t, root, handoffMarker(operationID, CurrentAgentVersion,
+	writeRawHandoffFile(t, root, handoffMarker(operationID, CurrentAgentVersion(),
 		handoffRunning, handoffPhaseInstalling, time.Now().Unix()))
 	writeClaimFile(t, root, selfHash, operationID)
 	return root, oldCfg, selfHash, operationID, identity, base
@@ -166,7 +166,7 @@ func TestCrashWindowClaimedOnBoot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if adopted.AgentSHA256 != selfHash || adopted.AgentVersion != CurrentAgentVersion {
+		if adopted.AgentSHA256 != selfHash || adopted.AgentVersion != CurrentAgentVersion() {
 			t.Fatalf("adopted identity = %q/%q", adopted.AgentVersion, adopted.AgentSHA256)
 		}
 		if err := adopted.ValidateInstalled(); err != nil {
@@ -409,7 +409,7 @@ func (w *convergeWriter) ConvergeHandoffConfig(_ context.Context, claim HandoffC
 		return w.failWith
 	}
 	cfg := w.cfg
-	cfg.AgentVersion = CurrentAgentVersion
+	cfg.AgentVersion = CurrentAgentVersion()
 	cfg.AgentSHA256 = claim.NewSHA256
 	writeAgentConfigFile(w.t, w.root, cfg)
 	return nil

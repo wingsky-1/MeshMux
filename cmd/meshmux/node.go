@@ -39,7 +39,7 @@ func runInternalAgentVersion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "USAGE: meshmux __internal-agent-version")
 		return 2
 	}
-	fmt.Fprintln(stdout, node.CurrentAgentVersion)
+	fmt.Fprintln(stdout, node.CurrentAgentVersion())
 	return 0
 }
 

@@ -40,7 +40,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 )
 
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
@@ -97,6 +97,11 @@ PRAGMA user_version=10;
 // row may only exist for a database this binary actually opened and can read at
 // the version it owns. A failed readback writes nothing and fails startup rather
 // than leaving a stale "last good" claim behind.
+//
+// It is the only writer of `database_versions`, and it names this build through
+// buildinfo.Version — the same single source as the release manifest projection
+// and node.CurrentAgentVersion (#11d spec §5.3). A row left by another build is
+// healed by the next start of this one, never by a health or management read.
 func (s *store) confirmDatabaseVersion(now time.Time) error {
 	var version int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -111,7 +116,7 @@ func (s *store) confirmDatabaseVersion(now time.Time) error {
   last_good_version=excluded.last_good_version,
   last_good_schema=excluded.last_good_schema,
   confirmed_at=excluded.confirmed_at`,
-		node.CurrentAgentVersion, version, now.UTC().Unix()); err != nil {
+		buildinfo.Version, version, now.UTC().Unix()); err != nil {
 		return errors.New("SCHEMA_CONFIRM_FAILED: the last-good database version could not be recorded")
 	}
 	return nil
@@ -119,11 +124,18 @@ func (s *store) confirmDatabaseVersion(now time.Time) error {
 
 // lastGoodDatabaseVersion reads the confirmed row. An absent row is honest: the
 // database was never confirmed by a started binary, which is not the same as a
-// row naming an empty release.
+// row naming an empty release. It is the one place that parses the row, so the
+// identity readback and every other consumer cannot drift apart.
 func (s *store) lastGoodDatabaseVersion() (databaseVersion, bool, error) {
+	return lastGoodDatabaseVersionFrom(s.db)
+}
+
+// lastGoodDatabaseVersionFrom is the explicit-handle form, so the identity
+// readback can be replayed through a read-only connection in a test.
+func lastGoodDatabaseVersionFrom(db *sql.DB) (databaseVersion, bool, error) {
 	var out databaseVersion
 	var confirmed int64
-	err := s.db.QueryRow(`SELECT last_good_version, last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
+	err := db.QueryRow(`SELECT last_good_version, last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
 		Scan(&out.Version, &out.Schema, &confirmed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return databaseVersion{}, false, nil

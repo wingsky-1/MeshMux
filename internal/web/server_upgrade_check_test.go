@@ -315,7 +315,7 @@ func TestUpgradeMixedVersionGate(t *testing.T) {
 		observed  string
 		want      string
 	}{
-		{"v3 to the shipping build", v3, node.CurrentAgentVersion, ""},
+		{"v3 to the shipping build", v3, node.CurrentAgentVersion(), ""},
 		{"v3 to an older build", v3, "0.9.0", codeUpgradeAgentIncompatible},
 		{"v3 to an unknown build", v3, "", codeUpgradeAgentIncompatible},
 		{"v1 to an older build", v1, "0.9.0", ""},
@@ -451,7 +451,7 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 // path covered by TestApproveEnqueuesStampedChain.
 func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
 	// A node that already reports this build.
-	b, app, nodeID, _ := upgradeApproveFixture(t, node.CurrentAgentVersion)
+	b, app, nodeID, _ := upgradeApproveFixture(t, node.CurrentAgentVersion())
 	manifest, err := upgrade.ForArch(runtime.GOARCH)
 	if err != nil {
 		t.Fatal(err)

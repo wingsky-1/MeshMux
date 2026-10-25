@@ -397,7 +397,7 @@ func mixedVersionGate(candidate node.Candidate, observed string) error {
 	if len(candidate.Route) == 0 {
 		return nil
 	}
-	if observed != node.CurrentAgentVersion {
+	if observed != node.CurrentAgentVersion() {
 		return errors.New(codeUpgradeAgentIncompatible + ": the node cannot consume a v3 candidate")
 	}
 	return nil

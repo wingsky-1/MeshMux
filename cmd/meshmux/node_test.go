@@ -458,7 +458,7 @@ func TestInternalAgentVersionIsExactPrivateZeroArgOutput(t *testing.T) {
 	if got := runWithDependencies([]string{"__internal-agent-version"}, strings.NewReader(""), &stdout, &stderr, &fakeNodeRunner{}, &fakeAgentService{}); got != 0 {
 		t.Fatalf("exit = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if stdout.String() != node.CurrentAgentVersion+"\n" {
+	if stdout.String() != node.CurrentAgentVersion()+"\n" {
 		t.Fatalf("stdout = %q, want exact pinned version", stdout.String())
 	}
 	if stderr.Len() != 0 {

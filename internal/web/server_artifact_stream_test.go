@@ -86,7 +86,7 @@ func (zeroReader) Read(p []byte) (int, error) {
 
 func installTestArtifact(app *Server, path, digest string) {
 	app.cfg.InstallArtifact = &InstallArtifact{
-		Path: path, Version: node.CurrentAgentVersion, Architecture: "amd64", SHA256: digest,
+		Path: path, Version: node.CurrentAgentVersion(), Architecture: "amd64", SHA256: digest,
 	}
 }
 

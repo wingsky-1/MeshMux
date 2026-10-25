@@ -13,7 +13,7 @@ func validConfig() Config {
 		Role:         RoleOut,
 		VLESSPort:    8443,
 		SSHPort:      2222,
-		AgentVersion: CurrentAgentVersion,
+		AgentVersion: CurrentAgentVersion(),
 		AgentSHA256:  strings.Repeat("b", 64),
 		KernelSHA256: strings.Repeat("c", 64),
 	}
@@ -216,7 +216,7 @@ func TestCandidateSupportsIndependentPositiveRevisions(t *testing.T) {
 func TestReadbackValidate(t *testing.T) {
 	readback := Readback{
 		Architecture:   "amd64",
-		AgentVersion:   CurrentAgentVersion,
+		AgentVersion:   CurrentAgentVersion(),
 		AgentSHA256:    strings.Repeat("b", 64),
 		KernelVersion:  KernelVersion,
 		KernelSHA256:   strings.Repeat("c", 64),

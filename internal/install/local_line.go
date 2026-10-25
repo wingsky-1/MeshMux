@@ -416,7 +416,7 @@ func verifySharedAgentVersion(ctx context.Context, opts NodeApplyOptions, logica
 		return &InstallError{Stage: "stage", Code: "MESHMUX_BINARY_INVALID",
 			Recovery: "The Hub-owned MeshMux runtime did not answer the version probe; repair the Hub first."}
 	}
-	if strings.TrimSpace(string(out)) != node.CurrentAgentVersion {
+	if strings.TrimSpace(string(out)) != node.CurrentAgentVersion() {
 		return &InstallError{Stage: "stage", Code: "MESHMUX_BINARY_INVALID",
 			Recovery: "The Hub-owned MeshMux runtime is not the pinned build; repair the Hub and the Line together."}
 	}
