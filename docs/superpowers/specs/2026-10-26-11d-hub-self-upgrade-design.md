@@ -1,7 +1,7 @@
-# 11d Hub 自升级执行设计（第 4 稿，送审）
+# 11d Hub 自升级执行设计（第 5 稿，送审）
 
 所属：#11 v1.0.0 Web 统一升级，7 段串行之第 6 段（11c-3 已合入 main，基线 `f82f84c`）。
-状态：设计送审。第 1 稿两份评审均为 NEEDS-REWORK；第 2 稿重做执行基座（§5.1）、对账与确认（§5.4/§5.5）、属主与恢复（§5.7）、manifest 信任链（§5.8），并把 co-located Line 重钉纳入范围（§5.6）。第 3 稿按 NEEDS-REWORK-2 修 MF-1（目标 manifest 门）、MF-2（from_package 真实来源）、MF-3（重钉/双 ledger 预检）、B8（GC 只收 confirmed）及 N1–N7。第 4 稿按最终签收补 MF-3 第 4 个 pin（Line ledger `state.Node.AgentVersion/AgentSHA256`，四处写集全成或全败）并钉死 `from_package_sha256` 读路径（Web 以 `buildinfo.Digest()` 落值、root dispatcher 用 0600/0700 ledger 核对，不给 Web ledger 读权）。11e（兼容矩阵内容）与 C 级 VM/真机验收（归 #12）不在本文范围；本文只消费 11c-3 已冻结的备份/确认/回退接口，不重定义其中任何语义。
+状态：设计送审。第 1 稿两份评审均为 NEEDS-REWORK；第 2 稿重做执行基座（§5.1）、对账与确认（§5.4/§5.5）、属主与恢复（§5.7）、manifest 信任链（§5.8），并把 co-located Line 重钉纳入范围（§5.6）。第 3 稿按 NEEDS-REWORK-2 修 MF-1（目标 manifest 门）、MF-2（from_package 真实来源）、MF-3（重钉/双 ledger 预检）、B8（GC 只收 confirmed）及 N1–N7。第 4 稿按最终签收补 MF-3 第 4 个 pin（Line ledger `state.Node.AgentVersion/AgentSHA256`，四处写集全成或全败）并钉死 `from_package_sha256` 读路径（Web 以 `buildinfo.Digest()` 落值、root dispatcher 用 0600/0700 ledger 核对，不给 Web ledger 读权）。**第 5 稿按 owner D1 把 Hub 备份从扁平单槽改为 per-op + `keep=2`（confirmed-only GC），删除 flat 恢复机制；旧二进制的 `SCHEMA_TOO_NEW` 指针保留为“per-op 提交后原子写入的 flat latest 副本”，只作存在性指针、11d 从不读取。** 11e（兼容矩阵内容）与 C 级 VM/真机验收（归 #12）不在本文范围；本文只消费 11c-3 已冻结的备份/确认/回退接口，不重定义其中任何语义。
 
 ## 1. 背景与意图
 
@@ -28,20 +28,20 @@
 - **C 级验收**（隔离 VM、真机 Debian 13 amd64/arm64）——归 #12；本文只承诺 B 级 fixture 证据。
 - **发布通道自动化**：Hub 自有目标 manifest 的获取/签名属 12e 及后续；v1.0 由 root 预置（§5.8），Web 只做选择与执行，不下载 manifest。
 - **LKG 回退的 Web 一键入口**（11c-3 语义可用，不新增按钮）。
-- **N-1 以上的多代 Hub 回退**（只保留一代，§5.7）。
+- **N-1 以上的多代 Hub 回退选择**：备份保留 `keep=2` 个 confirmed 代，但 11d 的 restore 仍按当前失败 op 选择，不新增“任意代”入口（§5.7）。
 - **`web → update` 反向导入**，除非引入中立叶子包（§5.9、Q3）。
 
 ## 4. 约束（继承 11c-3；C19–C22 为本稿新增）
 
-- **C1 扁平布局**：Hub 备份固定为 `<data-dir>/database-backup/record.json`（0600）+ `payload/`（0700 目录、0600 文件），只保留一代；不复用 Node 的 `<root>/<op32hex>/` 每操作目录语义。
-- **C2 记录冻结**：`update.BackupRecord` schema 1、`DisallowUnknownFields`、尾随数据拒绝、≤64 KiB；JSON 字节必须完全一致。**只有一个编码器**：`WriteBackupRecord` 参数化布局与载荷来源（§5.2），不新写平行 writer。
+- **C1 per-op 布局**：Hub 备份固定为 `<data-dir>/database-backup/<op32hex>/{record.json,payload/}`（目录 0700、`record.json` 0600、payload 目录 0700/文件 0600），与 Node 的每操作目录语义相同；confirmed-only GC 保留 `keep=2` 代。**扁平单槽布局及其 `recoverFlatSlot` 崩溃恢复机制整体删除，不实现、不迁移**（§5.2、Task 1 删除清单）。`<data-dir>/database-backup/record.json` 仅保留为旧二进制指针副本（§5.2.1），11d 的 restore/verify/GC/approval 从不读取它。
+- **C2 记录冻结**：`update.BackupRecord` schema 1、`DisallowUnknownFields`、尾随数据拒绝、≤64 KiB；JSON 字节必须完全一致。**只有一个编码器**：`WriteBackupRecord` 只参数化载荷来源（`PayloadSingleDB` / `PayloadTree`），不再有布局参数（§5.2）；Node 与 Hub 共用同一 per-op 路径与同一编码器。
 - **C3 状态机**：记录先写 `staged`，只有门控 finalize 后才是 `confirmed`；`failed` 是终态。11d 的门控就是启动身份回读（§5.5），finalize 本身沿用 11c-3，不改语义。
 - **C4 完整性顺序钉死**：`VACUUM INTO` 生成副本 → 在**副本**上 `PRAGMA integrity_check` → 才写 `integrity_ok=true`。
 - **C5 载荷含秘密**：payload 含订阅凭据、token hash、会话；0700/0600、`meshmux` 属主、永不离机、不进日志/回执。
 - **C6 双摘要分离**：`from_agent_sha256` = 运行二进制摘要（`buildinfo.Digest()`，应等于 Hub ledger `shared_binaries.meshmuxd.sha256`）。`from_package_sha256` = Hub 安装包摘要，**权威来源是 Hub ledger `managed_files["/usr/local/libexec/meshmuxd"]`**；但 Web 无 ledger 读权（目录 root 0700、文件 root 0600，C19），backup 时只能以 `buildinfo.Digest()` 落值——它与 ledger 记录的是安装器 self-copy 的同一份字节（§5.9）。**执行侧核对**：root dispatcher 在任何 `update` exec 前用 `install.ReadState("/")`（`readStateAt`，仍要求 0700/0600）读 ledger，与记录 `from_package_sha256` 比对；缺失/不可读/非 64 hex → `HUB_BACKUP_IDENTITY_MISSING`，不符 → `UPDATE_BACKUP_MISMATCH`，均零 exec。两个字段独立存储、独立校验：`from_agent` 只用于旧包/restore 的字节 pin，`from_package` 只用于 ledger 来源核对，不得互换。Hub 记录要求两者非空。`db_schema` 写真实 `PRAGMA user_version`（今天 10）。**`artifacts.meshmuxd` 在任何 ledger 中都不存在**（`InstallHub` 只 stage caddy+headscale；`PinnedMeshmuxd` 只被 `upgrade/manifest.go:173` 的组件表消费），不得再作为来源。
 - **C7 `database_versions` 写点冻结**：只在 store-open 迁移提交后由启动写者写。健康回读与管理面回读**只消费**，绝不写；旧行只在下一次启动自愈。该行是降级提示，不是迁移门。
-- **C8 `SCHEMA_TOO_NEW`**：只 `lstat` 记录存在性，不解析未来 schema；不原地降级。
-- **C9 不可逆位在记录上**：`irreversible_approved` 只有 `POST /tasks/db-migration/approve` 一个写者（session + 精确 Origin + CSRF + 字面值 `irreversible_confirm=1` + `operation_id`）。破坏性步骤前必须读位并重验载荷（staged/confirmed + `integrity_ok` + 非空私有 payload + `PayloadSHA256`）；审批是 metadata-only，恢复必须在副本上重跑 `integrity_check`。
+- **C8 `SCHEMA_TOO_NEW`**：只 `lstat` 扁平指针路径 `<data-dir>/database-backup/record.json` 的存在性，不解析未来 schema；不原地降级。该文件是 per-op 记录发布后写入的 flat latest 副本（§5.2.1），只保证旧二进制的存在性检查仍能命中；11d 不以它作恢复源。
+- **C9 不可逆位在记录上**：`irreversible_approved` 只有 `POST /tasks/db-migration/approve` 一个写者（session + 精确 Origin + CSRF + 字面值 `irreversible_confirm=1` + `operation_id`），且只写 `<data-dir>/database-backup/<op32hex>/record.json` 这一份被应用的 per-op 记录；扁平指针副本只按字节复制 per-op 记录（confirm 时可能因此带上该位），11d 从不在其上做授权判断，旧 approve 也不因它获权。破坏性步骤前必须读位并重验载荷（staged/confirmed + `integrity_ok` + 非空私有 payload + `PayloadSHA256`）；审批是 metadata-only，恢复必须在副本上重跑 `integrity_check`。
 - **C10 分级 revert**：停机前完成全部校验 → 停 Web → 换回旧二进制 → 恢复到**新** 0700 目录 → `integrity_check` → 翻 `--data-dir`（drop-in）→ `/healthz` 200 → 旧目录保留到确认。中途失败 = 终态 + 人工指引，原目录不动。
 - **C11 in-place down-migration**：只在新表为空且无新 binary 确认写时允许。**11d 显式把 schema 10 → 11**，升级后 `hub_upgrade_operations` 立即可有行，"新表为空"永不成立；因此 11d 的 op 一律只能 restore，不得 DROP 表降级。
 - **C12 确认是回读的副作用**：锚比较在 `confirmed` 短路**之前**；已被 revert 的操作永不确认；没有 `confirmUpgrade` 平行裁决。
@@ -50,7 +50,7 @@
 - **C15 启动稳定码**：只有 `SCHEMA_TOO_NEW` 记 `detail`（记录路径，无秘密）；其他只记稳定码。
 - **C16 执行面**：无新 protocol kind（`upgrade.*` 继续拒绝）、无新公开 CLI、固定 argv、无 shell、每写带 `operation_id`、回执诚实（queued/gated/applied/failed/rolled_back，applied 只由回读证明）、manifest pin + SHA-256 先于执行、日志脱敏。
 - **C17 模块方向**：`internal/update` 不得 import `internal/web`；今天唯一反向边是 `web → update`（仅为 `BackupRecord`）。
-- **C18 D2/D5（与 B8 对齐）**：孤儿兜底是纯 30 分钟年龄（不查 Hub）；GC 只在 confirmed 之后的下一次升级或显式清理时发生，且**候选集只有 `state=confirmed` 的代**（`GCBackups` 现行为：`staged`/`failed` 永不入选，`backup.go:336-340`）。`failed`/`staged` 记录必须活到被确认或显式清理，否则“失败仍有回退源”不成立。11d 的 Hub 只保留一代，`keep=1`；回收前先 rename 到 `.trash-<unix>` 再删。
+- **C18 D2/D5（与 B8 对齐）**：孤儿兜底是纯 30 分钟年龄（不查 Hub）；GC 只在 confirmed 之后的下一次升级或显式清理时发生，且**候选集只有 `state=confirmed` 的代**（`GCBackups` 现行为：`staged`/`failed` 永不入选，`backup.go:336-340`）。`failed`/`staged` 记录必须活到被确认或显式清理，否则“失败仍有回退源”不成立。11d 的 Hub 用 per-op 布局并保留 `keep=2`（Node 的 `KeepConfirmed=1` 不变）；最新两代 confirmed 与任何 staged/failed 记录永不被回收，回收前按 per-op 路径先 rename 到 `.trash-<unix>` 再删。扁平布局的 `keep=1` 与 flat-GC 特例删除；指针副本刷新失败时跳过该次 GC（§5.2.1）。
 - **C19 执行基座**：Web（`meshmux`，`CapabilityBoundingSet=`、`NoNewPrivileges=true`、`ProtectSystem=strict`）没有任何特权。**不引入 setuid/文件能力二进制**（11c-2 对 Agent 已排除，Hub 自有裁决相同）、**不给 Web 授 polkit**、**不让 Web 构造 ExecStart 或单元属性**。唯一触发是 root 属主的 path unit 监视一个 meshmux 可写目录。
 - **C20 信任锚在执行侧**：目标 manifest 只能来自 root 属主文件；Web 给的 target/digest 只是选择，不是授权。执行体必须是按该 manifest 摘要校验过的 staged 包，并对 `/proc/self/exe` 重算 `--expected-sha256`。
 - **C21 回读单向**：`confirmed` 只由“running 身份 == 记录 target”证明，不由 result 文件、unit 退出码或 UI 证明；`database_versions` 只由启动写。
@@ -91,7 +91,7 @@ DirectoryNotEmpty=/run/meshmux-hub/requests
 - **请求目录固定在 `/run` 而不是 data-dir**：§5.7 会翻转 `--data-dir`，单元 ExecStart 不能随之改变；请求只是短命意图，重启丢失即由 §5.5 的超时判定收尾。dispatcher 处理成功后把请求 rename 到 `/run/meshmux-hub/requests.done/`（同一 tmpfs，root:root 0700），目录恢复为空以便 path unit 重新武装；不写 data-dir，因此 data-dir 翻转不影响它。
 - Web 只写一个 0600 请求文件（temp + fsync + rename）并先提交 `queued`；path unit 与 oneshot 都由 PID 1 触发，**Web 不作任何特权调用**。第 1 稿的 `--no-block` 阻塞问题因此整体消失；等价钉死是“先提交 `queued`，后 rename 请求文件”（回执先于交接）。
 - **请求文件不是授权**：`{schema:1, kind:"update"|"restore", operation_id:"<32hex>", data_dir:"<绝对路径>"}`，≤1 KiB、严格 JSON、`O_NOFOLLOW`、属主 == meshmux、0600。`data_dir` 必须是 clean 绝对路径且**等于当前 `meshmux-web.service`（含 drop-in）`--data-dir` 的值**（root 读单元文本比对），Web 无法用它指向别处。目标、摘要、路径全部由 root 侧从冻结记录与 root manifest 重新推导。
-- **dispatcher 不执行升级写**：严格读 journal（§5.5）+ 冻结记录（root 读端按 meshmux 属主校验，§5.9）→ 校验 state/target/摘要 → **`kind:"update"` 时用 `install.ReadState("/")`（0600/0700）核对记录 `from_package_sha256`**（C6；`restore` 不查该字段，失败后 ledger 可能已前移）→ 读 root manifest 重算 `package_sha256` → 按 fd 校验 `<data-dir>/upgrade/meshmuxd-<target>-<arch>` 字节 → 把**已校验字节**复制到 root-only 的 `/var/lib/meshmux-installer/upgrade/exec-<op32hex>`（EXDEV 时复制 + fsync）→ `exec` 该副本。校验后再按路径打开会被 Web 换字节（TOCTOU），所以 exec 的是校验过的副本。
+- **dispatcher 不执行升级写**：按请求里的 `operation_id` 严格读 `<data-dir>/database-backup/<op32hex>/record.json`（root 读端按 meshmux 属主校验，§5.9；**不扫目录、不读扁平指针副本、不运行任何恢复逻辑**）→ 读 journal（§5.5）→ 校验 state/target/摘要/记录与 journal 同名同一 op → **`kind:"update"` 时用 `install.ReadState("/")`（0600/0700）核对记录 `from_package_sha256`**（C6；`restore` 不查该字段，失败后 ledger 可能已前移）→ 读 root manifest 重算 `package_sha256` → 按 fd 校验 `<data-dir>/upgrade/meshmuxd-<target>-<arch>` 字节 → 把**已校验字节**复制到 root-only 的 `/var/lib/meshmux-installer/upgrade/exec-<op32hex>`（EXDEV 时复制 + fsync）→ `exec` 该副本。校验后再按路径打开会被 Web 换字节（TOCTOU），所以 exec 的是校验过的副本。per-op 读是纯只读，**root 进程不再因读记录而写 Web 属主目录**（扁平布局的 `recoverFlatSlot` 副作用与 `LockFlatSlot` 跨进程假设一并删除）。
 - **restore 走同一条 dispatch 边界（N1）**：`kind:"restore"` 时 dispatcher 校验对象是**旧包** `<data-dir>/upgrade/meshmuxd-<from_version>-<arch>`，摘要必须等于记录的 `from_agent_sha256`（不是 target、不读 root manifest），同样复制到 root-only 的 `exec-<op32hex>` 后 `exec` 副本；`--restore-dir`、`--data-dir`、`--expected-sha256` 全部由 dispatcher 从冻结记录与 journal 推导，Web 只给 `kind`/`operation_id`/`data_dir`。restore 的 `exec` 副本与 update 的 `exec` 副本同名规则，成功后删除。
 - 真正改系统的代码是 staged 包自己的 `__internal-hub-update` / `__internal-hub-restore`，启动即对 `/proc/self/exe` 重算 `--expected-sha256`（11c-2 先例）。**单元 ExecStart 是固定 dispatcher，这是对“ExecStart 必须是 staged 包”这一不变量在静态单元下的等价实现**：static 单元无法随 target 改变 ExecStart，而让 Web 构造 argv 正是要消除的特权面；不变量因此钉在 exec 边界——dispatcher 本身不做任何升级写，升级写体是 root manifest 摘要钉死并自校验的 staged 包，已安装二进制只承担固定调度。
 - **新增特权面登记（自有评审项 R-SURFACE，见 §6.11）**：1 个 root oneshot + 1 个 path unit + 1 个 meshmux 可写请求目录；它们能造成的唯一效果是“执行一份由 root manifest 摘要钉死的发布包”。边界逐条钉死：
@@ -114,17 +114,18 @@ DirectoryNotEmpty=/run/meshmux-hub/requests
 
 目标与摘要在 backup 时确定（冻结记录不允许空字段），apply 不接收 digest、只做再校验；页面流程因此固定为“选目标（列出 root 预置且校验通过的 manifest）→ 备份 → 如不可逆先写确认位 → 提交”。apply 在 manifest `database_migration=irreversible` 而记录 `irreversible_approved=false` 时返回 `IRREVERSIBLE_CONFIRM_REQUIRED`，零变更。
 
-**单飞（C18/D5）**：任一 op 处于非终态（`backing_up|backed_up|queued|applying|restarting|verifying|partial`）或当前记录 `irreversible_approved=true` 时，`backup` 一律 `HUB_UPGRADE_BUSY`（**自有稳定码**，不复用 11c-3 的 `UPDATE_BACKUP_MISMATCH`；后者只表示记录身份/来源不符），零变更；不做并发备份。dispatcher 侧的“请求目录已有请求”另用 `HUB_HANDOFF_BUSY`（§5.1），两者语义不同、不互相顶替。`restored.json` 不阻塞新备份（它只禁止把携带记录当恢复源，§5.7），新 staged 记录落盘时一并清除。
+**单飞（C18/D5）**：任一 op 处于非终态（`backing_up|backed_up|queued|applying|restarting|verifying|partial`）或**最新可读 per-op 记录** `irreversible_approved=true` 时，`backup` 一律 `HUB_UPGRADE_BUSY`（**自有稳定码**，不复用 11c-3 的 `UPDATE_BACKUP_MISMATCH`；后者只表示记录身份/来源不符），零变更；不做并发备份。**“最新”定义为 journal-backed**：取 `hub-upgrade/ops/` 中 `backup_generation` 最大、且其 `<database-backup>/<op32hex>/record.json` 可读的 update op（同值按 `updated_at`、再按 op id 决胜）；**不得用 `database-backup/` 目录扫描或 `mtime` 推断**。最新 op 没有记录（例如提交前失败）时顺延到下一个 generation；全无则视为无当前记录。`backup_generation` 在 `backing_up` 时分配为“所有可读 journal op 的最大值 + 1”（首个为 1，失败/回滚不回收编号），GC 不重编号，因此“最新”跨 restore 仍稳定；journal 不可读时 fail-closed `HUB_BACKUP_JOURNAL_FAILED`，零备份。dispatcher 侧的“请求目录已有请求”另用 `HUB_HANDOFF_BUSY`（§5.1），两者语义不同、不互相顶替。`restored.json` 不阻塞新备份（它只禁止把携带记录当恢复源，§5.7），新 staged 记录落盘时一并清除。
 
 **顺序（rotate before replace，钉死）：**
 
-1. 生成 `operation_id`（32 位小写 hex，`crypto/rand`）；解析并校验 root manifest（§5.8），得 `manifest_sha256`/`package_sha256`。
+1. 生成 `operation_id`（32 位小写 hex，`crypto/rand`）；读 journal 按本节单飞定义计算 `backup_generation = max + 1` 并写 `backing_up`（fsync+rename）；解析并校验 root manifest（§5.8），得 `manifest_sha256`/`package_sha256`。
 2. **把运行中的二进制 stage 成旧包**：`buildinfo.Digest()` 读 `/proc/self/exe` → 复制到 `<data-dir>/upgrade/meshmuxd-<from_version>-<arch>`（0755，fsync + rename），回读摘要必须 == `from_agent_sha256`。失败 `HUB_BACKUP_BINARY_STAGE_FAILED`。**没有这一步，恢复默认就是 `HUB_RESTORE_BINARY_MISSING`。**
-3. `payload.part/` 建 0700；`VACUUM INTO '<payload.part>/meshmux.db'`（事务之外；目标必须不存在；路径是固定常量 + `op32hex` 派生）。
+3. `backup.Dir(root, op)` 建 `<data-dir>/database-backup/<op32hex>/`（0700）与 `payload.part/`；先删同 op 的陈旧 `payload.part`（不触碰已提交的 `payload`/`record.json`）；`VACUUM INTO '<op-dir>/payload.part/meshmux.db'`（事务之外；目标必须不存在；路径由固定常量 + `op32hex` 派生）。
 4. 只读打开副本 → `PRAGMA integrity_check` 必须 `ok`。
 5. 计算 `meshmux.db` 的 SHA-256，`payload_files=1`。
-6. `payload.part`→`payload`；写 `record.json.part`→fsync→rename；`state=staged`、`integrity_ok=true`。
-7. **此时不回收任何旧代（B8）**：GC 候选只有 `state=confirmed` 的代（`backup.go:336-340`），且按 C18 只在“确认之后的下一次升级或显式清理”执行；staged 落盘时删旧代会让当前升级的 N-1 在确认前消失。旧代原样保留到新代 `confirmed` 后的下一次 GC（keep=1）；显式清理走同一候选集。失败一律删 `.part`、旧代原样保留、回执 `failed` + 稳定码。
+6. **per-op 原子提交**：`payload.part`→`payload`；`record.json.part`→fsync→rename 为 `<op-dir>/record.json`；fsync op 目录与 `database-backup/`；`state=staged`、`integrity_ok=true`。至此 per-op 记录是唯一权威。
+7. journal `backed_up`（带第 1 步分配的 `backup_generation`）；随后写扁平指针副本（§5.2.1）。指针写失败**不改变** `backed_up`，只记 `HUB_BACKUP_POINTER_STALE` 并保留上一份指针。
+8. **此时不回收任何旧代（B8）**：GC 候选只有 `state=confirmed` 的代（`backup.go:336-340`），且按 C18 只在“确认之后的下一次升级或显式清理”执行；staged 落盘时删旧代会让当前升级的 N-1 在确认前消失。`keep=2` 的回收由 Task 5 在 confirm 之后执行；staged/failed 与最新两代 confirmed 永不被回收。失败一律删 `.part`、旧代原样保留、回执 `failed` + 稳定码。
 
 **字段映射：**
 
@@ -137,9 +138,19 @@ DirectoryNotEmpty=/run/meshmux-hub/requests
 | `manifest_sha256` / `package_sha256` | root manifest 字节摘要 / 该 manifest 中 `meshmuxd-<arch>` 的摘要 |
 | `from_package_sha256` | backup 时 Web 以 `buildinfo.Digest()` 落值（= 安装器 self-copy 的同一份字节；Web 不读 ledger）；权威值仍是 Hub ledger 的 `managed_files["/usr/local/libexec/meshmuxd"]`，由 root dispatcher 在 update exec 前用 `install.ReadState("/")` 核对（C6） |
 | `from_agent_sha256` | `buildinfo.Digest()`（运行二进制摘要，C6）；应与 `shared_binaries.meshmuxd.sha256` 相等（`hub_apply.go:119-132` 同一次 apply 写两者） |
-| `payload_path` / `payload_files` | `<data-dir>/database-backup/payload` / 1 |
+| `payload_path` / `payload_files` | `<data-dir>/database-backup/<op32hex>/payload` / 1 |
 
-**C2 的落地**：不新增 `WriteHubBackupRecord`。把既有 `WriteBackupRecord` 参数化为 `WriteBackupRecord(root, spec, layout, payload)`：`layout ∈ {LayoutFlat, LayoutPerOp}`，`payload ∈ {PayloadTree, PayloadSingleDB}`；两种布局共用同一个 `encodeBackupRecord` 与同一套状态/权限校验。**字节一致的范围（N4）**：`payload_path` 由布局决定（flat = `<root>/payload`，per-op = `<root>/<op32hex>/payload`），`verifyPayload` 又把它钉在记录上，所以两种布局的 `record.json` 不可能逐字节相同；正确断言是“**除 `payload_path` 外逐字节相同**”（同一 `spec` 下其余字段、键序、尾随字节完全一致），并把 flat 的 `payload_path` 作为固定特化单独断言。扁平布局拒绝 `<data-dir>/database-backup/<op32hex>/` 残留（不采用、不迁移）。
+**C2 的落地**：不新增 `WriteHubBackupRecord`。既有 `WriteBackupRecord(root, spec, payload)` 只参数化载荷来源：`payload ∈ {PayloadSingleDB, PayloadTree}`；Hub 用 `PayloadSingleDB`（单 `meshmux.db`，摘要取原始文件 SHA-256），Node 用 `PayloadTree`。路径固定为 per-op `<root>/<op32hex>/{record.json,payload}`，两种载荷共用同一个 `encodeBackupRecord`、同一套状态/权限校验与同一 `verifyPayload` 路径钉死；**不再有 `LayoutFlat` / `LayoutPerOp` 参数**。payload kind 不写入记录，因此同一 `spec` 下 Node 与 Hub 的 `record.json` 逐字节相同；测试用同一金标断言键序/尾随字节，不做“两种布局除 `payload_path` 外相同”的比较。扁平单槽的 `<root>/record.json`、`<root>/payload` 与 `<root>/payload.part` 路径不再被记录层使用；`<root>/record.json` 只是 §5.2.1 的指针副本。
+
+#### 5.2.1 旧二进制指针：flat latest 副本（D1 附属决定）
+
+11c-3 冻结的 `schemaTooNew`（`internal/web/store_database_gate.go`）只对**扁平路径** `<data-dir>/database-backup/record.json` 做 existence-only `Lstat`，不解析、不校验属主/模式。改为 per-op 后该路径默认不存在。**决定 (a)：per-op 提交成功后另写一份 flat latest 副本**，只作旧二进制的存在性指针；除冻结的 `schemaTooNew` existence-only `Lstat` 外，11d 的 `Read`/`Verify`/`Confirm`/restore/dispatcher/GC 都按 `<op32hex>/record.json` 工作，**从不读取该副本**。
+
+- **写序（钉死）**：① 第 6 步 per-op `record.json` rename + fsync 完成；② journal `backed_up`；③ 读回该 per-op 记录的**原始字节**，写 `<root>/record.json.part`（0600，`O_EXCL`；先删同目录陈旧 `.part`）→ fsync → rename 为 `<root>/record.json` → fsync `<root>`。副本内容与 per-op 记录逐字节相同，`payload_path` 仍指 `<root>/<op32hex>/payload`。**confirm 成功后按同一 temp+fsync+rename 步骤刷新一次副本**（此时内容是 confirmed 记录）；approve 不回写，故副本的 state/位可能滞后，但它只供旧二进制的存在性检查，11d 从不以它授权。
+- **崩溃语义**：①之前崩溃 → 无 per-op 记录，指针不变；①之后、③之前崩溃 → per-op 是权威，指针仍是上一代（或不存在）；③的 temp 写/rename 之间崩溃 → 旧指针或新指针二选一，`.part` 残留由下一次③先删。**没有 `recoverFlatSlot`、没有 trash/orphan 回滚、没有跨进程锁**：11d 对该副本无读者、无授权，任何中间态都不影响 11d 的正确性。
+- **失败语义**：③失败只记 `HUB_BACKUP_POINTER_STALE`（op id + 稳定码，无秘密），journal 保持 `backed_up`，per-op 记录/载荷不变；下一次成功 backup 或 confirm 重试。**confirm 的副本刷新失败时跳过本次 `backup.GC`**（`HUB_BACKUP_POINTER_STALE`，保留多余代），直到下一次成功刷新——因此指针目标永不被回收。显式清理同样先刷新指针，失败即拒绝清理。指针可能滞后数代，但每次 GC/清理前都要求刷新成功；GC 只扫 `<op32hex>/` 目录，`record.json` 永不是候选。
+- **旧二进制可见行为**：存在副本时，`schemaTooNew` 仍返回 “restore the verified database backup record `<data-dir>/database-backup/record.json`”，操作员打开即看到 `operation_id` 与 per-op `payload_path`；副本是合法 schema-1 `BackupRecord`，旧 `readDatabaseBackupRecord` 可严格解码，但其 `verifyDatabaseBackupPayload` 会因 `payload_path != <root>/payload` 拒绝——旧 approve 在这条降级边界上 fail-closed，11d 也从不把副本上的位当授权。副本缺失（首次 backup 的指针写失败）时旧二进制退回 “no verified database backup record exists at …”，只丢诊断指针，不丢恢复源。
+- **为什么不选 (b)/(c)**：(b) 的指针形状会被旧 `BackupRecord` 严格解码成 `DB_BACKUP_RECORD_CORRUPT`，而 `schemaTooNew` 的文案仍称它是“verified record”，等于让冻结文案说谎；(c) 最省事但把唯一跨 11d 降级边界的诊断指针主动丢掉。**(a) 只多一个 0600 原子写路径（backup 与 confirm 各执行一次），不新增编码器、读路径或恢复机制，且明确无读权**，是三个选项里最小且不骗人的一个。
 
 ### 5.3 版本身份（单一来源）
 
@@ -168,7 +179,7 @@ DirectoryNotEmpty=/run/meshmux-hub/requests
 
 **op journal 是权威，DB 表是镜像。** 恢复会把 DB 带回 schema 10（`hub_upgrade_operations` 不存在），所以 op 状态必须跨 schema 与 data-dir 存活：
 
-- `<data-dir>/hub-upgrade/ops/<op32hex>.json`（0600，schema 1）：`operation_id`、`kind`、`state`、`target_version`、`from_version`、`manifest_sha256`、`package_sha256`、`db_schema`、`backup_generation`、`error_code`、`updated_at`。Web 写；恢复时随 `hub-upgrade/` 带入新 data-dir。`backup_generation` 由 Web 在每次成功 backup 时自增（记录无此字段，C2 冻结）。
+- `<data-dir>/hub-upgrade/ops/<op32hex>.json`（0600，schema 1）：`operation_id`、`kind`、`state`、`target_version`、`from_version`、`manifest_sha256`、`package_sha256`、`db_schema`、`backup_generation`、`error_code`、`updated_at`。Web 写；恢复时随 `hub-upgrade/` 带入新 data-dir。`backup_generation` 在 `backing_up` 时分配为“现有可读 journal op 的最大值 + 1”（首个为 1；失败/回滚不回收编号，GC 不重编号），是 journal-backed 的“最新”判定依据（§5.2）；记录本身仍无此字段（C2 冻结），关联只靠 `operation_id`。
 - `hub_upgrade_operations`（schema 11，纯加法）是镜像，供 SQL 查询：同名列 + `detail`/`created_at`/`updated_at`。锚字段与记录同源，写入时断言与冻结记录相等；dispatcher 只读 journal 与记录，从不读 DB。
 
 ```
@@ -200,7 +211,7 @@ hub_upgrade_operations(
 
 上表所有 “result” 都指固定路径 `/var/lib/meshmux-installer/hub-upgrade/results/<op32hex>.json`（§5.9 N3），**不是** `<data-dir>/hub-upgrade/results/`；读端只接受该常量路径，且只把它当进度提示（C21）。
 
-**`confirmed` 判定（唯一）**：`buildinfo.Version == journal.target_version && buildinfo.Digest() == journal.package_sha256`。`from_*` 只用于恢复/重钉核对，**永不**与升级后的运行值比较（升级后 running 就是 target，`from_*` 必然不等）。判定只在启动对账执行；定时器只推进状态与超时，不确认。确认时调用 11c-3 既有 finalize 把备份记录置 `confirmed`（语义不改，GC 仍只在其后），并写 DB 镜像。**finalize 必须与 writer 一样按布局参数化（N5）**：11c-3 的 finalize 走 `requireVerifiedBackup(root, op, ...)`，默认 `<root>/<op>/record.json`；Hub 扁平布局是 `<root>/record.json`，因此 finalize 需接受同一个 `layout` 参数（`RequireBackupDir`/`VerifyBackupRecord`/`readBackupRecord` 全部随 layout 解析），否则 C2 的“单编码器”会被第二条读路径破坏。`reverted` 终态不被后续启动覆盖（C12）。
+**`confirmed` 判定（唯一）**：`buildinfo.Version == journal.target_version && buildinfo.Digest() == journal.package_sha256`。`from_*` 只用于恢复/重钉核对，**永不**与升级后的运行值比较（升级后 running 就是 target，`from_*` 必然不等）。判定只在启动对账执行；定时器只推进状态与超时，不确认。确认时调用 11c-3 既有 finalize 把**该 op 的 per-op 记录**置 `confirmed`（语义不改），并写 DB 镜像；随后按 §5.2.1 刷新扁平指针副本，成功才执行 `backup.GC(root, 2)`（confirmed-only；staged/failed 与最新两代永不入选）；刷新失败则跳过本次 GC 并记 `HUB_BACKUP_POINTER_STALE`，保留多余代到下一次成功刷新。`RequireBackupDir`/`VerifyBackupRecord`/`readBackupRecord` 固定解析 `<root>/<op32hex>/record.json`，**不再接受 layout 参数**；11c-3 的 Node 路径与 11d 的 Hub 路径因此是同一条读路径（原 N5 的 flat/per-op 双布局分叉删除）。`reverted` 终态不被后续启动覆盖（C12）。
 
 **重启后查询**：`GET /tasks` 的 Hub 区块读 journal + result；无内存依赖。
 
@@ -235,8 +246,8 @@ hub_upgrade_operations(
 
 **停机前（失败 = 零停机零变更）：**
 
-1. 严格读记录与 journal；journal `state ∈ {failed, partial, verifying}`、记录 `state ∈ {staged, confirmed}`、`integrity_ok`、`payload_files>0`。`staged` 是**合法恢复源**（升级失败时它就是最近一代），与 B8 一致：GC 只收 `confirmed`，`staged`/`failed` 记录及其载荷永不在恢复前被回收。
-2. 重算 `payload/meshmux.db` 的 SHA-256 == `PayloadSHA256`（`integrity_check` 不等于“字节正确”）。
+1. 按 journal 的 `operation_id` 严格读 `<data-dir>/database-backup/<op32hex>/record.json`（不扫目录、不读扁平指针副本）；journal `state ∈ {failed, partial, verifying}`、记录 `state ∈ {staged, confirmed}`、`integrity_ok`、`payload_files>0`。`staged` 是**合法恢复源**（升级失败时它就是最近一代），与 B8 一致：GC 只收 `confirmed`，`staged`/`failed` 记录及其载荷永不在恢复前被回收。
+2. 重算 `<op-dir>/payload/meshmux.db` 的 SHA-256 == `PayloadSHA256`（`integrity_check` 不等于“字节正确”）。
 3. 建新目录 0700；把副本落入新目录，并在**副本**上 `PRAGMA integrity_check`。
 4. **用原始只读连接**（`mode=ro&immutable=1`，不经 store-open/迁移）读副本自身的 `user_version` 与 `database_versions` 行，与记录的 `from_version`/`db_schema` 比较；不等或行缺失 → `CONFIG_CONFLICT`，停机前返回。第 1 稿用新二进制打开 schema 10 副本必然不一致，这是恒定误报。
 5. 旧包存在且摘要 == `from_agent_sha256`，否则 `HUB_RESTORE_BINARY_MISSING`（producer 已保证不再默认缺）。
@@ -246,11 +257,12 @@ hub_upgrade_operations(
 **停机后：** 停 Web → 旧包换回二进制（同目录 `meshmuxd.new` + rename）→ **四处 pin 改回 `from_*`**（Hub ledger `shared_binaries` + `managed_files` + Line ledger `shared_binaries` + Line ledger `state.Node` 的 `AgentVersion/AgentSHA256` + Line ledger `managed_files` + `agent.json`，同 §5.6-6 写集，全成或全败）并重启 Line → 写 `/etc/systemd/system/meshmux-web.service.d/10-data-dir.conf`（`ExecStart=` 复位 + 重写同一 argv、仅 `--data-dir` 改变；temp+fsync+rename+fsync 目录）→ `daemon-reload` → `start` → 轮询 `/healthz` 200（60s；SELECT 1 契约，只证存活）→ 原始只读连接核对恢复库身份 → result `restored`。data-dir 翻转**只用 drop-in**，基础单元不动；不再有“改写 ExecStart 或读 `hub-data-dir` 文件”的二选一。
 
 - 新建目录、恢复库、携带的 `database-backup/` 与 `hub-upgrade/` 全部 `chown -R meshmux:meshmux`。
-- **携带记录的限制**：`record.json` 按字节原样保留（C2），其 `payload_path` 仍指旧 data-dir，且其 state 不能代表恢复后事实；因此只可作 `SCHEMA_TOO_NEW` 的 existence-only 指引，不得作为下一次恢复源。启动对账见到 result `restored` 时写 `hub-upgrade/restored.json` 标记并把 journal 置 `reverted`（终态）；读取端见到标记即拒绝把携带记录当 rollback source，新 staged 记录落盘时清除标记。
+- **携带记录的限制**：`database-backup/<op32hex>/record.json` 与扁平指针副本都按字节原样保留（C2），其 `payload_path` 仍指旧 data-dir，且其 state 不能代表恢复后事实；因此只可作 `SCHEMA_TOO_NEW` 的 existence-only 指引（实际命中的是扁平指针副本），**per-op 记录也不得作为下一次恢复源**。启动对账见到 result `restored` 时写 `hub-upgrade/restored.json` 标记并把 journal 置 `reverted`（终态）；读取端见到标记即拒绝把任何携带记录当 rollback source，新 staged 记录落盘时清除标记。
 - 恢复后 DB 是 schema 10，op 镜像消失；op 事实来自 journal（随目录携带）+ result（固定 root 路径，§5.9 N3，不经 data-dir），UI 读它们。
 - 中途失败 = 终态 + 人工指引，原目录不动，Web 保持 down；不自动重试。若二进制/pin 已改，先换回再落 `partial`。
 - 二进制回退只对“加法迁移”的库成立（C11）；11d 自己的 op 永远走这条 restore。
 - **LKG 语义适用范围**：11c-3 的“重发 LKG candidate revision”是 Line/Out 的回退机制，11d 原样保留；Hub 没有 candidate revision 链，只有 restore 一条路，不得把 four-task 链套到 Hub。
+- **`keep=2` 不改变 restore 选择**：多保留的一代 confirmed 只是留在 `<data-dir>/database-backup/` 的恢复源；11d 仍只按 journal 当前失败 op 的 `operation_id` 恢复，不自动回退到更早的 confirmed 代，也不新增代选择入口。
 
 ### 5.8 Manifest 与 pin lifting（含不可逆来源）
 
@@ -275,18 +287,19 @@ hub_upgrade_operations(
 ### 5.9 空间 / 属主 / 日志 / ledger
 
 ```
-hubRequiredSpace = 128 MiB (目标包) + 2×dbSize (VACUUM 副本+旧代)
+hubRequiredSpace = 128 MiB (目标包) + 3×dbSize (VACUUM/暂存副本 + 2 个已确认代)
                  + 128 MiB (旧包) + dbSize (恢复新目录) + 256 MiB (journal/result/余量/exec 副本)
 hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预检下限
 ```
 
-`HUB_SPACE_INSUFFICIENT` 在每次复制/下载前检查（备份副本、目标包 stage、恢复目录），零变更；公式单测钉住。
+`HUB_SPACE_INSUFFICIENT` 在每次复制/下载前检查（备份副本、目标包 stage、恢复目录），零变更；公式单测钉住。`keep=2` 把备份库的峰值从 2×dbSize 提到 3×dbSize（最新/暂存 1 + 已确认旧代 2），恢复新目录另加 1×dbSize；扁平单槽的 1 代假设删除。
 
 | 路径 | 属主/模式 | 写者 |
 | --- | --- | --- |
 | `/var/lib/meshmux` | meshmux 0700 | installer |
-| `database-backup/`、`payload/` | meshmux 0700 / 文件 0600 | Web |
-| `record.json` | meshmux 0600 | Web |
+| `database-backup/<op32hex>/`、`payload/` | meshmux 0700 / 文件 0600 | Web |
+| `<op32hex>/record.json` | meshmux 0600 | Web |
+| `database-backup/record.json`（旧二进制指针副本） | meshmux 0600 | Web（§5.2.1；11d 从不读取） |
 | `upgrade/`（两代包） | meshmux 0700 / 包 0755 | Web |
 | `hub-upgrade/ops/` | meshmux 0700 / 0600 | Web |
 | `/var/lib/meshmux-installer/hub-upgrade/results/` | root:meshmux 0750 / 文件 0640 | root unit；**在 Web data-dir 之外**（N3） |
@@ -300,7 +313,7 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 - `ownedByCurrentUser` 不能用于跨 uid：Hub 读端参数化为 `expectedOwner`（Web 进程 = meshmux；root unit = meshmux），仍要求 0600/0700；root 不得以“反正能读”绕过属主检查。
 - **能力集是 Hub 自有裁决**：`CAP_CHOWN`（恢复族把新 data-dir 整树归还 meshmux；结果目录/文件定属主）与 `CAP_DAC_OVERRIDE`（root 单元要读 meshmux 0600 的 record/payload、要往 meshmux 0700 的 data-dir 写 result）都需要；11c-2 排除 DAC_OVERRIDE 是因为它的写集全是 root 属主，Hub 跨 uid，前提不同。真正的边界仍是固定 argv、枚举的 `ReadWritePaths`、root 属主 manifest 与 `expectedOwner` 校验——能力集不是授权，DAC_OVERRIDE 不改变“只能执行 root 认可的那一份包”。
 - 日志：op id、阶段、稳定码、版本、摘要；不记 token、订阅 URL、DB 内容；只有 `SCHEMA_TOO_NEW` 记 detail（记录路径）。
-- 稳定码分组：**启动** `SCHEMA_TOO_NEW`(detail)、`SCHEMA_READBACK_FAILED`、`SCHEMA_CONFIRM_FAILED`、`HUB_DIGEST_UNAVAILABLE`；**健康** `DATABASE_UNAVAILABLE`（503，仅 SELECT 1）；**管理面/执行** `DATABASE_UNCONFIRMED`、`DATABASE_VERSION_MISMATCH`、`MANIFEST_UNAVAILABLE`、`HUB_MANIFEST_PACKAGE_MISMATCH`、`IRREVERSIBLE_CONFIRM_REQUIRED`、`HUB_SPACE_INSUFFICIENT`、`HUB_UPGRADE_BUSY`、`HUB_BACKUP_*`、`HUB_HANDOFF_*`（含 `HUB_HANDOFF_BUSY`）、`HUB_UPDATE_*`、`HUB_UPGRADE_*`、`HUB_SHARED_BINARY_*`、`HUB_RESTORE_*`、`UPDATE_BACKUP_MISMATCH`、`CONFIG_CONFLICT`。
+- 稳定码分组：**启动** `SCHEMA_TOO_NEW`(detail)、`SCHEMA_READBACK_FAILED`、`SCHEMA_CONFIRM_FAILED`、`HUB_DIGEST_UNAVAILABLE`；**健康** `DATABASE_UNAVAILABLE`（503，仅 SELECT 1）；**管理面/执行** `DATABASE_UNCONFIRMED`、`DATABASE_VERSION_MISMATCH`、`MANIFEST_UNAVAILABLE`、`HUB_MANIFEST_PACKAGE_MISMATCH`、`IRREVERSIBLE_CONFIRM_REQUIRED`、`HUB_SPACE_INSUFFICIENT`、`HUB_UPGRADE_BUSY`、`HUB_BACKUP_*`（含 `HUB_BACKUP_JOURNAL_FAILED`、`HUB_BACKUP_POINTER_STALE`）、`HUB_HANDOFF_*`（含 `HUB_HANDOFF_BUSY`）、`HUB_UPDATE_*`、`HUB_UPGRADE_*`、`HUB_SHARED_BINARY_*`、`HUB_RESTORE_*`、`UPDATE_BACKUP_MISMATCH`、`CONFIG_CONFLICT`。
 - ledger（MF-2）：`readStateAt` strict 读不动，**权限也不动**：目录 root:root 0700、文件 root:root 0600（`apply.go:331` / `apply.go:161`）；Web 不 import `internal/install`，也不为读 ledger 获得任何遍历权。Hub **没有** `artifacts.meshmuxd`（`InstallHub` 只 stage caddy+headscale，`PinnedMeshmuxd` 只被 `upgrade/manifest.go:173` 的组件表消费，从不进 ledger）。实际来源与核对：
   - `from_package_sha256` ← backup 时 Web 只能取 `buildinfo.Digest()`（与安装器 self-copy 的同一份字节相同）；**权威来源**是 Hub ledger `managed_files["/usr/local/libexec/meshmuxd"]`（`hub_apply.go:119-132` 每次 apply 写），由 root dispatcher 用 `install.ReadState("/")`（严格 0600/0700）读后与记录比对；缺失/不可读/非 64 hex → `HUB_BACKUP_IDENTITY_MISSING`，与记录不符 → `UPDATE_BACKUP_MISMATCH`，零 exec。Web 读端不存在；记录仍只由 Web 在 backup 时冻结一次（C2），执行侧不补写、不回填。
   - `from_agent_sha256` ← `buildinfo.Digest()`，且应等于 Hub ledger `shared_binaries.meshmuxd.sha256`（同一次 apply 写两者；两者不等说明盘上二进制已漂移，`HUB_BACKUP_IDENTITY_MISSING`）。
@@ -325,30 +338,43 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 | `POST /tasks/hub-upgrade/backup` | §5.2 预升级备份；回执给出 `operation_id` |
 | `POST /tasks/hub-upgrade/apply` | 提交升级（同一 `operation_id`；目标已由备份固定） |
 | `POST /tasks/hub-upgrade/restore` | §5.7 |
-| `POST /tasks/db-migration/approve` | **不变**：只接受 `backup_operation_id` + 字面值 `irreversible_confirm=1` |
+| `POST /tasks/db-migration/approve` | 路由/表单**不变**（`backup_operation_id` + 字面值 `irreversible_confirm=1`）；记录读写改指 `<data-dir>/database-backup/<op32hex>/record.json`，扁平指针副本不参与 |
 
-页面显示记录状态（state、`from_version`、`db_schema`、payload 文件数、`integrity_ok`）、不可逆警告、恢复入口、op id 与 result 阶段；不可逆时 apply 前要求先写确认位并显示当前位值。**修悬空文案**：备份回执的 `operation_id` 就是 `POST /tasks/db-migration/approve` 需要的 `backup_operation_id`，`server_database_migration.go` 的提示改指本页（写入路径不动）。apply 在破坏性步骤前读位 + `verifyDatabaseBackupPayload`，不满足即 `IRREVERSIBLE_CONFIRM_REQUIRED`，无 flag/环境变量绕过。
+页面显示记录状态（state、`from_version`、`db_schema`、payload 文件数、`integrity_ok`）、不可逆警告、恢复入口、op id 与 result 阶段；`/tasks` 摘要里的“当前记录”与单飞判定同源（journal 最高 `backup_generation`，§5.2），**不扫 `database-backup/` 目录**；approve/apply 则按表单/journal 的 `operation_id` 精确读 per-op 记录。不可逆时 apply 前要求先写确认位并显示当前位值。**修悬空文案**：备份回执的 `operation_id` 就是 `POST /tasks/db-migration/approve` 需要的 `backup_operation_id`，`server_database_migration.go` 的提示改指本页（路由/写入语义不动，只改记录路径）。apply 在读位时**只读该 operation_id 的 per-op 记录**（不取“最新”、不扫目录、不读扁平副本），并重验 `verifyDatabaseBackupPayload`，不满足即 `IRREVERSIBLE_CONFIRM_REQUIRED`，无 flag/环境变量绕过。
+
+### 5.12 实现任务改写（Task 1/3/4/5，按已落地分支核对）
+
+- **Task 1（`feat/11d-1-backup-record`）删除 flat 全部范围**：`internal/backup/record.go` 删 `Layout` 类型、`LayoutPerOp`/`LayoutFlat` 与 `Paths` 的 layout 参数；`Path`/`Dir` 固定 per-op。`internal/backup/store.go` 删 `ReadFlat`、`recoverFlatSlot`、`flatSlot`、`publishFlatSlot`、`restoreRetiredPayload`、`reachFlatCrashPoint`、`gcFlat`、`rejectPerOpResidue`、`holdingDir` 的 flat 分支，以及 flat-only 的 `PayloadTrashPrefix`/`PayloadOrphanPrefix`/`RecordTrashPrefix`/`flatCrashPoint` 与 `LayoutFlat` 分支；`Dir/Write/Verify/Read/Confirm/GC` 去掉 layout 参数，`gcPerOp` 保留 `.trash-<unix>` rename。`internal/update/backup.go` 包装层同步去 layout（固定 per-op + `PayloadTree`）。`internal/web/store_database_gate.go` 的 `readDatabaseBackupRecord` 改为 `backup.Read(root, operationID, expectedOwner)` 读 `<root>/<op>/record.json`，approve 只写该 per-op 文件；`verifyDatabaseBackupPayload` 的 payload 根改为 `<root>/<op>/payload`；`schemaTooNew` 保持冻结的扁平 `Lstat` 不动（`databaseBackupRecordName` 只服务该指针路径）。
+- **Task 1 测试**：删 `TestRecordByteCompatAcrossLayouts`、`TestFlatPayloadPathPinned`、`TestFlatRejectsPerOpResidue`、`TestFlatWriteCrashWindowsRecover`、`TestGCFlatKeepsOneGeneration`、`TestConfirmFlatLayoutReadsRootRecord`；`TestSingleDBIntegrityFailureKeepsOldGeneration` 改成“失败不动上一个 per-op 代”；保留 `TestGCOnlyConfirmedGenerations`/`TestGCTrashRenameFailureRetains`，新增 `TestGCKeepTwoConfirmed`、`TestGCNeverCollectsNewestOrStaged`。
+- **Task 3（`feat/11d-3-hub-backup`）**：`CreateBackup` 去掉 `LockFlatSlot()`，改 `backup.Dir(root, op)` + `VACUUM INTO '<op>/payload.part/meshmux.db'` + `backup.Write(root, spec, PayloadSingleDB)`；per-op 提交并写 journal `backed_up` 后调用新 `internal/hubupgrade/pointer.go` 的 `PublishFlatPointer(root, op)`（读回 per-op 原始字节、temp+fsync+rename，失败仅 `HUB_BACKUP_POINTER_STALE`）。单飞“当前记录”由 `journal.LatestBackup(dataDir)`（max generation，journal-backed，按 §5.2 跳过无记录/不可读的 op）取 op 后 `backup.Read`，不再 `ReadFlat`。`backup_generation` 在 `backing_up` 时按 §5.2 分配。**Task 3 不 GC**；`internal/hubupgrade/lock.go` 整个删除。
+- **Task 3 测试**：删 `TestReadFlatReturnsTheSlotWithoutAnOperationID` 与所有 flat 路径/单槽断言；新增 `TestBackupPublishesPerOpThenPointer`、`TestBackupPointerFailureKeepsBackedUp`、`TestLatestIsJournalBacked`；`TestBackupNeverCollectsBeforeConfirm` 保留并断言 `GC` 未被调用。
+- **Task 4（`feat/11d-4-dispatch`）**：`dispatch.go` 的记录读取改为 `backup.Read(filepath.Join(request.DataDir, DatabaseBackupDir), request.OperationID, cfg.RecordOwner)`；删除“flat 读会跑 `recoverFlatSlot`、跨进程锁不覆盖”的注释与整个 `LockFlatSlot` 假设。请求/结果/argv/ledger 逻辑不变；记录必须与 journal 同一 `operation_id`。无锁替代：per-op 记录只经 rename 替换，11c-3 Node 路径已证明无锁读安全。
+- **Task 4 测试**：`TestDispatchReadsMeshmuxOwnedRecord` 改 per-op；新增 `TestDispatchReadsRequestedOperation`（plant 更新 op 目录不影响选择）、`TestDispatchReadDoesNotWriteDataDir`（无 trash/orphan/恢复副作用）；删 `LockFlatSlot`/`ReadFlat` fixture。
+- **Task 5（确认）**：`backup.Confirm(root, op, target, pkg, now)` 后按 §5.2.1 刷新扁平指针；刷新成功才 `backup.GC(root, 2)`，失败则跳过并记 `HUB_BACKUP_POINTER_STALE`。GC 只收 `confirmed` 且最新两代保留，staged/failed 不动。DB 镜像 `backup_generation` 与 journal 同值。
 
 ## 6. 测试计划（B 级，fixture-friendly）
 
-1. **Producer 顺序**：VACUUM → 副本 `integrity_check` → staged 记录；检查失败断言旧代保留、`.part` 清理、零记录写入；运行二进制已 stage 成旧包且摘要 == `from_agent_sha256`。
+**本轮改写的测试 ID**：#1、#3、#6、#7、#8、#9、#11、#13、#15、#17 的固定含义改为 per-op/`keep=2`；#3、#17 的 flat 断言删除，#6 增加 flat 指针 fixture，#7 增加“flat 副本的位不影响 apply”；新增 #19（旧二进制指针）。未列出的 ID 语义不变。
+
+1. **Producer 顺序**：VACUUM → `<op-dir>/payload.part` 副本 `integrity_check` → per-op `staged` 记录 → journal `backed_up` → flat `record.json` 副本；检查失败断言**旧 per-op 代**保留、`.part` 清理、零记录写入；运行二进制已 stage 成旧包且摘要 == `from_agent_sha256`。`TestBackupPublishesPerOpThenPointer` 断言 flat 副本字节 == per-op 记录字节，且指针写入发生在 per-op rename+fsync 之后。
 2. **载荷与双摘要**：payload 0700/0600、`payload_files=1`；`from_package` 与 `from_agent` 都由 Web 取 `/proc/self/exe`（`buildinfo.Digest()`），Web 不读 ledger；root dispatcher 读 Hub ledger `managed_files["/usr/local/libexec/meshmuxd"]` 核对 `from_package`。fixture：记录两字段不等 → 不被合并、不互替（`from_agent` 只用于 restore 字节 pin）；ledger 与记录不等 → `UPDATE_BACKUP_MISMATCH` 零 exec；缺 `managed_files` 项或非 64 hex → `HUB_BACKUP_IDENTITY_MISSING`；断言 Web 端从不读 ledger、代码**从不**读 `artifacts.meshmuxd`（该键不存在时不得报错也不得被当成空来源）。
-3. **C2 单写者**：同一身份下两种布局的 `record.json` **除 `payload_path` 外逐字节相同**（N4：`payload_path` 由布局决定且被 `verifyPayload` 钉住，不可能整份相同），并单独断言 flat 的 `payload_path == <root>/payload`；扁平布局拒绝 `<op32hex>/` 残留。
+3. **C2 单写者**：只有一个 per-op 路径与一个 `encodeBackupRecord`；payload kind 不写入记录，因此同一 `spec` 下 Node（`PayloadTree`）与 Hub（`PayloadSingleDB`）的 `record.json` 逐字节相同，`payload_path` 固定为 `<root>/<op32hex>/payload`；**删除** `LayoutFlat` 字节比较、flat `payload_path == <root>/payload` 与“拒绝 per-op 残留”三条断言（它们钉的是已删除的扁平布局）。
 4. **健康契约**：`/healthz` 只 SELECT 1——身份不匹配/行缺失/`user_version` 异常都不改变 200/503，且测试统计 DB 写次数为 0。
 5. **身份回读矩阵**（管理面 + 定时器）与 `HUB_DIGEST_UNAVAILABLE`（`/proc/self/exe` 不可读）。
-6. **`SCHEMA_TOO_NEW` 端到端**：子进程 + 高 `user_version` fixture，断言退出码、稳定码、detail 只含记录路径。
-7. **不可逆矩阵**：manifest `database_migration` 缺省/`irreversible`；无位拒绝、有位通过、位在但载荷被删拒绝；`IRREVERSIBLE_CONFIRM_REQUIRED` 零变更。
-8. **恢复**：`PayloadSHA256` 不符 → 停机前拒绝；schema 10 副本 + schema 11 执行体 → `CONFIG_CONFLICT` 在**停机前**返回（不误报）；旧包缺失 → `HUB_RESTORE_BINARY_MISSING`；happy path 含 drop-in 翻转、chown、`database-backup/`+`hub-upgrade/` 携带、`restored.json` 生效。
-9. **op journal**：非法迁移拒绝；终止态不被覆盖；恢复后 DB 无表而 journal 仍可读、单飞仍生效。
+6. **`SCHEMA_TOO_NEW` 端到端**：子进程 + 高 `user_version` fixture，断言退出码、稳定码、detail 只含**扁平指针路径** `<data-dir>/database-backup/record.json`；无指针时退回 “no verified database backup record exists at …”。同时断言 `schemaTooNew` 不解析指针、不检查 per-op 目录即可返回。
+7. **不可逆矩阵**：manifest `database_migration` 缺省/`irreversible`；无位拒绝、有位通过、位在但载荷被删拒绝；`IRREVERSIBLE_CONFIRM_REQUIRED` 零变更；位只写在 `<op>/record.json`，修改 flat 副本的位不影响 apply。
+8. **恢复**：`PayloadSHA256` 不符 → 停机前拒绝；schema 10 副本 + schema 11 执行体 → `CONFIG_CONFLICT` 在**停机前**返回（不误报）；旧包缺失 → `HUB_RESTORE_BINARY_MISSING`；happy path 含 drop-in 翻转、chown、`database-backup/<op>/`+扁平指针+`hub-upgrade/` 携带、`restored.json` 生效；恢复源只从 journal 的 op id 解析。
+9. **op journal**：非法迁移拒绝；终止态不被覆盖；恢复后 DB 无表而 journal 仍可读、单飞仍生效；`backup_generation` 为 max+1、失败不回收编号、GC 不重编号；最新 per-op 由 journal 决定（planted 新目录/新 mtime 不改写“最新”）。
 10. **argv 字节 pin**：`__internal-hub-dispatch`/`-update`/`-restore` 全 argv 逐字节；非法 target/digest/op 拒绝。
-11. **R-SURFACE**：`systemd-analyze verify` 三个单元文件（service/path/tmpfiles）；单元文件 root:root 0644；`.path` 含 `After=systemd-tmpfiles-setup.service`；meshmux 不能写 `/etc/systemd/system`（planted drop-in 必须 EACCES/EROFS）与 `/var/lib/meshmux-installer/upgrade`；伪造 `data_dir` 的请求被拒（不等于当前 `--data-dir`）；请求文件为符号链接被拒；未知 target 的请求 → `MANIFEST_UNAVAILABLE` 且**未 exec**；staged 字节 ≠ manifest 摘要 → 未 exec；校验后换字节（TOCTOU）→ exec 副本仍拒绝；`.path` 缺失时 `queued` 超时成 `HUB_HANDOFF_TIMEOUT`；>1 个请求 → `HUB_HANDOFF_BUSY` 且目录被 drain（path 能重新武装）；restore 请求校验的是 `from_agent_sha256` 而非 target。
+11. **R-SURFACE**：`systemd-analyze verify` 三个单元文件（service/path/tmpfiles）；单元文件 root:root 0644；`.path` 含 `After=systemd-tmpfiles-setup.service`；meshmux 不能写 `/etc/systemd/system`（planted drop-in 必须 EACCES/EROFS）与 `/var/lib/meshmux-installer/upgrade`；伪造 `data_dir` 的请求被拒（不等于当前 `--data-dir`）；请求文件为符号链接被拒；未知 target 的请求 → `MANIFEST_UNAVAILABLE` 且**未 exec**；staged 字节 ≠ manifest 摘要 → 未 exec；校验后换字节（TOCTOU）→ exec 副本仍拒绝；`.path` 缺失时 `queued` 超时成 `HUB_HANDOFF_TIMEOUT`；>1 个请求 → `HUB_HANDOFF_BUSY` 且目录被 drain（path 能重新武装）；restore 请求校验的是 `from_agent_sha256` 而非 target；dispatcher 按请求 op id 读记录（plant 一个更新的 op 目录不改变所选记录），且读路径**不写** data-dir（无 trash/orphan 副作用）、不存在 `LockFlatSlot`。
 12. **对账**：`queued` 超时、`applying` 30min 孤儿、`restarting` 且 running==from → `HUB_UPGRADE_NOT_APPLIED`、确认要求 version 与 digest 同时等于 target/`package_sha256`。
-13. **空间**：公式含 2×DB、旧包、exec 副本；`max(…, 1 GiB)` 单测；不足时每次复制前 `HUB_SPACE_INSUFFICIENT`。
+13. **空间**：公式含 3×DB（最新/暂存 + 2 个已确认代）、旧包、恢复副本、exec 副本；`max(…, 1 GiB)` 单测；不足时每次复制前 `HUB_SPACE_INSUFFICIENT`。
 14. **Line 重钉（MF-3）**：happy path 断言**四处**同时更新（Hub ledger `shared_binaries` + Line ledger `shared_binaries` + Line ledger `state.Node` 版本/摘要 + `agent.json`）且两处 `managed_files` 同步前移，然后 restart；只改 Hub ledger 的 fixture → 后续 `checkLocalLineSharedBinary`（`local_line.go:295-308`）必须报 `SHARED_BINARY_MISMATCH`；**故意让 Line ledger `state.Node` 保持旧对** → 后续 fixed argv `install --repair --non-interactive --from-recorded-state`（`install_cmd.go:191-201`）在 `checkRecordedAgentConfig`（`node_recorded.go:95-96`）报 `CONFIG_CONFLICT`（证明第 4 pin 必需）；四处写入任一失败 → 旧二进制 + 四处旧 pin 与两处 `managed_files` 全量恢复、Web 未重启、稳定码；写完后第二次备份仍能通过 `from_package` 核对，Line 后续 repair 不因 `managed_files[agent.json]` 报 `MANAGED_FILE_DRIFT`；预检时 Hub ledger / Line ledger shared / Line `state.Node` / `agent.json` 任一不符 → 零写。
-15. **GC 候选（B8）**：`staged`/`failed` 记录在 `GCBackups` 后仍存在（`backup.go:336-340` 现行为）；只有 `confirmed` 超 keep 才被回收；`failed`/`staged` 记录可作为 restore 源（§5.7-1），确认前不被任何路径回收；回收前 `.trash-<unix>` rename 失败即保留。
+15. **GC 候选（B8）**：`staged`/`failed` 记录在 `GCBackups(root, 2)` 后仍存在（`backup.go:336-340` 现行为）；只有**超过两代**的 `confirmed` 才被回收，最新两代 confirmed 永不入选；`failed`/`staged` 记录可作为 restore 源（§5.7-1），确认前不被任何路径回收；回收按 per-op 路径 `.trash-<unix>` rename 失败即保留；confirm 的指针刷新失败 → 本次 GC 跳过（断言多余 confirmed 代仍在）；**删除** `TestGCFlatKeepsOneGeneration` 等 flat no-op 断言。
 16. **目标 manifest 门（MF-1）**：用“更新版本 + 组件表与运行构建不同”的 manifest 断言通过目标门（证明没有走 `Manifest.Validate` 的编译期表比对）；`database_migration` 缺省/`irreversible` 都通过门；非法值拒绝；`version != target`、arch 不符、摘要非 64 hex、来源类别不符、`version <= running` 各自 `MANIFEST_UNAVAILABLE`。
-17. **finalize 布局（N5）**：flat 布局下 confirmed 走与 writer 相同的 layout 参数解析（`<root>/record.json`），断言不会去读 `<root>/<op>/record.json`；per-op 布局仍通过。
+17. **finalize 路径**：confirm 走与 writer 相同的 per-op 路径 `<root>/<op32hex>/record.json`，断言不会读 `<root>/record.json`（扁平指针副本）；**原 N5 的 layout 参数与 flat/per-op 双分支断言删除**。confirm 成功后 `GC(root, 2)` 只收 confirmed 超两代。
 18. **result 位置（N3）**：root unit 写到 `/var/lib/meshmux-installer/hub-upgrade/results/`；Web 对该目录无写权；Web 改写 `hub-upgrade/` 下同名文件不影响 dispatcher 判定（它只读固定 root 路径）。
+19. **旧二进制指针**：per-op 提交后 flat 副本存在、0600、字节 == per-op 记录；在①之后③之前注入崩溃 → per-op 可读、旧指针保留；③的 temp/rename 之间崩溃 → 旧/新指针二选一、无 `recoverFlatSlot` 调用；confirm 后副本刷新为 confirmed 记录、刷新失败时 GC 跳过；删除/损坏 flat 副本不影响 11d 的 `Read`/`Verify`/`Confirm`/restore/GC（证明无读权）；旧 `schemaTooNew` fixture 仍命中 detail；旧 `verifyDatabaseBackupPayload` 对 per-op `payload_path` 报 `DB_BACKUP_RECORD_CORRUPT`（fail-closed）。
 
 ## 7. 风险与回退
 
@@ -360,7 +386,8 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 | Web 读不到 root ledger | 不放开 0600/0700：backup 以 `buildinfo.Digest()` 落 `from_package`，root dispatcher 用 `install.ReadState("/")` 核对；缺失/不符零 exec（§5.9） |
 | Web 伪造 result 证据 | result 固定在 `/var/lib/meshmux-installer/hub-upgrade/results/`（Web data-dir 之外，Web 不可写）；且 `confirmed` 只由 running 身份判定（C21） |
 | VACUUM 期间并发写 | `VACUUM INTO` 事务一致快照；WAL fixture 证明 |
-| 双份 DB 撑爆磁盘 | §5.9 峰值项 + `max(…, 1 GiB)`，不足即 fail-closed |
+| 多代 DB 撑爆磁盘 | §5.9 峰值项（3×dbSize 备份库 + 恢复副本）+ `max(…, 1 GiB)`，不足即 fail-closed |
+| 旧二进制指针丢失/过期 | 指针只在 per-op 提交/confirm 后写、11d 从不读取；失败仅 `HUB_BACKUP_POINTER_STALE`，per-op 恢复源不受影响；confirm 刷新失败时跳过 GC，指针目标不被回收 |
 | 恢复后 data-dir 身份不符 | 停机前只读比对 → `CONFIG_CONFLICT`，保留两份目录 |
 | root 单元读不到 meshmux 0600 文件 | `CAP_DAC_OVERRIDE` + 参数化 `expectedOwner` 读端（字节可达 ≠ 授权，属主/模式仍校验） |
 | root 写的 result 读不到 | `results/` 在 `/var/lib/meshmux-installer/hub-upgrade/`（Web data-dir 之外）定属主 root:meshmux 0750、文件 0640；unit 是唯一写者，Web 只读（且 result 从不作授权，C21） |
@@ -376,6 +403,7 @@ hubSpaceFloor    = max(hubRequiredSpace, 1 GiB)   # 1 GiB = 安装器既有预�
 - **11e**：兼容矩阵内容接入 §5.8 的 gate 形状；矩阵缺失 fail-closed。
 - **#12**：C 级隔离 VM/真机验收（Debian 13 amd64/arm64），覆盖 `VACUUM INTO` 真快照、path unit/oneshot 行为、恢复后 Caddy/Headscale 联通。
 - 后续可把“root 预置 manifest”替换为签名发布通道；届时 §5.8 的 gate 形状与 §5.1 的执行基座不变。
+- **D2（root-side recovery + watchdog）已接受为 11d 范围**，但由独立的 plan/task change 落地，不在本设计稿展开。
 
 ## 9. 开放问题（不阻塞，最多 3）
 
