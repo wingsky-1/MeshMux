@@ -5,7 +5,7 @@ package store
 // Two version numbers are deliberately kept apart:
 //
 //   - `PRAGMA user_version` is the storage schema of this SQLite file. This
-//     binary owns version 16 and refuses any newer file without opening it for
+//     binary owns version 17 and refuses any newer file without opening it for
 //     writes; a database is never downgraded in place.
 //   - `policy_schema` is the stored route policy contract named by an upgrade
 //     manifest (currently 8). It is checked by the upgrade approval and the

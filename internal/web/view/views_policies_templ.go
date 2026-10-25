@@ -204,7 +204,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/policies.css\"><p class=\"subtitle\">路由策略分两层：客户端层决定设备上的流量走向，服务端层决定 Line 上的转发走向。每层从上到下匹配，先命中先生效。当前版本只有服务端层会下发到 Line；客户端层仅做预览与门禁校验。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/policies.css\"><p class=\"subtitle\">路由策略分两层：客户端层（只读）与服务端层，每层从上到下匹配，先命中先生效。服务端层会下发到 Line；客户端层已停写，既有 revision 仅做预览与门禁校验，客户端分流请在规则库维护。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -570,7 +570,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "</section></div><section class=\"panel mobile-loop\"><div class=\"panel-heading\"><h2>移动端提示</h2><span class=\"badge\">防回环</span></div><p class=\"hint\">标准订阅只包含 Line 与凭据，不含客户端层规则，因此导入后不会出现代理回环；客户端层分流需等消费该层的下发路径落地后才生效。Out 未配置或故障时，下发配置不会生成引用 Out 的规则，避免产生无法启动的无效配置。</p></section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer></main></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "</section></div><section class=\"panel mobile-loop\"><div class=\"panel-heading\"><h2>移动端提示</h2><span class=\"badge\">防回环</span></div><p class=\"hint\">标准订阅只包含 Line 与凭据，不含客户端层规则，因此导入后不会出现代理回环；客户端层已停写，客户端分流请在规则库维护（标准订阅同样不读取客户端层）。Out 未配置或故障时，下发配置不会生成引用 Out 的规则，避免产生无法启动的无效配置。</p></section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer></main></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

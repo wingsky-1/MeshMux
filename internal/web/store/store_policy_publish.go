@@ -484,7 +484,8 @@ func decodePolicyPins(raw json.RawMessage) (compiler.RuleSetPins, error) {
 var publishRefusalCodes = []string{
 	"POLICY_OPERATION_REQUIRED", "POLICY_PAYLOAD_INVALID", "POLICY_LAYER_INVALID",
 	"POLICY_NOT_FOUND", "POLICY_PINS_INVALID", "POLICY_CORRUPT", "POLICY_SECRET_REFUSED",
-	CodePolicyLayerRetired, CodePolicyPayloadRetired,
+	CodePolicyLayerRetired, // defensive: publication never writes a policy layer
+	CodePolicyPayloadRetired,
 	compiler.CodePolicyInvalid, compiler.CodePolicyConflict, compiler.CodeRulesetUnpinned,
 	route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
 	route.CodeRulesetFetchFailed, route.CodeRulesetPinInvalid,
@@ -522,7 +523,14 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		status = 404
 	case compiler.CodePolicyConflict, route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
 		"OUT_BINDING_INVALID", CodeOutNotAuthorized, CodePublishTasksInProgress,
-		CodePublishRevisionChanged, codePublishCandidateChanged, CodePolicyLayerRetired:
+		CodePublishRevisionChanged, codePublishCandidateChanged:
+		status = 409
+	case CodePolicyLayerRetired:
+		// Defensive only: AssemblePolicyPublication reads the active policy and
+		// renders it; it never creates, revises or activates a revision, so this
+		// refusal cannot originate from the publish path today. It stays mapped
+		// (409) so a future publication path that does validate a write answers
+		// with the stable code instead of becoming a 500 PUBLISH_GATE_FAILED.
 		status = 409
 	case codePublishGate, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
 		status = 503
