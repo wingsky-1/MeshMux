@@ -149,7 +149,7 @@ func seedHubSlot(t *testing.T, dataDir, operationID string, confirmed bool) (str
 
 func lastJournalOp(t *testing.T, dataDir string) Op {
 	t.Helper()
-	ops, err := ListOps(dataDir)
+	ops, err := ListOps(dataDir, os.Geteuid())
 	if err != nil || len(ops) == 0 {
 		t.Fatalf("journal: %v (%d ops)", err, len(ops))
 	}

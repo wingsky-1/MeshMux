@@ -46,7 +46,7 @@ func TestJournalForwardOnly(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("journal mode %v want 0600", info.Mode().Perm())
 	}
-	got, ok, err := ReadOp(dataDir, op.OperationID)
+	got, ok, err := ReadOp(dataDir, op.OperationID, os.Geteuid())
 	if err != nil || !ok {
 		t.Fatalf("read backing_up: ok=%v err=%v", ok, err)
 	}
@@ -112,6 +112,43 @@ func TestJournalForwardOnly(t *testing.T) {
 	if _, err := Advance(failed, StateReverted, ""); err != nil {
 		t.Fatalf("failed operation must accept restore: %v", err)
 	}
+
+	// The dispatcher may report failed/partial before the Web ever leaves
+	// queued (spec §5.5); the Web applies that terminal result without a
+	// synthetic applying/restarting step.
+	queued, err := Advance(journalOp(t, journalOperationID(t, "e"), StateBackedUp), StateQueued, "")
+	if err != nil {
+		t.Fatalf("backed_up -> queued: %v", err)
+	}
+	if _, err := Advance(queued, StatePartial, "HUB_HANDOFF_WRITE_FAILED"); err != nil {
+		t.Fatalf("queued -> partial: %v", err)
+	}
+}
+
+func TestJournalReadsAreOwnerAware(t *testing.T) {
+	dataDir := t.TempDir()
+	op := journalOp(t, journalOperationID(t, "a"), StateBackedUp)
+	if err := WriteOp(dataDir, op); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ReadOp(dataDir, op.OperationID, os.Geteuid()); err != nil || !ok {
+		t.Fatalf("owner read: ok=%v err=%v", ok, err)
+	}
+	if _, _, err := ReadOp(dataDir, op.OperationID, os.Geteuid()+1); err == nil {
+		t.Fatal("ReadOp adopted a journal owned by another account")
+	}
+	if _, err := ListOps(dataDir, os.Geteuid()+1); err == nil {
+		t.Fatal("ListOps adopted a journal owned by another account")
+	}
+	if _, _, err := Busy(dataDir, os.Geteuid()+1); err == nil {
+		t.Fatal("Busy adopted a journal owned by another account")
+	}
+	if ops, err := ListOps(dataDir, os.Geteuid()); err != nil || len(ops) != 1 {
+		t.Fatalf("owner list = %d ops, %v", len(ops), err)
+	}
+	if _, busy, err := Busy(dataDir, os.Geteuid()); err != nil || !busy {
+		t.Fatalf("owner busy = %v, %v", busy, err)
+	}
 }
 
 func TestJournalBusyOnlyNonTerminal(t *testing.T) {
@@ -134,7 +171,7 @@ func TestJournalBusyOnlyNonTerminal(t *testing.T) {
 		if err := WriteOp(dataDir, journalOp(t, journalOperationID(t, "a"), tc.state)); err != nil {
 			t.Fatalf("write %s: %v", tc.state, err)
 		}
-		op, busy, err := Busy(dataDir)
+		op, busy, err := Busy(dataDir, os.Geteuid())
 		if err != nil {
 			t.Fatalf("busy %s: %v", tc.state, err)
 		}
@@ -144,7 +181,7 @@ func TestJournalBusyOnlyNonTerminal(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	if _, busy, err := Busy(dataDir); err != nil || busy {
+	if _, busy, err := Busy(dataDir, os.Geteuid()); err != nil || busy {
 		t.Fatalf("empty journal busy=%v err=%v", busy, err)
 	}
 }
@@ -180,7 +217,7 @@ func TestJournalRejectsUnknownFieldAndTrailingData(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := ReadOp(dataDir, op.OperationID); err == nil {
+		if _, _, err := ReadOp(dataDir, op.OperationID, os.Geteuid()); err == nil {
 			t.Fatalf("%s journal was accepted", name)
 		}
 	}

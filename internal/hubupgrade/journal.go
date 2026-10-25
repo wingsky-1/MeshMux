@@ -121,7 +121,10 @@ func transitionAllowed(from, to State) bool {
 	case StateBackedUp:
 		return to == StateQueued || to == StateFailed
 	case StateQueued:
-		return to == StateApplying || to == StateRestarting || to == StateFailed
+		// A dispatcher result can already be failed/partial while the Web
+		// still sees queued (spec §5.5 "任意 result failed/partial → 应用该
+		// 终态"); only the Web advances.
+		return to == StateApplying || to == StateRestarting || to == StateFailed || to == StatePartial
 	case StateApplying:
 		return to == StateRestarting || to == StateVerifying || to == StateFailed || to == StatePartial
 	case StateRestarting:
@@ -146,7 +149,7 @@ func WriteOp(dataDir string, op Op) error {
 	if err := validateOp(op); err != nil {
 		return err
 	}
-	opsDir, err := journalOpsDir(dataDir, true)
+	opsDir, err := journalOpsDir(dataDir, true, os.Geteuid())
 	if err != nil {
 		return err
 	}
@@ -203,13 +206,15 @@ func validateOp(op Op) error {
 	return nil
 }
 
-// ReadOp returns one journal document. A missing operation is (zero, false,
-// nil); an unreadable or malformed one is an error, never "not found".
-func ReadOp(dataDir, operationID string) (Op, bool, error) {
+// ReadOp returns one journal document for the named owner. The Web passes its
+// own uid; the root dispatcher passes meshmux, because the journal it consumes
+// belongs to the Web account. A missing operation is (zero, false, nil); an
+// unreadable or malformed one is an error, never "not found".
+func ReadOp(dataDir, operationID string, expectedOwner int) (Op, bool, error) {
 	if !opIDRE.MatchString(operationID) {
 		return Op{}, false, fail(codeJournalCorrupt, "the operation id is not 32 lowercase hex")
 	}
-	opsDir, err := journalOpsDir(dataDir, false)
+	opsDir, err := journalOpsDir(dataDir, false, expectedOwner)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Op{}, false, nil
@@ -225,7 +230,7 @@ func ReadOp(dataDir, operationID string) (Op, bool, error) {
 		return Op{}, false, fail(codeJournalCorrupt, "the journal could not be inspected")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
-		info.Mode().Perm() != 0600 || !ownedBy(os.Geteuid(), info) || info.Size() > JournalMaxBytes {
+		info.Mode().Perm() != 0600 || !ownedBy(expectedOwner, info) || info.Size() > JournalMaxBytes {
 		return Op{}, false, fail(codeJournalCorrupt, "the journal is not a private 0600 file")
 	}
 	body, err := os.ReadFile(path)
@@ -242,11 +247,11 @@ func ReadOp(dataDir, operationID string) (Op, bool, error) {
 	return op, true, nil
 }
 
-// ListOps returns every readable journal document, newest first. A corrupt
-// document is an error: a state machine that silently ignores one operation
-// could start a second backup over its rollback source.
-func ListOps(dataDir string) ([]Op, error) {
-	opsDir, err := journalOpsDir(dataDir, false)
+// ListOps returns every readable journal document for the named owner, newest
+// first. A corrupt document is an error: a state machine that silently ignores
+// one operation could start a second backup over its rollback source.
+func ListOps(dataDir string, expectedOwner int) ([]Op, error) {
+	opsDir, err := journalOpsDir(dataDir, false, expectedOwner)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -268,7 +273,7 @@ func ListOps(dataDir string) ([]Op, error) {
 			continue
 		}
 		operationID := strings.TrimSuffix(name, ".json")
-		op, ok, err := ReadOp(dataDir, operationID)
+		op, ok, err := ReadOp(dataDir, operationID, expectedOwner)
 		if err != nil {
 			return nil, err
 		}
@@ -285,10 +290,11 @@ func ListOps(dataDir string) ([]Op, error) {
 	return ops, nil
 }
 
-// Busy returns the newest non-terminal operation. It is the backup single-flight
-// predicate; a journal that cannot be read is an error, never "not busy".
-func Busy(dataDir string) (Op, bool, error) {
-	ops, err := ListOps(dataDir)
+// Busy returns the newest non-terminal operation for the named owner. It is the
+// backup single-flight predicate; a journal that cannot be read is an error,
+// never "not busy".
+func Busy(dataDir string, expectedOwner int) (Op, bool, error) {
+	ops, err := ListOps(dataDir, expectedOwner)
 	if err != nil {
 		return Op{}, false, err
 	}
@@ -300,7 +306,7 @@ func Busy(dataDir string) (Op, bool, error) {
 	return Op{}, false, nil
 }
 
-func journalOpsDir(dataDir string, create bool) (string, error) {
+func journalOpsDir(dataDir string, create bool, expectedOwner int) (string, error) {
 	root, err := dataPath(dataDir, HubUpgradeDir)
 	if err != nil {
 		return "", err
@@ -324,7 +330,7 @@ func journalOpsDir(dataDir string, create bool) (string, error) {
 		return "", fail(codeJournalCorrupt, "the journal directory could not be inspected")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0700 ||
-		!ownedBy(os.Geteuid(), info) {
+		!ownedBy(expectedOwner, info) {
 		return "", fail(codeJournalCorrupt, "the journal directory is not a private 0700 directory")
 	}
 	return opsDir, nil

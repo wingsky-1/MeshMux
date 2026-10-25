@@ -100,7 +100,7 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 	defer unlock()
 
 	flatRoot := filepath.Join(cfg.DataDir, DatabaseBackupDir)
-	if op, busy, err := Busy(cfg.DataDir); err != nil {
+	if op, busy, err := Busy(cfg.DataDir, os.Geteuid()); err != nil {
 		return BackupReceipt{}, err
 	} else if busy {
 		return BackupReceipt{}, fail("HUB_UPGRADE_BUSY", "operation "+op.OperationID+" is in state "+string(op.State))
@@ -270,7 +270,7 @@ func currentFlatRecord(flatRoot string) (backup.Record, bool, error) {
 // records. A missing journal starts at 1; a failed operation still consumed its
 // generation, so a later backup never reuses it.
 func nextBackupGeneration(dataDir string) (int64, error) {
-	ops, err := ListOps(dataDir)
+	ops, err := ListOps(dataDir, os.Geteuid())
 	if err != nil {
 		return 0, err
 	}

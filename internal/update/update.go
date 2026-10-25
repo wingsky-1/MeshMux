@@ -435,14 +435,52 @@ func FetchVerifiedSource(ctx context.Context, dir, fileName string, c upgrade.Co
 		return "", fail("UPDATE_STAGE_FAILED", "the private staging directory could not be created")
 	}
 	final := filepath.Join(dir, fileName)
-	if os.WriteFile(final+".part", data, 0700) != nil {
+	part := final + ".part"
+	if err := writeStagedPackage(part, data); err != nil {
+		_ = os.Remove(part)
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be written")
 	}
-	if os.Rename(final+".part", final) != nil {
-		_ = os.Remove(final + ".part")
+	if os.Rename(part, final) != nil {
+		_ = os.Remove(part)
 		return "", fail("UPDATE_STAGE_FAILED", "the verified package could not be published")
 	}
 	return final, nil
+}
+
+// stagedFileSync is the fsync seam of a staged package. Production syncs the
+// real file; the test proves the flush happens while the .part name is still in
+// place, before the rename publishes it (spec §5.8 durable ordering).
+var stagedFileSync = func(file *os.File) error { return file.Sync() }
+
+// writeStagedPackage writes one verified package into a private scratch name
+// and flushes it before returning. The later rename therefore publishes bytes
+// that were already fsynced, rather than leaving a page-cache-only file under
+// the final executable name.
+func writeStagedPackage(path string, data []byte) error {
+	// A previous crash leaves a scratch file; it is never trusted, only
+	// replaced (and a planted symlink is unlinked, not followed).
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := stagedFileSync(file); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 // fetchPackage is the Agent's thin wrapper: the staged name remains the one

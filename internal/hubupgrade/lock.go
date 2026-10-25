@@ -27,9 +27,11 @@ import "sync"
 var flatSlotMu sync.Mutex
 
 // LockFlatSlot acquires the process-wide flat backup-slot lock and returns its
-// unlock function. Every access to <data-dir>/database-backup — producer,
-// approval, restore gate and page read — must hold it for the whole read or
-// write, including the record layer's recovery step.
+// unlock function. Every post-server access to <data-dir>/database-backup —
+// producer, approval, restore gate and page read — must hold it for the whole
+// read or write, including the record layer's recovery step. The startup
+// schemaTooNew existence-only Lstat runs before the server exists, never
+// recovers and writes nothing, so it is outside this critical section.
 func LockFlatSlot() func() {
 	flatSlotMu.Lock()
 	return flatSlotMu.Unlock
