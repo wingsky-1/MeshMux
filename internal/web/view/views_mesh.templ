@@ -1,5 +1,7 @@
 package view
 
+import "strconv"
+
 // MeshPage renders the mesh device workspace.
 //
 // The page is deliberately explicit about what it does and does not know:
@@ -43,7 +45,7 @@ templ MeshPage(p PageData, v MeshPageView) {
 						<div class={ meshNoticeClass(v.NoticeClass) } role="status">{ v.Notice }</div>
 					}
 					if v.Disclosure != nil {
-						<section class="panel key-disclosure">
+						<section id="mesh-key-modal" class="panel key-disclosure key-modal" role="dialog" aria-label="一次性入网 Key">
 							<div class="panel-heading"><h2>一次性入网 Key 已签发 · 仅显示一次</h2><span class="badge accent">{ v.Disclosure.Device }</span></div>
 							<p class="hint">此 Key 只在本次响应中出现，Hub 只保存它的 SHA-256 摘要。离开本页后无法再次查看；遗失请在设备列表中重新签发。请勿把它写入命令行、URL、Shell 历史或日志。</p>
 							<pre class="sub-secret">{ v.Disclosure.Secret }</pre>
@@ -69,6 +71,10 @@ templ MeshPage(p PageData, v MeshPageView) {
 						<section class="panel">
 							<h2>新增 Mesh 设备</h2>
 							<p class="muted">创建后立即签发一次性 Key。用途决定是否绑定订阅用户；平台只影响后续客户端提示。</p>
+							<p><a class="button" href="#mesh-add-modal">添加设备</a></p>
+						</section>
+						<div id="mesh-add-modal" class="modal" role="dialog" aria-label="添加设备"><div class="modal-card"><section class="panel">
+							<div class="panel-heading"><h2>添加设备</h2><a class="text-button" href="#">关闭 ✕</a></div>
 							<form method="post" action="/mesh">
 								<input type="hidden" name="csrf" value={ p.CSRF }/>
 								<label for="mesh_name">设备名称</label>
@@ -116,7 +122,7 @@ templ MeshPage(p PageData, v MeshPageView) {
 								<p class="hint">只创建“已通告、待批准”的声明；批准必须在上方设备卡中单独执行。仅“子网路由”用途可声明，且至少需要一个规范 CIDR 前缀。</p>
 								<button type="submit">创建并签发 Key →</button>
 							</form>
-						</section>
+						</section></div></div>
 						<section class="panel">
 							<h2>核对与边界</h2>
 							<p class="muted">按钮会执行一次真实的 Headscale <code>nodes list</code>，并把观测结果写入设备记录；请求结束即完成，没有后台任务。</p>
@@ -148,7 +154,21 @@ templ MeshPage(p PageData, v MeshPageView) {
 							</div>
 						}
 						for _,d:=range v.Devices {
-							<article class="node-card">
+							<article class="node-card device-row" data-device-id={ d.ID }>
+								<div class="device-row-bar">
+									<span class={ "status-dot " + d.StatusClass } aria-hidden="true"></span>
+									<span class="device-row-name">{ d.DisplayName }</span>
+									<span class="device-row-purpose">{ d.PurposeLabel }</span>
+									<span class={ d.OnlineClass }>{ d.Online }</span>
+									<span class="device-row-routes">{ meshRouteSummary(d.Routes) }</span>
+									<span class="device-row-actions">
+										if d.CanRevoke {
+											<a href={ templ.SafeURL("#mesh-remove-modal-" + d.ID) }>操作</a>
+										} else {
+											<span class="muted">—</span>
+										}
+									</span>
+								</div>
 								<div class="panel-heading">
 									<h3>{ d.DisplayName }</h3>
 									<span class={ d.StatusClass }>{ d.StatusLabel }</span>
@@ -224,7 +244,7 @@ templ MeshPage(p PageData, v MeshPageView) {
 													<tr><th>前缀</th><th>MeshMux 意图</th><th>已批准 <span class="muted">approved</span></th><th>已通告 <span class="muted">available</span></th><th>已服务 <span class="muted">served</span></th><th>最后观测 / 记录</th><th>operation_id</th><th>操作</th></tr>
 												</thead>
 												<tbody>
-													for _,rt:=range d.Routes {
+													for i,rt:=range d.Routes {
 														<tr>
 															<td><code>{ rt.Prefix }</code></td>
 															<td><span class={ rt.DesiredClass }>{ rt.DesiredLabel }</span></td>
@@ -266,12 +286,16 @@ templ MeshPage(p PageData, v MeshPageView) {
 															<td>
 																<div class="route-actions">
 																	if rt.CanApprove {
-																		<form method="post" action="/mesh/routes/approve"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><input type="hidden" name="prefix" value={ rt.Prefix }/><button type="submit">批准</button></form>
+																		<a class="button" href={ templ.SafeURL("#mesh-approve-modal-" + d.ID + "-" + strconv.Itoa(i)) }>批准</a>
+																			<div id={ "mesh-approve-modal-" + d.ID + "-" + strconv.Itoa(i) } class="modal" role="dialog" aria-label="批准确认"><div class="modal-card"><section class="panel"><div class="panel-heading"><h4>批准确认</h4><a class="text-button" href="#">关闭 ✕</a></div><p class="hint">即将批准设备 { d.DisplayName } 的子网前缀 <code>{ rt.Prefix }</code>。批准只改变 Headscale 的 approved 集合，不表示客户端已实际转发，也不证明跨网可达。</p><form method="post" action="/mesh/routes/approve"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><input type="hidden" name="prefix" value={ rt.Prefix }/><button type="submit">确认批准</button></form></section></div></div>
 																	}
 																	if rt.CanWithdraw {
 																		<form method="post" action="/mesh/routes/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><input type="hidden" name="prefix" value={ rt.Prefix }/><button class="secondary-button" type="submit">撤销批准</button></form>
 																	}
-																	if !rt.CanApprove && !rt.CanWithdraw {
+																	if rt.DesiredLabel == "待批准" && !rt.CanApprove {
+																		<button type="button" disabled title="设备尚未观测到 Headscale Node ID，批准不可用；请先完成注册并重新核对。">批准</button>
+																	}
+																	if !rt.CanApprove && !rt.CanWithdraw && rt.DesiredLabel != "待批准" {
 																		<span class="muted">—</span>
 																	}
 																</div>
@@ -294,7 +318,8 @@ templ MeshPage(p PageData, v MeshPageView) {
 										<form method="post" action="/mesh/retry"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><button class="secondary-button" type="submit">重试注销</button></form>
 									}
 									if d.CanRevoke {
-										<form method="post" action="/mesh/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><button class="danger-button" type="submit">注销设备</button></form>
+										<a class="danger-button" href={ templ.SafeURL("#mesh-remove-modal-" + d.ID) }>注销设备</a>
+										<div id={ "mesh-remove-modal-" + d.ID } class="modal" role="dialog" aria-label="移除确认"><div class="modal-card"><section class="panel"><div class="panel-heading"><h4>移除确认</h4><a class="text-button" href="#">关闭 ✕</a></div><p class="hint">即将注销设备 { d.DisplayName }。远端确认后即为终态；不影响订阅用户、Token 轮换或其他设备。请确认后继续。</p><form method="post" action="/mesh/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="device_id" value={ d.ID }/><button class="danger-button" type="submit" data-confirm="移除设备">确认移除</button></form></section></div></div>
 									}
 								</div>
 								<p class="sub-note">“注销”会移除这台设备的 Headscale 节点，远端确认后即为终态；不影响订阅用户、Token 轮换或其他设备。远端删除失败时设备保持“注销中”，可重试。未观测到 Node ID 的设备没有可删除的远端节点；如果它可能已经入网，请先“重新核对”，再删除观测到的节点。</p>
@@ -315,6 +340,18 @@ func meshNoticeClass(class string) string {
 		return "error"
 	}
 	return "notice"
+}
+
+// meshRouteSummary compacts one device's subnet declarations for the row bar.
+// It names only the declared prefixes already listed in the route table below.
+func meshRouteSummary(routes []MeshRouteView) string {
+	if len(routes) == 0 {
+		return "—"
+	}
+	if len(routes) == 1 {
+		return routes[0].Prefix
+	}
+	return routes[0].Prefix + " 等 " + strconv.Itoa(len(routes)) + " 个前缀"
 }
 
 // meshObservedLabel renders the last persisted observation honestly: an empty

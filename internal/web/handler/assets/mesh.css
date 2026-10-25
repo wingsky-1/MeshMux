@@ -198,3 +198,63 @@
     padding: 16px;
   }
 }
+
+/* Task 1: device-row horizontal bar (status dot / name / purpose / online /
+   subnet routes / actions) plus dialog affordances. All mesh flows keep their
+   existing POST endpoints; modals are CSS-only :target overlays shared with
+   app.css, and disabled approve buttons never submit. */
+.device-row-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #f3f6f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9aa7a1;
+  flex: none;
+}
+
+.status-dot.accent {
+  background: #12644e;
+}
+
+.status-dot.failure {
+  background: #a24528;
+}
+
+.device-row-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.device-row-purpose,
+.device-row-routes {
+  color: #2b4436;
+}
+
+.device-row-actions {
+  margin-left: auto;
+}
+
+.device-row-actions a {
+  font-size: 12px;
+}
+
+.route-actions button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.key-modal {
+  border-color: #dbe9df;
+}
