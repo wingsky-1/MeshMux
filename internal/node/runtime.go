@@ -23,6 +23,17 @@ const (
 	journalTXNSchema   = "meshmux-node-journal/v1"
 	maxIdempotency     = 1024
 	maxFinalCache      = 1024
+	// journalRecoveryTimeout bounds one attempt to settle the interrupted-apply
+	// journal. Recovery restores the LKG, restarts the kernel and proves it, so
+	// it gets more than one poll cycle's lock budget; a host that cannot finish
+	// inside it leaves the journal for the degraded retry below.
+	journalRecoveryTimeout = 20 * time.Second
+	// journalRecoveryRetryLimit bounds the degraded startup. A startup-transient
+	// failure keeps check/stage/apply at RECOVERY_REQUIRED while the poll loop
+	// retries; after this many attempts the journal is retired with the partial
+	// receipt that was already recorded, so a kernel that never settles still
+	// leaves the node manageable instead of refusing every config task forever.
+	journalRecoveryRetryLimit = 3
 )
 
 // stageTargetVersion is the release shape the Agent accepts for a stamped
@@ -106,6 +117,12 @@ type Runtime struct {
 	procRoot            string
 	writeState          func(*runtimeState) error
 	enforceProcArgs     bool
+	// journalRecoveryOperation and journalRecoveryAttempts track the degraded
+	// startup retry in memory. They are deliberately not persisted: a restart
+	// gets a fresh budget, while one Agent process never retries the same
+	// unresolved journal forever.
+	journalRecoveryOperation string
+	journalRecoveryAttempts  int
 }
 
 // StageTarget is the release record the Hub stamped onto one pending
@@ -295,16 +312,33 @@ func NewRuntimeContext(ctx context.Context, cfg Config, identity Identity, opts 
 		return nil, err
 	}
 	if state.Journal != nil {
-		recoveryCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err = r.recoverJournal(recoveryCtx, &state)
+		// A journal that could not be settled must not end startup: systemd
+		// would restart the Agent into the same failure, and the Hub would see a
+		// crash loop instead of a node that can report. The failed attempt has
+		// already recorded its terminal partial receipt in the state. Only the
+		// journal that can still change on a later attempt is kept, so
+		// check/stage/apply answer RECOVERY_REQUIRED while the poll loop
+		// retries; everything else converges here and leaves a manageable node.
+		operationID := state.Journal.OperationID
+		recoveryCtx, cancel := context.WithTimeout(context.Background(), journalRecoveryTimeout)
+		retryable, recoveryErr := r.recoverJournal(recoveryCtx, &state)
 		cancel()
-		if err != nil {
-			r.logger.ErrorContext(context.Background(), "runtime recovery failed",
-				"operation_id", state.Journal.OperationID, "error_code", errorCode(err))
-			return nil, err
+		if recoveryErr != nil {
+			if retryable {
+				r.journalRecoveryOperation = operationID
+				r.journalRecoveryAttempts = 1
+				r.logger.ErrorContext(context.Background(), "runtime recovery degraded",
+					"operation_id", operationID, "error_code", errorCode(recoveryErr),
+					"recovery_required", true)
+			} else {
+				r.logger.ErrorContext(context.Background(), "runtime recovery settled with a partial receipt",
+					"operation_id", operationID, "error_code", errorCode(recoveryErr))
+			}
 		}
 	}
 	if err := r.saveState(&state); err != nil {
+		// Nothing can be reported or retried without a durable state: this is
+		// the one recovery-adjacent failure that still refuses startup.
 		return nil, err
 	}
 	return r, nil
@@ -896,6 +930,11 @@ func (r *Runtime) cycle(ctx context.Context) {
 	if err := r.controller.Heartbeat(ctx, heartbeat); err != nil {
 		r.logger.WarnContext(ctx, "heartbeat unavailable", "error_code", "CONTROL_PLANE_UNAVAILABLE")
 	}
+	// A journal left by a degraded startup or a failed in-process restore is
+	// retried here, with the shared lock, before any task can reach the data
+	// plane. A settled recovery is saved and its receipt joins the outbox that
+	// replayResults drains below.
+	r.retryJournalRecovery(ctx)
 	if err := r.replayResults(ctx); err != nil {
 		r.logger.WarnContext(ctx, "result replay unavailable", "error_code", errorCode(err))
 		return
@@ -966,6 +1005,81 @@ func (r *Runtime) cycle(ctx context.Context) {
 		if terminalTaskResult(result.Status) {
 			_ = r.removeOutbox(task.OperationID)
 		}
+	}
+}
+
+// retryJournalRecovery is the poll-cycle half of the degraded startup. While
+// the journal survives, check/stage/apply keep answering RECOVERY_REQUIRED (the
+// existing guard); this retries the restore with the shared lock so the node can
+// leave that state without a restart. A settled recovery is persisted before
+// replayResults runs, so its rolled_back receipt is drained in the same cycle.
+// The retry is bounded: once the startup-transient budget is spent, the journal
+// is retired with the partial receipt the failed attempt already recorded, and
+// the next chain can repair the node instead of being refused forever.
+func (r *Runtime) retryJournalRecovery(ctx context.Context) {
+	state, err := r.loadStateForExecution()
+	if err != nil || state.Journal == nil {
+		return
+	}
+	operationID := state.Journal.OperationID
+	if operationID != r.journalRecoveryOperation {
+		r.journalRecoveryOperation = operationID
+		r.journalRecoveryAttempts = 0
+	}
+	if r.journalRecoveryAttempts >= journalRecoveryRetryLimit {
+		state.Journal = nil
+		if err := r.saveState(&state); err != nil {
+			r.logger.WarnContext(ctx, "journal recovery convergence not persisted",
+				"operation_id", operationID, "error_code", statePersistCode(err))
+			return
+		}
+		r.logger.ErrorContext(ctx, "journal recovery converged without a proved restore",
+			"operation_id", operationID, "error_code", "RECOVERY_REQUIRED")
+		return
+	}
+	lock, err := acquireRuntimeLock(ctx, r.root, true, r.lockTimeout)
+	if err != nil {
+		if ctx.Err() == nil {
+			r.logger.WarnContext(ctx, "journal recovery deferred",
+				"operation_id", operationID, "error_code", errorCode(err))
+		}
+		return
+	}
+	defer lock.Close()
+	// The state may have changed while waiting for the lock; only the journal
+	// this retry budget belongs to is processed.
+	state, err = r.loadStateForExecution()
+	if err != nil || state.Journal == nil {
+		return
+	}
+	if state.Journal.OperationID != operationID {
+		r.journalRecoveryOperation = state.Journal.OperationID
+		r.journalRecoveryAttempts = 0
+		return
+	}
+	r.journalRecoveryAttempts++
+	recoveryCtx, cancel := context.WithTimeout(ctx, journalRecoveryTimeout)
+	retryable, recoveryErr := r.recoverJournal(recoveryCtx, &state)
+	cancel()
+	if ctx.Err() != nil {
+		// The process is stopping mid-attempt. The disk still carries the
+		// journal, so the next start settles it; nothing this attempt concluded
+		// is persisted or reported.
+		return
+	}
+	if recoveryErr != nil {
+		r.logger.WarnContext(ctx, "journal recovery retry failed",
+			"operation_id", operationID, "error_code", errorCode(recoveryErr),
+			"recovery_required", retryable)
+	}
+	if err := r.saveState(&state); err != nil {
+		r.logger.WarnContext(ctx, "journal recovery state not persisted",
+			"operation_id", operationID, "error_code", statePersistCode(err))
+		return
+	}
+	if recoveryErr == nil {
+		r.journalRecoveryAttempts = 0
+		r.logger.InfoContext(ctx, "journal recovery settled", "operation_id", operationID)
 	}
 }
 

@@ -144,6 +144,8 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 
 `runtime.lock` 只在动态写事务期间持有，不伴随 Agent 进程生命周期。Agent 离线不会自动停止独立运行的 `meshmux-sing-box.service`，也不会以“离线”为由删除 identity、candidate 或配置。Agent 启动对该锁的等待有 60s 上界：超过后以稳定码 `RUNTIME_LOCK_TIMEOUT` 退出，由 systemd 重启重试；首启 bootstrap readback 的瞬时重试同样有界且可取消，预算复用 `agentLockTimeout`。
 
+Agent 启动发现未完成的 apply journal 时，恢复失败**不会**退出进程（否则 systemd 会把它拖进无限重启，且失败回执从未落盘）：可重试的宿主瞬态保留 journal，以 `recovery_required` 降级启动，`config.check`/`config.stage`/`config.apply` 以稳定码 `RECOVERY_REQUIRED` 拒绝动态写，轮询在 `runtime.lock` 内按上界重试；确定性失败（journal 损坏、缺少有效 LKG、LKG 候选缺失、ACL/readback 宿主漂移）以 `partial` + 稳定 `error_code` 落盘并上报后收敛、移除 journal，节点仍可被后续链修复。在这条恢复路径上，只有 state 无法持久化时才拒绝启动。
+
 ## partial、failed 与有限恢复
 
 安装事务使用 `validate → stage → apply → readback`。失败语义如下：
@@ -154,7 +156,7 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 - rollback 本身失败、恢复不完整或 readback 不一致时仍是 `partial`，绝不提升为 success。
 - repair 与回滚不自动恢复 nftables 表：快照只覆盖受管文件，`nft -f` 应用过的 Out 表失败时保持 fail closed（unit 停掉、文件保留），由管理员按恢复指引手动处理，不做自动 `nft delete/flush`。
 
-Agent runtime 的 `config.check`、`config.stage`、`config.apply`、`config.readback` 使用固定任务类型，params 只允许 `revision`。apply 在 runtime lock 内校验暂存配置、执行 `sing-box check`、原子替换、受控重启并严格读回进程、listener、配置 hash 和 binary hash。只有存在有效 LKG 时才尝试恢复；恢复后仍要求完整 readback，失败则报告 `partial`。plan 或 check 成功不代表 apply 成功。
+Agent runtime 的 `config.check`、`config.stage`、`config.apply`、`config.readback` 使用固定任务类型，params 只允许 `revision`。apply 在 runtime lock 内校验暂存配置、执行 `sing-box check`、原子替换、受控重启并严格读回进程、listener、配置 hash 和 binary hash。只有存在有效 LKG 时才尝试恢复；恢复后仍要求完整 readback，失败则报告 `partial`。启动恢复失败同样以 `partial` 落盘并上报，而不是退出让 systemd 重启循环；未被 Hub 看到 `applying` 的 journal 用 `partial`（而非 `rolled_back`）作为回执，因为 Hub 的 pending 行只接受前者。plan 或 check 成功不代表 apply 成功。
 
 ## Web 固定操作与离线状态
 

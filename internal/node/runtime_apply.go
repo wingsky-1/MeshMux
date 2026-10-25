@@ -341,11 +341,25 @@ func (r *Runtime) restoreLKG(ctx context.Context, state *runtimeState) error {
 		}
 	}
 	if _, err := r.readbackFor(ctx, r.cfg.Role, *candidate, state.LKGDigest, state.aclExpectation()); err != nil {
-		return errors.New("LKG_READBACK_FAILED")
+		return &lkgRestoreError{code: "LKG_READBACK_FAILED", cause: err}
 	}
 	state.Journal = nil
 	return nil
 }
+
+// lkgRestoreError names a failed LKG restore while keeping the underlying
+// readback signal. Boot recovery must tell a kernel that has not finished
+// starting (retry the restore) from a host that no longer matches the LKG
+// (retrying cannot change the verdict). Error() is the stable code alone:
+// errorCode must never see the cause.
+type lkgRestoreError struct {
+	code  string
+	cause error
+}
+
+func (e *lkgRestoreError) Error() string { return e.code }
+
+func (e *lkgRestoreError) Unwrap() error { return e.cause }
 
 func beforePIDEqual(before, after int) bool {
 	return before > 0 && before == after
@@ -372,31 +386,121 @@ func candidateFromStaged(data []byte) *Candidate {
 	return &candidate
 }
 
-func (r *Runtime) recoverJournal(ctx context.Context, state *runtimeState) error {
+// validTransaction reports whether the journal can still name the interrupted
+// transaction: its schema, operation, revision and config digest must agree. A
+// journal that fails this check is corruption, never a guessable record.
+func (j *applyJournal) validTransaction() bool {
+	return j != nil && j.Schema == journalTXNSchema && nodeIDPattern.MatchString(j.OperationID) &&
+		j.Revision >= 1 && len(j.Config) > 0 && sha256Hex(j.Config) == j.Digest
+}
+
+// receiptable reports whether the journal can still answer a redelivery: the
+// task envelope (revision, idempotency key, payload digest) survives even when
+// the transaction digest does not. A corrupt envelope is not guessed at; the
+// Hub row then ends through its own redelivery instead of a fabricated receipt.
+func (j *applyJournal) receiptable() bool {
+	return j != nil && nodeIDPattern.MatchString(j.OperationID) && j.TaskRevision >= 1 &&
+		j.Idempotency != "" && sha256Pattern.MatchString(j.Payload)
+}
+
+// journalRecoveryRetryable reports whether a failed LKG restore may still
+// succeed on a later attempt. Only a kernel that has not finished starting
+// qualifies: the LKG was healthy before the interrupted apply, so its config
+// bytes, ownership and ACL are deterministic on this host, and an ACL that no
+// longer matches the recorded authorization will not fix itself between polls.
+func journalRecoveryRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch errorCode(err) {
+	case "LKG_RESTART_FAILED", "LKG_PID_NOT_REPLACED":
+		return true
+	case "LKG_READBACK_FAILED":
+		var restore *lkgRestoreError
+		return errors.As(err, &restore) && TransientReadback(restore.cause)
+	default:
+		return false
+	}
+}
+
+// recordJournalFailure makes one failed recovery attempt reportable. The
+// receipt is partial: failure is explicit, and partial is legal from every Hub
+// state an interrupted apply can leave behind. The idempotency entry answers a
+// redelivery; the outbox entry exists only for an operation the Hub already saw
+// as "applying" and is replayed by the next drain.
+func (r *Runtime) recordJournalFailure(state *runtimeState, journal *applyJournal, code string) {
+	if journal == nil || !nodeIDPattern.MatchString(journal.OperationID) {
+		return
+	}
+	result := protocol.TaskResult{OperationID: journal.OperationID, Status: "partial", ErrorCode: stableCode(code)}
+	if journal.receiptable() {
+		state.Idempotency[journal.Idempotency] = idempotencyItem{
+			PayloadDigest: journal.Payload, TaskRevision: journal.TaskRevision,
+			OperationID: journal.OperationID, Result: result,
+		}
+	}
+	if journal.Reported {
+		state.FinalResults[journal.OperationID] = result
+	}
+}
+
+// recoverJournal settles one interrupted apply from the persisted journal.
+//
+// A proved restore records the rollback verdict and clears the journal. A failed
+// restore records the terminal partial receipt in the state and reports whether
+// another attempt can still change the outcome. The journal is retired when it
+// cannot (corruption, a missing LKG, deterministic host drift); it is kept only
+// while the failure is startup-transient, which is what makes check/stage/apply
+// answer RECOVERY_REQUIRED instead of touching a data plane whose LKG was not
+// proved.
+//
+// A successful restore is reported as rolled_back only when the Hub already saw
+// the operation as "applying". A journal that was never reported leaves its row
+// pending, and the Hub's frozen state machine refuses rolled_back there; partial
+// is the status it accepts from both pending and applying, so a crash in the
+// report window does not turn into a report the Agent can never deliver.
+func (r *Runtime) recoverJournal(ctx context.Context, state *runtimeState) (retryable bool, err error) {
 	journal := state.Journal
 	if journal == nil {
-		return nil
+		return false, nil
 	}
-	if journal.Schema != journalTXNSchema || journal.OperationID == "" || journal.Revision < 1 ||
-		sha256Hex(journal.Config) != journal.Digest {
-		return errors.New("JOURNAL_INVALID")
-	}
-	if len(state.LKG) > 0 {
-		if err := r.restoreLKG(ctx, state); err != nil {
-			result := protocol.TaskResult{OperationID: journal.OperationID, Status: "partial", ErrorCode: errorCode(err)}
-			state.Idempotency[journal.Idempotency] = idempotencyItem{
-				PayloadDigest: journal.Payload, TaskRevision: journal.TaskRevision,
-				OperationID: journal.OperationID, Result: result,
-			}
-			if journal.Reported {
-				state.FinalResults[journal.OperationID] = result
-			}
-			return err
+	failure := ""
+	// restore puts the last proved change set back. Its own success clears the
+	// journal; a failure replaces the receipt's reason with the step that
+	// actually refused and decides whether another attempt can change it.
+	restore := func() {
+		if len(state.LKG) == 0 {
+			return
 		}
-	} else {
-		return errors.New("JOURNAL_WITHOUT_LKG")
+		if restoreErr := r.restoreLKG(ctx, state); restoreErr != nil {
+			failure = errorCode(restoreErr)
+			retryable = journalRecoveryRetryable(restoreErr)
+		}
 	}
-	result := protocol.TaskResult{OperationID: journal.OperationID, Status: "rolled_back", ErrorCode: "RECOVERED_AFTER_CRASH"}
+	switch {
+	case !journal.validTransaction():
+		// The transaction cannot be proven, but the LKG in the same state is
+		// independent of it: put the last proved change set back when possible,
+		// and still name the unprovable journal in the receipt.
+		failure = "JOURNAL_INVALID"
+		restore()
+	case len(state.LKG) == 0:
+		failure = "JOURNAL_WITHOUT_LKG"
+	default:
+		restore()
+	}
+	if failure != "" {
+		r.recordJournalFailure(state, journal, failure)
+		if !retryable {
+			state.Journal = nil
+		}
+		return retryable, errors.New(failure)
+	}
+	status := "rolled_back"
+	if !journal.Reported {
+		status = "partial"
+	}
+	result := protocol.TaskResult{OperationID: journal.OperationID, Status: status, ErrorCode: "RECOVERED_AFTER_CRASH"}
 	state.Idempotency[journal.Idempotency] = idempotencyItem{
 		PayloadDigest: journal.Payload, TaskRevision: journal.TaskRevision,
 		OperationID: journal.OperationID, Result: result,
@@ -405,7 +509,7 @@ func (r *Runtime) recoverJournal(ctx context.Context, state *runtimeState) error
 		state.FinalResults[journal.OperationID] = result
 	}
 	state.Journal = nil
-	return nil
+	return false, nil
 }
 
 func (r *Runtime) finishApply(ctx context.Context, state *runtimeState, task protocol.Task, payload string, result protocol.TaskResult) protocol.TaskResult {

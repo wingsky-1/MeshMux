@@ -45,6 +45,8 @@ Node 安装先执行配置校验和真实 preflight，再展示 plan；未通过
 
 Agent 动态写事务与 repair 共用 `/var/lib/meshmux-agent/runtime.lock`，锁只在事务期间持有，不是常驻服务锁。Agent 启动等待该锁的上界是 60s（与安装器无人值守窗口一致），超过即以稳定码 `RUNTIME_LOCK_TIMEOUT` 退出，由 systemd 重启重试，而不是无限挂起；首启 bootstrap readback 的瞬时重试同样有界（复用 `agentLockTimeout` 预算且可取消），因此启动持锁时间有上界。Agent 离线或控制平面失联不会自动停止独立 kernel；恢复只尝试已有有效 LKG，恢复后必须严格 readback，失败保持 `partial` 而不是成功。
 
+启动时的 journal 恢复失败不再以非零退出交给 systemd 无限重启：可重试的宿主瞬态保留 journal、以 `recovery_required` 降级启动（动态写返回 `RECOVERY_REQUIRED`），轮询在锁内按上界重试后收敛；确定性失败（journal 损坏、LKG 候选缺失、ACL/readback 宿主漂移）以 `partial` + 稳定 `error_code` 落盘上报并移除 journal，节点保持可管理。恢复证明成功但 Hub 未看到 `applying` 时回执用 `partial` 而非 `rolled_back`，避免 `pending → rolled_back` 被 Hub 拒绝后无限重投。
+
 ## 阶段一已实现边界
 
 Argon2id 固定成本、服务端哈希会话、初始化令牌、精确 Host/Origin/CSRF、持久化全局认证限速（成功即清零，取舍见上文）、私有 SQLite 目录与事务迁移已实现。默认不信任转发 IP，Fail2ban 候选默认禁用；真实封禁仍需安装阶段隔离验收。参数、失败行为、可信本机边界和备份恢复要求见 [Web 安全基座](WEB_DEVELOPMENT.zh-CN.md)。
