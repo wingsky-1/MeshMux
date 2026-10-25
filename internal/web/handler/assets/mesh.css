@@ -224,11 +224,11 @@
   flex: none;
 }
 
-.status-dot.accent {
+.status-dot.ok {
   background: #12644e;
 }
 
-.status-dot.failure {
+.status-dot.fail {
   background: #a24528;
 }
 
@@ -255,6 +255,3 @@
   cursor: not-allowed;
 }
 
-.key-modal {
-  border-color: #dbe9df;
-}
