@@ -59,6 +59,9 @@ templ RulesLibraryPage(p PageData, v RulesLibraryView) {
 						<div class="panel-heading"><h2>预置规则</h2><span class="badge">{ strconv.Itoa(len(v.Presets)) } 条</span></div>
 						<p class="muted">预置规则由版本种子下发，随版本迁移替换、不原地修改；存量订阅停留在旧版本语义并标注可升级，不自动变。</p>
 						<p class="hint">！ 预置规则不可写：任何创建、修改、删除预置规则的请求都会被 RULE_PRESET_IMMUTABLE 拒绝。</p>
+						if len(v.Presets) == 0 {
+							<p class="muted">预置规则尚未载入：通常意味着数据库迁移未完成，请检查服务日志后再刷新本页。</p>
+						}
 						<ul class="policy-rules">
 							for _,row:=range v.Presets {
 								<li>
@@ -150,7 +153,11 @@ templ ruleViewModal(p PageData, row RuleLibraryRow) {
 				<button type="submit">生成新版本 →</button>
 			</form>
 		}
-		<form method="post" action="/rules/delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="stable_key" value={ row.StableKey }/><input type="hidden" name="version" value={ strconv.Itoa(row.Version) }/><button class="secondary-button" type="submit">删除该版本…</button></form>
+		if !row.Preset {
+			<form method="post" action="/rules/delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="stable_key" value={ row.StableKey }/><input type="hidden" name="version" value={ strconv.Itoa(row.Version) }/><button class="secondary-button" type="submit">删除该版本…</button></form>
+		} else {
+			<p class="hint">预置规则不可删除，随版本迁移替换。</p>
+		}
 	</section></div></div>
 }
 

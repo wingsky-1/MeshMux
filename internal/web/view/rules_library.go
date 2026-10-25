@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/policy"
@@ -104,25 +105,11 @@ func RuleLibraryOriginLabel(preset bool) string {
 func RuleVersionsLabel(history []int, current int) string {
 	parts := make([]string, 0, len(history))
 	for _, v := range history {
-		part := "v" + itoa(v)
+		part := "v" + strconv.Itoa(v)
 		if v == current {
 			part += "（当前）"
 		}
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, "、")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
 }

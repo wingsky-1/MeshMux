@@ -864,8 +864,8 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != store.DatabaseSchemaVersion {
-		t.Fatalf("user_version = %d, want %d", version, store.DatabaseSchemaVersion)
+	if version != 12 {
+		t.Fatalf("user_version = %d, want 12", version)
 	}
 	after, err := s.GetNodeAt(edge, now)
 	if err != nil {

@@ -80,14 +80,19 @@ type Rule struct {
 	UpdatedAt int64
 }
 
-// Validate enforces the library contract: a slug key, a guarded display name,
-// one of the three actions, one of the six matcher kinds, and canonical
-// matcher values under compiler semantics. The preset- namespace reservation
-// is a write-path guard (Create/Revise and ValidateRuleSet), not a Validate
-// rule, so seeded preset rows validate like any other row.
+// Validate enforces the library contract: a slug key outside the reserved
+// preset namespace, a guarded display name, one of the three actions, one of
+// the six matcher kinds, and canonical matcher values under compiler
+// semantics. The preset- refusal lives here (operator-input depth) and again
+// on every store write path; seeded preset rows bypass Validate entirely
+// (SeedPresetsTx inserts them directly), so validating a stored preset row as
+// operator input is a caller error (I3).
 func (r Rule) Validate() error {
 	if !stableKeyPattern.MatchString(r.StableKey) {
 		return errors.New(CodeInvalid + ": stable_key must be 1-64 lowercase letters, digits or hyphens")
+	}
+	if IsPresetKey(r.StableKey) {
+		return errors.New(CodePresetImmutable + ": stable_key " + r.StableKey + " is reserved for the seed bundle")
 	}
 	if err := validateRuleName(r.Name); err != nil {
 		return err

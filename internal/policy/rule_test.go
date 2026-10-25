@@ -33,6 +33,7 @@ func TestRuleValidateRefusesBadInput(t *testing.T) {
 	}{
 		{"bad key", func(r *Rule) { r.StableKey = "Bad Key!" }, "RULE_INVALID"},
 		{"empty key", func(r *Rule) { r.StableKey = "" }, "RULE_INVALID"},
+		{"preset prefix squat", func(r *Rule) { r.StableKey = "preset-evil" }, "RULE_PRESET_IMMUTABLE"},
 		{"empty name", func(r *Rule) { r.Name = "" }, "RULE_INVALID"},
 		{"secret in name", func(r *Rule) { r.Name = "泄露 uuid 的规则" }, "RULE_INVALID"},
 		{"bad action", func(r *Rule) { r.Action = "out" }, "RULE_INVALID"},
@@ -90,9 +91,16 @@ func TestPresetBundleCoversAllSixKinds(t *testing.T) {
 		if !IsPresetKey(p.StableKey) {
 			t.Fatalf("preset key %q escapes the preset- namespace", p.StableKey)
 		}
-		r := Rule{StableKey: p.StableKey, Name: p.Name, Action: p.Action, Kind: p.Kind, Values: p.Values}
-		if err := r.Validate(); err != nil {
-			t.Fatalf("preset %q invalid: %v", p.StableKey, err)
+		// Preset rows are seed data, not operator input: their fields validate
+		// under a neutral key, while the real key stays in the reserved
+		// namespace (Validate refuses it as operator input, I3).
+		shadow := Rule{StableKey: "seed-shape-check", Name: p.Name, Action: p.Action, Kind: p.Kind, Values: p.Values}
+		if err := shadow.Validate(); err != nil {
+			t.Fatalf("preset %q has invalid fields: %v", p.StableKey, err)
+		}
+		if err := (Rule{StableKey: p.StableKey, Name: p.Name, Action: p.Action, Kind: p.Kind, Values: p.Values}.Validate()); err == nil ||
+			!strings.HasPrefix(err.Error(), "RULE_PRESET_IMMUTABLE") {
+			t.Fatalf("preset key %q accepted as operator input: %v", p.StableKey, err)
 		}
 		seen[p.Kind]++
 	}

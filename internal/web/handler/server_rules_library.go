@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,7 +44,7 @@ func (app *Server) rulesLibraryModel(notice string, pending view.PendingRuleDele
 		}
 		names := make([]string, 0, len(used))
 		for _, u := range used {
-			names = append(names, u.SubscriberName)
+			names = append(names, u.DisplayName())
 		}
 		row := view.RuleLibraryRow{
 			StableKey: r.StableKey, Version: r.Version, Name: r.Name,
@@ -147,6 +148,13 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 			app.failRulesLibrary(w, r, err)
 			return
 		}
+		// M1: presets are refused on the first step too, with the same code
+		// as the confirmed step — the page never offers a delete confirm
+		// for a row that can never be deleted.
+		if rule.Origin == policy.OriginPreset {
+			app.failRulesLibrary(w, r, errors.New(policy.CodePresetImmutable+": preset rule "+rule.StableKey+" cannot be deleted; it is replaced by versioned migration only"))
+			return
+		}
 		used, err := app.rulesLib().RuleUsedBy(key, version)
 		if err != nil {
 			app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "引用关系读取失败。", "请检查数据库后重试；未删除任何规则。")
@@ -154,7 +162,7 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 		}
 		names := make([]string, 0, len(used))
 		for _, u := range used {
-			names = append(names, u.SubscriberName)
+			names = append(names, u.DisplayName())
 		}
 		app.event(r, "RULE_DELETE_PENDING")
 		model, err := app.rulesLibraryModel("", view.PendingRuleDelete{StableKey: rule.StableKey, Version: rule.Version, Name: rule.Name, UsedBy: names}, true)

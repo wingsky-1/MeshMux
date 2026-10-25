@@ -100,6 +100,7 @@ func TestRulesLibraryRefusesBadWrites(t *testing.T) {
 		{"preset namespace", "preset-evil", "direct", "geosite", "cn", http.StatusForbidden, "RULE_PRESET_IMMUTABLE"},
 		{"preset revise", "preset-direct-cn", "proxy", "geosite", "cn", http.StatusForbidden, "RULE_PRESET_IMMUTABLE"},
 		{"preset delete", "preset-direct-cn", "", "", "", http.StatusForbidden, "RULE_PRESET_IMMUTABLE"},
+		{"preset delete step one", "preset-direct-cn", "", "", "", http.StatusForbidden, "RULE_PRESET_IMMUTABLE"},
 		{"bad key", "Bad Key!", "direct", "geosite", "cn", http.StatusBadRequest, "RULE_INVALID"},
 		{"bad action", "x-bad", "out", "geosite", "cn", http.StatusBadRequest, "RULE_INVALID"},
 		{"bad kind", "x-bad", "direct", "ssid", "cn", http.StatusBadRequest, "RULE_INVALID"},
@@ -113,6 +114,12 @@ func TestRulesLibraryRefusesBadWrites(t *testing.T) {
 				rec = b.post("/rules/revise", url.Values{
 					"stable_key": {tc.key}, "name": {"改名"}, "action": {tc.action},
 					"matcher_kind": {tc.kind}, "values": {tc.values},
+				})
+			case tc.name == "preset delete step one":
+				// M1: the first step refuses a preset too — the page never
+				// offers a delete confirm for a row that cannot be deleted.
+				rec = b.post("/rules/delete", url.Values{
+					"stable_key": {tc.key}, "version": {"1"},
 				})
 			case strings.HasSuffix(tc.name, "delete"):
 				rec = b.post("/rules/delete", url.Values{

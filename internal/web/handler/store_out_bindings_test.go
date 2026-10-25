@@ -611,8 +611,8 @@ func TestSchemaV5MigrationCreatesOutBindingsAndPreservesV4(t *testing.T) {
 	if err = s.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
-		t.Fatalf("user_version=%d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
+	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 12 {
+		t.Fatalf("user_version=%d err=%v, want 12", version, err)
 	}
 	var tables int
 	if err = s.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='out_bindings'`).Scan(&tables); err != nil || tables != 1 {

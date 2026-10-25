@@ -189,3 +189,62 @@ func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 		t.Fatalf("preset used-by = %+v %v", used, err)
 	}
 }
+
+func TestUsedByFailClosedOnUnknownEdgeShape(t *testing.T) {
+	s := New(openPolicyTestDB(t))
+	db := s.DB()
+	now := time.Now()
+	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
+		t.Fatal(err)
+	}
+	// C1: the edge table exists but not in the Task-4 shape (a partial
+	// migration). The answer must be doubt, never "nobody references this".
+	if _, err := db.Exec(`CREATE TABLE subscription_rules(broken TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
+		t.Fatalf("wrong-shape used-by = %v, want DATABASE_UNAVAILABLE", err)
+	}
+	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
+		t.Fatalf("wrong-shape delete = %v, want DATABASE_UNAVAILABLE", err)
+	}
+	if _, err := s.GetRule("proxy-ai", 1); err != nil {
+		t.Fatalf("failed delete removed the row: %v", err)
+	}
+}
+
+func TestUsedByCountsOrphanEdgeRows(t *testing.T) {
+	s := New(openPolicyTestDB(t))
+	db := s.DB()
+	now := time.Now()
+	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
+		t.Fatal(err)
+	}
+	// I4: an edge row with no subscriber (a missing cascade on the subscriber
+	// delete) must still block deletion, surfaced by id.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscribers(
+	  id TEXT PRIMARY KEY, display_name TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscription_rules(
+	  subscriber_id TEXT NOT NULL, rule_stable_key TEXT NOT NULL, rule_version INTEGER NOT NULL,
+	  position INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO subscription_rules(subscriber_id, rule_stable_key, rule_version, position)
+	  VALUES('ghost-sub','proxy-ai',1,0)`); err != nil {
+		t.Fatal(err)
+	}
+	used, err := s.RuleUsedBy("proxy-ai", 1)
+	if err != nil {
+		t.Fatalf("RuleUsedBy: %v", err)
+	}
+	if len(used) != 1 || used[0].SubscriberID != "ghost-sub" {
+		t.Fatalf("orphan used-by = %+v, want the ghost row", used)
+	}
+	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "RULE_REFERENCED_BY_SUBSCRIPTIONS") {
+		t.Fatalf("orphan delete = %v, want RULE_REFERENCED_BY_SUBSCRIPTIONS", err)
+	} else if !strings.Contains(err.Error(), "ghost-sub") {
+		t.Fatalf("orphan refusal hides the id: %v", err)
+	}
+}

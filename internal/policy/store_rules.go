@@ -59,11 +59,29 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 // DB exposes the wrapped handle for tests that seed the subscription edge.
 func (s *Store) DB() *sql.DB { return s.db }
 
+// dbQuerier is the shared surface of *sql.DB and *sql.Tx the library reads
+// through, so the delete guard can run its check and its delete in one
+// transaction (I1).
+type dbQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 // RuleUsage names one subscriber that references a rule revision. It is the
 // delete guard's evidence and the used-by answer: both read this one query.
 type RuleUsage struct {
 	SubscriberID   string
 	SubscriberName string
+}
+
+// DisplayName renders the usage for operator output. An orphan edge row (a
+// reference whose subscriber is gone) has no name; it still counts and is
+// shown by id, never silently dropped (I4).
+func (u RuleUsage) DisplayName() string {
+	if u.SubscriberName != "" {
+		return u.SubscriberName
+	}
+	return "订阅 " + u.SubscriberID
 }
 
 func scanRule(row interface{ Scan(...any) error }) (Rule, error) {
@@ -154,10 +172,14 @@ func (s *Store) ReviseCustomRule(stableKey, name string, action Action, kind Mat
 
 // GetRule reads one immutable revision.
 func (s *Store) GetRule(stableKey string, version int) (Rule, error) {
+	return getRule(s.db, stableKey, version)
+}
+
+func getRule(q dbQuerier, stableKey string, version int) (Rule, error) {
 	if version < 1 {
 		return Rule{}, errors.New(CodeNotFound + ": unknown rule revision")
 	}
-	return scanRule(s.db.QueryRow(ruleSelect+` WHERE stable_key=? AND version=?`, stableKey, version))
+	return scanRule(q.QueryRow(ruleSelect+` WHERE stable_key=? AND version=?`, stableKey, version))
 }
 
 // LatestRule reads the highest version under a key.
@@ -230,29 +252,36 @@ func (s *Store) LatestRules() ([]Rule, error) {
 // DeleteRule removes one unreferenced custom revision. Preset rows are
 // refused with RULE_PRESET_IMMUTABLE; a revision referenced by any
 // subscription is refused with RULE_REFERENCED_BY_SUBSCRIPTIONS carrying the
-// subscriber names from the same RuleUsedBy query the page shows.
+// subscriber names from the same RuleUsedBy query the page shows. The check
+// and the delete run in one transaction, so a concurrent reference write
+// cannot slip between them and leave a dangling edge (I1).
 func (s *Store) DeleteRule(stableKey string, version int) error {
-	r, err := s.GetRule(stableKey, version)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
+	defer tx.Rollback()
+	r, err := getRule(tx, stableKey, version)
 	if err != nil {
 		return err
 	}
 	if r.Origin == OriginPreset || IsPresetKey(r.StableKey) {
 		return errors.New(CodePresetImmutable + ": preset rule " + r.StableKey + " cannot be deleted; it is replaced by versioned migration only")
 	}
-	used, err := s.RuleUsedBy(stableKey, version)
+	used, err := queryRuleUsedBy(tx, stableKey, version)
 	if err != nil {
 		return err
 	}
 	if len(used) > 0 {
 		names := make([]string, 0, len(used))
 		for _, u := range used {
-			names = append(names, u.SubscriberName)
+			names = append(names, u.DisplayName())
 		}
 		return errors.New(CodeReferenced + ": rule " + stableKey + " v" + itoa(version) +
 			" is still referenced by " + itoa(len(used)) + " subscription(s): " + strings.Join(names, "、") +
 			"; migrate those subscriptions first")
 	}
-	result, err := s.db.Exec(`DELETE FROM policy_rules WHERE stable_key=? AND version=?`, stableKey, version)
+	result, err := tx.Exec(`DELETE FROM policy_rules WHERE stable_key=? AND version=?`, stableKey, version)
 	if err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
@@ -260,31 +289,40 @@ func (s *Store) DeleteRule(stableKey string, version int) error {
 	if err != nil || affected != 1 {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
+	if err := tx.Commit(); err != nil {
+		return errors.New("DATABASE_UNAVAILABLE")
+	}
 	return nil
 }
 
 // RuleUsedBy names the subscribers referencing one rule revision. The
 // reference edge (subscription_rules) is owned by Task 4; until that table
-// exists the answer is honestly empty, never an error, so the library works
-// before the subscription wizard lands. Column names are the Task-4 contract:
+// exists the answer is honestly empty, so the library works before the
+// subscription wizard lands. Any other database doubt — a partially migrated
+// edge table with the wrong columns, an unreadable subscribers table — is
+// fail-closed (DATABASE_UNAVAILABLE), never mistaken for "nobody references
+// this" (C1). Orphan edge rows (no matching subscriber) still count via the
+// LEFT JOIN and surface by id, so a missing cascade can never blind the
+// delete guard (I4); Task 4 must clear the edge with the subscriber write
+// (REFERENCES ... ON DELETE CASCADE or an explicit delete in the same
+// transaction). Column names are the Task-4 contract:
 // subscription_rules(subscriber_id, rule_stable_key, rule_version, position).
 func (s *Store) RuleUsedBy(stableKey string, version int) ([]RuleUsage, error) {
+	return queryRuleUsedBy(s.db, stableKey, version)
+}
+
+func queryRuleUsedBy(q dbQuerier, stableKey string, version int) ([]RuleUsage, error) {
 	var table string
-	if err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='subscription_rules'`).Scan(&table); err != nil {
+	if err := q.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='subscription_rules'`).Scan(&table); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return []RuleUsage{}, nil
 		}
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
-	rows, err := s.db.Query(`SELECT s.id, s.display_name FROM subscription_rules r
-	  JOIN subscribers s ON s.id=r.subscriber_id
-	  WHERE r.rule_stable_key=? AND r.rule_version=? ORDER BY s.display_name, s.id`, stableKey, version)
+	rows, err := q.Query(`SELECT r.subscriber_id, COALESCE(s.display_name,'') FROM subscription_rules r
+	  LEFT JOIN subscribers s ON s.id=r.subscriber_id
+	  WHERE r.rule_stable_key=? AND r.rule_version=? ORDER BY COALESCE(s.display_name,''), r.subscriber_id`, stableKey, version)
 	if err != nil {
-		// The edge table exists but not in the Task-4 shape yet (for example a
-		// partial Task-4 migration): report empty rather than misreading it.
-		if strings.Contains(err.Error(), "no such column") || strings.Contains(err.Error(), "no such table") {
-			return []RuleUsage{}, nil
-		}
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
 	defer rows.Close()
