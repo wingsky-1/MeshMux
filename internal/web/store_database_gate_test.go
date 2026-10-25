@@ -53,14 +53,16 @@ func userVersion(t *testing.T, dir string) int {
 	return version
 }
 
-// hubDatabaseRecord writes the fixed Hub database backup record the gate and the
-// irreversible-confirmation action read. It is metadata only and 0600; the
-// payload is one private database copy, because an approval must never confirm a
-// record that holds nothing to restore.
+// hubDatabaseRecord writes the per-operation Hub database backup record the gate
+// and the irreversible-confirmation action read. It is metadata only and 0600;
+// the payload is one private database copy, because an approval must never
+// confirm a record that holds nothing to restore. The record lives at
+// <data-dir>/database-backup/<op32hex>/record.json, never in the flat pointer.
 func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*backup.Record)) (string, backup.Record) {
 	t.Helper()
 	root := filepath.Join(dataDir, databaseBackupDirName)
-	payload := filepath.Join(root, databaseBackupPayloadDirName)
+	opDir := filepath.Join(root, operationID)
+	payload := filepath.Join(opDir, backup.PayloadDir)
 	if err := os.MkdirAll(payload, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,7 @@ func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*b
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, databaseBackupRecordName)
+	path := filepath.Join(opDir, backup.RecordName)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}

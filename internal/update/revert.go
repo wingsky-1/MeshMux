@@ -602,7 +602,7 @@ func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVer
 	// backup.Confirm re-reads the record, checks the anchors before the
 	// confirmed short-circuit, refuses a non-staged record, re-verifies the
 	// payload and only then writes the confirmed state.
-	if _, err := backup.Confirm(root, operationID, targetVersion, agentSHA256, backup.LayoutPerOp, time.Now().UTC()); err != nil {
+	if _, err := backup.Confirm(root, operationID, targetVersion, agentSHA256, time.Now().UTC()); err != nil {
 		return err
 	}
 	s.refreshSource(agentSHA256)
