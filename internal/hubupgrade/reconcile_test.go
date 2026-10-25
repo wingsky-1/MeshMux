@@ -34,6 +34,8 @@ type reconcileHarness struct {
 	confirmed  []string
 	confirmErr error
 	removed    []string
+	claim      *Claim
+	claimErr   error
 }
 
 func newReconcileHarness(t *testing.T) *reconcileHarness {
@@ -65,6 +67,15 @@ func (h *reconcileHarness) config(startup bool) ReconcileConfig {
 		RemoveRequest: func(operationID string) error {
 			h.removed = append(h.removed, operationID)
 			return nil
+		},
+		Claim: func() (Claim, bool, error) {
+			if h.claimErr != nil {
+				return Claim{}, false, h.claimErr
+			}
+			if h.claim == nil {
+				return Claim{}, false, nil
+			}
+			return *h.claim, true, nil
 		},
 	}
 }
@@ -620,4 +631,82 @@ func TestReconcileDigestFailureIsRetryable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// claimFor builds the R1 anchor of one operation. The old pin set is complete
+// so the strict claim reader would accept it.
+func claimFor(operationID string, phase string, op Op) Claim {
+	return Claim{
+		Schema: ClaimSchema, Phase: phase, OperationID: operationID,
+		TargetVersion: op.TargetVersion, FromVersion: op.FromVersion,
+		NewSHA256: op.PackageSHA256,
+		OldPins: Pins{
+			HubSharedSHA: strings.Repeat("a", 64), HubManagedSHA: strings.Repeat("a", 64),
+		},
+		CreatedAt: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// TestReconcileClaimSwappingNewBinary pins the R1 terminal: the claim says the
+// swap section began, and the running identity is already the target. The four
+// pins may still be old, so restore must become legal immediately instead of
+// waiting out the 30 minute orphan bound.
+func TestReconcileClaimSwappingNewBinary(t *testing.T) {
+	h := newReconcileHarness(t)
+	h.version = handoffTarget
+	id := strings.Repeat("a", 32)
+	op := operation(id, StateApplying, h.now.Add(-time.Minute), 1)
+	writeJournal(t, h.dataDir, op)
+	h.claim = &Claim{}
+	claim := claimFor(id, ClaimPhaseSwapping, op)
+	h.claim = &claim
+	h.digest = op.PackageSHA256
+	h.run(t, true)
+	h.requireState(t, id, StateFailed, codeRepinIncomplete)
+}
+
+// TestReconcileClaimOldBinaryInert pins the safe half: the old binary still
+// runs, so the swap never became this image. The claim adds no terminal; the
+// ordinary NOT_APPLIED / timeout logic decides. The Web cannot unlink a
+// root-owned claim (C22), so the inert file simply stays.
+func TestReconcileClaimOldBinaryInert(t *testing.T) {
+	t.Run("startup", func(t *testing.T) {
+		h := newReconcileHarness(t)
+		if h.version != handoffFrom {
+			t.Fatalf("fixture version = %q", h.version)
+		}
+		id := strings.Repeat("b", 32)
+		op := operation(id, StateRestarting, h.now.Add(-time.Minute), 1)
+		writeJournal(t, h.dataDir, op)
+		claim := claimFor(id, ClaimPhaseSwapping, op)
+		h.claim = &claim
+		h.run(t, true)
+		h.requireState(t, id, StateFailed, codeUpgradeNotDone)
+	})
+
+	t.Run("ticker keeps it", func(t *testing.T) {
+		h := newReconcileHarness(t)
+		id := strings.Repeat("c", 32)
+		op := operation(id, StateRestarting, h.now.Add(-time.Minute), 1)
+		writeJournal(t, h.dataDir, op)
+		claim := claimFor(id, ClaimPhaseSwapping, op)
+		h.claim = &claim
+		h.run(t, false)
+		h.requireState(t, id, StateRestarting, "")
+	})
+}
+
+// TestReconcileRepinnedClaimInert: every pin moved; only the unlink did not.
+// The claim must not stop the ordinary startup confirmation.
+func TestReconcileRepinnedClaimInert(t *testing.T) {
+	h := newReconcileHarness(t)
+	h.version = handoffTarget
+	id := strings.Repeat("d", 32)
+	op := operation(id, StateRestarting, h.now.Add(-time.Minute), 1)
+	writeJournal(t, h.dataDir, op)
+	claim := claimFor(id, ClaimPhaseRepinned, op)
+	h.claim = &claim
+	h.digest = op.PackageSHA256
+	h.run(t, true)
+	h.requireState(t, id, StateConfirmed, "")
 }

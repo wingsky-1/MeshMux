@@ -260,6 +260,13 @@ func readLocalLineState(root string) (InstallState, bool, error) {
 	return readStateAt(root, localLineStatePath)
 }
 
+// ReadLocalLineState is the exported read point for the privileged Hub upgrade
+// executor (#11d Task 6): it must re-pin the Line ledger whose path is a private
+// install constant, never a caller-selected path.
+func ReadLocalLineState(root string) (InstallState, bool, error) {
+	return readLocalLineState(root)
+}
+
 // writeLocalLineState persists the co-located Line ledger to its fixed path.
 func writeLocalLineState(root string, state InstallState) error {
 	if err := ensureDirectory(rooted(root, filepath.Dir(localLineStatePath)), 0700); err != nil {

@@ -838,14 +838,25 @@ func writeState(root string, state InstallState) error {
 	return writeStateAt(root, installerStatePath, state)
 }
 
+// EncodeState returns the exact bytes every installer ledger is written with
+// (#11d Task 6 re-pins the two ledgers directly; the encoder must not drift
+// from the installer's own).
+func EncodeState(state InstallState) ([]byte, error) {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // writeStateAt persists one ledger to a fixed installer path. The path is
 // always an internal constant selected from the recorded layout.
 func writeStateAt(root, logicalPath string, state InstallState) error {
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := EncodeState(state)
 	if err != nil {
 		return err
 	}
-	return writeBytesAtomic(rooted(root, logicalPath), append(data, '\n'), 0600)
+	return writeBytesAtomic(rooted(root, logicalPath), data, 0600)
 }
 
 func writeBytesAtomic(path string, data []byte, mode os.FileMode) error {

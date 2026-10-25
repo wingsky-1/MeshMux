@@ -64,6 +64,9 @@ const (
 	codeUpgradeFailed   = "HUB_UPGRADE_FAILED"
 	codeConfirmFailed   = "HUB_UPGRADE_CONFIRM_FAILED"
 	codeGC              = "HUB_BACKUP_GC_FAILED"
+	// codeRepinIncomplete is the R1 terminal: the claim proves the target
+	// binary became the running image while the four pins may still be old.
+	codeRepinIncomplete = "HUB_SHARED_BINARY_REPIN_INCOMPLETE"
 )
 
 // RestoredMarker is the write-once fact that the data directory was restored
@@ -165,6 +168,10 @@ type ReconcileConfig struct {
 	// RemoveRequest unlinks one timed-out request. Nil means the fixed
 	// RequestDir; a fixture replaces it so no pass touches /run.
 	RemoveRequest func(operationID string) error
+	// Claim reads the root-written crash anchor (Task 6). Nil means the fixed
+	// ClaimDir. The Web reads it; only root writes or deletes it (C22), so an
+	// inert old-binary claim stays until the next root executor overwrites it.
+	Claim func() (Claim, bool, error)
 }
 
 // ReconcileChange is one journal transition this pass made. It is the only
@@ -217,6 +224,9 @@ func Reconcile(ctx context.Context, cfg ReconcileConfig) (ReconcileReport, error
 			return RemoveRequest(RequestDir, operationID)
 		}
 	}
+	if cfg.Claim == nil {
+		cfg.Claim = func() (Claim, bool, error) { return ReadClaim(ClaimDir) }
+	}
 	ops, err := ListOps(cfg.DataDir, os.Geteuid())
 	if err != nil {
 		return ReconcileReport{}, backupJournalError(err)
@@ -249,6 +259,9 @@ func (p *reconciler) one(ctx context.Context, op Op) error {
 		// confirmed is the successful end and reverted is sticky (C12): a later
 		// startup pass never overwrites either.
 		return nil
+	}
+	if handled, err := p.claimGate(op); handled {
+		return err
 	}
 	result, hasResult, err := p.cfg.Result(op.OperationID)
 	if err != nil {
@@ -323,6 +336,53 @@ func (p *reconciler) one(ctx context.Context, op Op) error {
 		return p.verifying(ctx, op)
 	}
 	return nil
+}
+
+// claimGate applies the R1 crash-claim rule before any result/state logic. A
+// claim is evidence, not an authorization: it can only move the operation it
+// names to the honest REPIN_INCOMPLETE terminal. A claim whose running identity
+// is still the old binary is inert and keeps the ordinary timeout/NOT_APPLIED
+// decision.
+func (p *reconciler) claimGate(op Op) (bool, error) {
+	if op.State == StateFailed || op.State == StatePartial || op.State == StateConfirmed || op.State == StateReverted {
+		return false, nil
+	}
+	claim, found, err := p.cfg.Claim()
+	if err != nil {
+		// A malformed claim is reported and retried; it must never be read as
+		// "no claim" and it must never authorize a write itself.
+		return false, err
+	}
+	if !found || claim.OperationID != op.OperationID {
+		return false, nil
+	}
+	if claim.Phase == ClaimPhaseRepinned {
+		// Every pin moved; only the unlink did not. Inert.
+		return false, nil
+	}
+	if p.cfg.Version == claim.FromVersion {
+		// The old binary still runs: the swap never became this image. Normal
+		// timeout / NOT_APPLIED logic decides; the claim adds nothing. The Web
+		// cannot unlink a root-owned file in the root-only upgrade tree (C22),
+		// and leaving this inert anchor is harmless: the next root executor
+		// overwrites it atomically.
+		return false, nil
+	}
+	if p.cfg.Version != claim.TargetVersion {
+		return false, nil
+	}
+	digest, err := p.runningDigest()
+	if err != nil {
+		return false, err
+	}
+	if digest != claim.NewSHA256 {
+		return false, nil
+	}
+	// Running target bytes + a swapping claim: the crash landed after the
+	// rename and before the four-pin write finished (or before its claim
+	// update). Restore must not wait out 30 minutes.
+	_, err = p.advance(op, StateFailed, codeRepinIncomplete)
+	return true, err
 }
 
 // terminalResult applies a terminal result document (failed, partial or

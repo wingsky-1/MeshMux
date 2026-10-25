@@ -26,6 +26,17 @@ func nodeManagedFiles(cfg node.Config, ssh []int, identity node.Identity) (map[s
 // operation. A co-located Line reuses the Hub's Fail2ban SSH jail instead of
 // installing a second jail for the same SSH listeners, so it never writes
 // the jail file the Hub owns.
+// RenderNodeAgentConfig returns the exact bytes nodeManagedFiles writes to
+// /etc/meshmux/agent.json (#11d Task 6 needs the same encoder for the
+// coordinated re-pin; the two writers must never drift byte-wise).
+func RenderNodeAgentConfig(cfg node.Config) ([]byte, error) {
+	body, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return nil, errors.New("CONFIG_RENDER_FAILED")
+	}
+	return append(body, '\n'), nil
+}
+
 func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identity, layout nodeLayout) (map[string]nodeManagedFile, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -41,11 +52,10 @@ func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identit
 			return nil, errors.New("PORT_CONFLICT")
 		}
 	}
-	agentConfig, err := json.MarshalIndent(cfg, "", "  ")
+	agentConfig, err := RenderNodeAgentConfig(cfg)
 	if err != nil {
-		return nil, errors.New("CONFIG_RENDER_FAILED")
+		return nil, err
 	}
-	agentConfig = append(agentConfig, '\n')
 	identityBody, err := json.MarshalIndent(identity, "", "  ")
 	if err != nil {
 		return nil, errors.New("IDENTITY_RENDER_FAILED")

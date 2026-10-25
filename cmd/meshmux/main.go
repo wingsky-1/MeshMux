@@ -49,6 +49,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-dispatch" {
 		os.Exit(runInternalHubDispatch(os.Args[2:], os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-update" {
+		os.Exit(runInternalHubUpdate(os.Args[2:], os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update-install" {
 		os.Exit(runInternalUpdateInstall(os.Args[2:], os.Stdout, os.Stderr))
 	}
@@ -86,6 +89,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	}
 	if len(args) > 0 && args[0] == "__internal-hub-dispatch" {
 		return runInternalHubDispatch(args[1:], stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-hub-update" {
+		return runInternalHubUpdate(args[1:], stderr)
 	}
 	if len(args) > 0 && args[0] == "__internal-update-install" {
 		return runInternalUpdateInstall(args[1:], stdout, stderr)
@@ -140,6 +146,35 @@ func runInternalHubDispatch(args []string, stderr io.Writer) int {
 		Now:         time.Now,
 	}
 	if err := rootexec.RunDispatch(context.Background(), cfg); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// runInternalHubUpdate is the staged target package's own entry: the
+// dispatcher began this process from a root-only verified copy with the fixed
+// argv of spec §5.6. It accepts no other flag and re-derives every privileged
+// decision from the frozen journal, record and root manifest.
+func runInternalHubUpdate(args []string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-hub-update", flag.ContinueOnError)
+	// Never echo caller-supplied arguments.
+	flags.SetOutput(io.Discard)
+	var cfg rootexec.UpdateConfig
+	flags.StringVar(&cfg.Target, "target", "", "approved target version")
+	flags.StringVar(&cfg.ExpectedSHA256, "expected-sha256", "", "verified target package SHA-256")
+	flags.StringVar(&cfg.OperationID, "operation-id", "", "operation ID")
+	flags.StringVar(&cfg.DataDir, "data-dir", "", "Hub data directory")
+	flags.StringVar(&cfg.FromVersion, "from-version", "", "running release before the swap")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-hub-update --target SEMVER --expected-sha256 HEX --operation-id HEX32 --data-dir PATH --from-version SEMVER")
+		return 2
+	}
+	cfg.Root = "/"
+	cfg.Now = time.Now
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	if err := rootexec.RunUpdate(ctx, cfg, node.ExecRunner{}); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
