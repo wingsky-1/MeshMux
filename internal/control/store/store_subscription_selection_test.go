@@ -357,7 +357,7 @@ func TestRuleDeleteRefusedWithSubscriptionName(t *testing.T) {
 	}, now); err != nil {
 		t.Fatal(err)
 	}
-	lib := policy.New(s.DB)
+	lib := policy.New(s.DB, RuleUsageSource())
 	used, err := lib.RuleUsedBy("preset-direct-cn", 1)
 	if err != nil {
 		t.Fatal(err)

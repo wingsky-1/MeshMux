@@ -23,7 +23,7 @@ func TestSchema12RuleLibraryAndPresetSeeds(t *testing.T) {
 	if version != DatabaseSchemaVersion {
 		t.Fatalf("user_version = %d, want %d", version, DatabaseSchemaVersion)
 	}
-	lib := policy.New(s.DB)
+	lib := policy.New(s.DB, RuleUsageSource())
 	presets, err := lib.ListRules("preset")
 	if err != nil {
 		t.Fatalf("ListRules(preset): %v", err)
@@ -77,7 +77,7 @@ func TestSchema12MigrationRecoversFromSeedFailure(t *testing.T) {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != DatabaseSchemaVersion {
 		t.Fatalf("version after replay = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
 	}
-	if presets, err := policy.New(s.DB).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
+	if presets, err := policy.New(s.DB, RuleUsageSource()).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
 		t.Fatalf("presets after replay = %d %v, want %d", len(presets), err, len(policy.Presets))
 	}
 }
@@ -104,7 +104,7 @@ func TestSchema11MigratesWithoutMirror(t *testing.T) {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != DatabaseSchemaVersion {
 		t.Fatalf("version after 11→12+ = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
 	}
-	if presets, err := policy.New(s.DB).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
+	if presets, err := policy.New(s.DB, RuleUsageSource()).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
 		t.Fatalf("presets after 11→12+ = %d %v, want %d", len(presets), err, len(policy.Presets))
 	}
 	var tables int

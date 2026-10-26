@@ -2,6 +2,7 @@ package policy
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,36 +36,25 @@ func openPolicyTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// seedSubscriptionEdge builds the minimal Task-4-shaped reference edge the
-// used-by lookup and the delete guard share: a subscribers row plus the
-// subscription_rules side table (subscriber_id, rule_stable_key, rule_version,
-// position). Task 4 owns this table; the DDL here is the contract it must
-// honor (same table and column names).
-func seedSubscriptionEdge(t *testing.T, db *sql.DB, subscriberID, subscriberName, stableKey string, version int) {
-	t.Helper()
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscribers(
-	  id TEXT PRIMARY KEY, display_name TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active',
-	  revision INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)`); err != nil {
-		t.Fatal(err)
+// fakeUsage is the injected used-by port: the policy core must delegate the
+// control-layer edge tables rather than query them itself. It is keyed by
+// "stable_key@version" so a sibling revision stays unreferenced.
+type fakeUsage struct {
+	used  map[string][]RuleUsage
+	err   error
+	calls int
+}
+
+func (f *fakeUsage) RuleUsedBy(_ Querier, stableKey string, version int) ([]RuleUsage, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
 	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscription_rules(
-	  subscriber_id TEXT NOT NULL, rule_stable_key TEXT NOT NULL, rule_version INTEGER NOT NULL,
-	  position INTEGER NOT NULL, UNIQUE(subscriber_id, position))`); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().Unix()
-	if _, err := db.Exec(`INSERT INTO subscribers(id, display_name, state, revision, created_at, updated_at)
-	  VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, subscriberID, subscriberName, "active", 1, now, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO subscription_rules(subscriber_id, rule_stable_key, rule_version, position)
-	  VALUES(?,?,?,COALESCE((SELECT MAX(position)+1 FROM subscription_rules WHERE subscriber_id=?),0))`, subscriberID, stableKey, version, subscriberID); err != nil {
-		t.Fatal(err)
-	}
+	return f.used[stableKey+"@"+itoa(version)], nil
 }
 
 func TestPresetWritesAreImmutable(t *testing.T) {
-	s := New(openPolicyTestDB(t))
+	s := New(openPolicyTestDB(t), &fakeUsage{})
 	now := time.Now()
 	if _, err := s.CreateCustomRule("preset-evil", " squat", ActionDirect, MatcherGeoSite, []string{"cn"}, now); err == nil ||
 		!strings.HasPrefix(err.Error(), "RULE_PRESET_IMMUTABLE") {
@@ -88,7 +78,7 @@ func TestPresetWritesAreImmutable(t *testing.T) {
 }
 
 func TestCustomRuleCRUDAndRevisionChain(t *testing.T) {
-	s := New(openPolicyTestDB(t))
+	s := New(openPolicyTestDB(t), &fakeUsage{})
 	now := time.Now()
 	created, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now)
 	if err != nil {
@@ -145,17 +135,15 @@ func TestCustomRuleCRUDAndRevisionChain(t *testing.T) {
 
 func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 	db := openPolicyTestDB(t)
-	s := New(db)
+	usage := &fakeUsage{used: map[string][]RuleUsage{
+		"proxy-ai@1":         {{SubscriberID: "sub-alice", SubscriberName: "爱丽丝"}, {SubscriberID: "sub-bob", SubscriberName: "鲍勃"}},
+		"preset-direct-cn@1": {{SubscriberID: "sub-alice", SubscriberName: "爱丽丝"}},
+	}}
+	s := New(db, usage)
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
 	}
-	// No edge table yet: nothing references the rule and deletion succeeds.
-	if used, err := s.RuleUsedBy("proxy-ai", 1); err != nil || len(used) != 0 {
-		t.Fatalf("used-by without edge table = %+v %v", used, err)
-	}
-	seedSubscriptionEdge(t, db, "sub-alice", "爱丽丝", "proxy-ai", 1)
-	seedSubscriptionEdge(t, db, "sub-bob", "鲍勃", "proxy-ai", 1)
 	used, err := s.RuleUsedBy("proxy-ai", 1)
 	if err != nil {
 		t.Fatalf("RuleUsedBy: %v", err)
@@ -176,6 +164,11 @@ func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 			t.Fatalf("refusal hides the subscriber list: %v", err)
 		}
 	}
+	// The guard and the page read the same injected port, so a referenced
+	// revision can never be deleted by the page path either.
+	if usage.calls < 2 {
+		t.Fatalf("used-by port calls = %d, want the page and the guard to share it", usage.calls)
+	}
 	// A sibling revision nobody references is still deletable.
 	if _, err := s.ReviseCustomRule("proxy-ai", "AI 走代理 v2", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
@@ -184,7 +177,6 @@ func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 		t.Fatalf("unreferenced sibling delete refused: %v", err)
 	}
 	// Referencing the preset proves the guard is not custom-only.
-	seedSubscriptionEdge(t, db, "sub-alice", "爱丽丝", "preset-direct-cn", 1)
 	if used, err := s.RuleUsedBy("preset-direct-cn", 1); err != nil || len(used) != 1 || used[0].SubscriberName != "爱丽丝" {
 		t.Fatalf("preset used-by = %+v %v", used, err)
 	}
@@ -192,21 +184,37 @@ func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 
 func TestUsedByFailClosedOnUnknownEdgeShape(t *testing.T) {
 	db := openPolicyTestDB(t)
-	s := New(db)
+	s := New(db, &fakeUsage{err: errors.New("DATABASE_UNAVAILABLE")})
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
 	}
-	// C1: the edge table exists but not in the Task-4 shape (a partial
-	// migration). The answer must be doubt, never "nobody references this".
-	if _, err := db.Exec(`CREATE TABLE subscription_rules(broken TEXT)`); err != nil {
-		t.Fatal(err)
-	}
+	// C1: an unreadable edge table (a partial migration, a broken reader) is
+	// doubt, never "nobody references this".
 	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
-		t.Fatalf("wrong-shape used-by = %v, want DATABASE_UNAVAILABLE", err)
+		t.Fatalf("unreadable used-by = %v, want DATABASE_UNAVAILABLE", err)
 	}
 	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
-		t.Fatalf("wrong-shape delete = %v, want DATABASE_UNAVAILABLE", err)
+		t.Fatalf("unreadable delete = %v, want DATABASE_UNAVAILABLE", err)
+	}
+	if _, err := s.GetRule("proxy-ai", 1); err != nil {
+		t.Fatalf("failed delete removed the row: %v", err)
+	}
+}
+
+func TestUsedByWithoutReaderFailsClosed(t *testing.T) {
+	s := New(openPolicyTestDB(t), nil)
+	now := time.Now()
+	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
+		t.Fatal(err)
+	}
+	// A missing used-by port cannot prove the revision is unused, so both the
+	// answer and the delete guard fail closed instead of guessing.
+	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
+		t.Fatalf("missing reader used-by = %v, want DATABASE_UNAVAILABLE", err)
+	}
+	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
+		t.Fatalf("missing reader delete = %v, want DATABASE_UNAVAILABLE", err)
 	}
 	if _, err := s.GetRule("proxy-ai", 1); err != nil {
 		t.Fatalf("failed delete removed the row: %v", err)
@@ -215,26 +223,16 @@ func TestUsedByFailClosedOnUnknownEdgeShape(t *testing.T) {
 
 func TestUsedByCountsOrphanEdgeRows(t *testing.T) {
 	db := openPolicyTestDB(t)
-	s := New(db)
+	s := New(db, &fakeUsage{used: map[string][]RuleUsage{
+		"proxy-ai@1": {{SubscriberID: "ghost-sub"}},
+	}})
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
 	}
 	// I4: an edge row with no subscriber (a missing cascade on the subscriber
-	// delete) must still block deletion, surfaced by id.
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscribers(
-	  id TEXT PRIMARY KEY, display_name TEXT NOT NULL)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscription_rules(
-	  subscriber_id TEXT NOT NULL, rule_stable_key TEXT NOT NULL, rule_version INTEGER NOT NULL,
-	  position INTEGER NOT NULL)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO subscription_rules(subscriber_id, rule_stable_key, rule_version, position)
-	  VALUES('ghost-sub','proxy-ai',1,0)`); err != nil {
-		t.Fatal(err)
-	}
+	// delete) must still block deletion, surfaced by id. The port reports the
+	// orphan; the guard must not drop it for the missing name.
 	used, err := s.RuleUsedBy("proxy-ai", 1)
 	if err != nil {
 		t.Fatalf("RuleUsedBy: %v", err)

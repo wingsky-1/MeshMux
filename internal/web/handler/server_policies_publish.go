@@ -61,7 +61,17 @@ func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ ses
 	}
 	receipt := store.PublicationReceipt(assembly, publication)
 	app.event(r, "POLICY_PUBLISHED")
-	store.WritePublicationReceipt(w, http.StatusOK, receipt, operation(r))
+	writePublicationReceipt(w, http.StatusOK, receipt, operation(r))
+}
+
+// writePublicationReceipt writes the stable publication receipt. It lives in
+// the handler: the store returns domain data and never touches an
+// http.ResponseWriter.
+func writePublicationReceipt(w http.ResponseWriter, status int, receipt store.PolicyPublishReceipt, operationID string) {
+	receipt.OperationID = operationID
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(receipt)
 }
 
 // publishVerifier builds the kernel verifier. The sing-box path is the
@@ -110,9 +120,6 @@ func (app *Server) writePublishFailure(w http.ResponseWriter, r *http.Request, s
 		ErrorCode:            code,
 		Detail:               message,
 		NextAction:           next,
-		OperationID:          operationID,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	writePublicationReceipt(w, status, body, operationID)
 }

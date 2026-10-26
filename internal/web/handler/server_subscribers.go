@@ -347,33 +347,14 @@ func (app *Server) fanOutLineChange(r *http.Request, nodeID string) {
 	}
 }
 
-// lineCredentialSubscriberIDs returns every subscriber that ever held a
-// credential on one Line. The rows are fully drained and closed before this
-// function returns, so the single store connection is free for the caller's
-// follow-up writes.
+// lineCredentialSubscriberIDs returns every subscriber that selects one Line or
+// ever held a credential on it. The selection edge is the authoritative intent;
+// the credential history is included so a dropped Line still loses its old UUID
+// on the next publication. The store owns the query and drains the rows before
+// returning, so the single store connection is free for the caller's follow-up
+// writes.
 func (app *Server) lineCredentialSubscriberIDs(nodeID string) ([]string, error) {
-	rows, err := app.store.DB.Query(`SELECT DISTINCT subscriber_id FROM proxy_credentials WHERE node_id=? ORDER BY subscriber_id`, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	subscriberIDs := []string{}
-	for rows.Next() {
-		var subscriberID string
-		if err = rows.Scan(&subscriberID); err != nil {
-			break
-		}
-		subscriberIDs = append(subscriberIDs, subscriberID)
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	if closeErr := rows.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return nil, err
-	}
-	return subscriberIDs, nil
+	return app.store.LineSubscriberIDs(nodeID)
 }
 
 // selectedLineIDs reads the checked Line checkboxes of one form.

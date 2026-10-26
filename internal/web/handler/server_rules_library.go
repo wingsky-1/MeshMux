@@ -18,7 +18,7 @@ import (
 // stable code (RULE_PRESET_IMMUTABLE and friends) always reaches the log and
 // the page.
 
-func (app *Server) rulesLib() *policy.Store { return policy.New(app.store.DB) }
+func (app *Server) rulesLib() *policy.Store { return policy.New(app.store.DB, store.RuleUsageSource()) }
 
 // rulesLibraryModel builds the page from the latest revision of every key,
 // each with the subscribers pinning exactly that revision. History comes from

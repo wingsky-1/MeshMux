@@ -35,7 +35,7 @@ func (app *Server) upgradeView(now time.Time) (view.UpgradeSnapshot, error) {
 	if snap.Approved, err = app.store.ApprovedTargets(); err != nil {
 		return view.UpgradeSnapshot{}, err
 	}
-	snap.Hub = view.NewHubUpgradeView(app.store.Dir, app.hubResultsDirValue(), now, app.hubIdentity(now))
+	snap.Hub = app.hubUpgradeView(now)
 	return snap, nil
 }
 

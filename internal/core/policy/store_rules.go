@@ -51,17 +51,35 @@ func SeedPresetsTx(tx *sql.Tx, now int64) error {
 
 // Store is the rule-library persistence on a *sql.DB the caller owns (the Hub
 // store hands over its handle; policy never opens a database itself).
-type Store struct{ db *sql.DB }
+//
+// The library owns only policy_rules. The subscriptions that pin a revision
+// live in the control layer's edge tables, so the used-by answer (and the
+// delete guard derived from it) is an injected port, implemented by that
+// layer: policy never names subscription_rules or subscribers.
+type Store struct {
+	db    *sql.DB
+	usage RuleUsageReader
+}
 
-// New wraps the caller's database handle.
-func New(db *sql.DB) *Store { return &Store{db: db} }
+// New wraps the caller's database handle and the control-layer used-by reader.
+// The reader may not be nil: without it the delete guard cannot prove that a
+// revision is unused, so the guard fails closed instead of guessing.
+func New(db *sql.DB, usage RuleUsageReader) *Store { return &Store{db: db, usage: usage} }
 
-// dbQuerier is the shared surface of *sql.DB and *sql.Tx the library reads
+// Querier is the shared surface of *sql.DB and *sql.Tx the library reads
 // through, so the delete guard can run its check and its delete in one
 // transaction (I1).
-type dbQuerier interface {
+type Querier interface {
 	QueryRow(query string, args ...any) *sql.Row
 	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+// RuleUsageReader names the subscriptions that pin one rule revision. The
+// control layer owns those edge tables and implements this port; the querier is
+// the caller's transaction, so the delete guard's check and delete stay one
+// atomic unit (I1) without policy reading a control table itself.
+type RuleUsageReader interface {
+	RuleUsedBy(q Querier, stableKey string, version int) ([]RuleUsage, error)
 }
 
 // RuleUsage names one subscriber that references a rule revision. It is the
@@ -172,7 +190,7 @@ func (s *Store) GetRule(stableKey string, version int) (Rule, error) {
 	return getRule(s.db, stableKey, version)
 }
 
-func getRule(q dbQuerier, stableKey string, version int) (Rule, error) {
+func getRule(q Querier, stableKey string, version int) (Rule, error) {
 	if version < 1 {
 		return Rule{}, errors.New(CodeNotFound + ": unknown rule revision")
 	}
@@ -265,7 +283,7 @@ func (s *Store) DeleteRule(stableKey string, version int) error {
 	if r.Origin == OriginPreset || IsPresetKey(r.StableKey) {
 		return errors.New(CodePresetImmutable + ": preset rule " + r.StableKey + " cannot be deleted; it is replaced by versioned migration only")
 	}
-	used, err := queryRuleUsedBy(tx, stableKey, version)
+	used, err := s.ruleUsedBy(tx, stableKey, version)
 	if err != nil {
 		return err
 	}
@@ -293,48 +311,22 @@ func (s *Store) DeleteRule(stableKey string, version int) error {
 }
 
 // RuleUsedBy names the subscribers referencing one rule revision. The
-// reference edge (subscription_rules) is owned by Task 4; until that table
-// exists the answer is honestly empty, so the library works before the
-// subscription wizard lands. Any other database doubt — a partially migrated
-// edge table with the wrong columns, an unreadable subscribers table — is
-// fail-closed (DATABASE_UNAVAILABLE), never mistaken for "nobody references
-// this" (C1). Orphan edge rows (no matching subscriber) still count via the
-// LEFT JOIN and surface by id, so a missing cascade can never blind the
-// delete guard (I4); Task 4 must clear the edge with the subscriber write
-// (REFERENCES ... ON DELETE CASCADE or an explicit delete in the same
-// transaction). Column names are the Task-4 contract:
-// subscription_rules(subscriber_id, rule_stable_key, rule_version, position).
+// reference edge (subscription_rules) is owned by the control layer, so the
+// answer is delegated to the injected reader; policy never queries a control
+// table itself. The delete guard calls the same reader inside its transaction,
+// so the page and the refusal cannot disagree (I1, I4).
 func (s *Store) RuleUsedBy(stableKey string, version int) ([]RuleUsage, error) {
-	return queryRuleUsedBy(s.db, stableKey, version)
+	return s.ruleUsedBy(s.db, stableKey, version)
 }
 
-func queryRuleUsedBy(q dbQuerier, stableKey string, version int) ([]RuleUsage, error) {
-	var table string
-	if err := q.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='subscription_rules'`).Scan(&table); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return []RuleUsage{}, nil
-		}
+// ruleUsedBy is the one read path of the used-by port, shared by the page and
+// the delete guard's transaction. A missing reader is database doubt, never
+// "nobody references this" (C1).
+func (s *Store) ruleUsedBy(q Querier, stableKey string, version int) ([]RuleUsage, error) {
+	if s.usage == nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
-	rows, err := q.Query(`SELECT r.subscriber_id, COALESCE(s.display_name,'') FROM subscription_rules r
-	  LEFT JOIN subscribers s ON s.id=r.subscriber_id
-	  WHERE r.rule_stable_key=? AND r.rule_version=? ORDER BY COALESCE(s.display_name,''), r.subscriber_id`, stableKey, version)
-	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	defer rows.Close()
-	out := []RuleUsage{}
-	for rows.Next() {
-		var u RuleUsage
-		if err := rows.Scan(&u.SubscriberID, &u.SubscriberName); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
-		}
-		out = append(out, u)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return out, nil
+	return s.usage.RuleUsedBy(q, stableKey, version)
 }
 
 func itoa(n int) string {

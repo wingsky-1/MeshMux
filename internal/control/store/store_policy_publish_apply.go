@@ -17,9 +17,7 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -178,14 +176,7 @@ func PublicationReceipt(assembly PolicyAssembly, publication PolicyPublication) 
 	return receipt
 }
 
-func WritePublicationReceipt(w http.ResponseWriter, status int, receipt PolicyPublishReceipt, operationID string) {
-	receipt.OperationID = operationID
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(receipt)
-}
-
-// publishRetryHint maps a publication refusal onto the operator's next step.
+// PublishRetryHint maps a publication refusal onto the operator's next step.
 func PublishRetryHint(err error) string {
 	code := err.Error()
 	switch {

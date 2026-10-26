@@ -11,7 +11,6 @@ package view
 import (
 	"context"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +69,10 @@ func (s HubIdentity) Confirmed() bool { return s.Code == "" && !s.CheckedAt.IsZe
 // per-operation record, the restored marker and the identity snapshot. Errors
 // are captured as stable codes so one unreadable metadata file cannot turn the
 // whole page into a 503.
+//
+// The facts are read by the handler and mapped into this structure; the view
+// package owns the shape and the wording, never the journal, the process owner
+// or any other filesystem access.
 type HubUpgradeView struct {
 	Op          hubupgrade.Op
 	HasOp       bool
@@ -88,63 +91,6 @@ type HubUpgradeView struct {
 	// will fail the row with HUB_BACKUP_ORPHANED then, and the operator should
 	// see that before walking away from a backup.
 	ExpiresAt time.Time
-}
-
-// NewHubUpgradeView reads the Hub upgrade facts. The journal is the authority
-// (D3): no mirror table is queried, and no directory under database-backup/ is
-// scanned to guess the current record.
-func NewHubUpgradeView(dataDir, resultsDir string, now time.Time, identity HubIdentity) HubUpgradeView {
-	view := HubUpgradeView{Identity: identity}
-	owner := os.Geteuid()
-	ops, err := hubupgrade.ListOps(dataDir, owner)
-	if err != nil {
-		view.Err = store.ErrorCodeOf(err)
-		return view
-	}
-	if op, ok := newestUpdateOp(ops); ok {
-		view.Op, view.HasOp = op, true
-		if op.State == hubupgrade.StateBackingUp || op.State == hubupgrade.StateBackedUp {
-			view.ExpiresAt = op.UpdatedAt.Add(hubupgrade.OrphanTimeout)
-		}
-		result, ok, err := hubupgrade.ReadResult(resultsDir, op.OperationID)
-		switch {
-		case err != nil:
-			view.ResultErr = store.ErrorCodeOf(err)
-		case ok:
-			view.Result, view.HasResult = result, true
-		}
-	}
-	if _, record, ok, err := hubupgrade.LatestBackup(dataDir, owner); err == nil && ok {
-		view.Record, view.HasRecord = record, true
-	} else if err != nil && view.Err == "" {
-		view.Err = store.ErrorCodeOf(err)
-	}
-	if marker, ok, err := hubupgrade.ReadRestoredMarker(dataDir); err == nil && ok {
-		view.Restored, view.HasRestored = marker, true
-	} else if err != nil && view.Err == "" {
-		view.Err = store.ErrorCodeOf(err)
-	}
-	return view
-}
-
-// newestUpdateOp is the journal's current update operation: the highest backup
-// generation, then the newest update time. It is journal-backed, so an
-// operation directory no journal names can never become "current".
-func newestUpdateOp(ops []hubupgrade.Op) (hubupgrade.Op, bool) {
-	var newest hubupgrade.Op
-	found := false
-	for _, op := range ops {
-		if op.Kind != hubupgrade.KindUpdate {
-			continue
-		}
-		switch {
-		case !found,
-			op.BackupGeneration > newest.BackupGeneration,
-			op.BackupGeneration == newest.BackupGeneration && op.UpdatedAt.After(newest.UpdatedAt):
-			newest, found = op, true
-		}
-	}
-	return newest, found
 }
 
 // converged compares two Hub-side reports: the newest staged revision is the
