@@ -1,4 +1,4 @@
-package route
+package compiler
 
 // The ruleset version lock and the retained AI ruleset byte verification.
 //
@@ -17,8 +17,8 @@ package route
 //     path does not call it: pins are the future way to consume a ruleset, and
 //     the byte check is the security half of that contract (Task 6 Keep list).
 //
-// The package still does not render client documents, read subscription
-// tokens, install or upgrade nodes, run a ruleset marketplace, latency probes or
+// This file still does not render client documents, read subscription tokens,
+// install or upgrade nodes, run a ruleset marketplace, latency probes or
 // multi-Out load balancing.
 
 import (
@@ -36,7 +36,7 @@ import (
 	"time"
 )
 
-// The stable codes this package reports. They are part of the diagnostic
+// The stable codes this file reports. They are part of the diagnostic
 // contract: a caller logs the code and the operation id, never the source URL,
 // the response body or the transport error.
 const (

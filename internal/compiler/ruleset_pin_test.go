@@ -1,4 +1,4 @@
-package route
+package compiler
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 )
 
 // testRulesetPayload is the bytes a fake fetch returns. It never leaves the
-// test: the route package treats a ruleset as opaque bytes and only proves the
-// pinned digest.
+// test: the compiler package treats a ruleset as opaque bytes and only proves
+// the pinned digest.
 var testRulesetPayload = []byte(`{"version":1,"rules":[{"domain_suffix":["example.invalid"]}]}`)
 
 func testPin() RulesetPin {

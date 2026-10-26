@@ -11,7 +11,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -221,10 +220,10 @@ func ResolveServerPolicy(policy ServerPolicy) (ServerPolicy, error) {
 		return policy, nil
 	}
 	if !policy.FallbackToLine {
-		return policy, &route.BlockedError{Code: route.CodeOutOfflineFailClosed, Detail: "OUT_OFFLINE"}
+		return policy, &BlockedError{Code: CodeOutOfflineFailClosed, Detail: "OUT_OFFLINE"}
 	}
 	if policy.OperationID == "" {
-		return policy, errors.New(route.CodeOutFallbackUnaudited + ": the explicit line fallback needs an operation id so the deviation can be audited")
+		return policy, errors.New(CodeOutFallbackUnaudited + ": the explicit line fallback needs an operation id so the deviation can be audited")
 	}
 	resolved := policy
 	resolved.Rules = append([]Rule(nil), policy.Rules...)

@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/route"
+	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -291,8 +291,8 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsOffline(t *testing.T) {
 	}
 	markLineOnline(t, s, line, now)
 	err := prepareSubscriberSyncForLine(s, line, now)
-	if err == nil || !hasErrorCode(err, route.CodeOutOfflineFailClosed) {
-		t.Fatalf("publication with an offline Out = %v, want %s", err, route.CodeOutOfflineFailClosed)
+	if err == nil || !hasErrorCode(err, compiler.CodeOutOfflineFailClosed) {
+		t.Fatalf("publication with an offline Out = %v, want %s", err, compiler.CodeOutOfflineFailClosed)
 	}
 	if got := candidateCount(t, s, line); got != revisions {
 		t.Fatalf("offline fail-closed publication stored %d revisions, want %d", got, revisions)
@@ -430,8 +430,8 @@ func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 	}
 	before := latestRevision(t, app, nodeID)
 	refusal := decodeApprove(t, approveUpgrade(t, b, nodeID, upgradeManifestVersion(t)), 409)
-	if refusal.OK || refusal.ErrorCode != route.CodeOutOfflineFailClosed {
-		t.Fatalf("approval with an offline Out = %+v, want %s", refusal, route.CodeOutOfflineFailClosed)
+	if refusal.OK || refusal.ErrorCode != compiler.CodeOutOfflineFailClosed {
+		t.Fatalf("approval with an offline Out = %+v, want %s", refusal, compiler.CodeOutOfflineFailClosed)
 	}
 	if got := latestRevision(t, app, nodeID); got != before {
 		t.Fatalf("refused approval advanced the revision: %d -> %d", before, got)
@@ -498,7 +498,7 @@ func TestPublishAssemblyStillUsesTheSameOutFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressLine || len(assembly.Targets) != 1 {
+	if assembly.EgressState != compiler.AIEgressLine || len(assembly.Targets) != 1 {
 		t.Fatalf("assembly = %s/%+v", assembly.EgressState, assembly.Targets)
 	}
 	if _, err := f.store.PublishPolicyAssembly(assembly, f.now); err != nil {

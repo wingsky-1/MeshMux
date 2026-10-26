@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 // publishApp builds an authenticated browser and installs the fixture gate.
@@ -107,7 +107,7 @@ func TestPublishEndpointStoresCandidate(t *testing.T) {
 	if got := receipt.RoutePolicyRevisions; len(got) != 1 || got["server"] != 1 {
 		t.Fatalf("route_policy_revisions = %v", got)
 	}
-	if receipt.EgressState != route.AIEgressLine {
+	if receipt.EgressState != compiler.AIEgressLine {
 		t.Fatalf("egress_state = %q, want line", receipt.EgressState)
 	}
 	if receipt.Candidate == nil || receipt.Candidate.Revision < 1 || receipt.Candidate.Lines != 1 ||
@@ -169,7 +169,7 @@ func TestPublishEndpointRefusals(t *testing.T) {
 	}
 	// An unhealthy Out fails closed with 409 and stores nothing.
 	refusal = publishReceipt(t, postPublish(t, b, `{"layer":"server","operation_id":"op-publish"}`), http.StatusConflict)
-	if refusal.ErrorCode != route.CodeOutOfflineFailClosed {
+	if refusal.ErrorCode != compiler.CodeOutOfflineFailClosed {
 		t.Fatalf("unhealthy out = %+v", refusal)
 	}
 	if refusal.NextAction == "" {

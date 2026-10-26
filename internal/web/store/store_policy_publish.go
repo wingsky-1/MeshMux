@@ -21,7 +21,6 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 // PolicySchemaVersion is the schema of the stored policy tables. Every
@@ -42,7 +41,7 @@ const (
 
 // Aggregate AI egress states of one server publication. A publication targets
 // every Line, so its receipt describes the whole fleet: the per-Line states of
-// route.AIEgressLine, route.AIEgressOut and route.AIEgressLineFallback stay as
+// compiler.AIEgressLine, compiler.AIEgressOut and compiler.AIEgressLineFallback stay as
 // they are, and a fleet whose Lines disagree is reported as mixed instead of
 // hiding every Line behind the first one.
 const (
@@ -422,22 +421,22 @@ func (s *Store) gatePolicyAssembly(ctx context.Context, verifier PublishVerifier
 // policyEgressState maps the Out facts onto the documented states.
 func policyEgressState(facts OutEgressFacts, fallback bool) (string, string) {
 	if !facts.Configured {
-		return route.AIEgressLine, ""
+		return compiler.AIEgressLine, ""
 	}
 	if facts.Available {
-		return route.AIEgressOut, ""
+		return compiler.AIEgressOut, ""
 	}
 	if fallback {
-		return route.AIEgressLineFallback, route.CodeOutOfflineFailClosed
+		return compiler.AIEgressLineFallback, compiler.CodeOutOfflineFailClosed
 	}
-	return PolicyEgressFailClosed, route.CodeOutOfflineFailClosed
+	return PolicyEgressFailClosed, compiler.CodeOutOfflineFailClosed
 }
 
 // AggregatePolicyEgress reduces the per-Line states of one publication to the
 // single state its receipt reports.
 //
-// Each Line keeps its own state: route.AIEgressLine, route.AIEgressOut,
-// route.AIEgressLineFallback or PolicyEgressFailClosed. The receipt reports
+// Each Line keeps its own state: compiler.AIEgressLine, compiler.AIEgressOut,
+// compiler.AIEgressLineFallback or PolicyEgressFailClosed. The receipt reports
 // that state only when every Line agrees; as soon as the Lines differ the
 // result is PolicyEgressMixed, because one Line's egress must never be
 // presented as every Line's egress. Fail-closed is not loosened by the
@@ -487,8 +486,8 @@ var publishRefusalCodes = []string{
 	CodePolicyLayerRetired, // defensive: publication never writes a policy layer
 	CodePolicyPayloadRetired,
 	compiler.CodePolicyInvalid, compiler.CodePolicyConflict, compiler.CodeRulesetUnpinned,
-	route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
-	route.CodeRulesetFetchFailed, route.CodeRulesetPinInvalid,
+	compiler.CodeOutOfflineFailClosed, compiler.CodeOutFallbackUnaudited,
+	compiler.CodeRulesetFetchFailed, compiler.CodeRulesetPinInvalid,
 	"OUT_BINDING_INVALID", CodeOutNotAuthorized,
 	CodePublishNoLines, codePublishGate,
 	node.CodePublishSingBoxMissing, node.CodePublishCheckSingBox,
@@ -521,7 +520,7 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		status = 400
 	case "POLICY_NOT_FOUND":
 		status = 404
-	case compiler.CodePolicyConflict, route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited,
+	case compiler.CodePolicyConflict, compiler.CodeOutOfflineFailClosed, compiler.CodeOutFallbackUnaudited,
 		"OUT_BINDING_INVALID", CodeOutNotAuthorized, CodePublishTasksInProgress,
 		CodePublishRevisionChanged, codePublishCandidateChanged:
 		status = 409

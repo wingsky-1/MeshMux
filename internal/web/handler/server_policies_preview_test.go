@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/compiler"
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 func previewServerPolicy(t *testing.T, b *browser, body string) (policyServerPreviewResponse, int) {
@@ -32,11 +31,11 @@ func TestPoliciesServerPreview(t *testing.T) {
 		code     string
 		fragment string
 	}{
-		{`{"domains":["chat.example.invalid"],"out":{"configured":false}}`, 200, route.AIEgressLine, "", `"outbound": "direct"`},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"available":true}}`, 200, route.AIEgressOut, "", `"outbound": "out"`},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true}}`, 409, "", route.CodeOutOfflineFailClosed, ""},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true}}`, 409, "", route.CodeOutFallbackUnaudited, ""},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true,"operation_id":"preview-op"}}`, 200, route.AIEgressLineFallback, route.CodeOutOfflineFailClosed, `"outbound": "direct"`},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":false}}`, 200, compiler.AIEgressLine, "", `"outbound": "direct"`},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"available":true}}`, 200, compiler.AIEgressOut, "", `"outbound": "out"`},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true}}`, 409, "", compiler.CodeOutOfflineFailClosed, ""},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true}}`, 409, "", compiler.CodeOutFallbackUnaudited, ""},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true,"operation_id":"preview-op"}}`, 200, compiler.AIEgressLineFallback, compiler.CodeOutOfflineFailClosed, `"outbound": "direct"`},
 		{`{"ai_ruleset":"ai"}`, 422, "", compiler.CodeRulesetUnpinned, ""},
 		{`not json`, 400, "", compiler.CodePolicyInvalid, ""},
 	}

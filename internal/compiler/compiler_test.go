@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -131,8 +130,8 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 	for _, version := range []string{"latest", "head", "main", "master", "stable", "dev", "nightly"} {
 		mutable.Version = version
 		if _, err := RenderSingBox(policy, RuleSetPins{GeoSite: map[string]RulesetPin{"cn": mutable}}); err == nil ||
-			!strings.HasPrefix(err.Error(), route.CodeRulesetPinInvalid) {
-			t.Fatalf("mutable version %q error = %v, want %s", version, err, route.CodeRulesetPinInvalid)
+			!strings.HasPrefix(err.Error(), CodeRulesetPinInvalid) {
+			t.Fatalf("mutable version %q error = %v, want %s", version, err, CodeRulesetPinInvalid)
 		}
 	}
 	for name, source := range map[string]string{
@@ -143,8 +142,8 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 		unsafe := pin
 		unsafe.Source = source
 		if _, err := RenderSingBox(policy, RuleSetPins{GeoSite: map[string]RulesetPin{"cn": unsafe}}); err == nil ||
-			!strings.HasPrefix(err.Error(), route.CodeRulesetPinInvalid) {
-			t.Fatalf("%s source error = %v, want %s", name, err, route.CodeRulesetPinInvalid)
+			!strings.HasPrefix(err.Error(), CodeRulesetPinInvalid) {
+			t.Fatalf("%s source error = %v, want %s", name, err, CodeRulesetPinInvalid)
 		}
 	}
 
@@ -163,8 +162,8 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := VerifyRuleset(pin, body); err == nil ||
-				!strings.HasPrefix(err.Error(), route.CodeRulesetFetchFailed) {
-				t.Fatalf("VerifyRuleset(%s) error = %v, want %s", name, err, route.CodeRulesetFetchFailed)
+				!strings.HasPrefix(err.Error(), CodeRulesetFetchFailed) {
+				t.Fatalf("VerifyRuleset(%s) error = %v, want %s", name, err, CodeRulesetFetchFailed)
 			}
 		})
 	}
@@ -187,16 +186,16 @@ func TestServerPolicyFailsClosedOnOutOffline(t *testing.T) {
 	if _, err := ResolveServerPolicy(policy); err == nil {
 		t.Fatal("offline Out resolved without a decision")
 	} else {
-		var blocked *route.BlockedError
-		if !errors.As(err, &blocked) || blocked.Code != route.CodeOutOfflineFailClosed || blocked.Detail != "OUT_OFFLINE" {
+		var blocked *BlockedError
+		if !errors.As(err, &blocked) || blocked.Code != CodeOutOfflineFailClosed || blocked.Detail != "OUT_OFFLINE" {
 			t.Fatalf("offline error = %v, want OUT_OFFLINE_FAIL_CLOSED/OUT_OFFLINE", err)
 		}
 	}
 
 	policy.FallbackToLine = true
 	if _, err := ResolveServerPolicy(policy); err == nil ||
-		!strings.HasPrefix(err.Error(), route.CodeOutFallbackUnaudited) {
-		t.Fatalf("unaudited fallback error = %v, want %s", err, route.CodeOutFallbackUnaudited)
+		!strings.HasPrefix(err.Error(), CodeOutFallbackUnaudited) {
+		t.Fatalf("unaudited fallback error = %v, want %s", err, CodeOutFallbackUnaudited)
 	}
 
 	policy.OperationID = "abcdefghijklmnopqrstuv"

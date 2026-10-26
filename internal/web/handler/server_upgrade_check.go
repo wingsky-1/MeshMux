@@ -41,7 +41,6 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/compiler"
-	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -297,8 +296,8 @@ func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, er
 	case strings.HasPrefix(code, "OUT_BINDING_INVALID"):
 		app.writeUpgradeFailure(w, r, http.StatusConflict, "OUT_BINDING_INVALID",
 			"当前服务端策略指向一个该线路没有的 Out。", "请先绑定 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
-	case strings.HasPrefix(code, route.CodeOutOfflineFailClosed):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, route.CodeOutOfflineFailClosed,
+	case strings.HasPrefix(code, compiler.CodeOutOfflineFailClosed):
+		app.writeUpgradeFailure(w, r, http.StatusConflict, compiler.CodeOutOfflineFailClosed,
 			"当前服务端策略指向的 Out 不可用。", "请恢复 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
 	case strings.HasPrefix(code, "POLICY_CORRUPT"), strings.HasPrefix(code, "POLICY_PINS_INVALID"),
 		strings.HasPrefix(code, compiler.CodePolicyInvalid), strings.HasPrefix(code, compiler.CodePolicyConflict),

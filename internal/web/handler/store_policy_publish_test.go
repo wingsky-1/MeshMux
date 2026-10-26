@@ -14,7 +14,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/protocol"
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 // publishFixture is one Hub with a paired Line, stored transport and an active
@@ -131,7 +130,7 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressLine || assembly.EgressCode != "" {
+	if assembly.EgressState != compiler.AIEgressLine || assembly.EgressCode != "" {
 		t.Fatalf("egress = %s/%s, want line/none", assembly.EgressState, assembly.EgressCode)
 	}
 	if len(assembly.Targets) != 1 || assembly.Targets[0].LineID != f.line {
@@ -167,7 +166,7 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("out assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressOut {
+	if assembly.EgressState != compiler.AIEgressOut {
 		t.Fatalf("egress = %s/%s, want out", assembly.EgressState, assembly.EgressCode)
 	}
 	if !strings.Contains(string(assembly.RouteFragment), `"outbound": "out"`) {
@@ -200,8 +199,8 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	verifier = &fixturePublishVerifier{}
 	candidatesBefore := candidateCount(t, f.store, f.line)
 	_, err = f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now)
-	if err == nil || !strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed) {
-		t.Fatalf("unhealthy Out assembly = %v, want %s", err, route.CodeOutOfflineFailClosed)
+	if err == nil || !strings.HasPrefix(err.Error(), compiler.CodeOutOfflineFailClosed) {
+		t.Fatalf("unhealthy Out assembly = %v, want %s", err, compiler.CodeOutOfflineFailClosed)
 	}
 	if singBox, mihomo := verifier.counts(); singBox != 0 || mihomo != 0 {
 		t.Fatalf("failed-closed assembly ran %d sing-box and %d mihomo checks", singBox, mihomo)
@@ -229,7 +228,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now); err == nil ||
-		!strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed) {
+		!strings.HasPrefix(err.Error(), compiler.CodeOutOfflineFailClosed) {
 		t.Fatalf("assembly without opt-in = %v, want fail-closed", err)
 	}
 	// With the opt-in the fallback resolves, and the receipt records both the
@@ -242,7 +241,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fallback assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressLineFallback || assembly.EgressCode != route.CodeOutOfflineFailClosed {
+	if assembly.EgressState != compiler.AIEgressLineFallback || assembly.EgressCode != compiler.CodeOutOfflineFailClosed {
 		t.Fatalf("fallback egress = %s/%s", assembly.EgressState, assembly.EgressCode)
 	}
 	if strings.Contains(string(assembly.RouteFragment), `"outbound": "out"`) {
@@ -312,14 +311,14 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	if assembly.EgressState != store.PolicyEgressMixed {
 		t.Fatalf("egress_state = %q, want %q for a healthy and a fail-closed line", assembly.EgressState, store.PolicyEgressMixed)
 	}
-	if assembly.EgressCode != route.CodeOutOfflineFailClosed {
-		t.Fatalf("egress_code = %q, want %q", assembly.EgressCode, route.CodeOutOfflineFailClosed)
+	if assembly.EgressCode != compiler.CodeOutOfflineFailClosed {
+		t.Fatalf("egress_code = %q, want %q", assembly.EgressCode, compiler.CodeOutOfflineFailClosed)
 	}
 	perLine := map[string]string{}
 	for _, target := range assembly.Targets {
 		perLine[target.LineID] = target.Egress
 	}
-	if perLine[f.line] != route.AIEgressOut || perLine[second] != store.PolicyEgressFailClosed {
+	if perLine[f.line] != compiler.AIEgressOut || perLine[second] != store.PolicyEgressFailClosed {
 		t.Fatalf("per-line egress = %v", perLine)
 	}
 }
@@ -385,11 +384,11 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	for _, target := range assembly.Targets {
 		perLine[target.LineID] = target
 	}
-	if perLine[f.line].Egress != route.AIEgressOut ||
+	if perLine[f.line].Egress != compiler.AIEgressOut ||
 		!strings.Contains(string(perLine[f.line].Candidate.Route), `"outbound": "out"`) {
 		t.Fatalf("healthy line target = %+v", perLine[f.line])
 	}
-	if perLine[second].Egress != route.AIEgressLineFallback ||
+	if perLine[second].Egress != compiler.AIEgressLineFallback ||
 		strings.Contains(string(perLine[second].Candidate.Route), `"outbound": "out"`) {
 		t.Fatalf("fallback line target = %+v", perLine[second])
 	}
@@ -407,16 +406,16 @@ func TestAggregatePolicyEgress(t *testing.T) {
 		code   string
 	}{
 		{"empty", nil, nil, "", ""},
-		{"one line", []string{route.AIEgressLine}, []string{""}, route.AIEgressLine, ""},
-		{"every line direct", []string{route.AIEgressLine, route.AIEgressLine}, []string{"", ""}, route.AIEgressLine, ""},
-		{"every line out", []string{route.AIEgressOut, route.AIEgressOut}, []string{"", ""}, route.AIEgressOut, ""},
-		{"healthy and fail-closed", []string{route.AIEgressOut, store.PolicyEgressFailClosed},
-			[]string{"", route.CodeOutOfflineFailClosed}, store.PolicyEgressMixed, route.CodeOutOfflineFailClosed},
-		{"fail-closed first", []string{store.PolicyEgressFailClosed, route.AIEgressOut},
-			[]string{route.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, route.CodeOutOfflineFailClosed},
-		{"out and line", []string{route.AIEgressOut, route.AIEgressLine}, []string{"", ""}, store.PolicyEgressMixed, ""},
-		{"fallback and out", []string{route.AIEgressLineFallback, route.AIEgressOut},
-			[]string{route.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, route.CodeOutOfflineFailClosed},
+		{"one line", []string{compiler.AIEgressLine}, []string{""}, compiler.AIEgressLine, ""},
+		{"every line direct", []string{compiler.AIEgressLine, compiler.AIEgressLine}, []string{"", ""}, compiler.AIEgressLine, ""},
+		{"every line out", []string{compiler.AIEgressOut, compiler.AIEgressOut}, []string{"", ""}, compiler.AIEgressOut, ""},
+		{"healthy and fail-closed", []string{compiler.AIEgressOut, store.PolicyEgressFailClosed},
+			[]string{"", compiler.CodeOutOfflineFailClosed}, store.PolicyEgressMixed, compiler.CodeOutOfflineFailClosed},
+		{"fail-closed first", []string{store.PolicyEgressFailClosed, compiler.AIEgressOut},
+			[]string{compiler.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, compiler.CodeOutOfflineFailClosed},
+		{"out and line", []string{compiler.AIEgressOut, compiler.AIEgressLine}, []string{"", ""}, store.PolicyEgressMixed, ""},
+		{"fallback and out", []string{compiler.AIEgressLineFallback, compiler.AIEgressOut},
+			[]string{compiler.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, compiler.CodeOutOfflineFailClosed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state, code := store.AggregatePolicyEgress(tc.states, tc.codes)

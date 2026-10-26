@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/compiler"
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 type policyServerPreviewOut struct {
@@ -82,15 +81,15 @@ func previewPolicy(input policyServerPreviewInput) (string, string, string, erro
 
 func previewEgressState(out policyServerPreviewOut) (string, string) {
 	if !out.Configured {
-		return route.AIEgressLine, ""
+		return compiler.AIEgressLine, ""
 	}
 	if out.Available {
-		return route.AIEgressOut, ""
+		return compiler.AIEgressOut, ""
 	}
 	if out.FallbackToLine && strings.TrimSpace(out.OperationID) != "" {
-		return route.AIEgressLineFallback, route.CodeOutOfflineFailClosed
+		return compiler.AIEgressLineFallback, compiler.CodeOutOfflineFailClosed
 	}
-	return "fail-closed", route.CodeOutOfflineFailClosed
+	return "fail-closed", compiler.CodeOutOfflineFailClosed
 }
 
 func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Request, err error) {
@@ -98,7 +97,7 @@ func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Reques
 	app.event(r, code)
 	status := http.StatusUnprocessableEntity
 	switch code {
-	case route.CodeOutOfflineFailClosed, route.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID":
+	case compiler.CodeOutOfflineFailClosed, compiler.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID":
 		status = http.StatusConflict
 	}
 	app.writePolicyServerPreview(w, r, status, policyServerPreviewResponse{ErrorCode: code})
@@ -107,8 +106,8 @@ func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Reques
 func previewFailure(err error) string {
 	code, _, _ := strings.Cut(err.Error(), ": ")
 	for _, known := range []string{
-		compiler.CodePolicyInvalid, compiler.CodeRulesetUnpinned, route.CodeOutOfflineFailClosed,
-		route.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID",
+		compiler.CodePolicyInvalid, compiler.CodeRulesetUnpinned, compiler.CodeOutOfflineFailClosed,
+		compiler.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID",
 	} {
 		if code == known {
 			return code

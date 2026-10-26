@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/compiler"
-	"github.com/wingsky-1/MeshMux/internal/route"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -446,8 +445,8 @@ func (app *Server) subscriberFail(w http.ResponseWriter, r *http.Request, err er
 	// failure, and the previous revision stays live.
 	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
 		code, status = "OUT_BINDING_INVALID", http.StatusConflict
-	case strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed):
-		code, status = route.CodeOutOfflineFailClosed, http.StatusConflict
+	case strings.HasPrefix(err.Error(), compiler.CodeOutOfflineFailClosed):
+		code, status = compiler.CodeOutOfflineFailClosed, http.StatusConflict
 	case strings.HasPrefix(err.Error(), store.CodeOutNotAuthorized):
 		code, status = store.CodeOutNotAuthorized, http.StatusConflict
 	case strings.HasPrefix(err.Error(), "POLICY_CORRUPT"):

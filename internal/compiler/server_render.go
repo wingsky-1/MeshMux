@@ -12,8 +12,6 @@ package compiler
 import (
 	"encoding/json"
 	"errors"
-
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 const (
@@ -58,7 +56,7 @@ func RenderServerRoute(policy ServerPolicy, pins RuleSetPins) ([]byte, error) {
 		return nil, errors.New("OUT_BINDING_INVALID: the server policy references an Out that is not configured")
 	}
 	if needsOut && !policy.OutAvailable {
-		return nil, &route.BlockedError{Code: route.CodeOutOfflineFailClosed, Detail: "OUT_OFFLINE"}
+		return nil, &BlockedError{Code: CodeOutOfflineFailClosed, Detail: "OUT_OFFLINE"}
 	}
 	final := serverSingBoxTags[policy.Default]
 	rules := make([]map[string]any, 0, len(policy.Rules))

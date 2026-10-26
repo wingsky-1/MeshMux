@@ -21,7 +21,6 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/route"
 )
 
 // realPublishGate builds the production verifier against the pinned kernel.
@@ -99,7 +98,7 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the real kernel refused the Out-free Line candidate: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressLine {
+	if assembly.EgressState != compiler.AIEgressLine {
 		t.Fatalf("egress = %s/%s, want line", assembly.EgressState, assembly.EgressCode)
 	}
 	if tags := gatedLineOutbounds(t, assembly); len(tags) != 1 || tags["direct"] != "direct" {
@@ -124,7 +123,7 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the real kernel refused the Out-selecting Line candidate: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressOut {
+	if assembly.EgressState != compiler.AIEgressOut {
 		t.Fatalf("egress = %s/%s, want out", assembly.EgressState, assembly.EgressCode)
 	}
 	tags := gatedLineOutbounds(t, assembly)
