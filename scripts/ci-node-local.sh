@@ -49,7 +49,7 @@ dc() { docker exec -e http_proxy="http://$PROXY_HOST:$PROXY_PORT" -e https_proxy
 echo "--- build host test binaries"
 mkdir -p "$WORK/bin"
 ( cd "$(dirname "$0")/.." && go test -c -o "$WORK/bin/install.test" ./internal/install )
-( cd "$(dirname "$0")/.." && go test -c -o "$WORK/bin/web.test" ./internal/web )
+( cd "$(dirname "$0")/.." && go test -c -o "$WORK/bin/web-handler.test" ./internal/web/handler )
 ( cd "$(dirname "$0")/.." && CGO_ENABLED=0 go build -o "$WORK/bin/meshmux" ./cmd/meshmux )
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -90,15 +90,15 @@ echo "--- copy test binaries into the container"
 dc mkdir -p "$BINDIR" "$FIXTURE_DIR"
 dc chmod 700 "$FIXTURE_DIR"
 docker cp "$WORK/bin/install.test" "$CONTAINER:$BINDIR/install.test"
-docker cp "$WORK/bin/web.test" "$CONTAINER:$BINDIR/web.test"
+docker cp "$WORK/bin/web-handler.test" "$CONTAINER:$BINDIR/web-handler.test"
 docker cp "$WORK/bin/meshmux" "$CONTAINER:$BINDIR/meshmux"
-dc chmod 755 "$BINDIR/install.test" "$BINDIR/web.test" "$BINDIR/meshmux"
+dc chmod 755 "$BINDIR/install.test" "$BINDIR/web-handler.test" "$BINDIR/meshmux"
 
 # The Hub fixture dies with the container on restart while its ready file
 # survives, so every boot removes the stale marker and (re)starts it.
 start_fixture() {
   dc rm -f "$FIXTURE_DIR/fixture-ready"
-  dc bash -lc "MESHMUX_NODE_HUB_FIXTURE_DIR=$FIXTURE_DIR MESHMUX_NODE_HUB_FIXTURE_ROLE=$role MESHMUX_NODE_HUB_FIXTURE_SSH_PORT=22 $BINDIR/web.test -test.run '^TestNodeHubFixture\$' -test.v > $BINDIR/fixture.log 2>&1 &"
+  dc bash -lc "MESHMUX_NODE_HUB_FIXTURE_DIR=$FIXTURE_DIR MESHMUX_NODE_HUB_FIXTURE_ROLE=$role MESHMUX_NODE_HUB_FIXTURE_SSH_PORT=22 $BINDIR/web-handler.test -test.run '^TestNodeHubFixture\$' -test.v > $BINDIR/fixture.log 2>&1 &"
   for _ in $(seq 1 60); do
     if dc test -f "$FIXTURE_DIR/fixture-ready" >/dev/null 2>&1; then break; fi
     sleep 2

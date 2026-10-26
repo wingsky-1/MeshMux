@@ -233,7 +233,7 @@ fi
 # skip without MESHMUX_SINGBOX_TEST_BINARY, so the variable is set here and a
 # SKIP is treated as a failure.
 export MESHMUX_SINGBOX_TEST_BINARY="${SINGBOX_BIN}"
-WEB_TEST="${REPO_ROOT}/.ci/bin/web.test"
+WEB_TEST="${REPO_ROOT}/.ci/bin/web-handler.test"
 if [[ ! -x "${WEB_TEST}" ]]; then
   fail "prebuilt test binary not found or not executable: ${WEB_TEST}; the CI workflow must build it before running this script"
 fi

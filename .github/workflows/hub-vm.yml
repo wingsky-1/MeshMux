@@ -119,6 +119,7 @@ jobs:
           CGO_ENABLED=0 go build -o .ci/bin/meshmux ./cmd/meshmux
           go test -c -o .ci/bin/install.test ./internal/install
           go test -c -o .ci/bin/web.test ./internal/web
+          go test -c -o .ci/bin/web-handler.test ./internal/web/handler
           go test -c -o .ci/bin/node.test ./internal/node
       - name: Install QEMU and cloud-init image tools
         run: |
