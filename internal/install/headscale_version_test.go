@@ -82,7 +82,7 @@ func TestPinnedHeadscaleVersionMatchesAdapter(t *testing.T) {
 // the release the adapter enforces, not a stale literal.
 func TestRenderedHeadscaleConfigStatesPinnedVersion(t *testing.T) {
 	c := Config{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org"}
-	files, err := CandidateFiles(c, []int{60794})
+	files, err := candidateFiles(c, []int{60794}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

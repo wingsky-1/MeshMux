@@ -2,25 +2,25 @@
 // optional Out chaining, direct-only zero-Out Lines and the rules that decide
 // which user may egress through which Out.
 //
-// Only one part of that scope is implemented (Issue #8): the AI egress decision
-// and the AI ruleset version lock in out_ruleset.go. The decision states the
-// three cases the server side must never conflate:
+// Implemented scope after Task 6: the ruleset version lock and the retained
+// AI-ruleset byte verification in out_ruleset.go. The former AI-egress decision
+// layer (DecideAIEgress*, AIEgressRequest/Decision, resolveAIEgress) was
+// removed because the rule library and the subscription composer now own that
+// decision. What remains is the security half of the pin contract:
 //
-//   - no Out configured: the AI traffic uses the Line directly, which is the
-//     configured egress of an Out-free deployment;
-//   - Out configured and available: the traffic egresses through the Out and the
-//     pinned ruleset bytes are verified against their SHA-256;
-//   - Out configured but unavailable: the request is refused
-//     (OUT_OFFLINE_FAIL_CLOSED) instead of silently using the Line, and only an
-//     explicit administrator opt-in carrying the request operation id may fall
-//     back.
+//   - a ruleset is usable only when it is pinned (exact HTTPS source, immutable
+//     version, SHA-256) and its bytes match the digest; a mutable or malformed
+//     pin is RULESET_PIN_INVALID and a download/digest/size failure is
+//     RULESET_FETCH_FAILED;
+//   - ResolveAIRuleset is kept although the current publication path does not
+//     call it: pins are the future consumption path, and the byte check is the
+//     contract that makes them safe (Task 6 Keep list).
 //
-// 状态：#8-D 已在 out_ruleset.go 实现 Out 的 AI 出口与规则集版本锁；Line
-// 入站选择、通用分流等其余 route 决策仍是 ADR-0007 下的占位，未实现通用规则
-// 引擎、规则市场、测速或多 Out 负载均衡。
+// 状态：Out 的 AI 出口选择已由规则库/订阅组装器承担；route 不再提供第二套
+// 决策 API。Line 入站选择、通用分流等其余 route 决策仍是 ADR-0007 下的占位，
+// 未实现通用规则引擎、规则市场、测速或多 Out 负载均衡。
 //
-// 职责：把"Line / Out / 规则集"的组合解析为一个可审计的出口决定，供发布链与
-// 渲染层消费。
+// 职责：维护规则集版本锁与字节校验，让引用 pins 的渲染层有唯一可信输入。
 //
 // 边界：与订阅分流不同——订阅分流负责把同一份用户集合渲染为不同客户端所需的
 // sing-box 与 Mihomo 文档，属于渲染层的表达选择；route 只描述连通性与准入，

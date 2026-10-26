@@ -494,6 +494,12 @@ func rollbackManaged(ctx context.Context, opts ApplyOptions, snapshots []fileSna
 	}
 	if restoreRunning && ok {
 		for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service", "meshmux-caddy.service"} {
+			// The failed apply already spent this unit's StartLimitBurst budget.
+			// Restore must clear it before starting the previously verified
+			// unit, otherwise systemd refuses the start and a recoverable
+			// failure escalates to ROLLBACK_FAILED. Best-effort for the same
+			// reason as the repair path.
+			_, _ = opts.Runner.Run(ctx, "systemctl", "reset-failed", unit)
 			if _, err := opts.Runner.Run(ctx, "systemctl", "start", unit); err != nil {
 				ok = false
 			}
@@ -681,6 +687,15 @@ func hasListenerPort(output string, port int) bool {
 
 func activateUnit(ctx context.Context, runner CommandRunner, unit string, repair bool) error {
 	if repair {
+		// Repair is the documented recovery path for a broken installation, so
+		// systemd's own restart limiter must not veto it: every failed start
+		// (crash loop, deterministic refusal, bad flag) consumes the
+		// StartLimitBurst budget, and the fourth restart within the interval is
+		// rejected with "Start request repeated too quickly". Clearing the
+		// counter is best-effort: a unit that is not loaded or has no recorded
+		// failure makes reset-failed exit non-zero without meaning the repair
+		// cannot proceed.
+		_, _ = runner.Run(ctx, "systemctl", "reset-failed", unit)
 		_, err := runner.Run(ctx, "systemctl", "restart", unit)
 		return err
 	}

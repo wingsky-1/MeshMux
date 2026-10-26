@@ -184,15 +184,42 @@ func numericDottedHost(value string) bool {
 	return true
 }
 
-// validateV2Fields validates the optional v2 blocks of a candidate. The v1
-// baseline (no users and no REALITY block) stays valid, users require a
-// REALITY block, and both blocks belong to edge nodes only.
+// validateV2Fields validates the optional v2 blocks and the Out egress of a
+// candidate. The v1 baseline (no users, no REALITY block, no route and no Out
+// egress) stays valid. Users require a REALITY block; an edge Out egress
+// requires one too. An Out-role candidate carries only the link key (the v4
+// document); everything else belongs to edge nodes. A route that names "out"
+// without an attached egress stays legal and renders the fail-closed block
+// stub, so a stored document never becomes unreadable just because its egress
+// was not attached yet.
 func (c Candidate) validateV2Fields() error {
-	if c.Reality == nil && len(c.Users) == 0 && len(c.Route) == 0 {
+	if c.Reality == nil && len(c.Users) == 0 && len(c.Route) == 0 && c.Out == nil {
 		return nil
 	}
+	if c.Role != RoleEdge && c.Role != RoleOut {
+		return errors.New("CANDIDATE_INVALID: users, reality, a route and an out egress are only valid for edge nodes")
+	}
+	if c.Out != nil {
+		if err := c.Out.Validate(); err != nil {
+			return err
+		}
+		if c.Role == RoleOut {
+			if c.Reality != nil || len(c.Users) != 0 || len(c.Route) != 0 {
+				return errors.New("CANDIDATE_INVALID: an out node carries only the link key")
+			}
+			// The void UUID history never belonged to an Out document: an Out
+			// node only renders its guard from the link key.
+			if c.Out.Key == "" {
+				return errors.New("OUT_EGRESS_INVALID: an out node needs the link key")
+			}
+			return nil
+		}
+		if c.Reality == nil {
+			return errors.New("REALITY_REQUIRED: reality is required when an out egress is present")
+		}
+	}
 	if c.Role != RoleEdge {
-		return errors.New("CANDIDATE_INVALID: users, reality and a route are only valid for edge nodes")
+		return errors.New("CANDIDATE_INVALID: users, reality, a route and an out egress are only valid for edge nodes")
 	}
 	if c.Reality == nil {
 		return errors.New("REALITY_REQUIRED: reality is required when users or a route are present")
@@ -274,6 +301,100 @@ func decodeVLESSUser(raw json.RawMessage) (VLESSUser, error) {
 		return VLESSUser{}, errors.New("CANDIDATE_INVALID: field type invalid")
 	}
 	return user, nil
+}
+
+// hasOutField reports whether one decoded candidate object carries the
+// optional Hub-issued out egress.
+func hasOutField(obj map[string]json.RawMessage) bool {
+	_, ok := obj["out"]
+	return ok
+}
+
+// decodeOutEgress decodes the optional out egress of a v2/v3/v4 document. An
+// absent key means no Out egress. Two mutually exclusive shapes are accepted:
+//
+//   - the SS link shape: server, port and exactly one credential, the SS link
+//     key ("key") for new egresses or the void VLESS UUID ("uuid") only for
+//     documents stored before the SS switch;
+//   - the external HTTP proxy shape (Ruling R11): server, port, type:"http"
+//     and optional username/password. It never carries a key or UUID, and a
+//     password without a username is refused by OutEgress.Validate.
+//
+// Both shapes decode so immutable history keeps verifying; new writes always
+// carry the key or the http body.
+func decodeOutEgress(raw json.RawMessage) (*OutEgress, error) {
+	const malformed = "CANDIDATE_INVALID: malformed candidate JSON"
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errors.New(malformed)
+	}
+	obj, err := decodeExactObject(trimmed)
+	if err != nil {
+		return nil, errors.New(malformed)
+	}
+	if len(obj) < 3 || len(obj) > 6 {
+		return nil, errors.New(malformed)
+	}
+	for name := range obj {
+		switch name {
+		case "server", "port", "key", "uuid", "type", "username", "password":
+		default:
+			return nil, errors.New(malformed)
+		}
+	}
+	var egress OutEgress
+	if err := decodeStringField(obj["server"], &egress.Server); err != nil {
+		return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+	}
+	port, err := decodePositiveInt64(obj["port"])
+	if err != nil || port > 65535 {
+		return nil, errors.New("CANDIDATE_INVALID: out port must be an integer")
+	}
+	egress.Port = int(port)
+	_, hasType := obj["type"]
+	_, hasKey := obj["key"]
+	_, hasUUID := obj["uuid"]
+	if hasType {
+		if hasKey || hasUUID || len(obj) > 5 {
+			return nil, errors.New(malformed)
+		}
+		if err := decodeStringField(obj["type"], &egress.Type); err != nil {
+			return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+		}
+		if egress.Type != OutEgressHTTP {
+			return nil, errors.New("CANDIDATE_INVALID: out egress type must be http")
+		}
+		if rawUsername, ok := obj["username"]; ok {
+			if err := decodeStringField(rawUsername, &egress.Username); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		}
+		if rawPassword, ok := obj["password"]; ok {
+			if err := decodeStringField(rawPassword, &egress.Password); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		}
+	} else {
+		if len(obj) != 3 || hasKey == hasUUID {
+			return nil, errors.New(malformed)
+		}
+		if hasKey {
+			if err := decodeStringField(obj["key"], &egress.Key); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		} else {
+			if err := decodeStringField(obj["uuid"], &egress.UUID); err != nil {
+				return nil, errors.New("CANDIDATE_INVALID: field type invalid")
+			}
+		}
+	}
+	if err := egress.Validate(); err != nil {
+		return nil, err
+	}
+	return &egress, nil
 }
 
 // decodeReality decodes the REALITY block of a v2 document. The block is one

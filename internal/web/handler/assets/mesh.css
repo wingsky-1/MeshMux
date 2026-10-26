@@ -1,0 +1,257 @@
+/* Scoped styles for the Mesh device workspace.
+   The palette, type scale and radii are the existing MeshMux console tokens
+   from app.css: green #12644e, muted #71817b, line #e1e8e4, surface #ffffff,
+   page #f5f7f6, panel radius 11px, control radius 8px, badge radius 6px.
+   Only layout that app.css does not already provide is added here.
+   The mesh page loads no other scoped stylesheet, so the card/secret/action
+   pieces it shares with the subscriber page are defined here with the same
+   values as subscribers.css instead of being left unstyled. */
+
+.mesh-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  align-items: start;
+  margin: 22px 0;
+}
+
+.mesh-split select,
+.mesh-split input[type="text"],
+.mesh-split textarea {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #cdd9d2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+  color: #203232;
+  font: inherit;
+}
+
+/* One-time key disclosure: the only secret this page ever renders. */
+.key-disclosure {
+  border-color: #dbe9df;
+  background: linear-gradient(180deg, #f4faf5 0%, #ffffff 42%);
+  margin-bottom: 22px;
+}
+
+.key-disclosure .sub-secret {
+  margin: 14px 0 4px;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.key-disclosure .details {
+  margin: 18px 0 0;
+}
+
+/* Device cards: shared classes with the subscriber page, same values. */
+.node-card {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 18px 20px;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.node-card .panel-heading h3 {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.node-card .details {
+  margin: 14px 0 0;
+}
+
+.sub-secret,
+.config-disclosure {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: #f3f6f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.config-disclosure {
+  margin: 14px 0 4px;
+  max-height: 28rem;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+}
+
+.sub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.sub-actions form {
+  margin: 0;
+}
+
+.sub-actions button {
+  margin-top: 0;
+  min-height: 40px;
+  padding: 9px 16px;
+  font-size: 13px;
+}
+
+.sub-actions .secondary-button {
+  background: #fff;
+  border: 1px solid #cdd9d2;
+  color: #2b4436;
+}
+
+.sub-actions .secondary-button:hover {
+  background: #f1f7f2;
+}
+
+.sub-actions .danger-button {
+  background: #fff0eb;
+  border: 1px solid #f0d5ca;
+  color: #a24528;
+}
+
+.sub-actions .danger-button:hover {
+  background: #f8e2da;
+}
+
+.sub-note {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #71817b;
+  margin: 10px 0 0;
+}
+
+/* Subnet route evidence: three remote columns plus the Hub intent. The wrapper
+   scrolls on narrow screens instead of making the device card overflow. */
+.route-block {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.route-block .panel-heading h4 {
+  font-size: 13px;
+  margin: 0;
+}
+
+.route-table-wrap {
+  overflow-x: auto;
+}
+
+.route-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.route-table th,
+.route-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.route-table th {
+  color: #71817b;
+  font-weight: 600;
+}
+
+.route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.route-actions form {
+  margin: 0;
+}
+
+.route-actions button {
+  margin-top: 0;
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .mesh-split {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .sub-actions button {
+    width: 100%;
+  }
+  .node-card {
+    padding: 16px;
+  }
+}
+
+/* Task 1: device-row horizontal bar (status dot / name / purpose / online /
+   subnet routes / actions) plus dialog affordances. All mesh flows keep their
+   existing POST endpoints; modals are CSS-only :target overlays shared with
+   app.css, and disabled approve buttons never submit. */
+.device-row-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #f3f6f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9aa7a1;
+  flex: none;
+}
+
+.status-dot.ok {
+  background: #12644e;
+}
+
+.status-dot.fail {
+  background: #a24528;
+}
+
+.device-row-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.device-row-purpose,
+.device-row-routes {
+  color: #2b4436;
+}
+
+.device-row-actions {
+  margin-left: auto;
+}
+
+.device-row-actions a {
+  font-size: 12px;
+}
+
+.route-actions button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+

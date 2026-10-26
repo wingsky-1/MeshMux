@@ -121,6 +121,92 @@ func TestRollbackDisablesHubDispatchPath(t *testing.T) {
 	}
 }
 
+func callIndex(calls []string, want string) int {
+	for i, call := range calls {
+		if call == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestActivateUnitRepairClearsStartLimitBeforeRestart pins the repair recovery
+// path: failed starts consume the unit's StartLimitBurst budget, so the fourth
+// repair restart would be refused with "Start request repeated too quickly"
+// unless reset-failed runs first.
+func TestActivateUnitRepairClearsStartLimitBeforeRestart(t *testing.T) {
+	runner := &fakeInstallerRunner{}
+	if err := activateUnit(context.Background(), runner, "meshmux-web.service", true); err != nil {
+		t.Fatalf("repair activation failed: %v", err)
+	}
+	reset := callIndex(runner.calls, "systemctl reset-failed meshmux-web.service")
+	restart := callIndex(runner.calls, "systemctl restart meshmux-web.service")
+	if reset < 0 || restart < 0 || reset > restart {
+		t.Fatalf("reset-failed must precede restart: %v", runner.calls)
+	}
+}
+
+// TestActivateUnitRepairToleratesResetFailedError keeps the reset best-effort:
+// a unit with no recorded failure makes reset-failed exit non-zero, which must
+// not turn a valid repair into a failed one.
+func TestActivateUnitRepairToleratesResetFailedError(t *testing.T) {
+	runner := &fakeInstallerRunner{failCall: "systemctl reset-failed meshmux-caddy.service"}
+	if err := activateUnit(context.Background(), runner, "meshmux-caddy.service", true); err != nil {
+		t.Fatalf("reset-failed error aborted the repair restart: %v", err)
+	}
+	if callIndex(runner.calls, "systemctl restart meshmux-caddy.service") < 0 {
+		t.Fatalf("repair did not restart the unit after reset-failed failed: %v", runner.calls)
+	}
+}
+
+// TestActivateUnitFreshInstallSkipsResetFailed keeps the fresh-install path
+// unchanged: enable --now is the only activation command.
+func TestActivateUnitFreshInstallSkipsResetFailed(t *testing.T) {
+	runner := &fakeInstallerRunner{}
+	if err := activateUnit(context.Background(), runner, "meshmux-web.service", false); err != nil {
+		t.Fatalf("fresh activation failed: %v", err)
+	}
+	want := []string{"systemctl enable --now meshmux-web.service"}
+	if len(runner.calls) != 1 || runner.calls[0] != want[0] {
+		t.Fatalf("fresh activation calls = %v, want %v", runner.calls, want)
+	}
+}
+
+// TestRollbackClearsStartLimitBeforeStart covers the rollback restore loop: the
+// failed apply already spent the units' start budget, so the rollback must
+// clear it before starting the previously verified units, or a recoverable
+// failure escalates to ROLLBACK_FAILED.
+func TestRollbackClearsStartLimitBeforeStart(t *testing.T) {
+	runner := &fakeInstallerRunner{}
+	opts := ApplyOptions{Root: t.TempDir(), Runner: runner}
+	if ok := rollbackManaged(context.Background(), opts, nil, true); !ok {
+		t.Fatalf("rollback reported failure: %v", runner.calls)
+	}
+	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service", "meshmux-caddy.service"} {
+		reset := callIndex(runner.calls, "systemctl reset-failed "+unit)
+		start := callIndex(runner.calls, "systemctl start "+unit)
+		if reset < 0 || start < 0 || reset > start {
+			t.Fatalf("rollback must reset-failed before starting %s: %v", unit, runner.calls)
+		}
+	}
+}
+
+// TestRollbackToleratesResetFailedError keeps the rollback restore best-effort
+// in the same way as the repair path: a reset failure must not fail the
+// rollback nor skip the start.
+func TestRollbackToleratesResetFailedError(t *testing.T) {
+	runner := &fakeInstallerRunner{failCall: "systemctl reset-failed meshmux-web.service"}
+	opts := ApplyOptions{Root: t.TempDir(), Runner: runner}
+	if ok := rollbackManaged(context.Background(), opts, nil, true); !ok {
+		t.Fatalf("reset-failed error turned the rollback into a failure: %v", runner.calls)
+	}
+	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service", "meshmux-caddy.service"} {
+		if callIndex(runner.calls, "systemctl start "+unit) < 0 {
+			t.Fatalf("rollback skipped starting %s after reset-failed failed: %v", unit, runner.calls)
+		}
+	}
+}
+
 func makeInstallerFixture(t *testing.T) installerFixture {
 	t.Helper()
 	root := t.TempDir()

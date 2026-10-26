@@ -65,7 +65,7 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 - [ ] **#6 L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；#6 baseline 无 TLS/REALITY、无用户、无订阅。#7 新实现及证据见下节。
 - [x] **Out ACL 语义（#8 源码已修复）**：ACL 已由 #8-B 改为空授权默认全拒绝（`inet meshmux_out` 只保留一条 `input` chain，`policy accept` 仅覆盖主机 SSH/回环/回程；VLESS 端口两条 `tcp/udp dport drop` 默认丢弃，仅 Hub 授权的 Line 源在 drop 之前 `accept`）。**仿真证据（隔离单测）**：`internal/node/render_acl_test.go`、`internal/node/runtime_readback_acl_test.go`、`internal/install/node_acl_test.go`（含有序 accept-before-drop、未对齐 CIDR 拒绝、`nft -j` 精确集合比对、注入 accept 拒绝、state 缺失退化为形状断言、repair 保留已授权 ACL）；`go test -race ./...` 全绿。
 - [x] **Out ACL 真实 L2+L3 证据（#8 收尾）**：`scripts/ci-node-components.sh` 在 `nft -c` 后执行真实 `nft -f` apply，并用 `nft -j list table inet meshmux_out` 断言至少 2 条 rule、归档 `nft list` 输出；容器无 `CAP_NET_ADMIN` 时显式 SKIP，不计为通过。L2 [hub-components run 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)（head `9495730`、tree `5720b86`）amd64/arm64 全绿，amd64 日志实得 `nft apply/readback PASS`（2 rules，非 SKIP）；L3 [hub-vm run 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)（同 head/tree）hub/edge/out 全 success，out 含 `TestNodeSystemVM` 真实 `nft list table inet meshmux_out` 回读断言。AI 双跳实际流量（已移交 #10）与客户端可用仍缺。
-- [x] **Out 缺失/故障语义与清理（#8-D）**：`internal/route/out_ruleset.go` 提供 `RulesetPin{Source,Version,SHA256}` 与 `ResolveAIRuleset`（下载/大小/摘要失败统一 `RULESET_FETCH_FAILED`，可变通道 `RULESET_PIN_INVALID`，均拒绝发布）；`internal/web/store_out_ai_egress.go` 分离“无 Out = 直出配置态”与“Out 故障 = `OUT_OFFLINE_FAIL_CLOSED`”，回退 Line 需 `FallbackToLine` + `operation_id` 否则 `OUT_FALLBACK_UNAUDITED`；`DeleteOut` 单事务删路由→复用 T3 回收 drain 清 ACL→同事务 readback（缺键或非空则回滚），未下发时返回 `OUT_SYNC_PENDING`（HTTP 202）而非假成功。**仿真证据（隔离单测）**：`internal/route/out_ruleset_test.go`、`internal/web/store_out_ai_egress_test.go`、`internal/web/store_out_bindings_test.go`、`internal/web/server_out_bindings_test.go`。
+- [x] **Out 缺失/故障语义与清理（#8-D，Task 6 后现状）**：`internal/route/out_ruleset.go` 提供 `RulesetPin{Source,Version,SHA256}` 与 `ResolveAIRuleset`（下载/大小/摘要失败统一 `RULESET_FETCH_FAILED`，可变通道 `RULESET_PIN_INVALID`）；AI 出口决策层已由 Task 6 删除并移交规则库/订阅组装器。`OutEgressFacts` 仍分离“无 Out = 直出配置态”与“Out 故障 = 不可用”，无 Opt-in 回退即 fail-closed；删除语义已被 Task 5 的 Ruling R9 取代（先清空 ACL 并读回，再彻底删除；失败 409 且不删任何内容）。**仿真证据（隔离单测）**：`internal/route/out_ruleset_test.go`、`internal/web/handler/store_out_ai_egress_test.go`（facts）、`internal/web/handler/store_out_sync_test.go` 与 Task 5 的 `TestOutDelete*`。
 - [x] **#6 自定义端口**：SSH 与 VLESS 端口不同；Fail2ban jail/action 与实际 SSH listener 匹配，nft 只替换 MeshMux 自有表。证据限于上述隔离 L2/L3 场景，不代表任意现网端口均已验证。
 
 实施说明见 [Line / Out 安装](INSTALL_NODE.zh-CN.md)；#9 与 #11 不在本轮验收范围。#8 本轮收尾已取 L2 真实 `nft -f` apply/readback（[hub-components 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)）与 L3 VM readback（[hub-vm 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)，head `9495730`、tree `5720b86`）；AI 双跳实际流量（已移交 #10）与客户端可用仍缺，#11 仍是 v1.0.0 P0。
@@ -94,7 +94,7 @@ PR-9a 分四个切片交付：9a-1 `internal/mesh` 纯领域模型、9a-2 `inter
 | B | 安装侧 socket 边界（9a-4）：`meshmux-web.service` 仅以 `SupplementaryGroups=meshmux-headscale` 穿过 0770 socket，数据目录仍 0700 且无 `Group=`/`ReadWritePaths` | [x] 模板断言 `internal/install/render_test.go`；**真实组权限链未验证** |
 | B | 一次性 Key 的消费语义（#113 2-4）：不存在接收 secret 的消费端点，`reconcile`/`claim` 证明注册（观测到 Headscale Node ID）时在同一事务消费该设备 live Key（`consumed`、摘要清空）；窗口已过的 Key 记为 `expired`，停留 `issued` 之外的记录不被改写 | [x] `TestMeshRegistrationConsumesKey`、`TestMeshEnrollmentKeySingleActive`、`TestMeshClaimBindsUnclaimedSameNameNodeExplicitly`、`TestMeshRekeyWithdrawsOldKey` |
 | B | 重签顺序（#113 2-3）：`/mesh/rekey` 按 validate → stage → apply → readback 执行——先解析 Headscale 用户并在内存中备好新 Key（proxy+mesh 另含 pre-auth key 与渲染文档），再用一次事务安装新 Key、作废旧 live Key；`expired → pending` 与安装 Key 同一事务。中途失败（Headscale 不可用、渲染失败、事务失败）不启用新 Key、不作废旧 Key，旧 Key 仍可用于入网；已过窗口的旧 Key 由该事务记为 `expired`，页面不称其为“已作废”；成功响应仍只出现一次新 Key | [x] `TestMeshRekeyHeadscaleFailureKeepsOldKey`、`TestMeshRekeySwapFailureKeepsOldKey`、`TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus`、`TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict`、`TestMeshRekeyRenderFailureKeepsOldKeyUsable`、`TestMeshRekeyLapsesOldKeyWithoutClaimingAWithdrawal`、`TestMeshRekeyNeverLeavesTwoLiveKeys` |
-| C | 隔离 Debian 13 Hub VM：真实 Headscale 0.29.5 下 Web 账户经 socket 完成 `version`/`users list`/`nodes list`，页面创建设备并核对、注销，事件日志无 Key 明文 | [ ] 待执行：`MESHMUX_MESH_HUB_FIXTURE_DIR=... /tmp/web.test -test.run '^TestMeshHubFixture$'`，需在干净 VM 内以 `meshmux` 账户运行；head/tree 与 run 链接待回填 |
+| C | 隔离 Debian 13 Hub VM：真实 Headscale 0.29.5 下 Web 账户经 socket 完成 `version`/`users list`/`nodes list`，页面创建设备并核对、注销，事件日志无 Key 明文 | [ ] 待执行：`MESHMUX_MESH_HUB_FIXTURE_DIR=... /tmp/web-handler.test -test.run '^TestMeshHubFixture$'`，需在干净 VM 内以 `meshmux` 账户运行；head/tree 与 run 链接待回填 |
 
 - [ ] **未含真机与真实注册**：本 PR 没有真实 tailnet 客户端入网，因此 `registered`、在线状态、Tailnet IP、真实 `nodes delete` 与真实 Headscale Key 消费均未被证明；自动化只证明观测到 Node ID 时 Hub 侧一次性 Key 转为 `consumed`、摘要清空。
 - [ ] **未含 C 级结论**：子网路由发布/批准/readback、路由策略与单 VPN 客户端配置分别属 9b/9c；Mesh 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 中的 Mesh-only 与 NAS 网段项）仍需真机与 #12 阶段验收。
@@ -131,12 +131,57 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | B | 服务端渲染：`RenderServerRoute`（AI 100/域名 200/CIDR 300 → `out`）+ `CompileCandidateWithRoute` + `meshmux-node/v3`（v1/v2 字节不变，route 白名单 `rules/rule_set/final`）；`final: out` 与无 Out 引 `out` 拒绝；候选按 route 声明 `direct`/`out`/`block` 出站，`out` 在 Out 接入路径落地前为 block stub（不静默直出），未知 egress 为 `CANDIDATE_ROUTE_INVALID` | [x] `internal/node/config_v3_test.go`、`render_route_test.go`（真实 `sing-box check -c` 覆盖有 Out/无 Out/block 三种路由）、`internal/web/publish_gate_kernel_test.go`（真实门禁跑存储的 Out 候选） |
 | B | 发布管线：active 装配 → fail-closed（无 opt-in 即 `OUT_OFFLINE_FAIL_CLOSED`，匿名回退 `OUT_FALLBACK_UNAUDITED`）→ 双内核门禁（缺件/版本错为显式拒绝）→ 同一事务写候选 + 四任务链（revision/快照/在途三守卫，整笔回滚）→ 回执 `queued` 永不谎报已应用 | [x] `store_policy_publish_test.go`（三态/门禁/v3/manifest）、`server_policies_publish_test.go`、`publish_check_test.go`（固定 argv/版本锁） |
 | B | Web：`/policies` 读 active 快照（失效回草案 + 冲突行）、validate 干跑、explain 查询、create/revise/activate/revoke（`operation_id` 强制）、publish（`policy_schema=8` + `route_policy_revisions` 供 #11 manifest 衔接）；schema 8 修订链 + append-only 审计 | [x] `server_policies_*_test.go`、`store_policies*_test.go`（状态机/触发器/迁移重放） |
-| B | 客户端层边界（#113 1-2）：发布真相仅服务端 route；客户端层只渲染 + 双内核门禁，回执 `status=gated` 明示“不写候选、不改变订阅下载内容”，`/policies` 标为“预览 · 不改变订阅”，混合发布回执同时说明客户端不写候选 | [x] `store_policy_publish_client_preview_test.go`（客户端发布/第二个客户端版本/混合发布后 sing-box 与 mihomo 下载字节不变；页面预览标注）、`server_policies_publish_test.go` |
+| B | 客户端层边界（#113 1-2）：发布真相仅服务端 route；客户端层只渲染 + 双内核门禁，回执 `status=gated` 明示“不写候选、不改变订阅下载内容”，`/policies` 标为“预览 · 不改变订阅”，混合发布回执同时说明客户端不写候选；Task 6 起客户端层**停写**（`POLICY_LAYER_RETIRED`），既有 revision 只读预览 | [x] `store_policy_publish_client_preview_test.go`（客户端发布/第二个客户端版本/混合发布后 sing-box 与 mihomo 下载字节不变；页面预览标注）、`server_policies_publish_test.go` |
 | C | 真实双出口 AI 双跳 / 无 Out 直出 / Out 故障 fail-closed 实际流量 | [ ] 未含：只有 fail-closed 语义与门禁单测；归 #12（`必须完成的真实用户闭环`第 3 项） |
 | C | 真机 sing-box / Mihomo 导入、iOS/Android 单 VPN、SSID 现场行为、客户端实际可用 | [ ] 未含：只有渲染与 `check -c`/`-t` 门禁；归 #12（同第 5 项） |
 | C | 真实 Line 上的路由发布/readback/回退（含 Web 发布真实策略） | [ ] 未含：只有候选事务与 Agent recover/LKG 复用；归 #12（同第 2/7 项） |
 
+## 订阅聚合重构（Task 4：组装 + 预览 + 快照 + 互锁）
+
+本节只登记源码与隔离自动化证据；不证明现网安装、真实双跳流量或客户端可用。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | 纯函数组装：`subscription.ComposeSubscription(lines, outs, rules, network)` 同输入同字节；返回内容摘要；两份客户端文档（sing-box JSON / Mihomo YAML）与每 Line 服务端 route 片段 | [x] `internal/subscription/compose_test.go`（`TestComposeSubscriptionIsByteDeterministic` 等） |
+| B | 规则双内核：同一规则选择在 sing-box route 与 Mihomo rules 都出现；geo/ruleset 未 pin 为 `COMPOSE_RULESET_UNPINNED`；重复/重叠规则分别 `COMPOSE_RULE_DUPLICATE`/`COMPOSE_RULE_CONFLICT` | [x] `TestComposeSubscriptionRulesReachBothDocuments`（真实 `sing-box check` 通过）、`TestComposeSubscriptionRefusesUnpinnedRuleSet`、`TestComposeSubscriptionDuplicateRuleIsBlocking`、`TestComposeSubscriptionRejectsOverlappingRules` |
+| B | Out 约束：1.0 单订阅最多 1 个 Out（`COMPOSE_OUT_LIMIT`）；选 Out 后无代理规则即 `COMPOSE_OUT_WITHOUT_PROXY_RULE`；同一 Line 上既有订阅的 Out 选择不一致即 `SUBSCRIPTION_OUT_CONFLICT` 并列出订阅名 | [x] `TestComposeSubscriptionRefusesSecondOut`、`TestWizardSaveRefusesBlockingPreviewWithoutWriting`、`TestWizardSaveRefusesOutConflictWithExistingSubscription`、`TestSaveSubscriptionSelectionRefusesSecondOutAndOutConflict` |
+| B | 边表 + 快照：schema 13 的 `subscription_lines/outs/rules/networks`（`position` 组内唯一）与 `subscription_snapshots`（选择+版本+排序+已批准摘要，不存字节）；`proxy_credentials` 仍为凭据具现；保留 Line 沿用 UUID | [x] `TestSchema13CreatesSelectionTables`、`TestSaveSubscriptionSelectionWritesEdgesAndSnapshot`、`TestSaveSubscriptionSelectionKeepsCredentialPerLine`、`TestWizardSaveKeepsExistingCredentialOnReSave` |
+| B | 预览 fail-fast 四层：输入 `!` 不阻断、保存严格校验、组装冲突、Out 槽位与内核门禁 `✖` 阻断且**不写入**；Mihomo 缺席为跳过提醒，Mihomo 拒绝为阻断 | [x] `TestWizardPreviewWritesNothingAndRemindsOnRecordedGroups`、`TestWizardSaveRefusesGateFailure`、`TestMihomoAbsentDegradesWithoutBlocking`、`TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary` |
+| B | 下载门禁：按快照重新组装并与已批准摘要比对，漂移 `SUBSCRIPTION_ARTIFACT_DRIFT`、未批准 `SUBSCRIPTION_ARTIFACT_NOT_APPROVED`；未走过向导的存量订阅保持原导出路径 | [x] `TestApproveSubscriptionSelectionRecordsArtifactAndRefusesDrift`、`TestApproveSubscriptionSelectionRefusesUnapprovedAndFailedGate`、`TestDownloadRefusesDriftedOrUnapprovedArtifact` |
+| B | used-by 互锁：被订阅引用的规则删除由规则库拒绝并列出订阅名；被订阅选择的 Out 删除被拒；组网设备引用可查 | [x] `TestRuleDeleteRefusedWithSubscriptionName`、`TestSelectionUsedByNames`、`TestWizardMeshGroupRefusesRevokedDevice` |
+| C | 真实 `sing-box check` 组合产物、真实双跳流量、Mihomo 固定版本门禁 | [x] 单测内真实 `sing-box 1.14.3` 通过（`TestWizardGateUsesRealSingBox`、`TestComposeSubscriptionRulesReachBothDocuments`，需 `MESHMUX_SINGBOX_TEST_BINARY`）；[ ] 真实双跳流量与 Mihomo 固定版本实测未含 |
+
+## 订阅聚合重构（Task 5：授权迁移 —— 删除 `out_bindings`，Out ACL 改节点成员制）
+
+本节登记“删除 `out_bindings` + 授权改节点成员制（Ruling R10）”的同 PR 原子切换证据。**C 级真机（现网 VPS、公网入口、客户端 App）仍未含**，只到 C-（真实内核 + loopback 拓扑）。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | 单一授权源（**Ruling R10：节点成员制**）：`DeriveOutAllowlist(out)` = 所有持有当前配对身份的 Line 地址并集；Line/Out 纳管即互通，身份吊销或删除即移除；无成员 = 显式空集（默认拒绝），不是省略键、不是错误 | [x] `TestOutAuthorization_DerivationIsNodeMembership`、`TestOutAuthorization_EnrollmentAddsEveryLine`、`TestOutAuthorization_EmptyMembershipIsDefaultDeny` |
+| B | 订阅与 ACL 解耦：订阅创建/改选/暂停/恢复**不改变**派生集合、**不重发** Out 链、链参数逐字节不变 | [x] `TestOutAuthorization_SubscriptionNeverTouchesTheACL`（5 种变更逐项比对派生 + 修订数 + 链参数） |
+| B | 迁移前后 ACL 字节一致：对“成员/吊销/传输移除/订阅选中/取消选中/暂停/删除”七种状态，派生 allowlist 与渲染 nft 字节与旧绑定派生的等价集合逐字节相同 | [x] `TestOutAuthorization_MigratedACLMatchesBindingBytes`（7 个子用例，含 `node.SameACLSourceSet` + `node.CompileACL` 字节比对） |
+| B | 空成员拒绝：没有可授权 Line 时 Out 链携带 `[]`，渲染出的 nft 只有两条 drop 规则、无 accept；Line 自身仍是直连（`direct`）且不被 Out 门禁阻塞 | [x] `TestOutAuthorization_EmptyMembershipIsDefaultDeny` |
+| B | **Out 彻底删除（Ruling R9）**：先清空 ACL 并读回，再删节点行 + `out_settings`（地址/link key）+ 候选/任务；被订阅引用时拒绝并列出订阅名；离线或链条在途时拒绝（409，本次不删任何内容）；删除后引用过它的 Line 按 fail-closed 重算 | [x] `TestOutDeleteManagementAPICleansTheRoute`、`TestOutDeleteRefusesALiveSubscriptionReference`、`TestOutDeleteRefusesWhenTheHostCannotDropItsGuard`、`TestOutAuthorization_BindingTableIsGone` |
+| B | 表与读写路径删除：schema 14 删除 `out_bindings` 与索引；`/nodes/out/bind`、`/nodes/out/unbind` 返回 `OUT_BINDING_API_RETIRED`（410）并指向上位替代动作；`out_settings`/订阅边表保留 | [x] `TestOutAuthorization_BindingTableIsGone`、`TestOutBindingEndpointsAreRetired`、`TestOutPoolListsTransportAndSelection` |
+| B | 服务端 Line 路由读派生结果：发布门禁、双读回、`OutEgressFacts`、AI 决策、节点页投影全部一致；选择 Out 只改客户端路由（不触发 Out 重发），被订阅引用的 Out 删除被拒（`OUT_REFERENCED_BY_SUBSCRIPTIONS` 并列出订阅名） | [x] `TestOutAuthorization_SelectingTheOutAuthorizesAndPublishes`、`TestOutAuthorization_DroppingTheSelectionKeepsTheACL`、`TestOutPreviewDerivesFromTheSubscription`、`TestSubscriberSyncFailsClosedWhenTheOutIsDeleted` |
+| B | 无法验证的源 fail-closed：DNS 名 Line 不能进 allowlist（`LINE_EGRESS_UNVERIFIED`），派生报错而不是猜地址；派生顺序与选择顺序无关（链参数可比对） | [x] `TestOutAuthorization_UnverifiableLineFailsClosed`、`TestOutAuthorization_SourceOrderIsByteStable` |
+| C- | 真实 sing-box 1.14.3 双跳：Out（SS 入站 `2022-blake3-aes-128-gcm`）+ Line（VLESS/REALITY 入站 + SS 出站 + AI 域名 route）+ 客户端 SOCKS，AI 域名请求真实走 Line→Out 到目标；两侧日志分别归属 `inbound/vless`→`outbound/shadowsocks[out]` 与 `inbound/shadowsocks`→`outbound/direct[direct]`；派生 guard 由真实 nftables 解析并安装到私有 netns | [x] `TestOutAuthorization_AIDoubleHopEndToEnd`（需 `MESHMUX_SINGBOX_TEST_BINARY`，loopback-only）；nft 在无 `CAP_NET_ADMIN`/netns 时显式 skip |
+| C | 现网 VPS 双跳、公网入口、客户端 App 实际可用、Out 故障时的真实流量 drop | [ ] 未含；归 #12（`必须完成的真实用户闭环` 第 3/5 项） |
+
 - [ ] **未含 C 级结论**：本节不证明任何真实流量、真机导入或现网发布成功；`queued` 回执不是已应用。#10 的 v1.0.0 闭环（`v1.0.0 必须完成的真实用户闭环` 第 3/5/7 项）由 #12 采集。
+
+## 订阅聚合重构（Task 6：清理 —— 死代码删除 + 文档同步）
+
+本节登记“删除零生产调用死代码 + `route_policies` client 层停写 + `exceptions`/`ssids` 显式拒绝（schema 17）”的证据。**不改变 Task 0-5/8 已合入的运行语义**；C 级真机仍归 #12。
+
+| 层级 | 待验范围 | 状态 |
+| --- | --- | --- |
+| B | client 层停写：创建/改版/激活/撤销 client revision 均以 `POLICY_LAYER_RETIRED` 拒绝（store 与 HTTP 两个入口一致，HTTP 409 + next_action）；既有 client 行仍可读、可作发布预览，server 层读写不变 | [x] `TestClientLayerWritesAreRetired`、`TestPolicyWriteAPILifecycle`（4 个 client 写入口 409）、`TestPolicyWriteAPIRejectsBadRequests` |
+| B | `exceptions`/`ssids` 显式拒绝：payload 含任一键（含空数组/null）即 `POLICY_PAYLOAD_RETIRED`，不再“写入成功但被忽略”；active 读取为严格解码，绕过迁移的旧键为 `POLICY_CORRUPT` | [x] `TestRetiredPolicyFieldsAreRejected`、`TestSchema17StripsRetiredPolicyFields` |
+| B | schema 17 存量重写：只改含退役键的 payload，`default`/`rules`/`note` 保留，revision/status/时间戳与审计事件不变；已干净 payload 逐字节不变；重放幂等；不可逆时回退到升级前数据库备份 | [x] `TestSchema17StripsRetiredPolicyFields`（含 16→17、strict read、replay） |
+| B | 死代码删除：只删已验证零生产调用且不在 Keep 清单的函数，连同其专属测试；`ResolveAIRuleset` 字节校验、`jsonAPI/jsonNamespace`、`compiler.Match.SSIDs` 保留；`render_v2`/Task 4/5/8 行为测试全部保留 | [x] 删除清单与复现命令见本 PR 描述（deadcode 前后 66→27 + 逐项 grep）；`make verify`（gofmt/vet/staticcheck/test/race/build）与 `go test ./...` 全绿 |
+| B | 文档与契约同步：ARCHITECTURE 表清单/schema 17、FEATURES/UX 客户端层只读、ADR-0007 修订记录、受影响包 `doc.go` | [x] 本 PR 文档 diff |
+| C | 现网旧库升级、真机客户端、发布后下载字节 | [ ] 未含：只有 schema fixture 与 loopback 单测；归 #12 |
 
 ## Issue #11 11d Hub 自升级验收（B 级；C 级归 #12）
 
@@ -229,7 +274,7 @@ mv /run/meshmux-hub/staging/<op32hex>.json /run/meshmux-hub/requests/<op32hex>.j
 - [ ] 通过 Web 创建/禁用/删除订阅、独立 Token 轮换及准确跨节点撤销；旧 URL 无法下载，已有本地客户端缓存的局限明确说明。
 - [ ] 普通 sing-box/Mihomo 格式真实导入；至少 iOS 与 Android 各一个 sing-box 单 VPN 代理+Mesh 配置通过。
 - [ ] Mesh-only 节点/子网路由可在无 Subscriber 情况下注册、批准路由、注销；NAS 设备路由能被远程客户端访问。
-- [ ] Web 可编辑发布国内外 / AI / 客户端 Tailnet/SSID/DNS 基础分流，规则/配置校验失败回退最后有效版本。
+- [ ] Web 可编辑发布国内外 / AI / 服务端分流；客户端分流经规则库（六种匹配器，无 SSID），客户端层既有 revision 仅只读预览；规则/配置校验失败回退最后有效版本。
 - [ ] Web 认证、SSH/Web 登录防爆破、Fail2ban 真正使用监听端口、Out 来源默认拒绝、密钥和订阅日志脱敏均通过测试。
 - [ ] Web 统一升级 Hub/Line/Out：两版内部测试制品、固定 manifest/哈希/兼容范围、逐节点验证、Hub 自升级和断线/失败回退按 #11 通过隔离环境实测。
 - [ ] 错误能定位 DNS、云安全组、监听、握手、授权、服务健康；配置应用半途失败可回退/重试，不报告虚假成功。

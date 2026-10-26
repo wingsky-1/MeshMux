@@ -250,6 +250,22 @@ func ValidateNodeInputs(role, displayName string, vlessPort, sshPort int) error 
 	if _, ok := nodeRoleOK[role]; !ok {
 		return errors.New("ROLE_INVALID: role must be edge or out")
 	}
+	if err := ValidateNodeDisplayName(displayName); err != nil {
+		return err
+	}
+	if vlessPort < 1 || vlessPort > 65535 || sshPort < 1 || sshPort > 65535 {
+		return errors.New("PORT_INVALID: VLESS and SSH ports must be 1-65535")
+	}
+	if vlessPort == sshPort {
+		return errors.New("PORT_CONFLICT: VLESS and SSH ports must differ")
+	}
+	return nil
+}
+
+// ValidateNodeDisplayName checks the hub-visible label of one node. The HTTP
+// proxy node (Ruling R11) has no ports, so its create path validates the name
+// with this helper instead of the full agent-node input contract.
+func ValidateNodeDisplayName(displayName string) error {
 	name := strings.TrimSpace(displayName)
 	if utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 64 {
 		return errors.New("DISPLAY_NAME_INVALID: use 1-64 characters")
@@ -258,12 +274,6 @@ func ValidateNodeInputs(role, displayName string, vlessPort, sshPort int) error 
 		if !strconv.IsPrint(r) {
 			return errors.New("DISPLAY_NAME_INVALID: non-printable characters rejected")
 		}
-	}
-	if vlessPort < 1 || vlessPort > 65535 || sshPort < 1 || sshPort > 65535 {
-		return errors.New("PORT_INVALID: VLESS and SSH ports must be 1-65535")
-	}
-	if vlessPort == sshPort {
-		return errors.New("PORT_CONFLICT: VLESS and SSH ports must differ")
 	}
 	return nil
 }

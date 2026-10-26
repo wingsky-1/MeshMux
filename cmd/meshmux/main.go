@@ -70,12 +70,6 @@ func main() {
 	os.Exit(runWithIO(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-// run is retained for simple CLI unit tests; prompts receive EOF unless tests
-// explicitly exercise runWithIO.
-func run(args []string, stderr io.Writer) int {
-	return runWithIO(args, strings.NewReader(""), io.Discard, stderr)
-}
-
 func runWithIO(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runWithDependencies(args, stdin, stdout, stderr, productionNodeRunner{}, productionAgentService{})
 }

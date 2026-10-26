@@ -38,6 +38,7 @@ jobs:
           go test -c -o .ci/bin/install.test ./internal/install
           go test -c -o .ci/bin/node.test ./internal/node
           go test -c -o .ci/bin/web.test ./internal/web
+          go test -c -o .ci/bin/web-handler.test ./internal/web/handler
           go build -o .ci/bin/meshmux-web ./cmd/meshmux-web
           go build -o .ci/bin/meshmux ./cmd/meshmux
           (cd .ci/bin && sha256sum meshmux > SHA256SUMS)

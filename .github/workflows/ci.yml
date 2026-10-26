@@ -94,7 +94,7 @@ jobs:
       - name: Generator version must be pinned and match go.mod
         run: |
           set -Eeuo pipefail
-          directive=$(grep -h '^//go:generate .*templ.* generate' internal/web/*.go)
+          directive=$(grep -rh '^//go:generate .*templ.* generate' internal/web/ | head -1)
           echo "directive: $directive"
           if echo "$directive" | grep -q '@latest'; then
             echo "::error::templ generate must pin a version, not @latest" >&2
@@ -112,15 +112,15 @@ jobs:
           fi
           echo "templ generator pinned to $pinned"
       - name: Regenerate templ views
-        run: go generate ./internal/web
+        run: go generate ./internal/web/...
       - name: Generated templ views must match their sources
         run: |
           set -Eeuo pipefail
           # -N stages untracked generated files as intent-to-add so a newly
           # created *_templ.go shows up in the diff instead of being ignored.
-          git add -N -- 'internal/web/*_templ.go'
-          if ! git diff --exit-code -- 'internal/web/*_templ.go'; then
-            echo "::error::committed *_templ.go files drift from the .templ sources; run 'go generate ./internal/web' and commit the result" >&2
+          git add -N -- 'internal/web/**/*_templ.go'
+          if ! git diff --exit-code -- 'internal/web/**/*_templ.go'; then
+            echo "::error::committed *_templ.go files drift from the .templ sources; run 'go generate ./internal/web/...' and commit the result" >&2
             exit 1
           fi
           echo "templ generated files match their sources"

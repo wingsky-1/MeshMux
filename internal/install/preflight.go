@@ -228,12 +228,6 @@ func probePorts(bind func(string, string) error) error {
 	return nil
 }
 
-// Preflight is read-only: probing ephemeral sockets is not persistent
-// installation or firewall modification. Every failed check blocks apply.
-func Preflight(ctx context.Context, c Config) ([]Check, []int) {
-	return PreflightWithMode(ctx, c, false)
-}
-
 // PreflightWithMode only tolerates ports occupied by the recorded MeshMux
 // services when an existing installation is being verified or repaired.
 func PreflightWithMode(ctx context.Context, c Config, allowManagedListeners bool) ([]Check, []int) {

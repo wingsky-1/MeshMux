@@ -1,0 +1,234 @@
+package view
+
+// SubscriptionWizardPage renders the Task-4 subscription wizard: the four
+// selection groups (Lines, Out, rules, mesh devices) and the fail-fast result
+// of the last preview or save.
+//
+// The page is deliberately explicit about the 1.0 execution boundary: the Out
+// group and the mesh group say "已记录，执行待 1.1" next to the selection, so no
+// operator can read a recorded choice as a running double hop or subnet route.
+// A "!" finding is a reminder and never blocks; a "✖" finding is blocking and
+// means the save wrote nothing.
+templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
+	@Document(p.Title) {
+		<a class="skip" href="#main">跳到内容</a>
+		<div class="shell">
+			<aside class="sidebar">
+				@Brand()
+				<div class="nav-label">工作空间</div>
+				<nav aria-label="主导航">
+					for _,item:=range Navigation {
+						if item.Path==p.Path {
+							<a class="active" href={ templ.SafeURL(item.Path) } aria-current="page"><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						} else {
+							<a href={ templ.SafeURL(item.Path) }><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						}
+					}
+				</nav>
+				<div class="sidebar-foot"><span class="dot"></span> 订阅向导<small>四组选择 · 预览先于保存</small></div>
+			</aside>
+			<div class="workspace">
+				<header class="topbar"><span>控制台 <span class="crumb">/ { p.Title }</span></span><div class="account"><span class="avatar">A</span><span>管理员</span><form action="/logout" method="post"><input type="hidden" name="csrf" value={ p.CSRF }/><button class="text-button" type="submit">退出</button></form></div></header>
+				<main id="main" class="content">
+					<div class="page-heading"><div><p class="eyebrow">MESHMUX CONSOLE</p><h1>{ p.Title }</h1></div><span class="pill">线路 · Out · 规则 · 组网</span></div>
+					if p.Dev {
+						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
+					}
+					<link rel="stylesheet" href="/assets/subscribers.css"/>
+					<p class="subtitle">订阅是纯函数产物：同一选择永远组装出同样的字节，下载时按快照重新组装并与已批准摘要比对。预览只提醒（!），保存被组装冲突或内核门禁拒绝时阻断（✖），且不写入任何选择。</p>
+					if v.Notice != "" {
+						<section class="panel">
+							<div class="panel-heading"><h2>上次操作</h2><span class={ wizardNoticeClass(v) }>{ v.Notice }</span></div>
+							if v.Saved {
+								<dl class="details">
+									<dt>内核门禁</dt><dd>{ v.GateLabel() }</dd>
+									<dt>产物摘要</dt><dd><code>{ v.ContentID }</code></dd>
+								</dl>
+							}
+						</section>
+					}
+					if len(v.Diagnostics) > 0 {
+						<section class="panel">
+							<div class="panel-heading"><h2>校验结果</h2><span class="badge">{ len(v.Diagnostics) } 项</span></div>
+							for _,diagnostic:=range v.Diagnostics {
+								<div class="sub-line" data-diagnostic-code={ diagnostic.Code }>
+									<span class="sub-line-name"><strong>{ diagnostic.Marker() }</strong> <code class="sub-code">{ diagnostic.Code }</code></span>
+									<span class="sub-intent">{ diagnostic.Detail }</span>
+									<span class={ diagnostic.Class() }>{ wizardDiagnosticLabel(diagnostic) }</span>
+								</div>
+							}
+							<p class="hint">! 只是提醒，不阻断；✖ 阻断保存与下载。阻断时未写入任何选择，原有选择与已批准产物保持不变。</p>
+						</section>
+					}
+					<form method="post" action="/subscribers/wizard/save">
+						<input type="hidden" name="csrf" value={ p.CSRF }/>
+						if v.SubscriberID != "" {
+							<input type="hidden" name="subscriber_id" value={ v.SubscriberID }/>
+						}
+						<section class="panel">
+							<div class="panel-heading"><h2>一 · 线路</h2><span class="badge">{ len(v.Lines) } 条</span></div>
+							if v.Create {
+								<label for="wizard_name">展示名</label>
+								<input id="wizard_name" name="display_name" type="text" required maxlength="80" placeholder="例如 alice-iphone"/>
+							} else {
+								<p class="muted">订阅用户：{ v.SubscriberName }（{ v.State }）</p>
+							}
+							if len(v.Lines) == 0 {
+								<p class="hint">还没有已配置的线路。请先在订阅用户页保存至少一条 Line。</p>
+							} else {
+								<div class="sub-check-list">
+									for _,line:=range v.Lines {
+										<label class="sub-check">
+											<input type="checkbox" name={ "line_" + line.NodeID } value="1" checked?={ line.Selected }/>
+											<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port } · 排序 { line.SortOrder }</small></span>
+										</label>
+										if !v.Create {
+											if line.Converged {
+												<span class="sub-confirmed is-confirmed">本机已确认</span>
+											} else {
+												<span class="sub-confirmed is-pending">待收敛{ wizardCodeSuffix(line.Code) }</span>
+											}
+										}
+									}
+								</div>
+							}
+							<p class="hint">凭据与线路一一对应：保留的线路沿用历史 UUID，新增线路在保存时获得新凭据，移除的线路只停用、UUID 保留可审计。</p>
+						</section>
+						<section class="panel">
+							<div class="panel-heading"><h2>二 · 出口</h2><span class="badge">Out / HTTP 代理 · 单选</span></div>
+							<p class="hint">！1.0 每个订阅最多选择 1 个出口：MeshMux Out 或外部 HTTP 代理。同一 Line 的所有订阅必须选择同一个出口，否则后选会被拒绝。</p>
+							<label class="sub-check">
+								<input type="radio" name="out_id" value="" checked?={ v.noOutSelected() }/>
+								<span class="sub-check-text">不使用出口<small>Line 直出；代理规则也走 Line</small></span>
+							</label>
+							if len(v.Outs) == 0 {
+								<p class="hint">出口池为空。请先在节点页纳管 Out 或 HTTP 代理并配置出口地址。</p>
+							} else {
+								<div class="sub-check-list">
+									for _,out:=range v.Outs {
+										<label class="sub-check">
+											<input type="radio" name="out_id" value={ out.OutID } checked?={ out.Selected } disabled?={ !out.Configured }/>
+											<span class="sub-check-text">{ out.DisplayName }<small>{ out.Endpoint() } · { out.StateLabel() }</small></span>
+										</label>
+									}
+								</div>
+							}
+							<p class="hint">出口选择只决定 Line 路由片段渲染的出口并过内核门禁：Out 使用 Hub 签发的 Shadowsocks link key，HTTP 代理使用其 URL/凭据渲染 http 出站。服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。</p>
+						</section>
+						<section class="panel">
+							<div class="panel-heading"><h2>三 · 规则</h2><span class="badge">{ len(v.Rules) } 个版本</span></div>
+							if len(v.Rules) == 0 {
+								<p class="hint">规则库为空。请先在规则库创建规则或等待预置种子。</p>
+							} else {
+								<div class="sub-check-list">
+									for _,rule:=range v.Rules {
+										<label class="sub-check">
+											<input type="checkbox" name={ "rule_" + rule.StableKey + "@" + wizardVersion(rule.Version) } value="1" checked?={ rule.Selected }/>
+											<span class="sub-check-text">{ rule.Name } · v{ wizardVersion(rule.Version) }<small>{ rule.Action } · { rule.Matcher }</small></span>
+										</label>
+										if rule.UpgradeHint != "" {
+											<span class="sub-confirmed is-pending">！ { rule.UpgradeHint }</span>
+										}
+									}
+								</div>
+							}
+							<p class="hint">订阅按（稳定键，版本）引用规则：被引用的版本不会被原地修改，删除会被拒绝并列出订阅名；新版本需要显式迁移。</p>
+						</section>
+						<section class="panel">
+							<div class="panel-heading"><h2>四 · 组网</h2><span class="badge">已记录，执行待 1.1</span></div>
+							if len(v.Devices) == 0 {
+								<p class="hint">还没有可选的 Mesh 设备。请先在 Mesh 设备页添加设备。</p>
+							} else {
+								<div class="sub-check-list">
+									for _,device:=range v.Devices {
+										<label class="sub-check">
+											<input type="checkbox" name={ "device_" + device.DeviceID } value="1" checked?={ device.Selected }/>
+											<span class="sub-check-text">{ device.DisplayName }<small>{ device.Purpose } · { device.Status }</small></span>
+										</label>
+									}
+								</div>
+							}
+							<p class="hint">组网选择参与订阅分组与引用判断，不改变标准订阅字节；子网路由执行以既有 Headscale 接线为准。</p>
+						</section>
+						<div class="sub-actions">
+							<button class="secondary-button" type="submit" formaction="/subscribers/wizard/preview">预览（不保存）</button>
+							<button type="submit">保存并校验</button>
+						</div>
+					</form>
+					<p class="hint">“已确认”只表示该 Line 的本机回读与它自己的最新不可变修订一致；它不证明公网可达、真实协议握手或客户端可用。</p>
+					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>订阅向导</span></footer>
+				</main>
+			</div>
+		</div>
+	}
+}
+
+// noOutSelected reports whether the "no Out" radio is the current choice.
+func (v SubscriptionWizardView) noOutSelected() bool {
+	for _, out := range v.Outs {
+		if out.Selected {
+			return false
+		}
+	}
+	return true
+}
+
+// Endpoint renders one egress's dial address or its configuration state.
+func (o WizardOut) Endpoint() string {
+	if !o.Configured {
+		return "未配置出口地址"
+	}
+	return o.Server + ":" + wizardVersion(o.Port)
+}
+
+// StateLabel renders one egress's availability. An external HTTP proxy is
+// always 外部: the Hub has no heartbeat for it and never claims one.
+func (o WizardOut) StateLabel() string {
+	if o.External() {
+		return "外部 · HTTP 代理"
+	}
+	if o.Online {
+		return "在线"
+	}
+	return "离线"
+}
+
+// wizardNoticeClass maps the save outcome onto the badge palette.
+func wizardNoticeClass(v SubscriptionWizardView) string {
+	if v.Saved {
+		return "badge accent"
+	}
+	return "badge"
+}
+
+// wizardDiagnosticLabel renders one finding's severity.
+func wizardDiagnosticLabel(diagnostic WizardDiagnostic) string {
+	if diagnostic.Blocking {
+		return "阻断"
+	}
+	return "提醒"
+}
+
+// wizardCodeSuffix renders one optional error code suffix.
+func wizardCodeSuffix(code string) string {
+	if code == "" {
+		return ""
+	}
+	return " · " + code
+}
+
+// wizardVersion renders one integer label without importing strconv twice.
+func wizardVersion(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	digits := make([]byte, 0, 8)
+	for value > 0 {
+		digits = append(digits, byte('0'+value%10))
+		value /= 10
+	}
+	for left, right := 0, len(digits)-1; left < right; left, right = left+1, right-1 {
+		digits[left], digits[right] = digits[right], digits[left]
+	}
+	return string(digits)
+}

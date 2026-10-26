@@ -33,6 +33,31 @@ type singBoxInbound struct {
 type singBoxOutbound struct {
 	Type string `json:"type"`
 	Tag  string `json:"tag"`
+	// Server, ServerPort, Method and Password carry the dial body of a real
+	// Shadowsocks egress (or the ServerPort and optional Basic credentials of
+	// an external HTTP proxy). They are present only on the "out" outbound of
+	// a Line whose selected egress attached an endpoint; every other outbound
+	// omits them. UUID is the void Task-2 shape: stored history keeps
+	// rendering it byte-identically (see OutEgress), new writes never set it.
+	Server     string `json:"server,omitempty"`
+	ServerPort int    `json:"server_port,omitempty"`
+	Method     string `json:"method,omitempty"`
+	Password   string `json:"password,omitempty"`
+	Username   string `json:"username,omitempty"`
+	UUID       string `json:"uuid,omitempty"`
+}
+
+// singBoxSSInbound is the Out guard listener: Shadowsocks with the pinned
+// 2022 method and the Hub-issued link key as password. The nft whitelist
+// around it is unchanged: it still gates the VLESS port value plus the
+// authorized source IPs, whatever inbound type listens there.
+type singBoxSSInbound struct {
+	Type       string `json:"type"`
+	Tag        string `json:"tag"`
+	Listen     string `json:"listen"`
+	ListenPort int    `json:"listen_port"`
+	Method     string `json:"method"`
+	Password   string `json:"password"`
 }
 
 // Server document egress tags. compiler.RenderServerRoute maps ActionDirect to
@@ -57,39 +82,84 @@ type serverEgress struct {
 //
 //   - "direct" keeps the Line egress for every rule that does not select the
 //     Out;
-//   - "out" is the tag the route names. Until the Out access path owns the real
-//     outbound body (its endpoint and credential), it is declared as a block
-//     stub, so traffic the policy sends to the Out is refused instead of
-//     silently leaving from the Line address — the leak the fail-closed rule
-//     exists to prevent. An Out that is unavailable never reaches a published
-//     document (the Hub refuses it with OUT_OFFLINE_FAIL_CLOSED); the stub is
-//     what keeps a document published while the Out was healthy from silently
-//     turning into a Line egress if the binding disappears later;
+//   - "out" is the tag the route names. While the egress slot owns the real
+//     outbound body, it is declared as a Shadowsocks outbound that dials the
+//     selected Out node (Ruling R7) or as an HTTP outbound that dials the
+//     selected external HTTP proxy (Ruling R11), so traffic the policy sends
+//     to the Out leaves through the selected egress instead of the Line
+//     address. Until that body is attached — the egress is bound but its
+//     transport is not configured yet — "out" stays a block stub, so the
+//     traffic is refused instead of silently leaving from the Line address,
+//     the leak the fail-closed rule exists to prevent. An Out that is
+//     unavailable never reaches a published document (the Hub refuses it with
+//     OUT_OFFLINE_FAIL_CLOSED); the stub is what keeps a document published
+//     while the Out was healthy from silently turning into a Line egress if
+//     the binding disappears later;
 //   - "block" is the explicit never-route egress, so a document that refuses a
 //     matched flow names a tag it actually carries.
+//
+// A stored document rendered before the SS switch keeps its byte-identical
+// VLESS "out" body (see OutEgress): the pinned digest must still verify, and
+// the void credential no longer authenticates anywhere because the Out side
+// is SS-only.
 //
 // Without an Out the document keeps the single "direct" outbound: a route-free
 // or direct-only candidate renders the frozen v1/v2 bytes, and a direct-only
 // Line does not grow an unused tag.
-func (e serverEgress) outbounds() []singBoxOutbound {
+func (e serverEgress) outbounds(out *OutEgress) []singBoxOutbound {
 	if !e.out && !e.block {
 		return []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
 	}
 	outbounds := []singBoxOutbound{{Type: singBoxDirectTag, Tag: singBoxDirectTag}}
 	if e.out {
-		outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxOutTag})
+		switch {
+		case out != nil && out.Type == OutEgressHTTP:
+			// Ruling R11: the egress slot may point at an external HTTP
+			// proxy instead of a MeshMux Out. The kernel type is "http";
+			// a credential-free proxy omits username and password because
+			// both are omitempty.
+			outbounds = append(outbounds, singBoxOutbound{
+				Type: "http", Tag: singBoxOutTag,
+				Server: out.Server, ServerPort: out.Port,
+				Username: out.Username, Password: out.Password,
+			})
+		case out != nil && out.Key != "":
+			outbounds = append(outbounds, singBoxOutbound{
+				Type: "shadowsocks", Tag: singBoxOutTag,
+				Server: out.Server, ServerPort: out.Port,
+				Method: OutLinkMethod, Password: out.Key,
+			})
+		case out != nil && out.UUID != "":
+			// Void history: reproduce the Task-2 VLESS bytes exactly so the
+			// pinned digest verifies. New writes never take this path.
+			outbounds = append(outbounds, singBoxOutbound{
+				Type: "vless", Tag: singBoxOutTag,
+				Server: out.Server, ServerPort: out.Port, UUID: out.UUID,
+			})
+		default:
+			outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxOutTag})
+		}
 	}
 	outbounds = append(outbounds, singBoxOutbound{Type: singBoxBlockTag, Tag: singBoxBlockTag})
 	return outbounds
 }
 
-// The v2 shapes are separate types on purpose: the frozen v1 document is
+// The v2 and v4 shapes are separate types on purpose: the frozen v1 document is
 // byte-for-byte immutable, so it can never inherit a new field or a changed
-// key order from the REALITY shape.
+// key order from the REALITY or SS shapes.
 
 type singBoxConfigV2 struct {
 	Log       singBoxLog         `json:"log"`
 	Inbounds  []singBoxInboundV2 `json:"inbounds"`
+	Outbounds []singBoxOutbound  `json:"outbounds"`
+	Route     json.RawMessage    `json:"route,omitempty"`
+}
+
+// singBoxOutConfig is the v4 Out document: the SS guard inbound plus the
+// direct outbound. It never carries a route, users or REALITY.
+type singBoxOutConfig struct {
+	Log       singBoxLog         `json:"log"`
+	Inbounds  []singBoxSSInbound `json:"inbounds"`
 	Outbounds []singBoxOutbound  `json:"outbounds"`
 	Route     json.RawMessage    `json:"route,omitempty"`
 }
@@ -141,32 +211,42 @@ const vlessFlow = "xtls-rprx-vision"
 //
 //   - The frozen v1 baseline keeps its exact bytes, including the empty
 //     "users" array and the revision-scoped "meshmux-vless-r<revision>" tag.
-//     It is the non-secret baseline for Out nodes and for edge nodes that
-//     have no credential yet.
+//     It is the non-secret baseline for Out nodes without transport and for
+//     edge nodes that have no credential yet.
 //   - A candidate that carries a REALITY block renders the native edge
 //     inbound with TLS, REALITY and the real credential users. Its tag is
 //     "meshmux-vless-<node_id>", which is stable across revisions so a
 //     user set change never rewrites the listener identity.
+//   - An Out candidate that carries the link key (a meshmux-node/v4 document)
+//     renders the SS guard inbound with the pinned 2022 method instead of the
+//     VLESS baseline. Its tag is "meshmux-ss-r<revision>".
 //
-// The rendered bytes carry node secrets (the VLESS UUIDs and the REALITY
-// private key). They only ever travel to the node's private file boundary;
-// they are never written to a public response, a subscription artifact or a
-// generic log line.
+// The rendered bytes carry node secrets (the VLESS UUIDs, the REALITY
+// private key and the SS link key). They only ever travel to the node's
+// private file boundary; they are never written to a public response, a
+// subscription artifact or a generic log line.
 //
 // A candidate that carries a route (a meshmux-node/v3 Line document) renders
 // that route too: the Hub resolved the Out contract before it stored the
 // fragment, and the Agent must apply exactly the published route instead of
 // silently compiling a route-free kernel config. The outbound set follows the
-// route: "out" and "block" are declared whenever the route names them, and an
-// "out" body is a block stub until the Out access path owns the real endpoint
-// and credential. `sing-box check` accepts a route tag with no matching
-// outbound, so this renderer — not the kernel gate — is what keeps the document
-// complete.
+// route: "out" and "block" are declared whenever the route names them. An
+// "out" body is the real Shadowsocks egress once the Hub attached the
+// selected Out node's endpoint and the Hub-issued link key to the candidate,
+// and the fail-closed block stub while it did not. `sing-box check` accepts
+// a route tag with no matching outbound, so this renderer — not the kernel
+// gate — is what keeps the document complete.
 //
 // The Out binding is deliberately not re-derived here: resolving "is an Out
 // configured and healthy" needs Hub state the node does not have. A route that
 // still names "out" only reaches this function through the Hub's own
 // ResolveServerPolicy gate; the Agent proves the rest with sing-box check.
+//
+// The endpoint itself rides the candidate: the Hub attaches the selected Out
+// node's address/port and the Hub-issued SS link key to the Line candidate
+// before it compiles, so the Hub and the Agent render byte-identical
+// documents and the readback digest needs no second channel. A nil Out keeps
+// the fail-closed block stub.
 func CompileCandidate(c Candidate) ([]byte, error) {
 	return compileCandidate(c, c.Route, len(c.Route) > 0)
 }
@@ -177,8 +257,9 @@ func CompileCandidate(c Candidate) ([]byte, error) {
 // subscription acceptance test imports node, which would close a test cycle.
 // The caller must resolve the policy first; a fragment that references the
 // "out" tag while no Out is configured is refused with OUT_BINDING_INVALID,
-// never rendered as direct. The fragment references "out" but does not create
-// that outbound: the Out access path owns its endpoint and credential.
+// never rendered as direct. The caller attaches the Out egress to the
+// candidate when the binding names a configured Out: the fragment references
+// "out" but the candidate carries its endpoint and credential.
 func CompileCandidateWithRoute(c Candidate, route json.RawMessage, outConfigured bool) ([]byte, error) {
 	return compileCandidate(c, route, outConfigured)
 }
@@ -190,6 +271,9 @@ func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([
 	route, egress, err := compileServerRoute(route, outConfigured)
 	if err != nil {
 		return nil, err
+	}
+	if c.Role == RoleOut && c.Out != nil && c.Out.Key != "" {
+		return compileOutCandidate(c, route, egress)
 	}
 	if c.Reality != nil {
 		return compileRealityCandidate(c, route, egress)
@@ -203,7 +287,34 @@ func compileCandidate(c Candidate, route json.RawMessage, outConfigured bool) ([
 			ListenPort: c.VLESSPort,
 			Users:      []json.RawMessage{},
 		}},
-		Outbounds: egress.outbounds(),
+		Outbounds: egress.outbounds(c.Out),
+		Route:     route,
+	}
+	out, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, errors.New("CANDIDATE_RENDER_FAILED")
+	}
+	return out, nil
+}
+
+// compileOutCandidate renders the Out guard listener: Shadowsocks with the
+// pinned 2022 method and the Hub-issued link key, on the node's VLESS port.
+// The tag stays revision-scoped like the v1 baseline it replaces
+// ("meshmux-ss-r<revision>"). An Out without configured transport never
+// reaches this renderer: it keeps the frozen v1 VLESS baseline, so its
+// stored digest still verifies.
+func compileOutCandidate(c Candidate, route json.RawMessage, egress serverEgress) ([]byte, error) {
+	config := singBoxOutConfig{
+		Log: singBoxLog{Disabled: true},
+		Inbounds: []singBoxSSInbound{{
+			Type:       "shadowsocks",
+			Tag:        fmt.Sprintf("meshmux-ss-r%d", c.Revision),
+			Listen:     "0.0.0.0",
+			ListenPort: c.VLESSPort,
+			Method:     OutLinkMethod,
+			Password:   c.Out.Key,
+		}},
+		Outbounds: egress.outbounds(c.Out),
 		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")
@@ -284,7 +395,7 @@ func compileRealityCandidate(c Candidate, route json.RawMessage, egress serverEg
 			},
 			Users: renderUsers(c.Users),
 		}},
-		Outbounds: egress.outbounds(),
+		Outbounds: egress.outbounds(c.Out),
 		Route:     route,
 	}
 	out, err := json.MarshalIndent(config, "", "  ")

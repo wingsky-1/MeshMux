@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -20,8 +21,8 @@ func TestCLIRejectsUnsupportedRolesAndCommands(t *testing.T) {
 		{nil, 2},
 	} {
 		var b bytes.Buffer
-		if got := run(tc.args, &b); got != tc.want {
-			t.Fatalf("run(%v)=%d, want %d", tc.args, got, tc.want)
+		if got := runWithIO(tc.args, strings.NewReader(""), io.Discard, &b); got != tc.want {
+			t.Fatalf("runWithIO(%v)=%d, want %d", tc.args, got, tc.want)
 		}
 		if strings.Contains(b.String(), "NOT READY TO INSTALL") {
 			t.Fatalf("obsolete installation notice for %v", tc.args)
@@ -38,7 +39,7 @@ func TestInternalHubDispatchRefusesOpenShape(t *testing.T) {
 	} {
 		var b bytes.Buffer
 		args := append([]string{"__internal-hub-dispatch"}, tc...)
-		if got := run(args, &b); got != 2 {
+		if got := runWithIO(args, strings.NewReader(""), io.Discard, &b); got != 2 {
 			t.Fatalf("run(%v)=%d, want 2", tc, got)
 		}
 		if !strings.HasPrefix(strings.TrimSpace(b.String()), "USAGE: meshmux __internal-hub-dispatch") {

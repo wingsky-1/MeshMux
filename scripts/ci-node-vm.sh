@@ -83,7 +83,7 @@ require_test() {
 }
 
 require_test .ci/bin/install.test TestNodeSystemVM
-require_test .ci/bin/web.test TestNodeHubFixture
+require_test .ci/bin/web-handler.test TestNodeHubFixture
 require_test .ci/bin/node.test TestRealityNativeCheck
 require_test .ci/bin/node.test TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials
 
@@ -170,9 +170,9 @@ wait_time_sync() {
 copy_test_binaries() {
   scp_vm .ci/bin/meshmux /tmp/meshmux
   scp_vm .ci/bin/install.test /tmp/install.test
-  scp_vm .ci/bin/web.test /tmp/web.test
+  scp_vm .ci/bin/web-handler.test /tmp/web-handler.test
   scp_vm .ci/bin/node.test /tmp/node.test
-  ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test /tmp/web.test /tmp/node.test'
+  ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test /tmp/web-handler.test /tmp/node.test'
 }
 run_reality_fixture() {
   # Run the gated native REALITY acceptance fixture inside the guest against
@@ -208,7 +208,7 @@ start_node_fixture() {
     # gateway, so the fixture must advertise Origin https://10.0.2.2:19443;
     # otherwise the Hub Host check rejects pairing with HOST_REJECTED (403).
     MESHMUX_NODE_HUB_FIXTURE_DIR="$fixture_dir" MESHMUX_NODE_HUB_FIXTURE_ROLE="$role" MESHMUX_NODE_HUB_FIXTURE_SSH_PORT=22 MESHMUX_NODE_HUB_FIXTURE_ORIGIN_HOST=10.0.2.2 \
-      ./.ci/bin/web.test -test.run '^TestNodeHubFixture$' -test.v >"$work/fixture.log" 2>&1 &
+      ./.ci/bin/web-handler.test -test.run '^TestNodeHubFixture$' -test.v >"$work/fixture.log" 2>&1 &
     fixture_pid=$!
   fi
   for _ in $(seq 1 120); do

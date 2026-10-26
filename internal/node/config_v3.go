@@ -161,14 +161,15 @@ func compactCandidateRoute(raw []byte) (json.RawMessage, error) {
 
 // unmarshalV3 decodes the v2 fields plus the route. It reuses the v2 decoder
 // with a rewritten schema instead of duplicating the strict field decoding,
-// then re-applies the v3 schema and the route check.
+// then re-applies the v3 schema and the route check. The Hub-issued out
+// egress rides the v2 half, so it is accepted here exactly as there.
 func (d *CandidateDocument) unmarshalV3(obj map[string]json.RawMessage) error {
 	const malformed = "CANDIDATE_INVALID: malformed candidate JSON"
 	required := []string{"schema", "node_id", "role", "revision", "vless_port", "kernel_version", "users", "reality", "route"}
-	if len(obj) != len(required) {
+	if len(obj) != len(required) && (len(obj) != len(required)+1 || !hasOutField(obj)) {
 		return errors.New(malformed)
 	}
-	base := make(map[string]json.RawMessage, len(required)-1)
+	base := make(map[string]json.RawMessage, len(required))
 	for _, name := range required {
 		value, ok := obj[name]
 		if !ok {
@@ -177,6 +178,9 @@ func (d *CandidateDocument) unmarshalV3(obj map[string]json.RawMessage) error {
 		if name != "route" {
 			base[name] = value
 		}
+	}
+	if hasOutField(obj) {
+		base["out"] = obj["out"]
 	}
 	base["schema"] = json.RawMessage(`"` + CandidateSchemaV2 + `"`)
 	if err := d.unmarshalV2(base); err != nil {

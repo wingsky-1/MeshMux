@@ -1,32 +1,25 @@
 package route
 
-// AI egress selection and the ruleset version lock.
+// The ruleset version lock and the retained AI ruleset byte verification.
 //
-// Issue #8 keeps one Out optional and one Line direct. The rule this file
-// encodes is deliberately narrow and is the server-side contract every future
-// renderer and publish path must obey:
+// Issue #8 originally resolved one AI egress decision here. The rule library
+// (internal/policy + the subscription composer, ADR-0008) now owns that
+// decision, so the decision types and functions were removed in Task 6. What
+// remains is the version lock itself, which is still the only contract for a
+// pinned artifact:
 //
-//   - "no Out configured" is a configured state, not a failure: the AI domains
-//     use the Line directly, exactly like every other destination.
-//   - "the Out is configured but unavailable" must never silently use the Line.
-//     The client would believe it is on a double hop while its AI traffic
-//     leaves from the Line address, which is the leak the fail-closed rule
-//     exists to prevent. The decision is refused with
-//     OUT_OFFLINE_FAIL_CLOSED and the caller reports it instead of publishing.
-//   - Falling back to the Line is an administrator decision, never a runtime
-//     guess. It needs the explicit opt-in *and* the request operation id, so
-//     the deviation is traceable in the audit log; a fallback without one is
-//     refused rather than recorded anonymously.
 //   - A ruleset is only usable when it is pinned (HTTPS source, immutable
 //     version, SHA-256) and its bytes match the pin. A pin that is mutable or
 //     malformed is a configuration defect (RULESET_PIN_INVALID); a download,
 //     digest or size failure is RULESET_FETCH_FAILED. Both refuse publication
 //     instead of shipping a client document that names an unverifiable file.
+//   - ResolveAIRuleset is deliberately kept although the current publication
+//     path does not call it: pins are the future way to consume a ruleset, and
+//     the byte check is the security half of that contract (Task 6 Keep list).
 //
-// This package still does not render client documents, read subscription
+// The package still does not render client documents, read subscription
 // tokens, install or upgrade nodes, run a ruleset marketplace, latency probes or
-// multi-Out load balancing. It returns a decision and the verified bytes; the
-// renderer that consumes them is out of #8's scope.
+// multi-Out load balancing.
 
 import (
 	"context"
@@ -41,8 +34,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
 // The stable codes this package reports. They are part of the diagnostic
@@ -96,10 +87,6 @@ var mutableRulesetVersions = map[string]bool{
 	"dev":     true,
 	"nightly": true,
 }
-
-// stableCodePattern is the shape of every value that reaches a log field or an
-// operator-facing detail.
-var stableCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
 
 // RulesetPin is the version lock of one AI ruleset artifact. Source must be an
 // exact public HTTPS URL, Version an immutable label and SHA256 the lowercase
@@ -202,8 +189,18 @@ func fetchPinnedRuleset(ctx context.Context, source string, limit int64) ([]byte
 	return body, nil
 }
 
+// productionRulesetFetcher is the bounded HTTPS fetch used by the retained
+// byte-verification entry point.
+func productionRulesetFetcher(ctx context.Context, source string) ([]byte, error) {
+	return fetchPinnedRuleset(ctx, source, maxRulesetBytes)
+}
+
 // ResolveAIRuleset downloads the pinned artifact and returns its bytes only
-// after they match the pinned digest.
+// after they match the pinned digest. It is the retained half of the former
+// AI-egress decision path: the rule library owns egress selection now, while
+// pins stay a version-locked byte contract for a future ruleset consumer.
+// The function is deliberately not called by the current publication path;
+// keeping it is the documented Task 6 exception (pins 未来用).
 //
 // Every failure is RULESET_FETCH_FAILED (an invalid pin is
 // RULESET_PIN_INVALID) and carries no URL, body or transport text, so a log
@@ -240,38 +237,6 @@ func resolveAIRuleset(ctx context.Context, fetch RulesetFetcher, pin RulesetPin,
 	return payload, nil
 }
 
-// AIEgressRequest is one AI egress decision input. The caller derives the Out
-// facts from the binding and the Out synchronization projection:
-//
-//	OutConfigured: an enabled binding exists for the Line.
-//	OutAvailable:  the Out is reachable and its authorization is confirmed.
-//	OutCode:       the stable reason when OutAvailable is false.
-//
-// FallbackToLine is the administrator's explicit opt-in and OperationID is the
-// request operation that records it.
-type AIEgressRequest struct {
-	LineID         string
-	OutID          string
-	OutConfigured  bool
-	OutAvailable   bool
-	OutCode        string
-	Pin            RulesetPin
-	FallbackToLine bool
-	OperationID    string
-}
-
-// AIEgressDecision is one resolved AI egress. Payload carries the verified
-// ruleset bytes only in AIEgressOut; a fallback never carries a ruleset,
-// because the Line does not render one.
-type AIEgressDecision struct {
-	Mode        string
-	Code        string
-	Detail      string
-	OperationID string
-	Ruleset     RulesetPin
-	Payload     []byte
-}
-
 // BlockedError is a refused decision. Code is the stable refusal code and
 // Detail the stable underlying reason, so the caller can report both without
 // inventing prose.
@@ -285,112 +250,4 @@ func (e *BlockedError) Error() string {
 		return e.Code
 	}
 	return e.Code + ": " + e.Detail
-}
-
-// resolveAIEgress resolves one AI egress decision.
-//
-// The order of the checks is the security property: an unavailable Out is never
-// turned into a Line egress unless the caller opted in with an auditable
-// operation id, and a ruleset is only fetched when the Out path is supposed to
-// carry the traffic.
-func resolveAIEgress(ctx context.Context, fetch RulesetFetcher, req AIEgressRequest) (AIEgressDecision, error) {
-	if err := subscription.ValidateID(req.LineID); err != nil {
-		return AIEgressDecision{}, errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
-	}
-	if !req.OutConfigured {
-		// No Out is a configured direct egress, not a degradation.
-		return AIEgressDecision{Mode: AIEgressLine}, nil
-	}
-	if err := subscription.ValidateID(req.OutID); err != nil {
-		return AIEgressDecision{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
-	}
-	detail := stableCode(req.OutCode, "OUT_OFFLINE")
-
-	// When the Out path is supposed to work, the ruleset must resolve. Its
-	// failure is as fatal as the Out being unavailable: a client document that
-	// names an unverified ruleset cannot match AI domains.
-	failure := ""
-	var payload []byte
-	var pin RulesetPin
-	if req.OutAvailable {
-		resolved, err := resolveAIRuleset(ctx, fetch, req.Pin, maxRulesetBytes)
-		if err != nil {
-			if !isRulesetCode(err) {
-				return AIEgressDecision{}, err
-			}
-			failure = stableCode(err.Error(), CodeRulesetFetchFailed)
-		} else {
-			payload, pin = resolved, req.Pin
-		}
-	} else {
-		failure = detail
-	}
-	if failure == "" {
-		return AIEgressDecision{
-			Mode:    AIEgressOut,
-			Ruleset: pin,
-			Payload: payload,
-		}, nil
-	}
-	if !req.FallbackToLine {
-		return AIEgressDecision{}, &BlockedError{Code: CodeOutOfflineFailClosed, Detail: failure}
-	}
-	if strings.TrimSpace(req.OperationID) == "" {
-		return AIEgressDecision{}, errors.New(CodeOutFallbackUnaudited + ": the explicit line fallback needs an operation id so the deviation can be audited")
-	}
-	return AIEgressDecision{
-		Mode:        AIEgressLineFallback,
-		Code:        CodeOutOfflineFailClosed,
-		Detail:      failure,
-		OperationID: req.OperationID,
-	}, nil
-}
-
-// isRulesetCode reports whether an error is one of this package's stable
-// ruleset codes rather than a caller programming error.
-func isRulesetCode(err error) bool {
-	message := err.Error()
-	return strings.HasPrefix(message, CodeRulesetFetchFailed) || strings.HasPrefix(message, CodeRulesetPinInvalid)
-}
-
-// stableCode keeps only a value that already looks like a stable code, so a
-// free-form error can never become a log field or an operator detail.
-func stableCode(raw, fallback string) string {
-	value := strings.TrimSpace(raw)
-	if index := strings.Index(value, ":"); index > 0 {
-		value = strings.TrimSpace(value[:index])
-	}
-	if !stableCodePattern.MatchString(value) {
-		return fallback
-	}
-	return value
-}
-
-// DecideAIEgress is the exported entry point for the server-side selection.
-// It downloads the pinned ruleset with the production fetcher and returns the
-// decision, a *BlockedError for a fail-closed refusal, or a plain error for an
-// invalid request (LINE_ID_INVALID / OUT_BINDING_INVALID).
-func DecideAIEgress(ctx context.Context, req AIEgressRequest) (AIEgressDecision, error) {
-	return decideAIEgressWithFetcher(ctx, productionRulesetFetcher, req)
-}
-
-// DecideAIEgressWithFetcher is the same decision with an injectable artifact
-// source. A nil fetcher selects the production HTTPS fetcher; the seam exists so
-// a caller (or a test) can resolve the pin from an already verified artifact
-// without reaching the network.
-func DecideAIEgressWithFetcher(ctx context.Context, fetch RulesetFetcher, req AIEgressRequest) (AIEgressDecision, error) {
-	if fetch == nil {
-		fetch = productionRulesetFetcher
-	}
-	return decideAIEgressWithFetcher(ctx, fetch, req)
-}
-
-// productionRulesetFetcher is the bounded HTTPS fetch used by the Hub.
-func productionRulesetFetcher(ctx context.Context, source string) ([]byte, error) {
-	return fetchPinnedRuleset(ctx, source, maxRulesetBytes)
-}
-
-// decideAIEgressWithFetcher is the single decision implementation.
-func decideAIEgressWithFetcher(ctx context.Context, fetch RulesetFetcher, req AIEgressRequest) (AIEgressDecision, error) {
-	return resolveAIEgress(ctx, fetch, req)
 }

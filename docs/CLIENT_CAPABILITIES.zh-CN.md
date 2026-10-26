@@ -31,7 +31,7 @@
 - **不提供 TUN 模式**配置：设备配置不包含 `tun` inbound、`auto_route` 或本地回环代理。
 - **不接受对端子网路由（`accept_routes:false`，有意固定）**：设备配置没有 TUN，唯一的 Tailscale 路由规则只匹配 Tailnet CGNAT 前缀（`100.64.0.0/10`、`fd7a:115c:a1e0::/48`），因此即使接受了别的节点通告的 LAN 前缀也没有出口路径，只会让客户端以为自己能到达。远程家庭网段策略属 #10；在那之前本文件不声称代理+Mesh 设备可访问对端子网，`subnet_router` 侧的 LAN 可达由现成 Tailscale 客户端（其自身 `--accept-routes`）与 Tailscale 路由能力决定。
 - **不含 SSID 与远程家庭网段策略**：SSID 分流、远程家庭网段和真机跨网可用性属 #10 及后续 C 级验收；本文件不声称 iOS/Android 真机已通过。
-  - 10b-1 已实现策略后端：客户端默认顺序为 Tailnet/远端家庭网段→Tailscale、CN→直连、例外→直连、其余→所选 Line 兜底；SSID 仅作为 sing-box 1.14.3 的 `wifi_ssid` 表达（Mihomo 1.19.32 无 SSID 规则类型，生成时返回 `RENDER_UNSUPPORTED`，不下发猜测字段）。策略持久化、Web 编辑与真机验证仍属 10b-2 及后续 C 级验收。
+  - 10b-1 已实现策略后端：客户端默认顺序为 Tailnet/远端家庭网段→Tailscale、CN→直连、例外→直连、其余→所选 Line 兜底；SSID 仅作为 sing-box 1.14.3 的 `wifi_ssid` 表达（Mihomo 1.19.32 无 SSID 规则类型，生成时返回 `RENDER_UNSUPPORTED`，不下发猜测字段）。策略持久化已由 `route_policies` 完成；Task 6 起客户端层停写（只保留既有 revision 的只读预览），客户端分流改由规则库写入订阅（六种匹配器，SSID 暂不上架），真机验证仍属 #10/#12。
 - **AI 双跳不改变客户端形态**：AI 域名选路由服务端与规则集决定；Out 不可用时服务端拒绝发布相关策略，而不是让客户端自行回退。
 
 ## 证据边界

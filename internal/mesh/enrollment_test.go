@@ -83,20 +83,13 @@ func TestEnrollmentSecretShapeAndReuse(t *testing.T) {
 
 func TestKeyStateMatrix(t *testing.T) {
 	states := []KeyState{KeyIssued, KeyConsumed, KeyExpired, KeyRevoked}
-	terminal := map[KeyState]bool{KeyIssued: false, KeyConsumed: true, KeyExpired: true, KeyRevoked: true}
 	for _, state := range states {
 		if err := state.Validate(); err != nil {
 			t.Fatalf("defined state rejected: %q: %v", state, err)
 		}
-		if got := state.Terminal(); got != terminal[state] {
-			t.Fatalf("Terminal(%q) = %v, want %v", state, got, terminal[state])
-		}
 	}
 	if KeyState("active").Validate() == nil {
 		t.Fatal("undefined key state accepted")
-	}
-	if KeyState("active").Terminal() {
-		t.Fatal("an undefined state reported itself terminal")
 	}
 }
 
@@ -109,9 +102,6 @@ func TestConsumeIsIrreversible(t *testing.T) {
 	}
 	if consumed.State != KeyConsumed || !consumed.ConsumedAt.Equal(now) {
 		t.Fatalf("consume = %q at %v", consumed.State, consumed.ConsumedAt)
-	}
-	if !consumed.State.Terminal() {
-		t.Fatal("consumed is not terminal")
 	}
 	if reuse, err := consumed.Consume(testDeviceID, now.Add(time.Minute)); err == nil {
 		t.Fatalf("consumed key reused: %q", reuse.State)

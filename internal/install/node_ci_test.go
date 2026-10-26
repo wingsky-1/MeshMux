@@ -67,7 +67,7 @@ func TestWriteNodeComponentFixtures(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(roleDir, "candidate-document.json"), document, 0600); err != nil {
 			t.Fatal(err)
 		}
-		files, err := nodeManagedFiles(cfg, []int{2222}, identity)
+		files, err := nodeManagedFilesForLayout(cfg, []int{2222}, identity, standaloneNodeLayout())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestWriteNodeComponentFixtures(t *testing.T) {
 func TestNodeComponentFixturesStayRoleAndPortBound(t *testing.T) {
 	for _, role := range []node.Role{node.RoleEdge, node.RoleOut} {
 		identity := node.Identity{NodeID: strings.Repeat("a", 32), IdentityToken: strings.Repeat("A", 43)}
-		files, err := nodeManagedFiles(componentNodeConfig(role), []int{2222}, identity)
+		files, err := nodeManagedFilesForLayout(componentNodeConfig(role), []int{2222}, identity, standaloneNodeLayout())
 		if err != nil {
 			t.Fatal(err)
 		}

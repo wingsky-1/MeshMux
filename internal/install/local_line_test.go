@@ -222,7 +222,7 @@ func TestLocalLineUsesSeparateLedgerAndPreservesHubLayout(t *testing.T) {
 	}
 
 	// The Line keeps its own ledger at the fixed local-Line path.
-	lineState, exists, err := readLocalLineState(f.root)
+	lineState, exists, err := readStateAt(f.root, localLineStatePath)
 	if err != nil || !exists {
 		t.Fatalf("local Line ledger missing: %+v %v", lineState, err)
 	}
@@ -345,7 +345,7 @@ func TestLocalLineRejectsMismatchingSharedBinary(t *testing.T) {
 	if readErr != nil || string(data) != "replaced runtime" {
 		t.Fatalf("the local Line overwrote the shared binary: %q %v", data, readErr)
 	}
-	if state, exists, readErr := readLocalLineState(f.root); readErr == nil && exists && state.Status == "installed" {
+	if state, exists, readErr := readStateAt(f.root, localLineStatePath); readErr == nil && exists && state.Status == "installed" {
 		t.Fatal("the refused local Line recorded an installed ledger")
 	}
 }
@@ -372,7 +372,7 @@ func TestLocalLineRepairKeepsHubLedgerAndSharedPin(t *testing.T) {
 	if string(hubBefore) != string(hubAfter) {
 		t.Fatal("the local Line repair rewrote the Hub ledger")
 	}
-	state, exists, err := readLocalLineState(f.root)
+	state, exists, err := readStateAt(f.root, localLineStatePath)
 	if err != nil || !exists || state.Node == nil {
 		t.Fatalf("local Line ledger lost after repair: %+v %v", state, err)
 	}
@@ -408,7 +408,7 @@ func TestLocalLineRefusesSecondLocalLine(t *testing.T) {
 	if err == nil || result.ErrorCode != "CONFIG_CONFLICT" {
 		t.Fatalf("second local Line = %+v %v", result, err)
 	}
-	state, exists, err := readLocalLineState(f.root)
+	state, exists, err := readStateAt(f.root, localLineStatePath)
 	if err != nil || !exists {
 		t.Fatalf("local Line ledger missing: %+v %v", state, err)
 	}
@@ -444,7 +444,7 @@ func TestHubRepairRejectsMismatchingSharedBinary(t *testing.T) {
 		t.Fatalf("Hub repair with a different build = %+v %v", result, err)
 	}
 	// The Line's pin and the Hub ledger survive the refusal.
-	state, exists, err := readLocalLineState(f.root)
+	state, exists, err := readStateAt(f.root, localLineStatePath)
 	if err != nil || !exists {
 		t.Fatalf("local Line ledger missing: %+v %v", state, err)
 	}
@@ -497,7 +497,7 @@ func TestHubRepairWithSameSharedBinaryStaysGreen(t *testing.T) {
 		t.Fatalf("a same-build Hub repair was blocked by the Line pin: %+v", result)
 	}
 	// The Line's pin is unchanged.
-	state, _, err := readLocalLineState(f.root)
+	state, _, err := readStateAt(f.root, localLineStatePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +563,7 @@ func TestLocalLineRefusesUncoveredHubSSHJail(t *testing.T) {
 		t.Fatalf("the refused Line reached host commands: %v", f.runner.calls)
 	}
 	// No Line ledger was created.
-	if _, exists, err := readLocalLineState(f.root); err != nil || exists {
+	if _, exists, err := readStateAt(f.root, localLineStatePath); err != nil || exists {
 		t.Fatalf("the refused Line wrote a ledger: exists=%v err=%v", exists, err)
 	}
 }
@@ -583,7 +583,7 @@ func TestStandaloneNodeKeepsSingleLedger(t *testing.T) {
 	if len(state.SharedBinaries) != 0 {
 		t.Fatalf("standalone ledger gained shared binaries: %+v", state.SharedBinaries)
 	}
-	if _, exists, err := readLocalLineState(f.root); err != nil || exists {
+	if _, exists, err := readStateAt(f.root, localLineStatePath); err != nil || exists {
 		t.Fatalf("standalone host gained a local Line ledger: exists=%v err=%v", exists, err)
 	}
 	// The standalone Line still owns its own SSH jail.

@@ -64,12 +64,18 @@ const (
 // copy to keep in sync.
 func CurrentAgentVersion() string { return buildinfo.Version }
 
-// Role is the installed node purpose. Line is represented by "edge".
+// Role is the Hub-visible node purpose. Line is represented by "edge".
+//
+// RoleHTTP is an external HTTP proxy managed by the Hub only (Ruling R11): it
+// has no Agent, no pairing, no candidate and no readback, so valid() (the
+// agent/install role check) deliberately rejects it. Its status is always
+// "external" and it is excluded from every convergence gate.
 type Role string
 
 const (
 	RoleEdge Role = "edge"
 	RoleOut  Role = "out"
+	RoleHTTP Role = "http"
 )
 
 // Config is the installer-owned, non-secret Agent configuration. Installed
@@ -115,13 +121,20 @@ type Candidate struct {
 	// Route is the resolved server route fragment of a Line. It is
 	// non-secret policy output, present only in a meshmux-node/v3 document.
 	Route json.RawMessage `json:"route,omitempty"`
+	// Out is the Hub-issued dial body of the Line's "out" outbound: the
+	// selected Out node's address/port plus the SS link key. It is a
+	// node secret in the same class as Users and Reality and travels only
+	// over the authenticated Hub<->Agent channel. A nil Out with a route
+	// that names "out" renders the fail-closed block stub.
+	Out *OutEgress `json:"out,omitempty"`
 }
 
 // CandidateDocument is the exact JSON document used for the mutable active
 // candidate and immutable candidate transport. Schema is meshmux-node/v1 for
 // the frozen six-field non-secret baseline, meshmux-node/v2 for the baseline
-// plus the users and reality blocks, and meshmux-node/v3 for v2 plus the
-// resolved server route fragment of a Line.
+// plus the users and reality blocks, meshmux-node/v3 for v2 plus the resolved
+// server route fragment of a Line, and meshmux-node/v4 for an Out node with
+// configured transport (the baseline plus the link key for its SS guard).
 type CandidateDocument struct {
 	Schema        string          `json:"schema"`
 	NodeID        string          `json:"node_id"`
@@ -132,12 +145,16 @@ type CandidateDocument struct {
 	Users         []VLESSUser     `json:"users,omitempty"`
 	Reality       *RealityConfig  `json:"reality,omitempty"`
 	Route         json.RawMessage `json:"route,omitempty"`
+	Out           *OutEgress      `json:"out,omitempty"`
 }
 
 // NewCandidateDocument binds a candidate to a schema identifier. A candidate
-// without users, without a reality block and without a route stays on the
-// frozen v1 document; a route makes it v3 and users or reality make it v2.
-// The route is compacted, so an equal route always yields equal bytes.
+// without users, without a reality block, without a route and without an Out
+// egress stays on the frozen v1 document; a route makes it v3 and users or
+// reality make it v2. An Out-role candidate with an attached egress takes
+// the v4 document so its Agent renders the SS guard; an Out without transport
+// keeps the frozen v1 baseline. The route is compacted, so an equal route
+// always yields equal bytes.
 func NewCandidateDocument(candidate Candidate) CandidateDocument {
 	document := CandidateDocument{
 		Schema:        CandidateSchema,
@@ -147,7 +164,18 @@ func NewCandidateDocument(candidate Candidate) CandidateDocument {
 		VLESSPort:     candidate.VLESSPort,
 		KernelVersion: candidate.KernelVersion,
 	}
-	if candidate.Reality == nil && len(candidate.Users) == 0 && len(candidate.Route) == 0 {
+	if candidate.Reality == nil && len(candidate.Users) == 0 && len(candidate.Route) == 0 && candidate.Out == nil {
+		return document
+	}
+	if candidate.Role == RoleOut && candidate.Out != nil {
+		// The v4 branch keeps every field so Validate can refuse an Out
+		// candidate that smuggles users, reality or a route instead of
+		// silently dropping them.
+		document.Schema = CandidateSchemaV4
+		document.Users = candidate.Users
+		document.Reality = candidate.Reality
+		document.Route = candidate.Route
+		document.Out = candidate.Out
 		return document
 	}
 	if len(candidate.Route) > 0 {
@@ -161,6 +189,7 @@ func NewCandidateDocument(candidate Candidate) CandidateDocument {
 		document.Users = []VLESSUser{}
 	}
 	document.Reality = candidate.Reality
+	document.Out = candidate.Out
 	return document
 }
 
@@ -176,6 +205,7 @@ func (d CandidateDocument) Candidate() Candidate {
 		Users:         d.Users,
 		Reality:       d.Reality,
 		Route:         d.Route,
+		Out:           d.Out,
 	}
 }
 
@@ -190,6 +220,26 @@ func (d CandidateDocument) MarshalJSON() ([]byte, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
+	if d.Schema == CandidateSchemaV4 {
+		type v4Document struct {
+			Schema        string     `json:"schema"`
+			NodeID        string     `json:"node_id"`
+			Role          Role       `json:"role"`
+			Revision      int64      `json:"revision"`
+			VLESSPort     int        `json:"vless_port"`
+			KernelVersion string     `json:"kernel_version"`
+			Out           *OutEgress `json:"out"`
+		}
+		return json.Marshal(v4Document{
+			Schema:        d.Schema,
+			NodeID:        d.NodeID,
+			Role:          d.Role,
+			Revision:      d.Revision,
+			VLESSPort:     d.VLESSPort,
+			KernelVersion: d.KernelVersion,
+			Out:           d.Out,
+		})
+	}
 	if d.Schema == CandidateSchemaV3 {
 		type v3Document struct {
 			Schema        string          `json:"schema"`
@@ -201,6 +251,7 @@ func (d CandidateDocument) MarshalJSON() ([]byte, error) {
 			Users         []VLESSUser     `json:"users"`
 			Reality       *RealityConfig  `json:"reality"`
 			Route         json.RawMessage `json:"route"`
+			Out           *OutEgress      `json:"out,omitempty"`
 		}
 		users := d.Users
 		if users == nil {
@@ -216,6 +267,7 @@ func (d CandidateDocument) MarshalJSON() ([]byte, error) {
 			Users:         users,
 			Reality:       d.Reality,
 			Route:         d.Route,
+			Out:           d.Out,
 		})
 	}
 	if d.Schema == CandidateSchemaV2 {
@@ -228,6 +280,7 @@ func (d CandidateDocument) MarshalJSON() ([]byte, error) {
 			KernelVersion string         `json:"kernel_version"`
 			Users         []VLESSUser    `json:"users"`
 			Reality       *RealityConfig `json:"reality"`
+			Out           *OutEgress     `json:"out,omitempty"`
 		}
 		users := d.Users
 		if users == nil {
@@ -242,6 +295,7 @@ func (d CandidateDocument) MarshalJSON() ([]byte, error) {
 			KernelVersion: d.KernelVersion,
 			Users:         users,
 			Reality:       d.Reality,
+			Out:           d.Out,
 		})
 	}
 	type v1Document struct {
@@ -273,7 +327,7 @@ func (d CandidateDocument) Equal(other CandidateDocument) bool {
 }
 
 // Equal reports whether two candidates carry exactly the same content,
-// including the optional v2 blocks and the v3 route.
+// including the optional v2 blocks, the v3 route and the Out egress.
 func (c Candidate) Equal(other Candidate) bool {
 	if c.NodeID != other.NodeID || c.Role != other.Role || c.Revision != other.Revision ||
 		c.VLESSPort != other.VLESSPort || c.KernelVersion != other.KernelVersion {
@@ -292,6 +346,13 @@ func (c Candidate) Equal(other Candidate) bool {
 			return false
 		}
 	} else if *c.Reality != *other.Reality {
+		return false
+	}
+	if c.Out == nil || other.Out == nil {
+		if c.Out != nil || other.Out != nil {
+			return false
+		}
+	} else if *c.Out != *other.Out {
 		return false
 	}
 	return bytes.Equal(bytes.TrimSpace(c.Route), bytes.TrimSpace(other.Route))
@@ -367,6 +428,8 @@ func (c Config) Metadata() Metadata {
 }
 
 func (r Role) valid() bool {
+	// Only an installed Agent role. RoleHTTP is a Hub-only external endpoint:
+	// it never receives a Config, a Metadata document or a Candidate.
 	return r == RoleEdge || r == RoleOut
 }
 
@@ -517,8 +580,8 @@ func (c Candidate) ValidateFor(config Config) error {
 func (d CandidateDocument) Validate() error {
 	switch d.Schema {
 	case CandidateSchema:
-		if d.Reality != nil || len(d.Users) > 0 || len(d.Route) > 0 {
-			return errors.New("CANDIDATE_INVALID: users, reality and route are not allowed in meshmux-node/v1")
+		if d.Reality != nil || len(d.Users) > 0 || len(d.Route) > 0 || d.Out != nil {
+			return errors.New("CANDIDATE_INVALID: users, reality, route and out are not allowed in meshmux-node/v1")
 		}
 	case CandidateSchemaV2:
 		if d.Reality == nil {
@@ -537,8 +600,18 @@ func (d CandidateDocument) Validate() error {
 		if err := validateCandidateRoute(d.Route); err != nil {
 			return err
 		}
+	case CandidateSchemaV4:
+		if d.Role != RoleOut {
+			return errors.New("CANDIDATE_INVALID: v4 is only valid for out nodes")
+		}
+		if d.Reality != nil || len(d.Users) != 0 || len(d.Route) != 0 {
+			return errors.New("CANDIDATE_INVALID: v4 carries only the link key, no users, reality or route")
+		}
+		if d.Out == nil || d.Out.Key == "" {
+			return errors.New("CANDIDATE_INVALID: v4 requires the link key")
+		}
 	default:
-		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1, meshmux-node/v2 or meshmux-node/v3")
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1, meshmux-node/v2, meshmux-node/v3 or meshmux-node/v4")
 	}
 	return d.Candidate().Validate()
 }
@@ -553,7 +626,7 @@ func (d CandidateDocument) ValidateFor(c Config) error {
 
 // UnmarshalJSON accepts exactly one object with the schema and the candidate
 // fields of that schema. It rejects unknown, duplicate, null and malformed
-// values, and never mixes the v1 and v2 shapes.
+// values, and never mixes the v1, v2, v3 and v4 shapes.
 func (d *CandidateDocument) UnmarshalJSON(data []byte) error {
 	obj, err := decodeExactObject(data)
 	if err != nil {
@@ -570,8 +643,10 @@ func (d *CandidateDocument) UnmarshalJSON(data []byte) error {
 		return d.unmarshalV2(obj)
 	case CandidateSchemaV3:
 		return d.unmarshalV3(obj)
+	case CandidateSchemaV4:
+		return d.unmarshalV4(obj)
 	default:
-		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1, meshmux-node/v2 or meshmux-node/v3")
+		return errors.New("CANDIDATE_SCHEMA_INVALID: expected meshmux-node/v1, meshmux-node/v2, meshmux-node/v3 or meshmux-node/v4")
 	}
 }
 
@@ -624,10 +699,10 @@ func (d *CandidateDocument) unmarshalV1(obj map[string]json.RawMessage) error {
 }
 
 // unmarshalV2 decodes the v2 document: the frozen six fields plus exactly the
-// users array and the reality block.
+// users array and the reality block, with an optional Hub-issued out egress.
 func (d *CandidateDocument) unmarshalV2(obj map[string]json.RawMessage) error {
 	required := []string{"schema", "node_id", "role", "revision", "vless_port", "kernel_version", "users", "reality"}
-	if len(obj) != len(required) {
+	if len(obj) != len(required) && (len(obj) != len(required)+1 || !hasOutField(obj)) {
 		return errors.New("CANDIDATE_INVALID: malformed candidate JSON")
 	}
 	for _, name := range required {
@@ -674,6 +749,11 @@ func (d *CandidateDocument) unmarshalV2(obj map[string]json.RawMessage) error {
 		return err
 	}
 	decoded.Reality = reality
+	out, err := decodeOutEgress(obj["out"])
+	if err != nil {
+		return err
+	}
+	decoded.Out = out
 	if err := decoded.Validate(); err != nil {
 		return err
 	}
