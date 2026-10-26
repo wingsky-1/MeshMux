@@ -48,6 +48,32 @@ func iniValue(t *testing.T, text, key string) string {
 	return ""
 }
 
+// TestWebUnitWatchdogAndStartLimit pins the D2 hardening of the Web unit: a
+// bounded restart budget, a watchdog that only the main process may feed, and a
+// declared boot directory for the process-level crash-loop guard.
+func TestWebUnitWatchdogAndStartLimit(t *testing.T) {
+	files, err := CandidateFiles(hubFixtureConfig(), []int{60794})
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := files["/etc/systemd/system/meshmux-web.service"]
+	for _, line := range []string{
+		"WatchdogSec=120",
+		"NotifyAccess=main",
+		"StartLimitIntervalSec=300",
+		"StartLimitBurst=3",
+		"ReadWritePaths=/run/meshmux-hub/boot",
+	} {
+		if !strings.Contains(web, line+"\n") {
+			t.Fatalf("web unit is missing %q:\n%s", line, web)
+		}
+	}
+	tmpfiles := files[hubTmpfilesPath]
+	if !strings.Contains(tmpfiles, "d /run/meshmux-hub/boot 0730 root meshmux\n") {
+		t.Fatalf("tmpfiles does not create the boot directory:\n%s", tmpfiles)
+	}
+}
+
 func TestWebJailRendersRealNewlines(t *testing.T) {
 	base := Config{"console.example.org", "sub.example.org", "mesh.example.org", false}
 	files, err := candidateFiles(base, []int{60794}, false)

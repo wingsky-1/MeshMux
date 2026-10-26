@@ -50,13 +50,13 @@ func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.
 	operationID := strings.TrimSpace(r.PostForm.Get("backup_operation_id"))
 	if !store.DatabaseBackupOperationPattern.MatchString(operationID) {
 		app.writeDatabaseMigrationFailure(w, r, http.StatusBadRequest, "DB_BACKUP_OPERATION_INVALID",
-			"备份操作编号不正确。", "请从 Hub 自升级的备份记录复制 32 位十六进制 operation_id 后重试；未写入任何确认。")
+			"备份操作编号不正确。", "请从本页 Hub 自升级区块的备份回执复制 32 位十六进制 operation_id（即 backup_operation_id）后重试；未写入任何确认。")
 		return
 	}
 	if r.PostForm.Get(databaseMigrationConfirmField) != "1" {
 		app.writeDatabaseMigrationFailure(w, r, http.StatusConflict, codeIrreversibleConfirmRequired,
 			"不可逆数据库迁移未经显式确认。",
-			"请由管理员在 Web 显式勾选“我确认这是不可逆迁移”后再批准；不存在命令行开关或其他绕过方式，未写入任何确认。")
+			"请由管理员在 Web 显式勾选“我确认这是不可逆迁移”后再批准，随后回到本页 Hub 自升级区块使用同一 backup_operation_id；不存在命令行开关或其他绕过方式，未写入任何确认。")
 		return
 	}
 	approval, err := app.store.ApproveIrreversibleMigration(operationID, true)
@@ -75,7 +75,7 @@ func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.
 		PolicySchema: approval.Record.PolicySchema, IrreversibleApproved: true,
 		OperationID: operation(r),
 		Detail:      "确认位已写入 Hub 数据库备份记录；本次请求没有执行任何迁移。",
-		NextAction:  "确认位等于操作员同意，不等于迁移已完成；11d 的 Hub 自升级在应用不可逆步骤前读取该位，成功启动后仍需 write last-good 并保留回滚源。",
+		NextAction:  "确认位等于操作员同意，不等于迁移已完成；请回到本页 Hub 自升级区块，用同一 operation_id 执行交接或恢复，root 执行体在应用不可逆步骤前读取该位。",
 	})
 }
 
@@ -87,11 +87,11 @@ func (app *Server) failDatabaseMigration(w http.ResponseWriter, r *http.Request,
 	switch {
 	case strings.HasPrefix(code, "DB_BACKUP_OPERATION_INVALID"):
 		app.writeDatabaseMigrationFailure(w, r, http.StatusBadRequest, "DB_BACKUP_OPERATION_INVALID",
-			"备份操作编号不正确。", "请从 Hub 自升级的备份记录复制 32 位十六进制 operation_id 后重试；未写入任何确认。")
+			"备份操作编号不正确。", "请从本页 Hub 自升级区块的备份回执复制 32 位十六进制 operation_id（即 backup_operation_id）后重试；未写入任何确认。")
 	case strings.HasPrefix(code, codeIrreversibleConfirmRequired):
 		app.writeDatabaseMigrationFailure(w, r, http.StatusConflict, codeIrreversibleConfirmRequired,
 			"不可逆数据库迁移未经显式确认。",
-			"请由管理员在 Web 显式勾选“我确认这是不可逆迁移”后再批准；不存在命令行开关或其他绕过方式，未写入任何确认。")
+			"请由管理员在 Web 显式勾选“我确认这是不可逆迁移”后再批准，随后回到本页 Hub 自升级区块使用同一 backup_operation_id；不存在命令行开关或其他绕过方式，未写入任何确认。")
 	case strings.HasPrefix(code, "DB_BACKUP_RECORD_MISSING"):
 		app.writeDatabaseMigrationFailure(w, r, http.StatusNotFound, "DB_BACKUP_RECORD_MISSING",
 			"没有该操作的 Hub 数据库备份记录。", "请先完成带完整性校验的 Hub 数据库备份；未写入任何确认。")

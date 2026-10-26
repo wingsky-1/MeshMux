@@ -123,11 +123,21 @@ auto_update:
 Description=MeshMux Hub Web
 After=network-online.target
 Wants=network-online.target
+# A Web that dies before /healthz becomes healthy is restarted only a bounded
+# number of times; the process-level boot guard writes the same fact to /run so
+# an operator sees HUB_UPGRADE_BOOT_CRASH_LOOP instead of an endless restart.
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
 User=meshmux
 Group=meshmux
+# WatchdogSec is liveness, not identity: the heartbeat stops when the database
+# no longer answers SELECT 1. NotifyAccess=main accepts WATCHDOG=1 only from the
+# Web process itself.
+WatchdogSec=120
+NotifyAccess=main
 # Supplementary membership of the Headscale service group lets the Web process
 # connect to the 0770 local unix socket (unix_socket_permission "0770"). It
 # grants no filesystem access to /var/lib/meshmux-headscale, which stays 0700 and
@@ -142,6 +152,7 @@ UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/run/meshmux-hub/requests /run/meshmux-hub/staging
+ReadWritePaths=/run/meshmux-hub/boot
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

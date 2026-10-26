@@ -62,3 +62,7 @@ func (s *Server) Close() error { return s.inner.Close() }
 
 // Handler serves the full management, agent and download boundary.
 func (s *Server) Handler() http.Handler { return s.inner.Handler() }
+
+// Healthy reports whether the database still answers SELECT 1. It is the
+// systemd watchdog predicate; see handler.Server.Healthy.
+func (s *Server) Healthy() bool { return s.inner.Healthy() }

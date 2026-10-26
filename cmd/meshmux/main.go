@@ -52,6 +52,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-update" {
 		os.Exit(runInternalHubUpdate(os.Args[2:], os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-restore" {
+		os.Exit(runInternalHubRestore(os.Args[2:], os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update-install" {
 		os.Exit(runInternalUpdateInstall(os.Args[2:], os.Stdout, os.Stderr))
 	}
@@ -86,6 +89,9 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	}
 	if len(args) > 0 && args[0] == "__internal-hub-update" {
 		return runInternalHubUpdate(args[1:], stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-hub-restore" {
+		return runInternalHubRestore(args[1:], stderr)
 	}
 	if len(args) > 0 && args[0] == "__internal-update-install" {
 		return runInternalUpdateInstall(args[1:], stdout, stderr)
@@ -173,6 +179,50 @@ func runInternalHubUpdate(args []string, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// runInternalHubRestore is the OLD staged package's restore entry (spec §5.7).
+// It is started either by the dispatcher from its root-only exec copy or
+// directly by root from the staged old package. The fixed argv names the
+// operation, the frozen from_agent digest, the current data directory and the
+// new directory derived as <data-dir>/restore-<op32hex>-<unix>.
+func runInternalHubRestore(args []string, stderr io.Writer) int {
+	cfg, err := parseRestoreArgs(args)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-hub-restore --expected-sha256 HEX --operation-id HEX32 --data-dir PATH --restore-dir PATH")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	if err := rootexec.RunRestore(ctx, cfg, node.ExecRunner{}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// parseRestoreArgs is the one flag parser of the hidden restore command. It is
+// exported to the package test that parses the documented console argv without
+// executing a restore.
+func parseRestoreArgs(args []string) (rootexec.RestoreConfig, error) {
+	flags := flag.NewFlagSet("__internal-hub-restore", flag.ContinueOnError)
+	// Never echo caller-supplied arguments.
+	flags.SetOutput(io.Discard)
+	var cfg rootexec.RestoreConfig
+	flags.StringVar(&cfg.ExpectedSHA256, "expected-sha256", "", "verified old package SHA-256")
+	flags.StringVar(&cfg.OperationID, "operation-id", "", "operation ID")
+	flags.StringVar(&cfg.DataDir, "data-dir", "", "current Hub data directory")
+	flags.StringVar(&cfg.RestoreDir, "restore-dir", "", "new data directory")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return rootexec.RestoreConfig{}, errors.New("HUB_RESTORE_ARGV_INVALID: unexpected restore arguments")
+	}
+	if cfg.ExpectedSHA256 == "" || cfg.OperationID == "" || cfg.DataDir == "" || cfg.RestoreDir == "" {
+		return rootexec.RestoreConfig{}, errors.New("HUB_RESTORE_ARGV_INVALID: every restore flag is required")
+	}
+	cfg.Root = "/"
+	cfg.Now = time.Now
+	return cfg, nil
 }
 
 // runInternalUpdate is the private Agent-driven entry. It accepts exactly one
