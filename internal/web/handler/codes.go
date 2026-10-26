@@ -3,7 +3,7 @@ package handler
 import (
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )

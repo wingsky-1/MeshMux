@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
 // stampTargetTx drives the transaction-scoped stamp the way the approval path

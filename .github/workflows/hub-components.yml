@@ -2,7 +2,7 @@ name: hub-components
 on:
   pull_request:
     paths:
-      - 'internal/install/**'
+      - 'internal/cli/install/**'
       - 'internal/node/**'
       - 'internal/node/protocol/**'
       - 'internal/protocol/**'
@@ -36,7 +36,7 @@ jobs:
       - name: Build isolated fixture and Web binaries
         run: |
           mkdir -p .ci/bin
-          go test -c -o .ci/bin/install.test ./internal/install
+          go test -c -o .ci/bin/install.test ./internal/cli/install
           go test -c -o .ci/bin/node.test ./internal/node
           go test -c -o .ci/bin/web.test ./internal/web
           go test -c -o .ci/bin/web-handler.test ./internal/web/handler

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 )
 
 // agentManifest is the read-only manifest-to-node channel of the restricted

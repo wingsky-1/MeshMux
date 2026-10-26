@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 )
 
 const databaseMigrationApprovePath = "/tasks/db-migration/approve"

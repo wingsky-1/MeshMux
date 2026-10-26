@@ -40,9 +40,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/buildinfo"
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 )
 
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")

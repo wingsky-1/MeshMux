@@ -26,7 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler"
 	"github.com/wingsky-1/MeshMux/internal/web/view"

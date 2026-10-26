@@ -35,26 +35,26 @@ var internalDAGLeafs = []struct {
 	// and stays a leaf there: the adapter describes an external process, so it
 	// must not reach into internal/mesh or the installer.
 	{"meshnet", []string{"internal/meshnet"}},
-	{"backup", []string{"internal/backup"}},
+	{"backup", []string{"internal/cli/backup"}},
 	// jobs was merged into internal/upgrade (Task 6). The release target lives in
 	// that package next to the manifest, so it is no longer a leaf of its own;
-	// internal/upgrade's own edges are checked by the hubupgrade guard below and
+	// internal/cli/upgrade's own edges are checked by the hubupgrade guard below and
 	// by the install-side dependency assertions.
-	{"buildinfo", []string{"internal/buildinfo"}},
+	{"buildinfo", []string{"internal/cli/buildinfo"}},
 	// versions is the leaf that carries pins two roles must agree on (Task 6):
-	// it exists so internal/install can read the Headscale pin without importing
+	// it exists so internal/cli/install can read the Headscale pin without importing
 	// the meshnet domain.
-	{"versions", []string{"internal/versions"}},
+	{"versions", []string{"internal/cli/versions"}},
 }
 
 // internalDAGHubUpgradeCandidates are the layouts of the Web upgrade producer.
 // It must never import the installer or the web layer (C6/C19).
-var internalDAGHubUpgradeCandidates = []string{"internal/hubupgrade", "internal/upgrade/hub"}
+var internalDAGHubUpgradeCandidates = []string{"internal/cli/hubupgrade", "internal/cli/upgrade/hub"}
 
 // internalDAGNodeAllowed is node's complete internal dependency set: the frozen
 // protocol contract (at either path) and the build identity. Anything else
 // means node reached into a domain it does not own.
-var internalDAGNodeAllowed = []string{"internal/protocol", "internal/node/protocol", "internal/buildinfo"}
+var internalDAGNodeAllowed = []string{"internal/protocol", "internal/node/protocol", "internal/cli/buildinfo"}
 
 // internalPackageGraph is the ./internal/... production import graph. Test-only
 // imports are excluded: a _test.go import may legally point back at a package
@@ -138,7 +138,7 @@ func TestArchitectureDAG(t *testing.T) {
 			}
 			found = true
 			for _, imported := range graph.internalImports(path) {
-				if isPackageOrSubpackage(imported, graph.full("internal/install")) {
+				if isPackageOrSubpackage(imported, graph.full("internal/cli/install")) {
 					t.Errorf("%s imports the installer (%s); the Web upgrade producer must not reach the privileged ledger", candidate, imported)
 				}
 				if isPackageOrSubpackage(imported, graph.full("internal/web")) {
@@ -153,13 +153,13 @@ func TestArchitectureDAG(t *testing.T) {
 	})
 
 	t.Run("install does not import web", func(t *testing.T) {
-		path := graph.full("internal/install")
+		path := graph.full("internal/cli/install")
 		if !graph.has(path) {
-			t.Fatalf("internal/install is missing from ./internal/...")
+			t.Fatalf("internal/cli/install is missing from ./internal/...")
 		}
 		for _, imported := range graph.internalImports(path) {
 			if isPackageOrSubpackage(imported, graph.full("internal/web")) {
-				t.Errorf("internal/install imports the web layer (%s); the installer must stay usable without it", imported)
+				t.Errorf("internal/cli/install imports the web layer (%s); the installer must stay usable without it", imported)
 			}
 		}
 	})

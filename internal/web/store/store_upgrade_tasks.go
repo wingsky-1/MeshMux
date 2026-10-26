@@ -14,9 +14,9 @@ import (
 	"errors"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
 // migrateSchema9 adds the target release snapshot to existing task rows. It is

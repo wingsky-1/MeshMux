@@ -18,7 +18,7 @@
 # .github/workflows/hub-components.yml.
 #
 # The pin is read from the repository fixture (releases.tsv), which is
-# rendered by internal/install/node_ci_test.go from internal/node/release.go.
+# rendered by internal/cli/install/node_ci_test.go from internal/node/release.go.
 # The script never hardcodes a second copy of the pin, so the two can not
 # drift apart.
 set -Eeuo pipefail

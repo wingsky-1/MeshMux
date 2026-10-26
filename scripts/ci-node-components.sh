@@ -48,8 +48,8 @@ for role in edge out; do
 done
 
 echo '--- Verify Node fixture bytes match the pinned code-base release ---'
-echo "code-pinned (internal/install/artifacts.go):"
-grep -E '"1\.14\.3"' /workspace/internal/install/artifacts.go | head -2 || true
+echo "code-pinned (internal/cli/install/artifacts.go):"
+grep -E '"1\.14\.3"' /workspace/internal/cli/install/artifacts.go | head -2 || true
 echo "fixture-pinned (releases.tsv):"
 cat "$fx/releases.tsv"
 
