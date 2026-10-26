@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // TestForArchPinsEveryComponent pins the #11a manifest contract: one MeshMux

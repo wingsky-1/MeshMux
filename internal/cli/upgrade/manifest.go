@@ -26,7 +26,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/install"
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // Schema identifies the manifest document; another schema is another contract.

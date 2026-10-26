@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 func TestLineRepinWithoutLine(t *testing.T) {

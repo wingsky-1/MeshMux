@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // selectionStore opens a store at the current schema.

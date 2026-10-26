@@ -1,0 +1,409 @@
+package subscription
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+)
+
+// The exporter targets exactly one client transport profile: VLESS over
+// REALITY with the xtls-rprx-vision flow, plain TCP and a Chrome uTLS
+// fingerprint. It never emits TUN, Mesh, mobile auto-VPN or Out node
+// references, and it never emits the Line private key, the REALITY handshake
+// configuration or a subscription bearer token.
+//
+// sing-box 1.14.3 has no outbound display-name field: an outbound carries a
+// "tag" and nothing else that a client renders. The tag is therefore the client
+// label "<display name> [<full node id>]", and the selector references and
+// default use the same label. The display name stays visible after a rename,
+// while the full stable Line NodeID remains encoded in the tag. The Mihomo
+// proxy name uses the same label.
+//
+// A tag is display metadata, not the client identity. A rename changes only
+// this label; the Line NodeID, the credential UUID, the REALITY public key and
+// the server stay unchanged, so a refreshed subscription presents a new name
+// without reusing or rotating an identity.
+const (
+	// exportListenAddress is the loopback address the client inbound binds
+	// to. The exported configuration never listens on a public interface.
+	exportListenAddress = "127.0.0.1"
+	// exportClientPort is the loopback mixed proxy port used by desktop
+	// clients that import this subscription.
+	exportClientPort = 1080
+	// exportSingBoxSelectorTag is the stable tag of the sing-box selector
+	// outbound. It never changes with a rename or a reorder. The value is owned
+	// by the node wire contract (internal/node/protocol).
+	exportSingBoxSelectorTag = protocol.SelectorTag
+	// exportSingBoxDirectTag is the explicit direct outbound tag. It exists
+	// so the configuration never depends on an implicit default and never
+	// references an Out node.
+	exportSingBoxDirectTag = protocol.OutboundDirectTag
+	// singBoxOutTag and singBoxBlockTag are the Line-route egress tags the
+	// composer renders. They are the node renderer's server tags, so a route
+	// fragment produced here is publishable as a Line candidate unchanged.
+	singBoxOutTag   = protocol.OutboundOutTag
+	singBoxBlockTag = protocol.OutboundBlockTag
+	// exportSingBoxInboundTag is the tag of the loopback mixed inbound.
+	exportSingBoxInboundTag = "mixed-in"
+	// exportSingBoxDNSTag is the tag of the local DNS transport used to
+	// resolve Line host names.
+	exportSingBoxDNSTag = "local"
+	// exportMihomoGroupName is the stable name of the Mihomo select group.
+	exportMihomoGroupName = protocol.MihomoGroupName
+	// exportVLESSFlow is the only VLESS sub-protocol exported.
+	exportVLESSFlow = protocol.VLESSFlow
+	// exportUTFingerprint is the only uTLS fingerprint exported.
+	exportUTFingerprint = "chrome"
+	// exportNetwork is the only transport network exported. The Vision flow
+	// carries TCP destinations only.
+	exportNetwork = "tcp"
+	// exportUDP is false because the Vision flow rejects UDP destinations on
+	// the server side, so a client that offers UDP would fail its handshake.
+	// The Mihomo "udp" flag therefore matches the sing-box "network" value.
+	exportUDP = false
+)
+
+// exportNode is one selected Line together with the credential that belongs
+// to it and the label used in client-facing lists.
+type exportNode struct {
+	Line  Line
+	UUID  string
+	Label string
+}
+
+// exportPlan is the validated, deterministically ordered export input.
+type exportPlan struct {
+	Nodes []exportNode
+}
+
+// ExportSingBox renders a standard sing-box 1.14.3 client configuration for
+// the selected Lines and their own credentials.
+//
+// The result is deterministic: the same Lines and credentials always produce
+// byte-identical output, and the Line order follows SortOrder then NodeID.
+// Every Line must have exactly one credential in the set; a missing or extra
+// credential is rejected so that no other subscriber identity can leak into
+// a published subscription. All credentials must belong to one Subscriber, so
+// one document can never mix two subscriber identities.
+func ExportSingBox(lines []Line, credentials []Credential) ([]byte, error) {
+	plan, err := buildExportPlan(lines, credentials)
+	if err != nil {
+		return nil, err
+	}
+	block := buildLineBlock(plan.Nodes)
+	return makeStandardSingBoxDocument(composeRouterPlan{
+		Lines:    block.Outbounds,
+		Selector: block.Selector,
+		Route:    composeRoutePlan{Final: composeEgressProxy},
+	})
+}
+
+// ExportMihomo renders a standard Mihomo client configuration for the
+// selected Lines and their own credentials.
+//
+// The result is deterministic: the same Lines and credentials always produce
+// byte-identical output, and the Line order follows SortOrder then NodeID.
+// Every Line must have exactly one credential in the set; a missing or extra
+// credential is rejected so that no other subscriber identity can leak into
+// a published subscription. All credentials must belong to one Subscriber, so
+// one document can never mix two subscriber identities.
+func ExportMihomo(lines []Line, credentials []Credential) ([]byte, error) {
+	plan, err := buildExportPlan(lines, credentials)
+	if err != nil {
+		return nil, err
+	}
+	block := buildLineBlock(plan.Nodes)
+	return makeMihomoDocument(composeRouterPlan{
+		Lines:    block.Outbounds,
+		Selector: block.Selector,
+		Route:    composeRoutePlan{Final: composeEgressProxy},
+	})
+}
+
+// buildExportPlan validates the public Line fields, pairs every Line with
+// exactly one credential and orders the result deterministically.
+func buildExportPlan(lines []Line, credentials []Credential) (*exportPlan, error) {
+	if len(lines) == 0 {
+		return nil, errors.New("EXPORT_NO_LINES: select at least one Line")
+	}
+	selected := make(map[string]Line, len(lines))
+	for _, line := range lines {
+		if err := validateExportLine(line); err != nil {
+			return nil, err
+		}
+		if _, exists := selected[line.NodeID]; exists {
+			return nil, errors.New("EXPORT_DUPLICATE_LINE: the same Line was selected twice")
+		}
+		selected[line.NodeID] = line
+	}
+	pairs := make(map[string]string, len(lines))
+	subscriberID := ""
+	for _, credential := range credentials {
+		// A credential must be a complete, canonical record. A missing
+		// subscriber identity would publish a document that belongs to
+		// nobody, so the whole record is validated before it is paired
+		// with a Line.
+		if err := credential.Validate(); err != nil {
+			return nil, errors.New("EXPORT_CREDENTIAL_INVALID: credential is not a canonical record")
+		}
+		if _, exists := selected[credential.NodeID]; !exists {
+			return nil, errors.New("EXPORT_CREDENTIAL_UNSELECTED: credential references a Line that is not selected")
+		}
+		if _, exists := pairs[credential.NodeID]; exists {
+			return nil, errors.New("EXPORT_CREDENTIAL_DUPLICATE: a Line has more than one credential")
+		}
+		// One subscription document carries one subscriber only. Mixing
+		// credentials of two subscribers would publish an identity that
+		// belongs to somebody else.
+		if subscriberID != "" && credential.SubscriberID != subscriberID {
+			return nil, errors.New("EXPORT_CREDENTIAL_SUBSCRIBER_MISMATCH: credentials belong to more than one Subscriber")
+		}
+		subscriberID = credential.SubscriberID
+		pairs[credential.NodeID] = credential.UUID
+	}
+	labels := exportLabels(lines)
+	plan := &exportPlan{Nodes: make([]exportNode, 0, len(lines))}
+	for _, line := range lines {
+		uuid, exists := pairs[line.NodeID]
+		if !exists {
+			return nil, errors.New("EXPORT_CREDENTIAL_MISSING: a selected Line has no credential")
+		}
+		plan.Nodes = append(plan.Nodes, exportNode{
+			Line:  line,
+			UUID:  uuid,
+			Label: labels[line.NodeID],
+		})
+	}
+	sort.SliceStable(plan.Nodes, func(i, j int) bool {
+		left, right := plan.Nodes[i].Line, plan.Nodes[j].Line
+		if left.SortOrder != right.SortOrder {
+			return left.SortOrder < right.SortOrder
+		}
+		return left.NodeID < right.NodeID
+	})
+	return plan, nil
+}
+
+// validateExportLine checks only the public fields a client receives. The
+// Line private key is never required and never exported, so a downloaded
+// public fixture can be exported without a server secret.
+func validateExportLine(line Line) error {
+	if err := ValidateID(line.NodeID); err != nil {
+		return errors.New("EXPORT_LINE_INVALID: Line identity is not canonical")
+	}
+	if err := ValidateDisplayName(line.DisplayName); err != nil {
+		return errors.New("EXPORT_LINE_INVALID: Line display name is not a printable label")
+	}
+	if !validHost(line.Server) {
+		return errors.New("EXPORT_LINE_INVALID: Line server is not one hostname or IP address")
+	}
+	if line.Port < 1 || line.Port > 65535 {
+		return errors.New("EXPORT_LINE_INVALID: Line port is out of range")
+	}
+	if line.SortOrder < 0 {
+		return errors.New("EXPORT_LINE_INVALID: Line sort order is negative")
+	}
+	if !validHost(line.ServerName) {
+		return errors.New("EXPORT_LINE_INVALID: Line server name is not one hostname or IP address")
+	}
+	if _, err := parseRealityKey(line.PublicKey); err != nil {
+		return errors.New("EXPORT_LINE_INVALID: Line REALITY public key is not canonical")
+	}
+	if err := ValidateShortID(line.ShortID); err != nil {
+		return errors.New("EXPORT_LINE_INVALID: Line REALITY short ID is not canonical")
+	}
+	if line.PrivateKey != "" {
+		if err := validateRealityKeyPair(line.PrivateKey, line.PublicKey); err != nil {
+			return errors.New("EXPORT_LINE_INVALID: Line REALITY key pair does not match")
+		}
+	}
+	return nil
+}
+
+// exportLabels builds one client label per Line. The label always carries the
+// stable Line identity, so two Lines that share a display name stay
+// distinguishable and a rename never changes the identity part. The sing-box
+// outbound tag and the Mihomo proxy name both use this label.
+func exportLabels(lines []Line) map[string]string {
+	labels := make(map[string]string, len(lines))
+	for _, line := range lines {
+		labels[line.NodeID] = line.DisplayName + " [" + line.NodeID + "]"
+	}
+	return labels
+}
+
+// singBoxClientConfig is the exported sing-box client document. The field
+// order is fixed by the struct layout so the output is byte-deterministic.
+type singBoxClientConfig struct {
+	Log       singBoxClientLog        `json:"log"`
+	DNS       singBoxClientDNS        `json:"dns"`
+	Inbounds  []singBoxClientInbound  `json:"inbounds"`
+	Outbounds []singBoxClientOutbound `json:"outbounds"`
+	Route     singBoxClientRoute      `json:"route"`
+}
+
+type singBoxClientLog struct {
+	Level     string `json:"level"`
+	Timestamp bool   `json:"timestamp"`
+}
+
+type singBoxClientDNS struct {
+	Servers []singBoxClientDNSServer `json:"servers"`
+}
+
+type singBoxClientDNSServer struct {
+	Type string `json:"type"`
+	Tag  string `json:"tag"`
+}
+
+type singBoxClientInbound struct {
+	Type       string `json:"type"`
+	Tag        string `json:"tag"`
+	Listen     string `json:"listen"`
+	ListenPort int    `json:"listen_port"`
+}
+
+type singBoxClientOutbound struct {
+	Type       string            `json:"type"`
+	Tag        string            `json:"tag"`
+	Server     string            `json:"server,omitempty"`
+	ServerPort int               `json:"server_port,omitempty"`
+	UUID       string            `json:"uuid,omitempty"`
+	Flow       string            `json:"flow,omitempty"`
+	Network    string            `json:"network,omitempty"`
+	TLS        *singBoxClientTLS `json:"tls,omitempty"`
+	Outbounds  []string          `json:"outbounds,omitempty"`
+	Default    string            `json:"default,omitempty"`
+}
+
+type singBoxClientTLS struct {
+	Enabled    bool                  `json:"enabled"`
+	ServerName string                `json:"server_name"`
+	UTLS       *singBoxClientUTLS    `json:"utls"`
+	Reality    *singBoxClientReality `json:"reality"`
+}
+
+type singBoxClientUTLS struct {
+	Enabled     bool   `json:"enabled"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+type singBoxClientReality struct {
+	Enabled   bool   `json:"enabled"`
+	PublicKey string `json:"public_key"`
+	ShortID   string `json:"short_id"`
+}
+
+type singBoxClientRoute struct {
+	Rules                 []map[string]any       `json:"rules,omitempty"`
+	RuleSet               []singBoxClientRuleSet `json:"rule_set,omitempty"`
+	DefaultDomainResolver string                 `json:"default_domain_resolver"`
+	Final                 string                 `json:"final"`
+}
+
+// singBoxClientRuleSet is one declared remote artifact a client route
+// references. The URL is the pinned source, so the client fetches exactly the
+// version the composer validated.
+type singBoxClientRuleSet struct {
+	Type   string `json:"type"`
+	Tag    string `json:"tag"`
+	Format string `json:"format"`
+	URL    string `json:"url"`
+}
+
+// yamlBuilder renders a deterministic YAML document for a fixed set of
+// controlled keys. Every string value is emitted as a JSON double-quoted
+// scalar: JSON string syntax is a subset of the YAML double-quoted scalar
+// syntax, so one escaping rule covers quotes, backslashes, control
+// characters and non-ASCII text without adding a YAML dependency.
+type yamlBuilder struct {
+	buf bytes.Buffer
+	// itemIndent is the indent of the list item currently being written.
+	itemIndent int
+	// itemFirst marks that the next item key still has to carry the "- "
+	// marker.
+	itemFirst bool
+}
+
+func (b *yamlBuilder) line(indent int, text string) {
+	b.buf.WriteString(strings.Repeat("  ", indent))
+	b.buf.WriteString(text)
+	b.buf.WriteByte('\n')
+}
+
+func (b *yamlBuilder) scalar(indent int, key, value string) {
+	b.line(indent, key+": "+yamlQuote(value))
+}
+
+func (b *yamlBuilder) integer(indent int, key string, value int) {
+	b.line(indent, key+": "+strconv.Itoa(value))
+}
+
+func (b *yamlBuilder) boolean(indent int, key string, value bool) {
+	b.line(indent, key+": "+strconv.FormatBool(value))
+}
+
+func (b *yamlBuilder) key(indent int, key string) {
+	b.line(indent, key+":")
+}
+
+func (b *yamlBuilder) listItem(indent int, value string) {
+	b.line(indent, "- "+yamlQuote(value))
+}
+
+// beginItem starts a mapping list item. The first key written afterwards is
+// placed on the "- " marker line; the remaining keys are aligned under it.
+func (b *yamlBuilder) beginItem(indent int) {
+	b.itemIndent = indent
+	b.itemFirst = true
+}
+
+// itemScalar writes one mapping key of the current list item.
+func (b *yamlBuilder) itemScalar(indent int, key, value string) {
+	b.itemLine(indent, key+": "+yamlQuote(value))
+}
+
+// itemInteger writes one integer mapping key of the current list item.
+func (b *yamlBuilder) itemInteger(indent int, key string, value int) {
+	b.itemLine(indent, key+": "+strconv.Itoa(value))
+}
+
+// itemBoolean writes one boolean mapping key of the current list item.
+func (b *yamlBuilder) itemBoolean(indent int, key string, value bool) {
+	b.itemLine(indent, key+": "+strconv.FormatBool(value))
+}
+
+// itemKey writes one nested mapping key of the current list item.
+func (b *yamlBuilder) itemKey(indent int, key string) {
+	b.itemLine(indent, key+":")
+}
+
+// itemLine writes one line of the current list item. The first line carries
+// the "- " marker, the following lines are indented one step further so all
+// keys of the item line up.
+func (b *yamlBuilder) itemLine(indent int, text string) {
+	if b.itemFirst {
+		b.itemFirst = false
+		b.line(indent, "- "+text)
+		return
+	}
+	b.line(indent+1, text)
+}
+
+func (b *yamlBuilder) bytes() []byte {
+	return b.buf.Bytes()
+}
+
+// yamlQuote renders one YAML double-quoted scalar.
+func yamlQuote(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
+}

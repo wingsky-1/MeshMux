@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // codes.go is the single source of the error-code literals this package spells

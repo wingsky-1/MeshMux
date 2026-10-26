@@ -3,7 +3,7 @@ package install
 import (
 	"context"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // nodeApplyErrors carries the exact apply/early-verify failure templates. The

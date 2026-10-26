@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // Store-level codes for the mesh persistence boundary. Domain refusals keep

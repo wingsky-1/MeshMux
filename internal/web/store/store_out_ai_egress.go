@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // OutEgressFacts is the read-only Out half of one AI egress decision. It

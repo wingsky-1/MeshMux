@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 func pairedNode(t *testing.T, app *Server, name string) (store.Node, string) {

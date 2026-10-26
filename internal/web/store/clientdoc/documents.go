@@ -23,8 +23,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // SingBox wraps a rendered client route fragment into the native sing-box

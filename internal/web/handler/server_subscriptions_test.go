@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // The public download boundary is exercised with its own fixtures. Every test

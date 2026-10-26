@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // BatchOutcomeStatus is the terminal state of one batch member.

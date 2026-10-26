@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // clientTailscaleTag is the endpoint tag the client policy renderer emits.

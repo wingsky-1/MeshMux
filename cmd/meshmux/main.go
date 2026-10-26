@@ -22,7 +22,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/install"
 	"github.com/wingsky-1/MeshMux/internal/cli/update"
 	"github.com/wingsky-1/MeshMux/internal/cli/webcmd"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // installRoleHub is not a node role: a hub host is described by install.Config

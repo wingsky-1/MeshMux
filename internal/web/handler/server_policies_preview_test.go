@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 func previewServerPolicy(t *testing.T, b *browser, body string) (policyServerPreviewResponse, int) {

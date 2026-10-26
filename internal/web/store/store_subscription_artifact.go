@@ -29,7 +29,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // SubscriptionArtifactDownload resolves one plaintext bearer into the two

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // convergeSpawner records the one argv the writer starts and can block, so a

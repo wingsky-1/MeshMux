@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 var meshKeyPattern = regexp.MustCompile(`<pre class="sub-secret">([^<]+)</pre>`)

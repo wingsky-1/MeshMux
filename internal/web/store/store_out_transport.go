@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // Out transport: the operator-entered dial address of one Out node plus the

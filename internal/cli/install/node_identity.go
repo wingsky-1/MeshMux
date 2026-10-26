@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // nodeIdentityErrors carries the exact identity-phase failure templates. The

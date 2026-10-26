@@ -13,8 +13,8 @@ package store
 import (
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 func TestComposerActionsMatchTheRuleLibrary(t *testing.T) {

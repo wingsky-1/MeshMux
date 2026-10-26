@@ -29,8 +29,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // lineServerRouteTx returns the route fragment a Line must publish now, or nil

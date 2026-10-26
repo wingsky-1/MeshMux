@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // aclJSONWithAccepts renders the `nft -j` document of the fixture's Out guard

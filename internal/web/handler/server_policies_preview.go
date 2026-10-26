@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // policyServerPreviewFragmentLines caps the rendered fragment. The preview is

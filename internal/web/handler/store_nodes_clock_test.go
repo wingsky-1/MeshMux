@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // fixedTaskStamp reads created_at/updated_at of one task row.

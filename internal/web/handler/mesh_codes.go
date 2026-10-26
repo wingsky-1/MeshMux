@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/store"
 )
 

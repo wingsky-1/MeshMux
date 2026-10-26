@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 // upstreamDigests records the SHA-256 of the official release assets of each

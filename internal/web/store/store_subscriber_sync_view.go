@@ -11,7 +11,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // SubscriberLineSyncSnapshot is the precise convergence evidence of one Line

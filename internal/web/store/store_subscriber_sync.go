@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // The subscriber-level synchronization summary.

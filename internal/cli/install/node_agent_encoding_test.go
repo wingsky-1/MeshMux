@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 func TestAgentConfigEncodingUnchanged(t *testing.T) {

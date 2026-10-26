@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 const (

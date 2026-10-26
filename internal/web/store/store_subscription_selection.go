@@ -36,7 +36,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // Stable selection refusals. Only the code (before ": ") is stable.

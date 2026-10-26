@@ -30,7 +30,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // RuleRevision is one pinned rule-library identity: rule_revision_id is exactly

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // buildLineCandidateTx builds the complete desired candidate of one node in

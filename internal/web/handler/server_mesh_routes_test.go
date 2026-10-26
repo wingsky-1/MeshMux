@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 // meshCreateRouter creates a subnet_router through the page form, including the

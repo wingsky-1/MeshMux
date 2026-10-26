@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // policiesPublishHandle is the authenticated management endpoint.

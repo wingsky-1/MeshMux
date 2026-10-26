@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // TestInstallNonInteractiveRequiresConfirmAndRepair is the CLI half of the

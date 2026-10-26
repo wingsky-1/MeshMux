@@ -23,8 +23,8 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // upgradeApproveFixture pairs one Line whose initial chain already finished, so

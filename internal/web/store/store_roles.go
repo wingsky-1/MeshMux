@@ -11,7 +11,7 @@ package store
 // the labels a receipt carries, so a query or a page that compares a label must
 // use these values rather than its own copy.
 
-import "github.com/wingsky-1/MeshMux/internal/node"
+import "github.com/wingsky-1/MeshMux/internal/core/node"
 
 const (
 	// nodeRoleEdge is a proxy Line node (the only role that serves VLESS).

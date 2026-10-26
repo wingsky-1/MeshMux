@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 func nonInteractiveRepair(t *testing.T, f *nodeFixture, operationID string, opts NodeApplyOptions) (InstallResult, error) {

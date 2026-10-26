@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 )
 
 // subnetRouterSpec returns a subnet_router device spec with the given declared

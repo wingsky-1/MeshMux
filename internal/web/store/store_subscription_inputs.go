@@ -22,9 +22,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // selectionInputs is the pure composer's input set for one selection.

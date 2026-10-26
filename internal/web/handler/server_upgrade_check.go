@@ -40,7 +40,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // Stable approval refusals of this task. The literals live in codes.go so a

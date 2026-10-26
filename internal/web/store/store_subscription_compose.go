@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // Stable composition refusals owned by the store.

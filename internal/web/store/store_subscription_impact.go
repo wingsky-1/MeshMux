@@ -27,7 +27,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // ImpactFinding is one read-only statement about a proposed selection.

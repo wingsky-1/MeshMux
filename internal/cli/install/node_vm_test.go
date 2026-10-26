@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // dumpGuestServiceState logs the kernel unit state, its journal tail and

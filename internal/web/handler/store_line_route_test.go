@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // outServerPolicy selects the Out for one documentation domain.

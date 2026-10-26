@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 func TestAssembleSingBoxClientAddsEndpointOnlyForARouteReference(t *testing.T) {

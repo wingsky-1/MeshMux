@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision int64) []protocol.Task {

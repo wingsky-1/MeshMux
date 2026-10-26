@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 )
 
 // validateSelectionOutTx checks that a selected egress is a usable endpoint:

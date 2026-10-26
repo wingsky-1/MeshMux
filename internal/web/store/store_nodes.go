@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // Node is the Hub-visible record for a Line/Out host. The ID and role are

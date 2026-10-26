@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 const testHeadscaleOrigin = "https://headscale.example.invalid"

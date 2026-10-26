@@ -74,7 +74,7 @@ jobs:
           fi
           while IFS= read -r file; do
             case "$file" in
-              internal/cli/install/*|internal/node/*|internal/node/protocol/*|internal/protocol/*|cmd/meshmux/*|\
+              internal/cli/install/*|internal/core/node/*|internal/core/node/protocol/*|internal/protocol/*|cmd/meshmux/*|\
               scripts/ci-hub-vm.sh|scripts/ci-node-vm.sh|scripts/ci-node-reality.sh|\
               .github/workflows/hub-vm.yml|docs/CI_HUB_VALIDATION.zh-CN.md|\
               docs/ACCEPTANCE.zh-CN.md|docs/INSTALL_HUB.zh-CN.md)
@@ -120,7 +120,7 @@ jobs:
           go test -c -o .ci/bin/install.test ./internal/cli/install
           go test -c -o .ci/bin/web.test ./internal/web
           go test -c -o .ci/bin/web-handler.test ./internal/web/handler
-          go test -c -o .ci/bin/node.test ./internal/node
+          go test -c -o .ci/bin/node.test ./internal/core/node
       - name: Install QEMU and cloud-init image tools
         run: |
           sudo apt-get update -qq

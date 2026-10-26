@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 )

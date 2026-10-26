@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // views_policies.go holds the display-only view model for the /policies page.

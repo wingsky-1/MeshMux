@@ -25,8 +25,8 @@ import (
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 //go:embed assets/*

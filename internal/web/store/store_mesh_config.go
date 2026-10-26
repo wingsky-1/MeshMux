@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // subscriptionForSubscriber resolves the proxy half of one device-scoped Mesh

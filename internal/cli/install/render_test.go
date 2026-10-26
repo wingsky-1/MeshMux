@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 )
 
 // jailValue parses a Fail2ban INI the way fail2ban does: "[name]" opens a

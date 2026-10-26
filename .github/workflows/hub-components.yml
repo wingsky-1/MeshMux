@@ -3,8 +3,8 @@ on:
   pull_request:
     paths:
       - 'internal/cli/install/**'
-      - 'internal/node/**'
-      - 'internal/node/protocol/**'
+      - 'internal/core/node/**'
+      - 'internal/core/node/protocol/**'
       - 'internal/protocol/**'
       - 'internal/web/**'
       - 'cmd/meshmux/**'
@@ -37,7 +37,7 @@ jobs:
         run: |
           mkdir -p .ci/bin
           go test -c -o .ci/bin/install.test ./internal/cli/install
-          go test -c -o .ci/bin/node.test ./internal/node
+          go test -c -o .ci/bin/node.test ./internal/core/node
           go test -c -o .ci/bin/web.test ./internal/web
           go test -c -o .ci/bin/web-handler.test ./internal/web/handler
           go build -o .ci/bin/meshmux-web ./cmd/meshmux-web

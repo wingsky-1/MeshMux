@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // Rule library persistence for the subscription aggregation rebuild (Task 3,

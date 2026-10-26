@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 type PolicyLayer string

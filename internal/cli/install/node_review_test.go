@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // TestNodeInstalledRejectsNonRepairReinstall pins the v1.0.0 rule: an

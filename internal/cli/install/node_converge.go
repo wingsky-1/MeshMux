@@ -24,7 +24,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // ConvergeHandoffConfig publishes the claimed Agent release into agent.json.

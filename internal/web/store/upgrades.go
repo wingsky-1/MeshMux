@@ -13,7 +13,7 @@ import (
 	"errors"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // StagedReadback is the newest staged evidence of one node. A formal upgrade

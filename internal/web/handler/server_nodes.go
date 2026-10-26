@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // agentAPI lives in codes.go next to the shared constants.

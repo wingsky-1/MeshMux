@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // The public download is a bearer credential. Every rejection - an unknown

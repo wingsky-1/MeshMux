@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // fixturePublishVerifier is the test double of the kernel gate. It runs no

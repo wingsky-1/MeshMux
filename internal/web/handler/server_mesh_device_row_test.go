@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 // meshRowSlice returns the article slice of one device row, so row assertions

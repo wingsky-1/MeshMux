@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/web/store"
 )
 

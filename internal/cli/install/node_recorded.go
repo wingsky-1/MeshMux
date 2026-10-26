@@ -31,7 +31,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // recordedNodeConfig derives the full Node configuration of this host from its

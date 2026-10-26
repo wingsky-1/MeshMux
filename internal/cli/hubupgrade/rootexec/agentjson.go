@@ -21,7 +21,7 @@ import (
 	"syscall"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 const agentConfigMaxBytes = 1 << 20

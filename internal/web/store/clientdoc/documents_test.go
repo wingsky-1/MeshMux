@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 func TestSingBoxAddsEndpointOnlyForARouteReference(t *testing.T) {

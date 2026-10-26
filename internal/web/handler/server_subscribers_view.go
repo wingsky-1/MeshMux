@@ -12,7 +12,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // renderSubscribers renders the subscriber page, optionally with a one-time

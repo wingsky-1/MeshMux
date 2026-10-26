@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // The Task-3 storage leg: a fresh database migrates to schema 12 and carries

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // TestLinesSaveFansOutToEveryCredentialSubscriber pins the #7 fan-out: saving a

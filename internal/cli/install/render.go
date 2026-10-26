@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 )
 
 // CandidateFiles returns deterministic, UNAPPLIED configurations for Phase B.

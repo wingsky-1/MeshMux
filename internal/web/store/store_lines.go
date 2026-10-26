@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // setLine stores the transport of one Line. The node must be an existing edge

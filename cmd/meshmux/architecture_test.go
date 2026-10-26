@@ -28,15 +28,15 @@ var internalDAGLeafs = []struct {
 	name       string
 	candidates []string
 }{
-	// protocol moves to internal/node/protocol (Task 5); the zero-internal
+	// protocol moves to internal/core/node/protocol (Task 5); the zero-internal
 	// import contract holds at either path.
-	{"protocol", []string{"internal/protocol", "internal/node/protocol"}},
-	// headscale was merged into the meshnet domain as internal/meshnet (Task 6)
-	// and stays a leaf there: the adapter describes an external process, so it
-	// must not reach into internal/mesh or the installer.
-	{"meshnet", []string{"internal/meshnet"}},
+	{"protocol", []string{"internal/protocol", "internal/core/node/protocol"}},
+	// headscale was merged into the meshnet domain as internal/core/meshnet
+	// (Task 6) and stays a leaf there: the adapter describes an external
+	// process, so it must not reach into internal/core/mesh or the installer.
+	{"meshnet", []string{"internal/core/meshnet"}},
 	{"backup", []string{"internal/cli/backup"}},
-	// jobs was merged into internal/upgrade (Task 6). The release target lives in
+	// jobs was merged into internal/cli/upgrade (Task 6). The release target lives in
 	// that package next to the manifest, so it is no longer a leaf of its own;
 	// internal/cli/upgrade's own edges are checked by the hubupgrade guard below and
 	// by the install-side dependency assertions.
@@ -54,7 +54,7 @@ var internalDAGHubUpgradeCandidates = []string{"internal/cli/hubupgrade", "inter
 // internalDAGNodeAllowed is node's complete internal dependency set: the frozen
 // protocol contract (at either path) and the build identity. Anything else
 // means node reached into a domain it does not own.
-var internalDAGNodeAllowed = []string{"internal/protocol", "internal/node/protocol", "internal/cli/buildinfo"}
+var internalDAGNodeAllowed = []string{"internal/protocol", "internal/core/node/protocol", "internal/cli/buildinfo"}
 
 // internalPackageGraph is the ./internal/... production import graph. Test-only
 // imports are excluded: a _test.go import may legally point back at a package
@@ -165,9 +165,9 @@ func TestArchitectureDAG(t *testing.T) {
 	})
 
 	t.Run("node imports only protocol and buildinfo", func(t *testing.T) {
-		path := graph.full("internal/node")
+		path := graph.full("internal/core/node")
 		if !graph.has(path) {
-			t.Fatalf("internal/node is missing from ./internal/...")
+			t.Fatalf("internal/core/node is missing from ./internal/...")
 		}
 		allowed := make(map[string]bool, len(internalDAGNodeAllowed))
 		for _, relative := range internalDAGNodeAllowed {
@@ -175,7 +175,7 @@ func TestArchitectureDAG(t *testing.T) {
 		}
 		for _, imported := range graph.internalImports(path) {
 			if !allowed[imported] {
-				t.Errorf("internal/node imports %s; its internal dependencies are frozen to protocol and buildinfo", imported)
+				t.Errorf("internal/core/node imports %s; its internal dependencies are frozen to protocol and buildinfo", imported)
 			}
 		}
 	})

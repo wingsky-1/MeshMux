@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // policyWriteRequest is shared by the four actions; unused fields are ignored.
