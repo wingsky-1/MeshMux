@@ -1,4 +1,4 @@
-package headscale
+package meshnet
 
 // CLIRunner is the only production headscale adapter. Every call is one local
 // process: a fixed executable, a fixed --config file, machine-readable output,

@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
+	"github.com/wingsky-1/MeshMux/internal/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // upstreamDigests records the SHA-256 of the official release assets of each
@@ -26,25 +27,32 @@ var upstreamDigests = map[string]map[string]string{
 // the manifest decides which binary is downloaded. If a bump changed only one of
 // them, the handshake would refuse every change on a host the installer just
 // provisioned, or the installer would stage a binary the adapter never verified.
-// One constant feeds both, and this test fails if a future edit reintroduces a
-// literal or forgets the matching digests.
+//
+// After the internal regroup (Task 6) the pin has three readers that must agree:
+// the leaf internal/versions (which install re-exports and the artifact table
+// reads), and the adapter's own literal in internal/meshnet (kept there so the
+// adapter stays a zero-internal-import leaf). This test fails if a future edit
+// reintroduces a third literal or forgets the matching digests.
 func TestPinnedHeadscaleVersionMatchesAdapter(t *testing.T) {
-	if HeadscaleVersion != headscale.HeadscaleVersion {
-		t.Fatalf("install.HeadscaleVersion = %q, adapter = %q", HeadscaleVersion, headscale.HeadscaleVersion)
+	if HeadscaleVersion != versions.HeadscaleVersion {
+		t.Fatalf("install.HeadscaleVersion = %q, versions = %q", HeadscaleVersion, versions.HeadscaleVersion)
+	}
+	if HeadscaleVersion != meshnet.HeadscaleVersion {
+		t.Fatalf("install.HeadscaleVersion = %q, adapter = %q", HeadscaleVersion, meshnet.HeadscaleVersion)
 	}
 	// The host layout of the adapter and the installer must describe the same
 	// binary and configuration file; otherwise the installer provisions one path
 	// while the Hub runs another.
-	if headscaleBinaryPath != headscale.BinaryPath {
-		t.Errorf("installer stages %q, adapter runs %q", headscaleBinaryPath, headscale.BinaryPath)
+	if headscaleBinaryPath != meshnet.BinaryPath {
+		t.Errorf("installer stages %q, adapter runs %q", headscaleBinaryPath, meshnet.BinaryPath)
 	}
-	if got := headscale.ConfigPath; got != "/etc/meshmux/headscale.yaml" {
+	if got := meshnet.ConfigPath; got != "/etc/meshmux/headscale.yaml" {
 		t.Errorf("adapter config path = %q", got)
 	}
 
-	digests, recorded := upstreamDigests[headscale.HeadscaleVersion]
+	digests, recorded := upstreamDigests[meshnet.HeadscaleVersion]
 	if !recorded {
-		t.Fatalf("no upstream digests recorded for Headscale %q: read the release asset SHA-256 metadata and add them to upstreamDigests", headscale.HeadscaleVersion)
+		t.Fatalf("no upstream digests recorded for Headscale %q: read the release asset SHA-256 metadata and add them to upstreamDigests", meshnet.HeadscaleVersion)
 	}
 	for _, arch := range []string{"amd64", "arm64"} {
 		pinned := PinnedArtifacts(arch)
@@ -54,13 +62,13 @@ func TestPinnedHeadscaleVersionMatchesAdapter(t *testing.T) {
 				continue
 			}
 			found = true
-			if a.Version != headscale.HeadscaleVersion {
-				t.Errorf("%s headscale artifact version = %q, adapter = %q", arch, a.Version, headscale.HeadscaleVersion)
+			if a.Version != meshnet.HeadscaleVersion {
+				t.Errorf("%s headscale artifact version = %q, adapter = %q", arch, a.Version, meshnet.HeadscaleVersion)
 			}
 			// The download URL is derived from the same constant, so a literal
 			// that disagrees with Version would stage a binary the handshake
 			// rejects.
-			wantPrefix := "https://github.com/juanfont/headscale/releases/download/v" + headscale.HeadscaleVersion + "/headscale_" + headscale.HeadscaleVersion + "_linux_" + arch
+			wantPrefix := "https://github.com/juanfont/headscale/releases/download/v" + meshnet.HeadscaleVersion + "/headscale_" + meshnet.HeadscaleVersion + "_linux_" + arch
 			if a.Source != wantPrefix {
 				t.Errorf("%s headscale source = %q, want %q", arch, a.Source, wantPrefix)
 			}
@@ -87,11 +95,11 @@ func TestRenderedHeadscaleConfigStatesPinnedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := files["/etc/meshmux/headscale.yaml"]
-	want := "# Headscale " + headscale.HeadscaleVersion + ","
+	want := "# Headscale " + meshnet.HeadscaleVersion + ","
 	if !strings.HasPrefix(config, want) {
 		t.Fatalf("rendered Headscale config starts with %q, want %q", firstLine(config), want)
 	}
-	if headscale.HeadscaleVersion != "0.29.5" && strings.Contains(config, "0.29.5") {
+	if meshnet.HeadscaleVersion != "0.29.5" && strings.Contains(config, "0.29.5") {
 		t.Fatal("rendered Headscale config still contains the previous release literal")
 	}
 	// The adapter reads unix_socket from this file, so the generated value must

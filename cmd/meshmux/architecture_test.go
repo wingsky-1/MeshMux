@@ -31,12 +31,20 @@ var internalDAGLeafs = []struct {
 	// protocol moves to internal/node/protocol (Task 5); the zero-internal
 	// import contract holds at either path.
 	{"protocol", []string{"internal/protocol", "internal/node/protocol"}},
-	// route was merged into internal/compiler (Task 3) and later into
-	// internal/policy (Task 4); its pin code is no longer a leaf package.
-	{"headscale", []string{"internal/headscale"}},
+	// headscale was merged into the meshnet domain as internal/meshnet (Task 6)
+	// and stays a leaf there: the adapter describes an external process, so it
+	// must not reach into internal/mesh or the installer.
+	{"meshnet", []string{"internal/meshnet"}},
 	{"backup", []string{"internal/backup"}},
-	{"jobs", []string{"internal/jobs"}},
+	// jobs was merged into internal/upgrade (Task 6). The release target lives in
+	// that package next to the manifest, so it is no longer a leaf of its own;
+	// internal/upgrade's own edges are checked by the hubupgrade guard below and
+	// by the install-side dependency assertions.
 	{"buildinfo", []string{"internal/buildinfo"}},
+	// versions is the leaf that carries pins two roles must agree on (Task 6):
+	// it exists so internal/install can read the Headscale pin without importing
+	// the meshnet domain.
+	{"versions", []string{"internal/versions"}},
 }
 
 // internalDAGHubUpgradeCandidates are the layouts of the Web upgrade producer.

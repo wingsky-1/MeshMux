@@ -12,8 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/wingsky-1/MeshMux/internal/jobs"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
 // StagedReadback is the newest staged evidence of one node. A formal upgrade
@@ -72,7 +72,7 @@ WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FRO
 			}
 			row.staged.Derived = true
 		} else {
-			target := jobs.Target{Version: targetVersion, ManifestSHA256: manifest,
+			target := upgrade.Target{Version: targetVersion, ManifestSHA256: manifest,
 				PolicySchema: int(policySchema), CandidateRevision: targetRevision}
 			if err := target.Validate(); err != nil || targetRevision != revision.Revision {
 				rows.Close()

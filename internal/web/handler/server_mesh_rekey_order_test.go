@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
 	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/meshnet"
 )
 
 // meshIOLiveKey returns the single issued key of a device, failing when the
@@ -52,10 +52,10 @@ func TestMeshRekeyHeadscaleFailureKeepsOldKey(t *testing.T) {
 	now := app.now()
 	before := meshIOLiveKey(t, app, device.ID, now)
 
-	fake.failWith["users.list"] = headscale.CodeUnavailable
+	fake.failWith["users.list"] = meshnet.CodeUnavailable
 	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
-	if !strings.Contains(w.Body.String(), headscale.CodeUnavailable) {
+	if !strings.Contains(w.Body.String(), meshnet.CodeUnavailable) {
 		t.Fatalf("control-plane refusal lost its code: %.300s", w.Body.String())
 	}
 	// The old secret survives a failed attempt in both directions: the row is
@@ -238,7 +238,7 @@ func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 		t.Fatalf("fixture device is %s, want expired", expired.Status)
 	}
 	// A Headscale refusal keeps it expired: no status moved, no key minted.
-	fake.failWith["users.list"] = headscale.CodeUnavailable
+	fake.failWith["users.list"] = meshnet.CodeUnavailable
 	fake.resetCalls()
 	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
@@ -396,7 +396,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, firstSecret := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
 	now := app.now()
-	fake.failWith["users.list"] = headscale.CodeUnavailable
+	fake.failWith["users.list"] = meshnet.CodeUnavailable
 	requireStatus(t, b.post("/mesh/rekey", url.Values{"device_id": {device.ID}}), http.StatusServiceUnavailable)
 	delete(fake.failWith, "users.list")
 
@@ -561,11 +561,11 @@ func TestMeshRekeyLiveKeyReadback(t *testing.T) {
 func TestMeshRekeyFailureMessageIsActionable(t *testing.T) {
 	_, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	fake.failWith["users.list"] = headscale.CodeUnavailable
+	fake.failWith["users.list"] = meshnet.CodeUnavailable
 	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	body := w.Body.String()
-	if !strings.Contains(body, headscale.CodeUnavailable) {
+	if !strings.Contains(body, meshnet.CodeUnavailable) {
 		t.Fatalf("stable code missing: %.400s", body)
 	}
 	if !strings.Contains(body, w.Header().Get("X-Operation-ID")) {

@@ -5,14 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/jobs"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
 // stampTargetTx drives the transaction-scoped stamp the way the approval path
 // does: one transaction, committed here.
-func stampTargetTx(app *Server, operationID string, target jobs.Target) error {
+func stampTargetTx(app *Server, operationID string, target upgrade.Target) error {
 	tx, err := app.store.DB.Begin()
 	if err != nil {
 		return err
@@ -36,7 +35,7 @@ func TestUpgradeTaskRecordRoundTripAndPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	tasks := fixedTasksForRevision(t, app, created.ID, latest.Revision)
-	target := jobs.Target{
+	target := upgrade.Target{
 		Version: "1.2.3", ManifestSHA256: strings.Repeat("cd", 32),
 		PolicySchema: upgrade.PolicySchema, CandidateRevision: latest.Revision,
 	}

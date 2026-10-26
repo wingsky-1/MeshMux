@@ -14,7 +14,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/jobs"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
@@ -54,8 +53,8 @@ func migrateSchema9(tx *sql.Tx) error {
 // chain and stamps its stage row together: the first Agent poll can never see a
 // pending row without its target. There is deliberately no non-transactional
 // twin, so no future caller can split the two writes.
-func StampUpgradeTargetTx(tx *sql.Tx, operationID string, target jobs.Target, now time.Time) error {
-	if err := jobs.ValidateOperationID(operationID); err != nil {
+func StampUpgradeTargetTx(tx *sql.Tx, operationID string, target upgrade.Target, now time.Time) error {
+	if err := upgrade.ValidateOperationID(operationID); err != nil {
 		return err
 	}
 	if err := target.Validate(); err != nil {
@@ -123,32 +122,32 @@ func (s *Store) ApprovedTargets() (map[string]ApprovedTarget, error) {
 // its status. The Agent polls the row after the Hub may already have moved it
 // on, so a pending-only read would lose the stamp; an unstamped row is simply
 // not an upgrade.
-func (s *Store) StampedStageTarget(nodeID, operationID string) (jobs.Target, bool, error) {
-	var target jobs.Target
+func (s *Store) StampedStageTarget(nodeID, operationID string) (upgrade.Target, bool, error) {
+	var target upgrade.Target
 	var version, manifest string
 	var policySchema int64
 	err := s.DB.QueryRow(`SELECT target_version, target_manifest_sha256, policy_schema, target_revision
  FROM agent_tasks WHERE operation_id=? AND node_id=? AND kind=?`,
 		operationID, nodeID, protocol.KindConfigStage).Scan(&version, &manifest, &policySchema, &target.CandidateRevision)
 	if errors.Is(err, sql.ErrNoRows) {
-		return jobs.Target{}, false, nil
+		return upgrade.Target{}, false, nil
 	}
 	if err != nil {
-		return jobs.Target{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return upgrade.Target{}, false, errors.New("DATABASE_UNAVAILABLE")
 	}
 	if version == "" {
-		return jobs.Target{}, false, nil
+		return upgrade.Target{}, false, nil
 	}
 	target.Version, target.ManifestSHA256, target.PolicySchema = version, manifest, int(policySchema)
 	if err := target.Validate(); err != nil {
-		return jobs.Target{}, false, errors.New("UPGRADE_RECORD_CORRUPT: the persisted upgrade target is not actionable")
+		return upgrade.Target{}, false, errors.New("UPGRADE_RECORD_CORRUPT: the persisted upgrade target is not actionable")
 	}
 	return target, true, nil
 }
 
 // ApprovedUpgrade is one stored approval.
 type ApprovedUpgrade struct {
-	jobs.Target
+	upgrade.Target
 	StageOperationID string
 	Tasks            []string
 }
@@ -253,7 +252,7 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 	if stageOperation == "" {
 		return ApprovedUpgrade{}, errors.New("UPGRADE_CHAIN_INVALID: the fixed chain has no stage step")
 	}
-	target := jobs.Target{Version: manifest.Version, ManifestSHA256: manifestSHA,
+	target := upgrade.Target{Version: manifest.Version, ManifestSHA256: manifestSHA,
 		PolicySchema: manifest.PolicySchema, CandidateRevision: revision}
 	// Same transaction as the enqueue: the first poll can never see an
 	// unstamped pending row.

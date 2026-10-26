@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
 	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/meshnet"
 )
 
 var meshKeyPattern = regexp.MustCompile(`<pre class="sub-secret">([^<]+)</pre>`)
@@ -23,8 +23,8 @@ var meshKeyPattern = regexp.MustCompile(`<pre class="sub-secret">([^<]+)</pre>`)
 // chosen operation with one stable adapter code.
 type fakeHeadscale struct {
 	mu       sync.Mutex
-	users    []headscale.User
-	nodes    []headscale.Node
+	users    []meshnet.User
+	nodes    []meshnet.Node
 	calls    []string
 	failWith map[string]string
 	nextID   uint64
@@ -33,7 +33,7 @@ type fakeHeadscale struct {
 func (f *fakeHeadscale) record(call string) error {
 	f.calls = append(f.calls, call)
 	if code, ok := f.failWith[call]; ok {
-		return &headscale.Error{Code: code}
+		return &meshnet.Error{Code: code}
 	}
 	return nil
 }
@@ -58,49 +58,49 @@ func (f *fakeHeadscale) callsOf(name string) int {
 	return n
 }
 
-func (f *fakeHeadscale) ListUsers(context.Context) ([]headscale.User, error) {
+func (f *fakeHeadscale) ListUsers(context.Context) ([]meshnet.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("users.list"); err != nil {
 		return nil, err
 	}
-	return append([]headscale.User(nil), f.users...), nil
+	return append([]meshnet.User(nil), f.users...), nil
 }
 
-func (f *fakeHeadscale) CreateUser(_ context.Context, name string) (headscale.User, error) {
+func (f *fakeHeadscale) CreateUser(_ context.Context, name string) (meshnet.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("users.create"); err != nil {
-		return headscale.User{}, err
+		return meshnet.User{}, err
 	}
 	for _, user := range f.users {
 		if user.Name == name {
-			return headscale.User{}, &headscale.Error{Code: headscale.CodeAlreadyExists}
+			return meshnet.User{}, &meshnet.Error{Code: meshnet.CodeAlreadyExists}
 		}
 	}
 	f.nextID++
-	user := headscale.User{ID: f.nextID, Name: name, DisplayName: name}
+	user := meshnet.User{ID: f.nextID, Name: name, DisplayName: name}
 	f.users = append(f.users, user)
 	return user, nil
 }
 
-func (f *fakeHeadscale) ListNodes(context.Context, string) ([]headscale.Node, error) {
+func (f *fakeHeadscale) ListNodes(context.Context, string) ([]meshnet.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("nodes.list"); err != nil {
 		return nil, err
 	}
-	return append([]headscale.Node(nil), f.nodes...), nil
+	return append([]meshnet.Node(nil), f.nodes...), nil
 }
 
-func (f *fakeHeadscale) CreatePreAuthKey(_ context.Context, req headscale.PreAuthKeyRequest) (headscale.PreAuthKey, string, error) {
+func (f *fakeHeadscale) CreatePreAuthKey(_ context.Context, req meshnet.PreAuthKeyRequest) (meshnet.PreAuthKey, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("preauthkeys.create"); err != nil {
-		return headscale.PreAuthKey{}, "", err
+		return meshnet.PreAuthKey{}, "", err
 	}
 	f.nextID++
-	return headscale.PreAuthKey{ID: f.nextID, UserID: req.UserID}, "headscale-preauth-example-once", nil
+	return meshnet.PreAuthKey{ID: f.nextID, UserID: req.UserID}, "headscale-preauth-example-once", nil
 }
 
 func (f *fakeHeadscale) ExpirePreAuthKey(_ context.Context, id uint64) error {
@@ -131,11 +131,11 @@ func (f *fakeHeadscale) DeleteNode(_ context.Context, id uint64) error {
 	return nil
 }
 
-func (f *fakeHeadscale) SetApprovedRoutes(_ context.Context, id uint64, prefixes []string) (headscale.Node, error) {
+func (f *fakeHeadscale) SetApprovedRoutes(_ context.Context, id uint64, prefixes []string) (meshnet.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("nodes.approve-routes"); err != nil {
-		return headscale.Node{}, err
+		return meshnet.Node{}, err
 	}
 	for i, node := range f.nodes {
 		if node.ID == id {
@@ -143,14 +143,14 @@ func (f *fakeHeadscale) SetApprovedRoutes(_ context.Context, id uint64, prefixes
 			return f.nodes[i], nil
 		}
 	}
-	return headscale.Node{}, &headscale.Error{Code: headscale.CodeNotFound}
+	return meshnet.Node{}, &meshnet.Error{Code: meshnet.CodeNotFound}
 }
 
-func (f *fakeHeadscale) ClearApprovedRoutes(_ context.Context, id uint64) (headscale.Node, error) {
+func (f *fakeHeadscale) ClearApprovedRoutes(_ context.Context, id uint64) (meshnet.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("nodes.clear-routes"); err != nil {
-		return headscale.Node{}, err
+		return meshnet.Node{}, err
 	}
 	for i, node := range f.nodes {
 		if node.ID == id {
@@ -158,7 +158,7 @@ func (f *fakeHeadscale) ClearApprovedRoutes(_ context.Context, id uint64) (heads
 			return f.nodes[i], nil
 		}
 	}
-	return headscale.Node{}, &headscale.Error{Code: headscale.CodeNotFound}
+	return meshnet.Node{}, &meshnet.Error{Code: meshnet.CodeNotFound}
 }
 
 // meshTestApp returns an initialized, logged-in console with a fake control
@@ -166,7 +166,7 @@ func (f *fakeHeadscale) ClearApprovedRoutes(_ context.Context, id uint64) (heads
 func meshTestApp(t *testing.T) (*Server, *browser, *fakeHeadscale, *bytes.Buffer) {
 	t.Helper()
 	app, logs := testApp(t)
-	fake := &fakeHeadscale{failWith: map[string]string{}, users: []headscale.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
+	fake := &fakeHeadscale{failWith: map[string]string{}, users: []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
 	app.mesh = fake
 	b := &browser{app: app}
 	initialize(t, b)
@@ -391,7 +391,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 	// A device that never registered carries no node id, so a live Headscale
 	// node with a matching name is not evidence: the row stays "未注册" and no
 	// address is attributed to it.
-	fake.nodes = []headscale.Node{{ID: 77, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.7"}}}
+	fake.nodes = []meshnet.Node{{ID: 77, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.7"}}}
 	page := b.req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
 	afterRender, err := b.app.store.GetMeshDevice(device.ID)
@@ -449,7 +449,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 
 func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
-	fake.users = []headscale.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
 	records, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.now())
 	if err != nil {
 		t.Fatal(err)
@@ -474,10 +474,10 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 		t.Fatalf("disappearance not recorded: %+v", expired)
 	}
 	// A Headscale outage is reported, never rendered as "expired".
-	fake.failWith["nodes.list"] = headscale.CodeUnavailable
+	fake.failWith["nodes.list"] = meshnet.CodeUnavailable
 	w = b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, http.StatusServiceUnavailable)
-	if !strings.Contains(w.Body.String(), headscale.CodeUnavailable) {
+	if !strings.Contains(w.Body.String(), meshnet.CodeUnavailable) {
 		t.Fatalf("outage lost its stable code: %.300s", w.Body.String())
 	}
 }
@@ -508,7 +508,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fake.nodes = []headscale.Node{{ID: 42, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser}}
+	fake.nodes = []meshnet.Node{{ID: 42, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser}}
 	w := b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
 
@@ -541,7 +541,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 // subscriber, its credentials or its subscription token.
 func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
-	fake.users = []headscale.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
 	now := app.now()
 	line := createEdgeNode(t, app.store, now)
 	configureLine(t, app.store, line, "line-a", now)
@@ -563,7 +563,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	if registered.Status != mesh.StatusRegistered {
 		t.Fatalf("fixture not registered: %+v", registered)
 	}
-	fake.nodes = []headscale.Node{{ID: 42, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.9"}}}
+	fake.nodes = []meshnet.Node{{ID: 42, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.9"}}}
 	fake.resetCalls()
 
 	w := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
@@ -643,12 +643,12 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 // retryable intent instead of a settled record with a live node.
 func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
-	fake.users = []headscale.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
 	device, _ := meshCreateDevice(t, b, fake, "tablet", "mesh_only", "android", "")
 	if _, err := app.store.RecordMeshObservation(device.ID, 55, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.failWith["nodes.delete"] = headscale.CodeCommandFailed
+	fake.failWith["nodes.delete"] = meshnet.CodeCommandFailed
 
 	w := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
@@ -659,7 +659,7 @@ func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
 	if pending.Status != mesh.StatusRevoking {
 		t.Fatalf("failed remote removal settled the device: %+v", pending)
 	}
-	if !strings.Contains(w.Body.String(), headscale.CodeCommandFailed) {
+	if !strings.Contains(w.Body.String(), meshnet.CodeCommandFailed) {
 		t.Fatalf("failure code not reported: %.300s", w.Body.String())
 	}
 
@@ -777,7 +777,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 
 func TestMeshCreateRejectsBindingMismatch(t *testing.T) {
 	_, b, fake, _ := meshTestApp(t)
-	fake.users = []headscale.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
 	w := b.post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"proxy_mesh"}, "platform": {"ios"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusBadRequest)
 	if !strings.Contains(w.Body.String(), mesh.CodeSubscriberBindingInvalid) {
@@ -813,7 +813,7 @@ func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
 	}
 	// Creating the user again because Headscale raced the list is still success.
 	fake.users = nil
-	fake.failWith["users.create"] = headscale.CodeAlreadyExists
+	fake.failWith["users.create"] = meshnet.CodeAlreadyExists
 	if _, err := b.app.ensureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
 		t.Fatalf("already-exists user creation failed: %v", err)
 	}

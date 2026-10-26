@@ -1,13 +1,15 @@
-// Package upgrade is the read-only release manifest of issue #11a: MeshMux
-// version, the fixed component tables of the supported Debian architectures,
-// the policy schema and the route policy revision slot. It describes a release
-// only and never downloads, applies, rolls back or enqueues a task
-// (#11b-11e). The set endpoint carries both architecture tables; a node selects
-// its own runtime.GOARCH projection locally.
+// Package upgrade is the release domain of issue #11: what a MeshMux release is
+// (the read-only manifest of #11a) and which release a task converges a node to
+// (the release target of #11b, merged here from internal/jobs by the internal
+// regroup Task 6). It downloads, applies, rolls back and enqueues nothing
+// itself (#11b-11e): the manifest describes a release, the target names one, and
+// the executor, apply and rollback live in the #11c series.
 //
 // It reuses install's pinned artifact tables as data and node's version
 // constants, so internal/web shows the release without importing the privileged
-// installer.
+// installer. The set endpoint carries both architecture tables; a node selects
+// its own runtime.GOARCH projection locally. The target half performs no I/O: no
+// table, no queue, no process.
 package upgrade
 
 import (

@@ -1,8 +1,17 @@
-// Package headscale is the Hub-side adapter for the local Headscale control
-// plane. It is the only place in MeshMux that talks to Headscale, and it does
-// so through the pinned headscale executable over the fixed local unix socket
-// of the Hub layout. It adds no Go dependency: Headscale's gRPC/protobuf client
-// is not imported, so the Hub keeps its small, auditable dependency set.
+// Package meshnet is the Hub-side adapter for the local Headscale control
+// plane: the third-party control plane behind the Mesh domain of internal/mesh.
+// It is the only place in MeshMux that talks to Headscale, and it does so
+// through the pinned headscale executable over the fixed local unix socket of
+// the Hub layout. It adds no Go dependency: Headscale's gRPC/protobuf client is
+// not imported, so the Hub keeps its small, auditable dependency set.
+//
+// The package was named internal/headscale before the internal regroup (Task 6)
+// merged it into the Mesh domain as one package. It stays a zero-internal-import
+// leaf on purpose: the adapter describes an external process, not the Mesh
+// device model, so it must not import internal/mesh and the installer can read
+// its pinned version without pulling a domain in. The `failure` helper next to
+// internal/mesh's same-named helper is not a collision: they live in different
+// packages.
 //
 // Scope of this package (PR-9a-2, extended by PR-9b-1):
 //   - one narrow Client interface (users, nodes, one-time pre-auth keys, route
@@ -38,7 +47,7 @@
 // executes no arbitrary command: the executable path and the argv shapes are
 // fixed constants, and caller-supplied values are validated before they reach
 // an argument.
-package headscale
+package meshnet
 
 import (
 	"context"
@@ -46,10 +55,18 @@ import (
 	"time"
 )
 
-// HeadscaleVersion is the single pinned Headscale release of a MeshMux Hub.
-// The installer artifacts and this adapter share this value, so a release bump
-// cannot update the downloaded binary while leaving the command contract or the
-// version handshake behind. A drift test in internal/install enforces it.
+// HeadscaleVersion is the single pinned Headscale release of a MeshMux Hub, and
+// the release the fixed argv table of this adapter was written against. The
+// installer artifact manifest and the generated configuration must name the same
+// release; they read internal/versions, and the drift test in internal/install
+// fails if the two ever disagree.
+//
+// The literal is repeated here instead of imported so this adapter stays a
+// zero-internal-import leaf (C0): a control-plane adapter that can be reviewed,
+// tested and reasoned about without the rest of the module. The version is part
+// of its own contract — the handshake below refuses any other release — so a
+// silent re-export would hide the one constant a reviewer must check when the
+// argv table changes.
 const HeadscaleVersion = "0.29.5"
 
 // The stable codes this package reports. They are the diagnostic contract: a

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 type Artifact struct {
@@ -26,11 +26,16 @@ type Artifact struct {
 	Format    string `json:"format"`
 }
 
-// HeadscaleVersion re-exports the adapter's pinned release so the Hub has one
-// definition. The artifact manifest, the version handshake in internal/headscale
-// and the generated configuration all read this value; a drift test in this
-// package fails if they ever disagree.
-const HeadscaleVersion = headscale.HeadscaleVersion
+// HeadscaleVersion re-exports the pinned release from the leaf internal/versions
+// so the Hub has one definition. The artifact manifest, the version handshake in
+// internal/meshnet and the generated configuration all read the same constant; a
+// drift test in this package fails if they ever disagree.
+//
+// The re-export deliberately does not name the adapter: internal/install stages
+// a Headscale binary, it never talks to the control plane, and importing the
+// meshnet domain here would pull a domain into the privileged installer for one
+// string. Reading the leaf keeps the installer's dependency surface unchanged.
+const HeadscaleVersion = versions.HeadscaleVersion
 
 // Digests copied from the upstream GitHub release asset SHA-256 metadata.
 // No "latest" or user-supplied release URL is permitted in a host operation.

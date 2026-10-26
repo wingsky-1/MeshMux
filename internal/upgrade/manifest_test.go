@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
-	"github.com/wingsky-1/MeshMux/internal/headscale"
+	"github.com/wingsky-1/MeshMux/internal/meshnet"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
@@ -24,7 +24,7 @@ func TestForArchPinsEveryComponent(t *testing.T) {
 		if m.Schema != Schema || m.Version != node.CurrentAgentVersion() || m.Architecture != arch || m.PolicySchema != 8 {
 			t.Fatalf("%s: header = %+v", arch, m)
 		}
-		want := map[string]string{"caddy": "2.11.7", "headscale": headscale.HeadscaleVersion,
+		want := map[string]string{"caddy": "2.11.7", "headscale": meshnet.HeadscaleVersion,
 			"sing-box": node.KernelVersion, "mihomo": node.MihomoVersion, "meshmuxd": "dev-20261023"}
 		if len(m.Components) != len(want) {
 			t.Fatalf("%s: components = %+v", arch, m.Components)
@@ -44,7 +44,7 @@ func TestForArchPinsEveryComponent(t *testing.T) {
 			}
 		}
 	}
-	if headscale.HeadscaleVersion != "0.29.5" || node.KernelVersion != "1.14.3" || node.MihomoVersion != "1.19.32" {
+	if meshnet.HeadscaleVersion != "0.29.5" || node.KernelVersion != "1.14.3" || node.MihomoVersion != "1.19.32" {
 		t.Fatal("component baseline drifted from the documented v1.0.0 release")
 	}
 }

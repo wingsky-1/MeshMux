@@ -24,8 +24,8 @@ import (
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
-	"github.com/wingsky-1/MeshMux/internal/headscale"
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/meshnet"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
@@ -56,7 +56,7 @@ type Server struct {
 	// mesh is the narrow Headscale control-plane adapter behind the mesh
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.
-	mesh headscale.Client
+	mesh meshnet.Client
 	// publishRunner is the fixed process boundary of the publish gate. It is
 	// nil in production (node.ExecRunner) and replaced by a fixture runner in
 	// tests so no kernel binary is required to exercise the gate.
@@ -159,7 +159,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 		s.Close()
 		return nil, err
 	}
-	app := &Server{cfg: c, store: s, log: logger, now: time.Now, kdfSlot: make(chan struct{}, 1), mesh: headscale.NewCLIRunner(), formKey: []byte(store.RandomToken())}
+	app := &Server{cfg: c, store: s, log: logger, now: time.Now, kdfSlot: make(chan struct{}, 1), mesh: meshnet.NewCLIRunner(), formKey: []byte(store.RandomToken())}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
