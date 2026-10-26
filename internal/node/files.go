@@ -122,64 +122,80 @@ func ensureManagedDir(path string) error {
 	return nil
 }
 
-func prepareActiveConfig(root string, data []byte) error {
-	dir := rooted(root, activeConfigDir)
-	path := rooted(root, ActiveConfigPath)
+// managedFileCodes names the stable error codes of one managed runtime file.
+// Each target reports its own vocabulary (ACTIVE_CONFIG_*, ACTIVE_CANDIDATE_*,
+// ACL_*), so the caller supplies the codes instead of the helper flattening
+// them into a shared set.
+type managedFileCodes struct {
+	directoryCreateFailed string
+	permissions           string
+	ownerInvalid          string
+	unavailable           string
+}
+
+// prepareManagedFile is the shared prepare path of a managed runtime file:
+// reject a symlinked directory, create the directory with dirMode, validate it
+// with dirCheck, reject a symlinked target, then write the file through
+// writeManagedFile. Only the constants differ between the active config and the
+// active candidate; the failure codes stay per target.
+func prepareManagedFile(root, dirPath, filePath string, data []byte, dirMode, fileMode os.FileMode, dirCheck func(string) error, codes managedFileCodes) error {
+	dir := rooted(root, dirPath)
+	path := rooted(root, filePath)
 	if err := ensureNoSymlinkAncestors(root, dir); err != nil {
 		return err
 	}
-	if err := os.Mkdir(dir, 0750); err != nil && !os.IsExist(err) {
-		return errors.New("ACTIVE_DIRECTORY_CREATE_FAILED")
+	if err := os.Mkdir(dir, dirMode); err != nil && !os.IsExist(err) {
+		return errors.New(codes.directoryCreateFailed)
 	}
-	if err := ensureManagedDir(dir); err != nil {
+	if err := dirCheck(dir); err != nil {
 		return err
 	}
 	if err := ensureNoSymlinkAncestors(root, path); err != nil {
 		return err
 	}
+	return writeManagedFile(root, path, data, fileMode, codes)
+}
+
+// writeManagedFile writes a managed runtime file after its ancestors were
+// checked. An existing target must be a regular file with exactly mode and the
+// managed owner; it is replaced atomically while preserving its owner. A
+// missing target is created atomically with the managed owner.
+func writeManagedFile(root, path string, data []byte, mode os.FileMode, codes managedFileCodes) error {
 	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0640 {
-			return errors.New("ACTIVE_CONFIG_PERMISSIONS")
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != mode.Perm() {
+			return errors.New(codes.permissions)
 		}
 		if err := verifyOwner(info, managedFileUID(root)); err != nil {
-			return errors.New("ACTIVE_CONFIG_OWNER_INVALID")
+			return errors.New(codes.ownerInvalid)
 		}
-		return writeAtomic(path, data, 0640, true)
+		return writeAtomic(path, data, mode, true)
 	} else if !os.IsNotExist(err) {
-		return errors.New("ACTIVE_CONFIG_UNAVAILABLE")
+		return errors.New(codes.unavailable)
 	}
-	return writeAtomicOwned(path, data, 0640, managedFileUID(root), -1)
+	return writeAtomicOwned(path, data, mode, managedFileUID(root), -1)
+}
+
+func prepareActiveConfig(root string, data []byte) error {
+	return prepareManagedFile(root, activeConfigDir, ActiveConfigPath, data, 0750, 0640, ensureManagedDir, managedFileCodes{
+		directoryCreateFailed: "ACTIVE_DIRECTORY_CREATE_FAILED",
+		permissions:           "ACTIVE_CONFIG_PERMISSIONS",
+		ownerInvalid:          "ACTIVE_CONFIG_OWNER_INVALID",
+		unavailable:           "ACTIVE_CONFIG_UNAVAILABLE",
+	})
 }
 
 func prepareCandidate(root string, data []byte) error {
-	dir := rooted(root, agentDataDir)
-	path := rooted(root, ActiveCandidatePath)
-	if err := ensureNoSymlinkAncestors(root, dir); err != nil {
-		return err
-	}
-	if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
-		return errors.New("DATA_DIRECTORY_CREATE_FAILED")
-	}
-	if err := ensurePrivateDir(dir); err != nil {
-		return err
-	}
-	if err := ensureNoSymlinkAncestors(root, path); err != nil {
-		return err
-	}
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
-			return errors.New("ACTIVE_CANDIDATE_PERMISSIONS")
-		}
-		if err := verifyOwner(info, managedFileUID(root)); err != nil {
-			return errors.New("ACTIVE_CANDIDATE_OWNER_INVALID")
-		}
-		return writeAtomic(path, data, 0600, true)
-	} else if !os.IsNotExist(err) {
-		return errors.New("ACTIVE_CANDIDATE_UNAVAILABLE")
-	}
-	return writeAtomicOwned(path, data, 0600, managedFileUID(root), -1)
+	return prepareManagedFile(root, agentDataDir, ActiveCandidatePath, data, 0700, 0600, ensurePrivateDir, managedFileCodes{
+		directoryCreateFailed: "DATA_DIRECTORY_CREATE_FAILED",
+		permissions:           "ACTIVE_CANDIDATE_PERMISSIONS",
+		ownerInvalid:          "ACTIVE_CANDIDATE_OWNER_INVALID",
+		unavailable:           "ACTIVE_CANDIDATE_UNAVAILABLE",
+	})
 }
 
+// prepareACL keeps its own prefix: it never creates the agent directory and it
+// checks the target's ancestors before the directory, so an unsafe path still
+// wins over a bad directory. Only the write tail is shared.
 func prepareACL(root string, data []byte) error {
 	dir := rooted(root, agentDataDir)
 	path := rooted(root, ACLPath)
@@ -189,18 +205,11 @@ func prepareACL(root string, data []byte) error {
 	if err := ensurePrivateDir(dir); err != nil {
 		return err
 	}
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
-			return errors.New("ACL_PERMISSIONS")
-		}
-		if err := verifyOwner(info, managedFileUID(root)); err != nil {
-			return errors.New("ACL_OWNER_INVALID")
-		}
-		return writeAtomic(path, data, 0600, true)
-	} else if !os.IsNotExist(err) {
-		return errors.New("ACL_UNAVAILABLE")
-	}
-	return writeAtomicOwned(path, data, 0600, managedFileUID(root), -1)
+	return writeManagedFile(root, path, data, 0600, managedFileCodes{
+		permissions:  "ACL_PERMISSIONS",
+		ownerInvalid: "ACL_OWNER_INVALID",
+		unavailable:  "ACL_UNAVAILABLE",
+	})
 }
 
 func verifyOwner(info os.FileInfo, uid int) error {

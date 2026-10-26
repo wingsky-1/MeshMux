@@ -168,7 +168,7 @@ func TestTransientSandboxCoversInstallPaths(t *testing.T) {
 		markers    []string
 	}{
 		{"CAP_CHOWN", "os.Chown on managed files and chown(1) on Agent directories",
-			[]string{"internal/install/node_apply.go:os.Chown", "internal/install/apply.go:os.Chown"}},
+			[]string{"internal/install/apply_shared.go:os.Chown", "internal/install/node_apply.go:restoreFileSnapshots", "internal/install/apply.go:restoreFileSnapshots"}},
 		{"CAP_NET_ADMIN", "nft -c / nft list table need the netfilter netlink socket",
 			[]string{"internal/install/node_stage.go:\"nft\", \"-c\"", "internal/install/node_apply.go:\"nft\", \"-j\""}},
 		{"CAP_DAC_READ_SEARCH", "ss -p reads /proc/<pid>/fd of the non-root sing-box process",

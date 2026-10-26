@@ -467,28 +467,10 @@ func rollbackNodeFailure(result InstallResult, state, previous InstallState, had
 }
 
 func rollbackNodeFiles(ctx context.Context, opts NodeApplyOptions, snapshots []fileSnapshot, restoreRunning bool) bool {
-	ok := true
 	for _, unit := range []string{node.AgentUnit, node.SingBoxUnit, node.ACLUnit} {
 		_, _ = opts.Runner.Run(ctx, "systemctl", "stop", unit)
 	}
-	for i := len(snapshots) - 1; i >= 0; i-- {
-		s := snapshots[i]
-		if !s.Exists {
-			if err := os.Remove(s.Target); err != nil && !os.IsNotExist(err) {
-				ok = false
-			}
-			continue
-		}
-		if err := copyAtomic(s.Backup, s.Target, s.Mode.Perm()); err != nil {
-			ok = false
-			continue
-		}
-		if opts.Root == "/" {
-			if err := os.Chown(s.Target, s.UID, s.GID); err != nil {
-				ok = false
-			}
-		}
-	}
+	ok := restoreFileSnapshots(opts.Root, snapshots)
 	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
 		ok = false
 	}

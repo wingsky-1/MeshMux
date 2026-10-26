@@ -584,15 +584,18 @@ func TestSubscriptionDownloadReturnsPublicLinesOnly(t *testing.T) {
 	}
 }
 
-// TestSubscriptionRejectsPortMismatch proves that a Line whose published port
-// disagrees with the stored transport can never serve a download.
-func TestSubscriptionRejectsPortMismatch(t *testing.T) {
+// refuseSubscriptionAfterMutation breaks one stored invariant of the converged
+// download fixture with mutation, then proves that the download is refused.
+// Every invariant the gate trusts is damaged the same way, so the tests below
+// differ only in the row they break.
+func refuseSubscriptionAfterMutation(t *testing.T, mutation string) {
+	t.Helper()
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.now = func() time.Time { return now }
 	nodeID, _, _, bearer, _ := downloadFixture(t, app, now)
 
-	if _, err := app.store.DB.Exec(`UPDATE line_settings SET port=9443 WHERE node_id=?`, nodeID); err != nil {
+	if _, err := app.store.DB.Exec(mutation, nodeID); err != nil {
 		t.Fatal(err)
 	}
 	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
@@ -601,21 +604,16 @@ func TestSubscriptionRejectsPortMismatch(t *testing.T) {
 	}
 }
 
+// TestSubscriptionRejectsPortMismatch proves that a Line whose published port
+// disagrees with the stored transport can never serve a download.
+func TestSubscriptionRejectsPortMismatch(t *testing.T) {
+	refuseSubscriptionAfterMutation(t, `UPDATE line_settings SET port=9443 WHERE node_id=?`)
+}
+
 // TestSubscriptionRejectsUnenrolledLine proves that a Line without a valid
 // identity can never serve a download.
 func TestSubscriptionRejectsUnenrolledLine(t *testing.T) {
-	app, _ := subscriptionApp(t)
-	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
-	nodeID, _, _, bearer, _ := downloadFixture(t, app, now)
-
-	if _, err := app.store.DB.Exec(`UPDATE node_identities SET revoked=1 WHERE node_id=?`, nodeID); err != nil {
-		t.Fatal(err)
-	}
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("status %d want 404", w.Code)
-	}
+	refuseSubscriptionAfterMutation(t, `UPDATE node_identities SET revoked=1 WHERE node_id=?`)
 }
 
 // TestSubscriptionReportsDatabaseFailure proves that a broken database is

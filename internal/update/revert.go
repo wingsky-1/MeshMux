@@ -157,34 +157,13 @@ func WriteRevertResult(path string, result RevertResult) error {
 	if err != nil {
 		return fail("UPDATE_REVERT_RESULT_WRITE_FAILED", "the revert record could not be encoded")
 	}
-	data = append(data, '\n')
-	file, err := os.CreateTemp(filepath.Dir(path), ".revert-*.part")
-	if err != nil {
-		return fail("UPDATE_REVERT_RESULT_WRITE_FAILED", "the revert result directory is not writable")
-	}
-	temp := file.Name()
-	defer func() {
-		if temp != "" {
-			_ = os.Remove(temp)
-		}
-	}()
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fail("UPDATE_REVERT_RESULT_WRITE_FAILED", "the revert record could not be written")
-	}
-	if err = os.Rename(temp, path); err != nil {
-		return fail("UPDATE_REVERT_RESULT_WRITE_FAILED", "the revert record could not be published")
-	}
-	temp = ""
-	return nil
+	return writeAtomicJSONResult(path, append(data, '\n'), atomicWriteSpec{
+		tmpPattern:    ".revert-*.part",
+		failCode:      "UPDATE_REVERT_RESULT_WRITE_FAILED",
+		dirDetail:     "the revert result directory is not writable",
+		writeDetail:   "the revert record could not be written",
+		publishDetail: "the revert record could not be published",
+	})
 }
 
 // ReadRevertResult reads one verdict under the same strict, private rules as

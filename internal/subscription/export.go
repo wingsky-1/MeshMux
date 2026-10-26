@@ -117,12 +117,37 @@ func exportSingBoxWithRules(lines []Line, credentials []Credential, rules []comp
 			Final:                 exportSingBoxSelectorTag,
 		},
 	}
+	config.Outbounds = clientProxyOutbounds(plan)
+	if len(rules) > 0 {
+		rendered, sets := clientRuleSelection(rules)
+		config.Route.Rules = rendered
+		config.Route.RuleSet = sets
+	}
+	encoded, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, errors.New("EXPORT_RENDER_FAILED")
+	}
+	return append(encoded, '\n'), nil
+}
+
+// clientProxyOutbounds renders the proxy outbounds shared by every sing-box
+// client document: one VLESS/REALITY outbound per selected Line, the selector
+// that holds exactly those outbounds, and the explicit direct outbound.
+//
+// The selector default is the first selected Line. The selector keeps the
+// chosen Lines only, so a client can never fall back to an unknown or
+// unauthorized node. The document shape is platform independent: a desktop
+// client, iOS and Android differ only in how they import this same document,
+// never in the outbound model, so the Mesh endpoint is added by the caller and
+// never by this helper.
+func clientProxyOutbounds(plan *exportPlan) []singBoxClientOutbound {
+	outbounds := make([]singBoxClientOutbound, 0, len(plan.Nodes)+2)
 	selector := singBoxClientOutbound{
 		Type: "selector",
 		Tag:  exportSingBoxSelectorTag,
 	}
 	for _, node := range plan.Nodes {
-		config.Outbounds = append(config.Outbounds, singBoxClientOutbound{
+		outbounds = append(outbounds, singBoxClientOutbound{
 			Type:       "vless",
 			Tag:        node.Label,
 			Server:     node.Line.Server,
@@ -146,25 +171,12 @@ func exportSingBoxWithRules(lines []Line, credentials []Credential, rules []comp
 		})
 		selector.Outbounds = append(selector.Outbounds, node.Label)
 	}
-	// The default route is the first selected Line. The selector keeps the
-	// chosen Lines only, so a client can never fall back to an unknown or
-	// unauthorized node.
 	selector.Default = plan.Nodes[0].Label
-	config.Outbounds = append(config.Outbounds, selector)
-	config.Outbounds = append(config.Outbounds, singBoxClientOutbound{
+	outbounds = append(outbounds, selector)
+	return append(outbounds, singBoxClientOutbound{
 		Type: "direct",
 		Tag:  exportSingBoxDirectTag,
 	})
-	if len(rules) > 0 {
-		rendered, sets := clientRuleSelection(rules)
-		config.Route.Rules = rendered
-		config.Route.RuleSet = sets
-	}
-	encoded, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, errors.New("EXPORT_RENDER_FAILED")
-	}
-	return append(encoded, '\n'), nil
 }
 
 // ExportMihomo renders a standard Mihomo client configuration for the

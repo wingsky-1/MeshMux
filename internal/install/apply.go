@@ -462,7 +462,6 @@ func failAndRollback(result InstallResult, state, previous InstallState, hadPrev
 }
 
 func rollbackManaged(ctx context.Context, opts ApplyOptions, snapshots []fileSnapshot, restoreRunning bool) bool {
-	ok := true
 	// The path unit is the armed privileged surface of #11d. A failed install
 	// must not leave it watching the request directory while its service file is
 	// restored or removed (Task 4 review item 5). A repair rollback re-enables
@@ -471,24 +470,7 @@ func rollbackManaged(ctx context.Context, opts ApplyOptions, snapshots []fileSna
 	for _, unit := range []string{"meshmux-caddy.service", "meshmux-web.service", "meshmux-headscale.service"} {
 		_, _ = opts.Runner.Run(ctx, "systemctl", "stop", unit)
 	}
-	for i := len(snapshots) - 1; i >= 0; i-- {
-		s := snapshots[i]
-		if !s.Exists {
-			if err := os.Remove(s.Target); err != nil && !os.IsNotExist(err) {
-				ok = false
-			}
-			continue
-		}
-		if err := copyAtomic(s.Backup, s.Target, s.Mode.Perm()); err != nil {
-			ok = false
-			continue
-		}
-		if opts.Root == "/" {
-			if err := os.Chown(s.Target, s.UID, s.GID); err != nil {
-				ok = false
-			}
-		}
-	}
+	ok := restoreFileSnapshots(opts.Root, snapshots)
 	if _, err := opts.Runner.Run(ctx, "systemctl", "daemon-reload"); err != nil {
 		ok = false
 	}

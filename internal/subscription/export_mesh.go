@@ -298,41 +298,7 @@ func ExportMeshDevice(input MeshDeviceInput, policies ...MeshPolicy) ([]byte, er
 			Final: exportSingBoxSelectorTag,
 		},
 	}
-	selector := singBoxClientOutbound{
-		Type: "selector",
-		Tag:  exportSingBoxSelectorTag,
-	}
-	for _, node := range plan.Nodes {
-		config.Outbounds = append(config.Outbounds, singBoxClientOutbound{
-			Type:       "vless",
-			Tag:        node.Label,
-			Server:     node.Line.Server,
-			ServerPort: node.Line.Port,
-			UUID:       node.UUID,
-			Flow:       exportVLESSFlow,
-			Network:    exportNetwork,
-			TLS: &singBoxClientTLS{
-				Enabled:    true,
-				ServerName: node.Line.ServerName,
-				UTLS: &singBoxClientUTLS{
-					Enabled:     true,
-					Fingerprint: exportUTFingerprint,
-				},
-				Reality: &singBoxClientReality{
-					Enabled:   true,
-					PublicKey: node.Line.PublicKey,
-					ShortID:   node.Line.ShortID,
-				},
-			},
-		})
-		selector.Outbounds = append(selector.Outbounds, node.Label)
-	}
-	selector.Default = plan.Nodes[0].Label
-	config.Outbounds = append(config.Outbounds, selector)
-	config.Outbounds = append(config.Outbounds, singBoxClientOutbound{
-		Type: "direct",
-		Tag:  exportSingBoxDirectTag,
-	})
+	config.Outbounds = clientProxyOutbounds(plan)
 	encoded, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return nil, errors.New("EXPORT_RENDER_FAILED")

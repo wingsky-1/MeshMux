@@ -69,34 +69,13 @@ func WriteResult(path string, result UpdateResult) error {
 	if err != nil {
 		return fail("UPDATE_RESULT_WRITE_FAILED", "the result record could not be encoded")
 	}
-	data = append(data, '\n')
-	file, err := os.CreateTemp(filepath.Dir(path), ".result-*.part")
-	if err != nil {
-		return fail("UPDATE_RESULT_WRITE_FAILED", "the result directory is not writable")
-	}
-	temp := file.Name()
-	defer func() {
-		if temp != "" {
-			_ = os.Remove(temp)
-		}
-	}()
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fail("UPDATE_RESULT_WRITE_FAILED", "the result record could not be written")
-	}
-	if err = os.Rename(temp, path); err != nil {
-		return fail("UPDATE_RESULT_WRITE_FAILED", "the result record could not be published")
-	}
-	temp = ""
-	return nil
+	return writeAtomicJSONResult(path, append(data, '\n'), atomicWriteSpec{
+		tmpPattern:    ".result-*.part",
+		failCode:      "UPDATE_RESULT_WRITE_FAILED",
+		dirDetail:     "the result directory is not writable",
+		writeDetail:   "the result record could not be written",
+		publishDetail: "the result record could not be published",
+	})
 }
 
 // ReadResult reads one fixed-schema result. An unsafe file (symlink, wrong
