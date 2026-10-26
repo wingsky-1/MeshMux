@@ -19,7 +19,7 @@ func componentNodeConfig(role node.Role) node.Config {
 		Role:         role,
 		VLESSPort:    8443,
 		SSHPort:      2222,
-		AgentVersion: node.CurrentAgentVersion,
+		AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256:  strings.Repeat("b", 64),
 		KernelSHA256: strings.Repeat("c", 64),
 	}

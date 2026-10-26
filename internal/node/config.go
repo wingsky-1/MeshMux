@@ -10,8 +10,9 @@
 // exec.CommandContext and holds the shared runtime flock (AcquireRuntimeLock),
 // and ReadbackLocal in runtime_readback.go reads the live data plane back.
 //
-// The dependency direction is one way: node imports only internal/protocol.
-// internal/web and internal/install import node; node never imports either.
+// The dependency direction is one way: node imports internal/protocol and the
+// standard-library-only internal/buildinfo. internal/web and internal/install
+// import node; node never imports either.
 package node
 
 import (
@@ -24,6 +25,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 )
 
 const (
@@ -46,9 +49,20 @@ const (
 )
 
 const (
-	CandidateSchema     = "meshmux-node/v1"
-	CurrentAgentVersion = "1.0.0-dev"
+	CandidateSchema = "meshmux-node/v1"
 )
+
+// CurrentAgentVersion is this build's Agent identity, projected read-only from
+// the single source internal/buildinfo (#11d spec §5.3, N7).
+//
+// It is deliberately a function and not a variable. A writable package variable
+// could be reassigned at runtime by any importing package, which would move the
+// release manifest projection, the `database_versions` identity row and the
+// upgrade confirmation together with no compile-time protection; a function
+// returns a value no caller can assign. The release build injects the version
+// once, with -ldflags -X .../internal/buildinfo.Version, so there is no second
+// copy to keep in sync.
+func CurrentAgentVersion() string { return buildinfo.Version }
 
 // Role is the Hub-visible node purpose. Line is represented by "edge".
 //
@@ -396,7 +410,7 @@ func (c Config) ValidateInstalled() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	if c.AgentVersion != CurrentAgentVersion {
+	if c.AgentVersion != CurrentAgentVersion() {
 		return errors.New("AGENT_VERSION_INVALID: installed Agent version is not the pinned build")
 	}
 	if !sha256Pattern.MatchString(c.AgentSHA256) {
@@ -815,7 +829,7 @@ func (r Readback) Validate() error {
 	if _, ok := KernelReleaseFor(r.Architecture); !ok {
 		return errors.New("READBACK_INVALID: unsupported architecture")
 	}
-	if r.AgentVersion != CurrentAgentVersion {
+	if r.AgentVersion != CurrentAgentVersion() {
 		return errors.New("READBACK_INVALID: installed Agent version is not pinned")
 	}
 	if !sha256Pattern.MatchString(r.AgentSHA256) || !sha256Pattern.MatchString(r.KernelSHA256) ||

@@ -19,7 +19,7 @@ func TestOutNodesHaveNoPoolLimit(t *testing.T) {
 		cfg := node.Config{
 			HubURL: "https://hub.example.invalid", NodeID: id,
 			Role: node.RoleOut, VLESSPort: 8443 + i, SSHPort: 2222,
-			AgentVersion: node.CurrentAgentVersion,
+			AgentVersion: node.CurrentAgentVersion(),
 		}
 		root := t.TempDir()
 		plan := BuildNodePlanForRoot(root, "op-pool", cfg, "amd64", checks, []int{2222})

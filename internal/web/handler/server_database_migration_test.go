@@ -93,6 +93,16 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 	if approved.BackupOperationID != operationID || approved.BackupRecord != recordPath {
 		t.Fatalf("receipt does not name the confirmed record: %+v", approved)
 	}
+	// The approval acts on the operation directory, never on the flat pointer
+	// <database-backup>/record.json that only the old binary's schemaTooNew
+	// existence check reads.
+	wantRecord := filepath.Join(app.store.Dir, store.DatabaseBackupDirName, operationID, store.DatabaseBackupRecordName)
+	if approved.BackupRecord != wantRecord {
+		t.Fatalf("approval record = %q, want %q", approved.BackupRecord, wantRecord)
+	}
+	if filepath.Dir(approved.BackupRecord) == filepath.Join(app.store.Dir, store.DatabaseBackupDirName) {
+		t.Fatalf("approval wrote the flat pointer %q", approved.BackupRecord)
+	}
 	if stored := readStoredDatabaseRecord(t, recordPath); !stored.IrreversibleApproved {
 		t.Fatal("bit was not stored on the backup record")
 	}

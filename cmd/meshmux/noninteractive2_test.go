@@ -28,7 +28,7 @@ func recordedNodeState(t *testing.T, role node.Role) (install.InstallState, stri
 	cfg := node.Config{
 		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
 		Role: role, VLESSPort: 8443, SSHPort: 2222,
-		AgentVersion: node.CurrentAgentVersion, AgentSHA256: strings.Repeat("b", 64),
+		AgentVersion: node.CurrentAgentVersion(), AgentSHA256: strings.Repeat("b", 64),
 		KernelSHA256: strings.Repeat("c", 64),
 	}
 	operationID := strings.Repeat("1", 32)

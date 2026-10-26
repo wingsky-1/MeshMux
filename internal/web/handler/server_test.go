@@ -34,7 +34,7 @@ func testApp(t *testing.T) (*Server, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
 	c := Config{Listen: "127.0.0.1:9080", Origin: testOrigin, DataDir: filepath.Join(t.TempDir(), "state")}
-	app, err := New(c, slog.New(slog.NewJSONHandler(&logs, nil)))
+	app, err := newServer(c, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

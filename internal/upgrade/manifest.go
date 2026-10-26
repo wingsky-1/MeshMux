@@ -53,6 +53,11 @@ type Manifest struct {
 	PolicySchema         int              `json:"policy_schema"`
 	RoutePolicyRevisions map[string]int64 `json:"route_policy_revisions,omitempty"`
 	Components           []Component      `json:"components"`
+	// DatabaseMigration is the hub target's migration class (#11d spec §5.8):
+	// empty is additive. It rides the target gate in internal/update, not
+	// Validate below, because Validate is the running build's self-check. The
+	// field is part of the manifest bytes, so manifest_sha256 pins it.
+	DatabaseMigration string `json:"database_migration,omitempty"`
 }
 
 // mihomo is the pinned subscription client of the publish gate. It is not a node
@@ -83,7 +88,7 @@ func ForArch(architecture string) (Manifest, error) {
 	if !ok {
 		return Manifest{}, errors.New("MANIFEST_ARCH_INVALID: no pinned release for this architecture")
 	}
-	m := Manifest{Schema: Schema, Version: node.CurrentAgentVersion, Architecture: architecture,
+	m := Manifest{Schema: Schema, Version: node.CurrentAgentVersion(), Architecture: architecture,
 		PolicySchema: PolicySchema, Components: components}
 	return m, m.Validate()
 }
@@ -92,7 +97,7 @@ func ForArch(architecture string) (Manifest, error) {
 // is projected through ForArch, so each embedded table is byte-identical to the
 // single-arch document the approval pins.
 func ForArchSet() (ManifestSet, error) {
-	set := ManifestSet{Schema: SetSchema, Version: node.CurrentAgentVersion, PolicySchema: PolicySchema,
+	set := ManifestSet{Schema: SetSchema, Version: node.CurrentAgentVersion(), PolicySchema: PolicySchema,
 		Manifests: make(map[string]Manifest, len(supportedArchitectures))}
 	for _, architecture := range supportedArchitectures {
 		m, err := ForArch(architecture)
@@ -131,7 +136,7 @@ func (s ManifestSet) Projection(architecture string) (Manifest, []byte, error) {
 // must be present exactly once, agree with the set header, and pass the same
 // running-build self-check as Manifest.Validate. This is the Hub's serving
 // contract; a target release on the Agent side is checked by update's
-// validateTarget instead, because its component table is not the running
+// ValidateTarget instead, because its component table is not the running
 // build's table.
 func (s ManifestSet) Validate() error {
 	if s.Schema != SetSchema {

@@ -214,7 +214,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 					}
 					<div class="settings-grid">
 						<section class="panel"><h2>创建待纳管节点</h2><p class="muted">节点纳管不限个数，Out 池可按需扩展；Out 出口地址在下方节点卡片中配置。</p><a class="button" href="#enroll">纳管节点 →</a></section>
-						<section class="panel"><h2>安装制品</h2><dl class="details"><dt>Agent 版本</dt><dd><code>{ nodedomain.CurrentAgentVersion }</code></dd><dt>内核</dt><dd><code>{ nodedomain.KernelVersion }</code></dd>
+						<section class="panel"><h2>安装制品</h2><dl class="details"><dt>Agent 版本</dt><dd><code>{ nodedomain.CurrentAgentVersion() }</code></dd><dt>内核</dt><dd><code>{ nodedomain.KernelVersion }</code></dd>
 							if artifact != nil {
 								<dt>当前架构</dt><dd>{ artifact.Architecture }</dd><dt>CLI SHA-256</dt><dd><code>{ artifact.SHA256 }</code></dd>
 								<p class="hint">只提供当前 Hub 架构的同一运行中 CLI。其他架构必须使用同源、已核验的构建；不使用 latest 或 curl | sh。</p>

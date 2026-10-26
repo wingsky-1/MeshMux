@@ -56,12 +56,26 @@ MESHMUX_HUB_FIXTURE_DIR="$fixture" /workspace/.ci/bin/install.test \
 /usr/local/libexec/meshmux-caddy validate --config "$fixture/Caddyfile" --adapter caddyfile
 /usr/local/libexec/meshmux-headscale --config "$fixture/headscale.yaml" configtest
 
-for file in "$fixture"/meshmux-*.service; do
+for file in "$fixture"/meshmux-*.service "$fixture"/meshmux-*.path; do
   install -m 0644 "$file" "/etc/systemd/system/${file##*/}"
 done
+install -m 0644 "$fixture/meshmux.conf" /etc/tmpfiles.d/meshmux.conf
 systemd-analyze verify /etc/systemd/system/meshmux-web.service \
   /etc/systemd/system/meshmux-headscale.service \
-  /etc/systemd/system/meshmux-caddy.service
+  /etc/systemd/system/meshmux-caddy.service \
+  /etc/systemd/system/meshmux-hub-dispatch.service \
+  /etc/systemd/system/meshmux-hub-dispatch.path
+
+# The dispatch substrate depends on the exact tmpfiles modes: the Web must be
+# able to write requests and read results, while the ledger tree stays 0600 and
+# the request.done tree stays root-only. staging/ is the unwatched sibling the
+# Web completes a request in, so it needs the same Web-writable mode.
+grep -qx 'd /run/meshmux-hub/requests 0730 root meshmux' /etc/tmpfiles.d/meshmux.conf
+grep -qx 'd /run/meshmux-hub/staging 0730 root meshmux' /etc/tmpfiles.d/meshmux.conf
+grep -qx 'd /run/meshmux-hub/requests.done 0700 root root' /etc/tmpfiles.d/meshmux.conf
+grep -qx 'd /var/lib/meshmux-installer 0711 root root' /etc/tmpfiles.d/meshmux.conf
+grep -qx 'd /var/lib/meshmux-installer/hub-upgrade/results 0750 root meshmux' /etc/tmpfiles.d/meshmux.conf
+grep -q 'ReadWritePaths=/run/meshmux-hub/requests /run/meshmux-hub/staging' /etc/systemd/system/meshmux-web.service
 
 install -m 0644 "$fixture/meshmux-ssh.local" /etc/fail2ban/jail.d/meshmux-ssh.local
 fail2ban-client -t

@@ -19,11 +19,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/headscale"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
@@ -67,15 +69,80 @@ type Server struct {
 	// it nil so the fixed GitHub releases endpoint is read; tests inject a
 	// deterministic tag without a network. It never approves anything.
 	releaseSource func(context.Context) (string, error)
+	// identity is the read-only Hub identity snapshot of #11d (spec §5.4). It
+	// is refreshed by one bounded 30s ticker started in New and stopped in
+	// Close; a page reads it without touching the database. identityMu guards
+	// the snapshot and the refresher handles.
+	identityMu       sync.RWMutex
+	identity         view.HubIdentity
+	identityCancel   context.CancelFunc
+	identityDone     chan struct{}
+	identityInterval time.Duration
+	// opTarget is the read-only journal seam for the identity readback. Task 2
+	// leaves it nil (no journal yet); Task 5 wires it. It is a field rather
+	// than a parameter so the ticker and a page render compare against the
+	// same source. Task 5 must inject it before startHubIdentityRefresh starts
+	// the refresher: the goroutine reads the field every tick, so assigning it
+	// afterwards would both race and leave published snapshots uncompared.
+	opTarget opTargetFunc
+	// digest is the running executable's SHA-256, computed at most once and
+	// only when a verifying operation needs it. It is read-only identity, not
+	// a pin.
+	digestOnce sync.Once
+	digest     string
+	digestErr  error
+	// hubBackup is the producer seam of the Hub backup route (#11d Task 3r).
+	// Production leaves it nil so hubupgrade.CreateBackup always runs; an HTTP
+	// test replaces it to prove the boundary and receipt without a root-owned
+	// manifest. It is never a caller-supplied callback.
+	hubBackup func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error)
+	// hubApply is the handoff seam of the Hub apply route (#11d Task 5). Same
+	// rule as hubBackup: production leaves it nil, a test replaces it.
+	hubApply func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error)
+	// reconcileMu guards the reconcile ticker handles. The ticker runs one
+	// journal pass every 30s; only the startup pass may judge identity and
+	// confirm (spec §5.5).
+	reconcileMu       sync.Mutex
+	reconcileCancel   context.CancelFunc
+	reconcileDone     chan struct{}
+	reconcileInterval time.Duration
 }
 
 type requestKey int
 
 const operationKey requestKey = 0
 
-// New builds the handler runtime with routing and middleware. HTTP tests use
-// it directly; the executable must go through web.New (validation first).
+// New validates the operator configuration and builds the handler runtime.
+// HTTP tests use newServer directly (no lifecycle); the executable must go
+// through web.New (validation first).
 func New(c Config, logger *slog.Logger) (*Server, error) {
+	app, err := newServer(c, logger)
+	if err != nil {
+		return nil, err
+	}
+	// The journal adapter must exist before the identity refresher starts: the
+	// refresher compares every snapshot against the verifying operation, so a
+	// seam assigned later would race it (Task 2 carry). It is a read-only
+	// adapter over the same journal the reconcile pass advances.
+	app.opTarget = app.hubOpTarget
+	// The startup pass is the only one allowed to judge an identity and confirm
+	// (spec §5.5): a ticker in the old process cannot tell "not swapped yet"
+	// from "swapped and failed". It runs before the refresher so the first
+	// published snapshot already sees the confirmed journal state.
+	app.reconcileHubUpgrade(context.Background(), true)
+	// The read-only identity refresher of #11d (spec §5.4) runs for the life of
+	// the process and stops in Close. Observation never depends on a browser
+	// request, and the refresher never gates /healthz and never writes: the
+	// confirmed row was written once, by openStore, before this point.
+	app.startHubIdentityRefresh(context.Background())
+	// The journal state machine advances on its own 30s bound (spec §5.5); it
+	// never confirms, because only a startup pass may.
+	app.startHubUpgradeReconcile(context.Background())
+	return app, nil
+}
+
+// newServer is also used by HTTP tests; the executable must go through New.
+func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	c = sanitizeInstallArtifact(c)
 	s, err := store.OpenStore(c.DataDir)
 	if err != nil {
@@ -194,6 +261,15 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	// explicit operator bit on the Hub database backup record consumed by 11d.
 	// It performs no migration and no database edit.
 	r.Post("/tasks/db-migration/approve", jsonAPI(app.mutation(app.tasksDatabaseMigrationApprove, true)))
+	// The Hub backup producer (#11d Task 3r): one authenticated mutation that
+	// reads a root-owned target manifest and commits one per-operation verified
+	// database backup plus its existence-only flat pointer. Apply/restore are
+	// Task 5/7; this route never hands off and never upgrades.
+	r.Post("/tasks/hub-upgrade/backup", jsonAPI(app.mutation(app.tasksHubUpgradeBackup, true)))
+	// The Hub handoff (#11d Task 5): one authenticated mutation that re-verifies
+	// a backed-up operation, stages the root-pinned target package and queues one
+	// request under /run. It never waits for the upgrade and never claims one.
+	r.Post("/tasks/hub-upgrade/apply", jsonAPI(app.mutation(app.tasksHubUpgradeApply, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
@@ -220,7 +296,11 @@ func New(c Config, logger *slog.Logger) (*Server, error) {
 	return app, nil
 }
 
-func (s *Server) Close() error          { return s.store.Close() }
+func (s *Server) Close() error {
+	s.stopHubUpgradeReconcile()
+	s.stopHubIdentityRefresh()
+	return s.store.Close()
+}
 func (s *Server) Handler() http.Handler { return s.handler }
 
 func (s *Server) boundary(next http.Handler) http.Handler {

@@ -57,7 +57,7 @@ func ConvergeHandoffConfig(root, operationID, expectedSHA256 string) error {
 	if err != nil {
 		return err
 	}
-	cfg.AgentVersion = node.CurrentAgentVersion
+	cfg.AgentVersion = node.CurrentAgentVersion()
 	cfg.AgentSHA256 = expectedSHA256
 	if err := cfg.ValidateInstalled(); err != nil {
 		return errors.New("HANDOFF_CONVERGE_CONFIG_INVALID")
@@ -74,7 +74,7 @@ func ConvergeHandoffConfig(root, operationID, expectedSHA256 string) error {
 	// names the running binary and validates as an installed configuration.
 	written, err := readAgentConfig(root)
 	if err != nil || written.AgentSHA256 != expectedSHA256 ||
-		written.AgentVersion != node.CurrentAgentVersion || written.ValidateInstalled() != nil {
+		written.AgentVersion != node.CurrentAgentVersion() || written.ValidateInstalled() != nil {
 		return errors.New("HANDOFF_CONVERGE_READBACK_FAILED")
 	}
 	return nil

@@ -103,7 +103,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 	apply, readback := fixedTasksForRevision(t, app, created.ID, latest.Revision)[2], fixedTasksForRevision(t, app, created.ID, latest.Revision)[3]
 	release, _ := node.KernelReleaseFor("amd64")
 	evidence := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: release.Version,
 		KernelSHA256: release.BinarySHA256, ActiveRevision: latest.Revision,
 		ConfigSHA256: latest.ConfigSHA256, LocalActive: true, OutDefaultDeny: true,
@@ -158,7 +158,7 @@ func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
 	readback := fixedTasksForRevision(t, app, created.ID, latest.Revision)[3]
 	release, _ := node.KernelReleaseFor("amd64")
 	evidence := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: release.Version,
 		KernelSHA256: release.BinarySHA256, ActiveRevision: latest.Revision,
 		ConfigSHA256: latest.ConfigSHA256, LocalActive: true, OutDefaultDeny: false,
@@ -269,7 +269,7 @@ func TestInstallArtifactBoundariesAndShellQuote(t *testing.T) {
 	}
 	sum := sha256.Sum256(body)
 	app.cfg.InstallArtifact = &InstallArtifact{
-		Path: path, Version: node.CurrentAgentVersion, Architecture: "amd64", SHA256: hex.EncodeToString(sum[:]),
+		Path: path, Version: node.CurrentAgentVersion(), Architecture: "amd64", SHA256: hex.EncodeToString(sum[:]),
 	}
 	w = b.req("GET", "/api/nodes/cli", nil, nil)
 	requireStatus(t, w, 200)

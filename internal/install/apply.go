@@ -328,8 +328,12 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	}
 
 	now := time.Now().UTC()
-	if err := ensureDirectory(rooted(opts.Root, filepath.Dir(installerStatePath)), 0700); err != nil {
-		return fail("stage", "INSTALL_STATE_UNAVAILABLE", "Create a root-owned private installer state directory and retry.")
+	// The installer state root is 0711: the Web must traverse it to read the
+	// root-preset target manifest and the dispatcher result, but it must not be
+	// able to list the tree. Both ledgers below it stay 0600 root and local-line
+	// stays 0700 (spec §5.9, plan ruling 1).
+	if err := ensureHubUpgradeLayout(opts.Root); err != nil {
+		return fail("stage", "INSTALL_STATE_UNAVAILABLE", "Create a root-owned traversable installer state directory and retry.")
 	}
 	operationDir := rooted(opts.Root, "/var/lib/meshmux-installer/operations/"+operationID)
 	if err := ensureDirectory(operationDir, 0700); err != nil {
@@ -834,14 +838,25 @@ func writeState(root string, state InstallState) error {
 	return writeStateAt(root, installerStatePath, state)
 }
 
+// EncodeState returns the exact bytes every installer ledger is written with
+// (#11d Task 6 re-pins the two ledgers directly; the encoder must not drift
+// from the installer's own).
+func EncodeState(state InstallState) ([]byte, error) {
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // writeStateAt persists one ledger to a fixed installer path. The path is
 // always an internal constant selected from the recorded layout.
 func writeStateAt(root, logicalPath string, state InstallState) error {
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := EncodeState(state)
 	if err != nil {
 		return err
 	}
-	return writeBytesAtomic(rooted(root, logicalPath), append(data, '\n'), 0600)
+	return writeBytesAtomic(rooted(root, logicalPath), data, 0600)
 }
 
 func writeBytesAtomic(path string, data []byte, mode os.FileMode) error {

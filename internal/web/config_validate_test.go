@@ -29,7 +29,7 @@ func TestValidateRejectsDevHTTPArtifact(t *testing.T) {
 		DataDir: t.TempDir(),
 		DevHTTP: true,
 		InstallArtifact: &InstallArtifact{
-			Path: path, Version: node.CurrentAgentVersion, Architecture: "amd64", SHA256: hex.EncodeToString(sum[:]),
+			Path: path, Version: node.CurrentAgentVersion(), Architecture: "amd64", SHA256: hex.EncodeToString(sum[:]),
 		},
 	}
 	if err := c.Validate(1000); err == nil || !strings.Contains(err.Error(), "INSTALL_ARTIFACT_INVALID") {

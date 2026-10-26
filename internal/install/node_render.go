@@ -18,6 +18,22 @@ type nodeManagedFile struct {
 	Static bool
 }
 
+func nodeManagedFiles(cfg node.Config, ssh []int, identity node.Identity) (map[string]nodeManagedFile, error) {
+	return nodeManagedFilesForLayout(cfg, ssh, identity, standaloneNodeLayout())
+}
+
+// RenderNodeAgentConfig returns the agent.json document as the installer's
+// own renderer would write it (#11d Task 6 re-pins agent.json with this exact
+// encoder). nodeManagedFiles keeps its independent MarshalIndent path so the
+// byte-equality test compares two writers, not one function with itself.
+func RenderNodeAgentConfig(cfg node.Config) ([]byte, error) {
+	body, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return nil, errors.New("CONFIG_RENDER_FAILED")
+	}
+	return append(body, '\n'), nil
+}
+
 // nodeManagedFilesForLayout renders the fixed managed file set of a Node
 // operation. A co-located Line reuses the Hub's Fail2ban SSH jail instead of
 // installing a second jail for the same SSH listeners, so it never writes

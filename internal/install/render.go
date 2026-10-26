@@ -8,6 +8,12 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/mesh"
 )
 
+// CandidateFiles returns deterministic, UNAPPLIED configurations for Phase B.
+// All interpolation comes from Config.Validate(), never remote user input.
+func CandidateFiles(c Config, ssh []int) (map[string]string, error) {
+	return candidateFiles(c, ssh, false)
+}
+
 // candidateFiles permits internal TLS only to the isolated systemd integration
 // test; no public CLI option can enable it.
 func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, error) {
@@ -135,6 +141,7 @@ RestartSec=5s
 UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
+ReadWritePaths=/run/meshmux-hub/requests /run/meshmux-hub/staging
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
@@ -253,7 +260,7 @@ ignoreregex =
 datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\.\d{1,9})?%%z
 journalmatch = _SYSTEMD_UNIT=meshmux-web.service
 `
-	return map[string]string{
+	files := map[string]string{
 		"/etc/meshmux/Caddyfile":                        caddy,
 		"/etc/meshmux/headscale.yaml":                   headscale,
 		"/etc/systemd/system/meshmux-web.service":       webUnit,
@@ -262,7 +269,11 @@ journalmatch = _SYSTEMD_UNIT=meshmux-web.service
 		"/etc/fail2ban/jail.d/meshmux-ssh.local":        sshJail,
 		"/etc/fail2ban/jail.d/meshmux-web.local":        webJail,
 		"/etc/fail2ban/filter.d/meshmux-web.conf":       webFilter,
-	}, nil
+	}
+	for path, body := range hubDispatchFiles() {
+		files[path] = body
+	}
+	return files, nil
 }
 
 func directCaddyArg(c Config) string {

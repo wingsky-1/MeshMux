@@ -45,10 +45,6 @@ func TestSchema12RuleLibraryAndPresetSeeds(t *testing.T) {
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM route_policies`).Scan(&policySchema); err != nil {
 		t.Fatalf("route_policies table missing after migration: %v", err)
 	}
-	var mirror string
-	if err := s.DB.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='hub_upgrade_operations'`).Scan(&mirror); err != nil {
-		t.Fatalf("11d-reserved mirror table missing after migration: %v", err)
-	}
 }
 
 // The C3 leg: the version bump is last, so a seed failure leaves the version
@@ -86,48 +82,34 @@ func TestSchema12MigrationRecoversFromSeedFailure(t *testing.T) {
 	}
 }
 
-// The C2 lock: a database that already sits at 12 keeps the 11d-reserved
-// mirror (first升到 12，再模拟 11d 合入仍能补齐); a database arriving at 11
-// with mirror rows migrates to 12 without losing them.
-func TestSchema11MirrorBackfill(t *testing.T) {
+// A database arriving at 11 (the 11d-reserved number, which merged with no
+// leg of its own) still migrates through the rule-library leg to the owned
+// schema, and the migration creates no 11d mirror table: the operation
+// journal is authoritative (D3).
+func TestSchema11MigratesWithoutMirror(t *testing.T) {
 	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	// Drop the mirror the fresh migration just backfilled, then re-run: the
-	// ensure step must recreate it without touching the version.
-	if _, err := s.DB.Exec(`DROP TABLE hub_upgrade_operations`); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Migrate(); err != nil {
-		t.Fatalf("Migrate() after mirror drop: %v", err)
-	}
-	var version int
-	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != DatabaseSchemaVersion {
-		t.Fatalf("version after backfill = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
-	}
-	var mirror string
-	if err := s.DB.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='hub_upgrade_operations'`).Scan(&mirror); err != nil {
-		t.Fatalf("mirror not backfilled: %v", err)
-	}
-	// A version-11 database carrying 11d mirror rows (simulated 11d leg
-	// output) migrates to 12 with the rows and the rule library intact.
-	if _, err := s.DB.Exec(`INSERT INTO hub_upgrade_operations(operation_id, target_version, from_version, state, manifest_sha256, package_sha256, db_schema, backup_generation, created_at, updated_at)
-	  VALUES('op11d','1.0.0','1.0.0','done','m','p',11,1,0,0); PRAGMA user_version=11;`); err != nil {
+	// Rewind to the reserved number: the 11d leg never landed, so the 12 leg
+	// must apply on top of 11 exactly as it does on top of 10.
+	if _, err := s.DB.Exec(`PRAGMA user_version=11;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("Migrate() from 11: %v", err)
 	}
-	var rows int
-	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM hub_upgrade_operations WHERE operation_id='op11d'`).Scan(&rows); err != nil || rows != 1 {
-		t.Fatalf("11d mirror rows after migration = %d err=%v, want 1", rows, err)
-	}
+	var version int
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != DatabaseSchemaVersion {
-		t.Fatalf("version after 11→12 = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
+		t.Fatalf("version after 11→12+ = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
 	}
 	if presets, err := policy.New(s.DB).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
-		t.Fatalf("presets after 11→12 = %d %v, want %d", len(presets), err, len(policy.Presets))
+		t.Fatalf("presets after 11→12+ = %d %v, want %d", len(presets), err, len(policy.Presets))
+	}
+	var tables int
+	if err := s.DB.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='hub_upgrade_` + `operations'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("mirror table present after migration: tables=%d err=%v", tables, err)
 	}
 }

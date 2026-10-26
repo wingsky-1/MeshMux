@@ -28,10 +28,12 @@ package store
 // bit lives on the record and no approval table is added.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,7 +42,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 )
 
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
@@ -61,11 +63,12 @@ const (
 	DatabaseSchemaVersion = 17
 
 	// The Hub database backup is independent of the node rollback store
-	// (spec §4.1 "Hub DB 记录独立"). One last verified backup is kept next to
-	// the database, in the same private 0700 data directory, so a restore never
-	// needs a path outside the deployment boundary. The record and payload names
-	// come from the neutral record package, so the Hub slot and the Node store
-	// cannot drift apart.
+	// (spec §4.1 "Hub DB 记录独立"). Verified per-operation backups are kept next
+	// to the database, in the same private 0700 data directory, so a restore
+	// never needs a path outside the deployment boundary. The record and payload
+	// names come from the neutral record package, so the Hub slot and the Node
+	// store cannot drift apart. The flat <root>/record.json is an existence-only
+	// pointer for this file's schemaTooNew check; nothing here reads it.
 	DatabaseBackupDirName        = "database-backup"
 	DatabaseBackupPayloadDirName = backup.PayloadDir
 	DatabaseBackupRecordName     = backup.RecordName
@@ -75,7 +78,13 @@ const (
 // upgrade. A form value never reaches a path or query before this check.
 var DatabaseBackupOperationPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-// databaseVersion is the last-known-good pair of the Hub database.
+// DatabaseVersion is the last-known-good pair of the Hub database.
+type DatabaseVersion struct {
+	Version     string
+	Schema      int
+	ConfirmedAt time.Time
+}
+
 // migrateSchema10 adds the single last-known-good row. It is purely additive:
 // no existing table, row or index changes, so a rollback only needs to drop the
 // table and set user_version back. IF NOT EXISTS keeps the migration replayable
@@ -101,6 +110,11 @@ PRAGMA user_version=10;
 // row may only exist for a database this binary actually opened and can read at
 // the version it owns. A failed readback writes nothing and fails startup rather
 // than leaving a stale "last good" claim behind.
+//
+// It is the only writer of `database_versions`, and it names this build through
+// buildinfo.Version — the same single source as the release manifest projection
+// and node.CurrentAgentVersion (#11d spec §5.3). A row left by another build is
+// healed by the next start of this one, never by a health or management read.
 func (s *Store) confirmDatabaseVersion(now time.Time) error {
 	var version int
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -115,10 +129,35 @@ func (s *Store) confirmDatabaseVersion(now time.Time) error {
   last_good_version=excluded.last_good_version,
   last_good_schema=excluded.last_good_schema,
   confirmed_at=excluded.confirmed_at`,
-		node.CurrentAgentVersion, version, now.UTC().Unix()); err != nil {
+		buildinfo.Version, version, now.UTC().Unix()); err != nil {
 		return errors.New("SCHEMA_CONFIRM_FAILED: the last-good database version could not be recorded")
 	}
 	return nil
+}
+
+// LastGoodDatabaseVersion reads the confirmed row. An absent row is honest: the
+// database was never confirmed by a started binary, which is not the same as a
+// row naming an empty release. It is the one place that parses the row, so the
+// identity readback and every other consumer cannot drift apart.
+func (s *Store) LastGoodDatabaseVersion() (DatabaseVersion, bool, error) {
+	return LastGoodDatabaseVersionFrom(s.DB)
+}
+
+// LastGoodDatabaseVersionFrom is the explicit-handle form, so the identity
+// readback can be replayed through a read-only connection in a test.
+func LastGoodDatabaseVersionFrom(db *sql.DB) (DatabaseVersion, bool, error) {
+	var out DatabaseVersion
+	var confirmed int64
+	err := db.QueryRow(`SELECT last_good_version, last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
+		Scan(&out.Version, &out.Schema, &confirmed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DatabaseVersion{}, false, nil
+	}
+	if err != nil {
+		return DatabaseVersion{}, false, errors.New("DATABASE_UNAVAILABLE")
+	}
+	out.ConfirmedAt = time.Unix(confirmed, 0).UTC()
+	return out, true, nil
 }
 
 // schemaTooNew builds the refusal for a database written by a newer binary. The
@@ -140,13 +179,14 @@ func (s *Store) schemaTooNew(version int) error {
 // refused: a future record schema must not be silently truncated into today's
 // approval semantics.
 //
-// This is the thin adapter over the neutral record package (#11d Task 1): the
+// This is the thin adapter over the neutral record package (#11d Task 1r): the
 // strict decoding, the private-mode rule and the "belongs to this operation"
-// check come from backup.Read with LayoutFlat, and the Web keeps only what is
-// its own policy — the DB_BACKUP_* stable codes and the extra refusal of a record
-// that names no source database schema.
+// check come from backup.Read on <root>/<operationID>/record.json, and the Web
+// keeps only what is its own policy — the DB_BACKUP_* stable codes and the extra
+// refusal of a record that names no source database schema. The flat
+// <root>/record.json pointer is never read here.
 func readDatabaseBackupRecord(root, operationID string) (backup.Record, error) {
-	record, err := backup.Read(root, operationID, backup.LayoutFlat, os.Geteuid())
+	record, err := backup.Read(root, operationID, os.Geteuid())
 	if err != nil {
 		return backup.Record{}, databaseBackupRecordError(err)
 	}
@@ -177,11 +217,11 @@ func databaseBackupRecordError(err error) error {
 // database file, so this check is metadata-only (presence, private modes and the
 // recorded file count), not a re-hash on every operator click; 11d's restore step
 // still runs PRAGMA integrity_check on the copy it opens.
-func verifyDatabaseBackupPayload(record backup.Record, root string) error {
+func verifyDatabaseBackupPayload(record backup.Record, operationDir string) error {
 	if record.PayloadFiles <= 0 {
 		return errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup holds no payload files")
 	}
-	payload := filepath.Join(root, DatabaseBackupPayloadDirName)
+	payload := filepath.Join(operationDir, DatabaseBackupPayloadDirName)
 	if filepath.Clean(record.PayloadPath) != payload {
 		return errors.New("DB_BACKUP_RECORD_CORRUPT: the Hub database backup record names another payload path")
 	}
@@ -256,10 +296,14 @@ func (s *Store) ApproveIrreversibleMigration(operationID string, confirmed bool)
 	if !record.IntegrityOK {
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_RECORD_UNVERIFIED: the Hub database backup has no integrity readback")
 	}
-	if err := verifyDatabaseBackupPayload(record, root); err != nil {
+	operationDir, err := backup.Dir(root, operationID)
+	if err != nil {
+		return databaseMigrationApproval{}, databaseBackupRecordError(err)
+	}
+	if err := verifyDatabaseBackupPayload(record, operationDir); err != nil {
 		return databaseMigrationApproval{}, err
 	}
-	out := databaseMigrationApproval{Record: record, RecordPath: filepath.Join(root, DatabaseBackupRecordName)}
+	out := databaseMigrationApproval{Record: record, RecordPath: filepath.Join(operationDir, DatabaseBackupRecordName)}
 	if record.IrreversibleApproved {
 		out.AlreadyApproved = true
 		return out, nil
@@ -268,7 +312,7 @@ func (s *Store) ApproveIrreversibleMigration(operationID string, confirmed bool)
 	// The bit is written through the record layer's single encoder and its
 	// staged-then-renamed publish, so an approval can never publish half a record
 	// or a record the record layer would refuse to read back.
-	if err := backup.WriteRecord(root, record); err != nil {
+	if err := backup.WriteRecord(operationDir, record); err != nil {
 		return databaseMigrationApproval{}, errors.New("DB_BACKUP_APPROVAL_FAILED: the confirmation could not be stored")
 	}
 	out.Record = record
@@ -280,4 +324,57 @@ func (s *Store) ApproveIrreversibleMigration(operationID string, confirmed bool)
 func ownedByCurrentUser(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return ok && int(stat.Uid) == os.Geteuid()
+}
+
+// VacuumDatabaseCopy is the production VACUUM INTO callback for the Hub backup
+// producer. The destination is fixed by the producer and must not exist: SQLite
+// refuses an existing target, and a stale copy is deleted by the producer after
+// the operation directory is created. VACUUM runs outside any transaction on
+// the store's single connection.
+func (s *Store) VacuumDatabaseCopy(ctx context.Context, dst string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		return errors.New("HUB_BACKUP_VACUUM_FAILED: the VACUUM destination already exists")
+	} else if !os.IsNotExist(err) {
+		return errors.New("HUB_BACKUP_VACUUM_FAILED: the VACUUM destination could not be inspected")
+	}
+	if _, err := s.DB.ExecContext(ctx, "VACUUM INTO ?", dst); err != nil {
+		return errors.New("HUB_BACKUP_VACUUM_FAILED: VACUUM INTO did not produce the copy")
+	}
+	return nil
+}
+
+// IntegrityCheckCopy opens the finished copy read-only and runs
+// PRAGMA integrity_check. It never opens the live database and never writes the
+// copy through a writer connection; immutable=1 makes the check itself prove it
+// cannot touch the file.
+func (s *Store) IntegrityCheckCopy(ctx context.Context, path string) error {
+	u := url.URL{Scheme: "file", Path: path}
+	copyDB, err := sql.Open("sqlite", u.String()+"?mode=ro&immutable=1")
+	if err != nil {
+		return errors.New("HUB_BACKUP_INTEGRITY_FAILED: the database copy could not be opened")
+	}
+	defer copyDB.Close()
+	copyDB.SetMaxOpenConns(1)
+	var result string
+	if err := copyDB.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result); err != nil {
+		return errors.New("HUB_BACKUP_INTEGRITY_FAILED: integrity_check could not run on the copy")
+	}
+	if result != "ok" {
+		return errors.New("HUB_BACKUP_INTEGRITY_FAILED: integrity_check did not return ok")
+	}
+	return nil
+}
+
+// LiveDatabaseSchemaVersion is the live PRAGMA user_version. The producer
+// records it as db_schema; it is never guessed from this build's constant,
+// because a restore compares the copy against the record.
+func (s *Store) LiveDatabaseSchemaVersion(ctx context.Context) (int64, error) {
+	var version int64
+	if err := s.DB.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return 0, errors.New("HUB_BACKUP_SCHEMA_FAILED: the database schema could not be read")
+	}
+	if version <= 0 {
+		return 0, errors.New("HUB_BACKUP_SCHEMA_FAILED: the database reports no schema version")
+	}
+	return version, nil
 }

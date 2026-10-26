@@ -54,14 +54,16 @@ func userVersion(t *testing.T, dir string) int {
 	return version
 }
 
-// hubDatabaseRecord writes the fixed Hub database backup record the gate and the
-// irreversible-confirmation action read. It is metadata only and 0600; the
-// payload is one private database copy, because an approval must never confirm a
-// record that holds nothing to restore.
+// hubDatabaseRecord writes the per-operation Hub database backup record the gate
+// and the irreversible-confirmation action read. It is metadata only and 0600;
+// the payload is one private database copy, because an approval must never
+// confirm a record that holds nothing to restore. The record lives at
+// <data-dir>/database-backup/<op32hex>/record.json, never in the flat pointer.
 func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*backup.Record)) (string, backup.Record) {
 	t.Helper()
 	root := filepath.Join(dataDir, store.DatabaseBackupDirName)
-	payload := filepath.Join(root, store.DatabaseBackupPayloadDirName)
+	opDir := filepath.Join(root, operationID)
+	payload := filepath.Join(opDir, store.DatabaseBackupPayloadDirName)
 	if err := os.MkdirAll(payload, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*b
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, store.DatabaseBackupRecordName)
+	path := filepath.Join(opDir, store.DatabaseBackupRecordName)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -212,8 +214,15 @@ func TestSchemaVersionConfirmedAfterStart(t *testing.T) {
 		Scan(&storedVersion, &storedSchema, &confirmedAt); err != nil {
 		t.Fatalf("last-good row missing: %v", err)
 	}
-	if storedVersion != node.CurrentAgentVersion || storedSchema != store.DatabaseSchemaVersion || confirmedAt <= 0 {
+	stored, ok, err := s.LastGoodDatabaseVersion()
+	if err != nil || !ok {
+		t.Fatalf("last-good readback: ok=%v err=%v", ok, err)
+	}
+	if storedVersion != node.CurrentAgentVersion() || storedSchema != store.DatabaseSchemaVersion || confirmedAt <= 0 {
 		t.Fatalf("last-good row = %q/%d/%d", storedVersion, storedSchema, confirmedAt)
+	}
+	if stored.Version != storedVersion || stored.Schema != int(storedSchema) || stored.ConfirmedAt.Unix() != confirmedAt {
+		t.Fatalf("typed readback = %+v", stored)
 	}
 	var rows int
 	if err := s.DB.QueryRow(`SELECT count(*) FROM database_versions`).Scan(&rows); err != nil || rows != 1 {

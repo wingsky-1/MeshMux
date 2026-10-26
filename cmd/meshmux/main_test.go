@@ -29,3 +29,21 @@ func TestCLIRejectsUnsupportedRolesAndCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestInternalHubDispatchRefusesOpenShape(t *testing.T) {
+	for _, tc := range [][]string{
+		nil,
+		{"--request-dir", "/tmp/not-the-fixed-dir"},
+		{"--target", "2.0.0"},
+		{"--request-dir", "/run/meshmux-hub/requests", "extra"},
+	} {
+		var b bytes.Buffer
+		args := append([]string{"__internal-hub-dispatch"}, tc...)
+		if got := runWithIO(args, strings.NewReader(""), io.Discard, &b); got != 2 {
+			t.Fatalf("run(%v)=%d, want 2", tc, got)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(b.String()), "USAGE: meshmux __internal-hub-dispatch") {
+			t.Fatalf("run(%v) stderr = %q", tc, b.String())
+		}
+	}
+}

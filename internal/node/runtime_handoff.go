@@ -454,14 +454,14 @@ func adoptCrashWindowClaim(root string, cfg Config, selfHash string) (Config, er
 	marker, ok, err := readUpgradeHandoffFile(root)
 	if err != nil || !ok || marker.State != handoffRunning ||
 		marker.OperationID != claim.OperationID ||
-		marker.TargetVersion != CurrentAgentVersion {
+		marker.TargetVersion != CurrentAgentVersion() {
 		return cfg, mismatch("the claim does not match the pending handoff marker")
 	}
 	if err := verifyExecutableHash(rooted(root, AgentBinaryPath), selfHash); err != nil {
 		return cfg, mismatch("the installed Agent binary does not match the claim record")
 	}
 	adopted := cfg
-	adopted.AgentVersion = CurrentAgentVersion
+	adopted.AgentVersion = CurrentAgentVersion()
 	adopted.AgentSHA256 = selfHash
 	if err := adopted.ValidateInstalled(); err != nil {
 		return cfg, mismatch("the recovered configuration does not validate")

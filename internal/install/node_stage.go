@@ -96,7 +96,7 @@ func stageNodeArtifacts(ctx context.Context, result *InstallResult, state *Insta
 		return fail(failures.meshmuxBinary)
 	}
 	installedCfg := cfg
-	installedCfg.AgentVersion = node.CurrentAgentVersion
+	installedCfg.AgentVersion = node.CurrentAgentVersion()
 	installedCfg.AgentSHA256 = agentHash
 	installedCfg.KernelSHA256 = kernelHash
 	compiled, err := node.CompileCandidate(node.Candidate{

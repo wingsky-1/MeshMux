@@ -117,7 +117,7 @@ func (r *localLineRunner) Run(ctx context.Context, name string, args ...string) 
 	}
 	if len(args) == 1 && args[0] == "__internal-agent-version" {
 		r.calls = append(r.calls, name+" "+strings.Join(args, " "))
-		return []byte(node.CurrentAgentVersion + "\n"), nil
+		return []byte(node.CurrentAgentVersion() + "\n"), nil
 	}
 	return r.fakeNodeRunner.Run(ctx, name, args...)
 }
@@ -132,7 +132,7 @@ func makeLocalLineFixture(t *testing.T) *localLineFixture {
 	cfg := node.Config{
 		HubURL: localLineHubOrigin, NodeID: strings.Repeat("a", 32),
 		Role: node.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
-		AgentVersion: node.CurrentAgentVersion,
+		AgentVersion: node.CurrentAgentVersion(),
 	}
 	release, _ := node.KernelReleaseFor("amd64")
 	binary := []byte("fixture sing-box binary for local line")
@@ -168,7 +168,7 @@ func makeLocalLineFixture(t *testing.T) *localLineFixture {
 	}
 	compiledSum := sha256.Sum256(compiled)
 	readback := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: runtimeHash, KernelVersion: node.KernelVersion,
 		KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
 		ConfigSHA256: hex.EncodeToString(compiledSum[:]), LocalActive: true,

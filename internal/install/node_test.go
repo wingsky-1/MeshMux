@@ -191,7 +191,7 @@ func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]
 		}
 	default:
 		if len(args) == 1 && args[0] == "version" {
-			return []byte(node.CurrentAgentVersion + " " + node.KernelVersion), nil
+			return []byte(node.CurrentAgentVersion() + " " + node.KernelVersion), nil
 		}
 	}
 	return nil, nil
@@ -214,7 +214,7 @@ func makeNodeFixture(t *testing.T, role node.Role) *nodeFixture {
 	cfg := node.Config{
 		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
 		Role: role, VLESSPort: 8443, SSHPort: 2222,
-		AgentVersion: node.CurrentAgentVersion,
+		AgentVersion: node.CurrentAgentVersion(),
 	}
 	release, _ := node.KernelReleaseFor("amd64")
 	binary := []byte("fixture sing-box binary " + string(role))
@@ -244,7 +244,7 @@ func makeNodeFixture(t *testing.T, role node.Role) *nodeFixture {
 	runner := &fakeNodeRunner{users: map[string]bool{}, packages: map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}}
 	runner.aclPath = rooted(root, node.ACLPath)
 	readback := node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 		KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 7,
 		ConfigSHA256: strings.Repeat("d", 64), LocalActive: true,
@@ -396,7 +396,7 @@ func nodeManagedFilesForTest(t *testing.T, role node.Role) map[string]nodeManage
 	cfg := node.Config{
 		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
 		Role: role, VLESSPort: 8443, SSHPort: 2222,
-		AgentVersion: node.CurrentAgentVersion,
+		AgentVersion: node.CurrentAgentVersion(),
 	}
 	identity := node.Identity{NodeID: cfg.NodeID, IdentityToken: strings.Repeat("A", 43)}
 	files, err := nodeManagedFilesForLayout(cfg, []int{2222}, identity, standaloneNodeLayout())
@@ -449,7 +449,7 @@ func TestNodeLayoutRepairUsesEffectiveLineLedgerNotHubLedger(t *testing.T) {
 		Role: node.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
 	}
 	recorded := cfg
-	recorded.AgentVersion = node.CurrentAgentVersion
+	recorded.AgentVersion = node.CurrentAgentVersion()
 	recorded.AgentSHA256 = strings.Repeat("b", 64)
 	recorded.KernelSHA256 = strings.Repeat("c", 64)
 	if err := writeLocalLineState(root, InstallState{
@@ -505,7 +505,7 @@ func TestNodeLayoutRepairRejectsUnboundLineLedger(t *testing.T) {
 				Role: node.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
 			}
 			recorded := cfg
-			recorded.AgentVersion = node.CurrentAgentVersion
+			recorded.AgentVersion = node.CurrentAgentVersion()
 			recorded.AgentSHA256 = strings.Repeat("b", 64)
 			recorded.KernelSHA256 = strings.Repeat("c", 64)
 			tc.mutate(&recorded)
@@ -543,7 +543,7 @@ func TestNodeBadArchiveHashDoesNotWriteHostFiles(t *testing.T) {
 
 func TestNodeIdentityPersistedBeforeMetadataFailure(t *testing.T) {
 	f := makeNodeFixture(t, node.RoleOut)
-	f.cfg.AgentVersion = node.CurrentAgentVersion
+	f.cfg.AgentVersion = node.CurrentAgentVersion()
 	f.cfg.AgentSHA256 = strings.Repeat("b", 64)
 	f.cfg.KernelSHA256 = f.binaryHash
 	f.candidate = node.NewCandidateDocument(node.Candidate{
@@ -760,7 +760,7 @@ func TestNodeTableOwnershipDistinguishesAbsentAndProbeFailure(t *testing.T) {
 	root := t.TempDir()
 	recorded := cfg
 	recorded.AgentVersion, recorded.AgentSHA256, recorded.KernelSHA256 =
-		node.CurrentAgentVersion, strings.Repeat("b", 64), strings.Repeat("c", 64)
+		node.CurrentAgentVersion(), strings.Repeat("b", 64), strings.Repeat("c", 64)
 	if err := writeState(root, InstallState{
 		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "installed", Node: &recorded,
 	}); err != nil {
@@ -890,7 +890,7 @@ func TestNodeRepairReusesIdentityAndPreservesLKG(t *testing.T) {
 	compiledHash := sha256.Sum256(compiled)
 	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
 		return node.Readback{
-			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 9,
 			ConfigSHA256: hex.EncodeToString(compiledHash[:]), LocalActive: true,
@@ -968,7 +968,7 @@ func TestNodeRepairDeclaresThatItKeepsTheRecordedCandidate(t *testing.T) {
 	compiledHash := sha256.Sum256(compiled)
 	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
 		return node.Readback{
-			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
 			ConfigSHA256: hex.EncodeToString(compiledHash[:]), LocalActive: true,
@@ -1117,7 +1117,7 @@ func TestNodeFirstInstallAndLedger(t *testing.T) {
 	f.opts.HTTPClient = hub.Client()
 	f.opts.Readback = func(context.Context, node.Config, string, node.CommandRunner) (node.Readback, error) {
 		return node.Readback{
-			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+			Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 			AgentSHA256: strings.Repeat("b", 64), KernelVersion: node.KernelVersion,
 			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
 			ConfigSHA256: strings.Repeat("d", 64), LocalActive: true, OutDefaultDeny: true,
@@ -1193,14 +1193,14 @@ func TestVerifyAgentBinaryRequiresExactVersionProbe(t *testing.T) {
 	newOpts := func(runner CommandRunner) NodeApplyOptions {
 		return NodeApplyOptions{Root: "/", Runner: runner}
 	}
-	r := &probeRunner{out: []byte(node.CurrentAgentVersion + "\n")}
+	r := &probeRunner{out: []byte(node.CurrentAgentVersion() + "\n")}
 	if err := verifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", selfHash); err != nil {
 		t.Fatalf("exact probe = %v, want nil", err)
 	}
 	if len(r.args) != 1 || r.args[0] != "__internal-agent-version" {
 		t.Fatalf("probe argv = %q, want exactly [__internal-agent-version]", r.args)
 	}
-	r = &probeRunner{out: []byte(node.CurrentAgentVersion + " extra")}
+	r = &probeRunner{out: []byte(node.CurrentAgentVersion() + " extra")}
 	if err := verifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", selfHash); err == nil {
 		t.Fatal("substring probe accepted, want AGENT_VERSION_MISMATCH")
 	}
@@ -1208,7 +1208,7 @@ func TestVerifyAgentBinaryRequiresExactVersionProbe(t *testing.T) {
 	if err := verifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", selfHash); err == nil {
 		t.Fatal("failed probe accepted, want AGENT_VERSION_PROBE_FAILED")
 	}
-	r = &probeRunner{out: []byte(node.CurrentAgentVersion + "\n")}
+	r = &probeRunner{out: []byte(node.CurrentAgentVersion() + "\n")}
 	if err := verifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", strings.Repeat("0", 64)); err == nil {
 		t.Fatal("hash mismatch accepted, want AGENT_NOT_SELF_COPY")
 	}

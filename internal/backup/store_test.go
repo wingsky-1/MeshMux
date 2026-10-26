@@ -1,11 +1,9 @@
 package backup
 
-// The store tests pin the two layouts apart: the per-operation store keeps the
-// 11c-3 directory semantics, while the flat Hub slot is a single generation that
-// a new backup replaces atomically. The flat slot has two files and no atomic
-// multi-file commit, so every crash window is tested explicitly
-// (recoverFlatSlot) and GC is a no-op unless the caller asks for keep<1
-// (spec C1/C18, §5.2, §6.2-3, §6.15).
+// The store tests pin the per-operation store (#11d Task 1r): one 0700
+// directory per operation holding one 0600 record and one 0700 payload, a retry
+// that re-verifies instead of overwriting, confirmed-only GC, and the cross-uid
+// ownership rule of the read path (spec C1/C18, §5.9, §6.2-3, §6.15).
 
 import (
 	"bytes"
@@ -24,8 +22,6 @@ const testPolicySchema = 8
 
 // noCheck is the trivial integrity callback of a fixture database copy.
 func noCheck(string) error { return nil }
-
-var errSimulatedCrash = errors.New("simulated crash")
 
 func testSpec(operationID string) Spec {
 	return Spec{
@@ -49,17 +45,6 @@ func codeOf(err error) string {
 	return code
 }
 
-func requireMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	info, err := os.Lstat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	if info.Mode().Perm() != want {
-		t.Fatalf("%s mode = %04o, want %04o", path, info.Mode().Perm(), want)
-	}
-}
-
 // writeTree writes one per-operation record whose payload is a copied snapshot
 // tree, exactly as the Node rollback store does.
 func writeTree(t *testing.T, root string, spec Spec) Record {
@@ -81,18 +66,18 @@ func writeTree(t *testing.T, root string, spec Spec) Record {
 			t.Fatal(err)
 		}
 	}
-	record, err := Write(root, spec, LayoutPerOp, Payload{Kind: PayloadTree, SnapshotDir: source})
+	record, err := Write(root, spec, Payload{Kind: PayloadTree, SnapshotDir: source})
 	if err != nil {
 		t.Fatalf("write per-op record: %v", err)
 	}
 	return record
 }
 
-// stageDB puts the database copy a producer VACUUMed into the flat scratch slot
-// the store promotes from.
-func stageDB(t *testing.T, root string, data []byte) {
+// stagePerOpDB puts the database copy a producer VACUUMed into the operation's
+// scratch payload, which Write verifies and publishes.
+func stagePerOpDB(t *testing.T, root, operationID string, data []byte) {
 	t.Helper()
-	part := filepath.Join(root, PayloadPart)
+	part := filepath.Join(root, operationID, PayloadPart)
 	if err := os.MkdirAll(part, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -101,191 +86,86 @@ func stageDB(t *testing.T, root string, data []byte) {
 	}
 }
 
-// writeDB stages one database copy and publishes it through the flat layout.
-func writeDB(t *testing.T, root string, spec Spec, data []byte) Record {
+// writePerOpDB stages one database copy and publishes it as a per-operation
+// single-database generation.
+func writePerOpDB(t *testing.T, root string, spec Spec, data []byte) Record {
 	t.Helper()
-	stageDB(t, root, data)
-	record, err := Write(root, spec, LayoutFlat, Payload{Kind: PayloadSingleDB, Check: noCheck})
+	stagePerOpDB(t, root, spec.OperationID, data)
+	record, err := Write(root, spec, Payload{Kind: PayloadSingleDB, Check: noCheck})
 	if err != nil {
-		t.Fatalf("write flat record: %v", err)
+		t.Fatalf("write per-op database record: %v", err)
 	}
 	return record
 }
 
-// crashWrite runs one flat write and dies at the named publication step, so the
-// slot is left exactly as a process crash would leave it: no cleanup ran.
-func crashWrite(t *testing.T, root string, spec Spec, stage string) {
-	t.Helper()
-	previous := flatCrashPoint
-	flatCrashPoint = func(reached string) {
-		if reached == stage {
-			panic(errSimulatedCrash)
-		}
-	}
-	defer func() { flatCrashPoint = previous }()
-	func() {
-		defer func() {
-			switch recovered := recover(); recovered {
-			case errSimulatedCrash:
-				return
-			case nil:
-				t.Fatalf("write finished without reaching the %q crash point", stage)
-			default:
-				t.Fatalf("write failed before the %q crash point: %v", stage, recovered)
-			}
-		}()
-		if _, err := Write(root, spec, LayoutFlat, Payload{Kind: PayloadSingleDB, Check: noCheck}); err != nil {
-			panic(err)
-		}
-	}()
-}
-
-// TestSingleDBPayloadRequiresCheck pins the fail-closed rule for a payload the
+// TestPerOpSingleDBRequiresCheck pins the fail-closed rule for a payload the
 // store cannot verify by itself: the producer's integrity callback is required,
 // and a refusal writes no record and leaves no scratch payload behind.
-func TestSingleDBPayloadRequiresCheck(t *testing.T) {
+func TestPerOpSingleDBRequiresCheck(t *testing.T) {
 	root := t.TempDir()
-	stageDB(t, root, []byte("fixture database\n"))
-	_, err := Write(root, testSpec(strings.Repeat("a", 32)), LayoutFlat, Payload{Kind: PayloadSingleDB})
+	op := strings.Repeat("a", 32)
+	stagePerOpDB(t, root, op, []byte("fixture database\n"))
+	_, err := Write(root, testSpec(op), Payload{Kind: PayloadSingleDB})
 	if codeOf(err) != CodeCorrupt {
 		t.Fatalf("write without check = %v, want %s", err, CodeCorrupt)
 	}
+	opDir := filepath.Join(root, op)
 	for _, name := range []string{RecordName, PayloadDir, PayloadPart} {
-		if _, statErr := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(statErr) {
+		if _, statErr := os.Lstat(filepath.Join(opDir, name)); !os.IsNotExist(statErr) {
 			t.Fatalf("a refused write left %q behind: %v", name, statErr)
 		}
 	}
 }
 
-// TestSingleDBIntegrityFailureKeepsOldGeneration is the B8 property on the Hub
-// slot: a copy that fails its integrity check never replaces the generation that
-// is already there, and the scratch copy is cleaned up.
-func TestSingleDBIntegrityFailureKeepsOldGeneration(t *testing.T) {
+// TestPerOpSingleDBIntegrityFailureKeepsOldGeneration is the B8 property: a copy
+// that fails its integrity check never touches another operation's generation,
+// and the scratch copy is cleaned up.
+func TestPerOpSingleDBIntegrityFailureKeepsOldGeneration(t *testing.T) {
 	root := t.TempDir()
-	old := writeDB(t, root, testSpec(strings.Repeat("a", 32)), []byte("generation A\n"))
-	recordPath := filepath.Join(root, RecordName)
-	payloadPath := filepath.Join(old.PayloadPath, SingleDBName)
-	recordBefore, err := os.ReadFile(recordPath)
+	oldOp := strings.Repeat("a", 32)
+	old := writeTree(t, root, testSpec(oldOp))
+	oldRecordPath := filepath.Join(root, oldOp, RecordName)
+	oldPayloadFile := filepath.Join(old.PayloadPath, "usr/local/libexec/meshmuxd")
+	recordBefore, err := os.ReadFile(oldRecordPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloadBefore, err := os.ReadFile(payloadPath)
+	payloadBefore, err := os.ReadFile(oldPayloadFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	stageDB(t, root, []byte("generation B\n"))
-	_, err = Write(root, testSpec(strings.Repeat("b", 32)), LayoutFlat, Payload{
+	newOp := strings.Repeat("b", 32)
+	stagePerOpDB(t, root, newOp, []byte("generation B\n"))
+	_, err = Write(root, testSpec(newOp), Payload{
 		Kind:  PayloadSingleDB,
 		Check: func(string) error { return errors.New("integrity_check: not ok") },
 	})
 	if codeOf(err) != CodeCorrupt {
 		t.Fatalf("integrity failure = %v, want %s", err, CodeCorrupt)
 	}
-	recordAfter, err := os.ReadFile(recordPath)
+	recordAfter, err := os.ReadFile(oldRecordPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(recordBefore, recordAfter) {
-		t.Fatalf("a failed backup changed the record:\nbefore:\n%s\nafter:\n%s", recordBefore, recordAfter)
+		t.Fatalf("a failed backup changed the old record:\nbefore:\n%s\nafter:\n%s", recordBefore, recordAfter)
 	}
-	payloadAfter, err := os.ReadFile(payloadPath)
+	payloadAfter, err := os.ReadFile(oldPayloadFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(payloadBefore, payloadAfter) {
 		t.Fatal("a failed backup changed the retained payload")
 	}
-	if _, statErr := os.Lstat(filepath.Join(root, PayloadPart)); !os.IsNotExist(statErr) {
-		t.Fatalf("the failed copy's scratch payload survived: %v", statErr)
-	}
-	if _, err := Verify(root, old.OperationID, old.FromVersion, old.DBSchema, old.PolicySchema, LayoutFlat, os.Geteuid()); err != nil {
+	if _, err := Verify(root, old.OperationID, old.FromVersion, old.DBSchema, old.PolicySchema, os.Geteuid()); err != nil {
 		t.Fatalf("the retained generation stopped verifying: %v", err)
 	}
-}
-
-// TestFlatWriteCrashWindowsRecover pins the crash recovery of the two-file slot.
-// A crash between the payload renames, one before the record rename, and one
-// after it must all resolve to a generation whose record and payload agree: the
-// old one while the new record is not committed, the new one once it is. A slot
-// where neither pair agrees is corrupt, never guessed.
-func TestFlatWriteCrashWindowsRecover(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		stage  string
-		wantOp string
-		wantDB string
-	}{
-		{"between the payload renames", flatStagePayloadRetired, strings.Repeat("a", 32), "generation A\n"},
-		{"before the record rename", flatStagePayloadPublished, strings.Repeat("a", 32), "generation A\n"},
-		{"after the record rename", flatStageRecordPublished, strings.Repeat("b", 32), "generation B\n"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			old := writeDB(t, root, testSpec(strings.Repeat("a", 32)), []byte("generation A\n"))
-			stageDB(t, root, []byte("generation B\n"))
-			crashWrite(t, root, testSpec(strings.Repeat("b", 32)), tc.stage)
-
-			// Recovery happens on the next entry, not in the crashed write.
-			record, err := Read(root, tc.wantOp, LayoutFlat, os.Geteuid())
-			if err != nil {
-				t.Fatalf("read after the %q crash: %v", tc.stage, err)
-			}
-			if record.OperationID != tc.wantOp {
-				t.Fatalf("recovered record = %s, want %s", record.OperationID, tc.wantOp)
-			}
-			if _, err := Verify(root, record.OperationID, record.FromVersion, record.DBSchema, record.PolicySchema, LayoutFlat, os.Geteuid()); err != nil {
-				t.Fatalf("recovered record does not verify: %v", err)
-			}
-			data, err := os.ReadFile(filepath.Join(root, PayloadDir, SingleDBName))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(data) != tc.wantDB {
-				t.Fatalf("recovered payload = %q, want %q", data, tc.wantDB)
-			}
-			if tc.wantOp == old.OperationID && record.PayloadSHA256 != old.PayloadSHA256 {
-				t.Fatalf("rollback changed the retained digest: %+v", record)
-			}
-			assertNoSlotLeftovers(t, root)
-		})
-	}
-
-	t.Run("neither pair agrees", func(t *testing.T) {
-		root := t.TempDir()
-		record := writeDB(t, root, testSpec(strings.Repeat("a", 32)), []byte("generation A\n"))
-		if err := os.WriteFile(filepath.Join(root, PayloadDir, SingleDBName), []byte("tampered\n"), 0600); err != nil {
-			t.Fatal(err)
+	newDir := filepath.Join(root, newOp)
+	for _, name := range []string{RecordName, PayloadDir, PayloadPart} {
+		if _, statErr := os.Lstat(filepath.Join(newDir, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("the failed operation left %q behind: %v", name, statErr)
 		}
-		trash := filepath.Join(root, PayloadTrashPrefix+"1")
-		if err := os.MkdirAll(trash, 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(trash, SingleDBName), []byte("also tampered\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Read(root, record.OperationID, LayoutFlat, os.Geteuid()); codeOf(err) != CodeCorrupt {
-			t.Fatalf("read of an unrecoverable slot = %v, want %s", err, CodeCorrupt)
-		}
-		if data, err := os.ReadFile(filepath.Join(root, PayloadDir, SingleDBName)); err != nil || string(data) != "tampered\n" {
-			t.Fatalf("an unrecoverable slot was rewritten: %q, %v", data, err)
-		}
-	})
-}
-
-func assertNoSlotLeftovers(t *testing.T, root string) {
-	t.Helper()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		// payload.part is the producer's staged copy, not a slot leftover.
-		if name == RecordName || name == PayloadDir || name == PayloadPart {
-			continue
-		}
-		t.Fatalf("the recovered slot still holds %q", name)
 	}
 }
 
@@ -298,21 +178,19 @@ func TestExpectedOwnerEnforced(t *testing.T) {
 	root := t.TempDir()
 	op := strings.Repeat("a", 32)
 	writeTree(t, root, testSpec(op))
-	flatRoot := filepath.Join(root, "flat")
-	writeDB(t, flatRoot, testSpec(op), []byte("fixture database\n"))
 
-	if _, err := Read(root, op, LayoutPerOp, os.Geteuid()+1); codeOf(err) != CodeCorrupt {
-		t.Fatalf("per-op read with a foreign owner = %v, want %s", err, CodeCorrupt)
+	if _, err := Read(root, op, os.Geteuid()+1); codeOf(err) != CodeCorrupt {
+		t.Fatalf("read with a foreign owner = %v, want %s", err, CodeCorrupt)
 	}
-	if _, err := Read(flatRoot, op, LayoutFlat, os.Geteuid()+1); codeOf(err) != CodeCorrupt {
-		t.Fatalf("flat read with a foreign owner = %v, want %s", err, CodeCorrupt)
-	}
-	if _, err := Verify(root, op, "1.0.0", 10, testPolicySchema, LayoutPerOp, os.Geteuid()+1); codeOf(err) != CodeCorrupt {
-		t.Fatalf("per-op verify with a foreign owner = %v, want %s", err, CodeCorrupt)
+	if _, err := Verify(root, op, "1.0.0", 10, testPolicySchema, os.Geteuid()+1); codeOf(err) != CodeCorrupt {
+		t.Fatalf("verify with a foreign owner = %v, want %s", err, CodeCorrupt)
 	}
 	// The owner the writer used is the one that passes.
-	if _, err := Read(root, op, LayoutPerOp, os.Geteuid()); err != nil {
+	if _, err := Read(root, op, os.Geteuid()); err != nil {
 		t.Fatalf("read as the owning account: %v", err)
+	}
+	if _, err := Verify(root, op, "1.0.0", 10, testPolicySchema, os.Geteuid()); err != nil {
+		t.Fatalf("verify as the owning account: %v", err)
 	}
 }
 
@@ -336,13 +214,13 @@ func TestGCOnlyConfirmedGenerations(t *testing.T) {
 				t.Fatal(err)
 			}
 		case StateConfirmed:
-			if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, LayoutPerOp, record.CreatedAt); err != nil {
+			if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, record.CreatedAt); err != nil {
 				t.Fatalf("confirm %s: %v", op, err)
 			}
 		}
 	}
 
-	removed, err := GC(root, KeepConfirmed, LayoutPerOp)
+	removed, err := GC(root, KeepConfirmed)
 	if err != nil {
 		t.Fatalf("gc: %v", err)
 	}
@@ -362,74 +240,105 @@ func TestGCOnlyConfirmedGenerations(t *testing.T) {
 	// Staged and failed records keep their payloads: they are still restore
 	// sources.
 	for _, op := range ops[3:] {
-		record, err := Read(root, op, LayoutPerOp, os.Geteuid())
+		record, err := Read(root, op, os.Geteuid())
 		if err != nil {
 			t.Fatalf("retained %s unreadable: %v", op, err)
 		}
-		if _, err := Verify(root, op, record.FromVersion, record.DBSchema, record.PolicySchema, LayoutPerOp, os.Geteuid()); err != nil {
+		if _, err := Verify(root, op, record.FromVersion, record.DBSchema, record.PolicySchema, os.Geteuid()); err != nil {
 			t.Fatalf("retained %s payload damaged: %v", op, err)
 		}
 	}
 	// A second GC is a no-op.
-	if again, err := GC(root, KeepConfirmed, LayoutPerOp); err != nil || len(again) != 0 {
+	if again, err := GC(root, KeepConfirmed); err != nil || len(again) != 0 {
 		t.Fatalf("second gc = %q, %v; want none", again, err)
 	}
 }
 
-// TestGCFlatKeepsOneGeneration pins the Hub slot rule: the flat layout holds one
-// generation, so GC(keep>=1) is a no-op and only an explicit keep<1 cleanup of a
-// confirmed generation removes it. A staged generation is never collected.
-func TestGCFlatKeepsOneGeneration(t *testing.T) {
+// TestGCKeepTwoConfirmed pins the Hub keep count: four confirmed generations,
+// keep=2, only the two oldest are collected.
+func TestGCKeepTwoConfirmed(t *testing.T) {
 	root := t.TempDir()
-	record := writeDB(t, root, testSpec(strings.Repeat("a", 32)), []byte("generation A\n"))
-	recordPath := filepath.Join(root, RecordName)
-	before, err := os.ReadFile(recordPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payloadBefore, err := os.ReadFile(filepath.Join(root, PayloadDir, SingleDBName))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, keep := range []int{KeepConfirmed, 2, 100} {
-		removed, err := GC(root, keep, LayoutFlat)
-		if err != nil || len(removed) != 0 {
-			t.Fatalf("flat gc(keep=%d) = %q, %v; want a no-op", keep, removed, err)
+	base := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	ops := []string{strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32), strings.Repeat("4", 32)}
+	for i, op := range ops {
+		spec := testSpec(op)
+		spec.Now = func() time.Time { return base.Add(time.Duration(i) * time.Hour) }
+		record := writeTree(t, root, spec)
+		if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, record.CreatedAt); err != nil {
+			t.Fatalf("confirm %s: %v", op, err)
 		}
 	}
-	after, err := os.ReadFile(recordPath)
+
+	removed, err := GC(root, 2)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("gc: %v", err)
 	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("flat gc(keep=1) changed the record")
+	sort.Strings(removed)
+	if len(removed) != 2 || removed[0] != ops[0] || removed[1] != ops[1] {
+		t.Fatalf("removed = %q, want the two oldest confirmed generations %q", removed, ops[:2])
 	}
-	if payloadAfter, err := os.ReadFile(filepath.Join(root, PayloadDir, SingleDBName)); err != nil || !bytes.Equal(payloadBefore, payloadAfter) {
-		t.Fatalf("flat gc(keep=1) changed the payload: %q, %v", payloadAfter, err)
+	for i, op := range ops {
+		_, statErr := os.Lstat(filepath.Join(root, op))
+		if i < 2 && !os.IsNotExist(statErr) {
+			t.Fatalf("old confirmed %s survived: %v", op, statErr)
+		}
+		if i >= 2 && statErr != nil {
+			t.Fatalf("retained confirmed %s missing: %v", op, statErr)
+		}
+	}
+}
+
+// TestGCNeverCollectsNewestOrStaged pins the two exclusions of the Hub GC: the
+// newest two confirmed generations are never candidates, and a staged or failed
+// generation is never collected even when it is the newest record.
+func TestGCNeverCollectsNewestOrStaged(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	ops := []string{
+		strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32),
+		strings.Repeat("4", 32), strings.Repeat("5", 32),
+	}
+	for i, op := range ops {
+		spec := testSpec(op)
+		spec.Now = func() time.Time { return base.Add(time.Duration(i) * time.Hour) }
+		record := writeTree(t, root, spec)
+		switch i {
+		case 0, 1, 2:
+			if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, record.CreatedAt); err != nil {
+				t.Fatalf("confirm %s: %v", op, err)
+			}
+		case 3:
+			// Still staged and the newest record.
+		case 4:
+			record.State = StateFailed
+			if err := WriteRecord(filepath.Join(root, op), record); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
-	// An explicit keep<1 still refuses a staged generation: it is the only
-	// rollback source this slot has.
-	if removed, err := GC(root, 0, LayoutFlat); err != nil || len(removed) != 0 {
-		t.Fatalf("flat gc(keep=0) on a staged generation = %q, %v; want retained", removed, err)
+	removed, err := GC(root, 2)
+	if err != nil {
+		t.Fatalf("gc: %v", err)
 	}
-	if _, err := Read(root, record.OperationID, LayoutFlat, os.Geteuid()); err != nil {
-		t.Fatalf("staged generation was collected: %v", err)
+	if len(removed) != 1 || removed[0] != ops[0] {
+		t.Fatalf("removed = %q, want only the oldest confirmed generation %q", removed, ops[0])
 	}
-
-	// After confirmation an explicit cleanup removes the generation.
-	if _, err := Confirm(root, record.OperationID, record.TargetVersion, record.PackageSHA256, LayoutFlat, time.Now().UTC()); err != nil {
-		t.Fatalf("confirm: %v", err)
+	if _, statErr := os.Lstat(filepath.Join(root, ops[0])); !os.IsNotExist(statErr) {
+		t.Fatalf("oldest confirmed %s survived: %v", ops[0], statErr)
 	}
-	removed, err := GC(root, 0, LayoutFlat)
-	if err != nil || len(removed) != 1 || removed[0] != record.OperationID {
-		t.Fatalf("flat gc(keep=0) after confirm = %q, %v; want %q", removed, err, record.OperationID)
+	for _, op := range ops[1:] {
+		if _, statErr := os.Lstat(filepath.Join(root, op)); statErr != nil {
+			t.Fatalf("retained %s missing: %v", op, statErr)
+		}
+		record, err := Read(root, op, os.Geteuid())
+		if err != nil {
+			t.Fatalf("retained %s unreadable: %v", op, err)
+		}
+		if _, err := Verify(root, op, record.FromVersion, record.DBSchema, record.PolicySchema, os.Geteuid()); err != nil {
+			t.Fatalf("retained %s payload damaged: %v", op, err)
+		}
 	}
-	if _, err := Read(root, record.OperationID, LayoutFlat, os.Geteuid()); codeOf(err) != CodeMissing {
-		t.Fatalf("collected generation is still readable: %v", err)
-	}
-	assertNoSlotLeftovers(t, root)
 }
 
 // TestGCTrashRenameFailureRetains pins the last line of the collection order: a
@@ -442,7 +351,7 @@ func TestGCTrashRenameFailureRetains(t *testing.T) {
 	spec := testSpec(op)
 	spec.Now = func() time.Time { return created }
 	record := writeTree(t, root, spec)
-	if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, LayoutPerOp, created); err != nil {
+	if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, created); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 
@@ -454,7 +363,7 @@ func TestGCTrashRenameFailureRetains(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(trash, "occupied"), []byte("x"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := GC(root, 0, LayoutPerOp)
+	removed, err := GC(root, 0)
 	if err == nil {
 		t.Fatal("gc reported success although the generation could not be retired")
 	}
@@ -464,66 +373,56 @@ func TestGCTrashRenameFailureRetains(t *testing.T) {
 	if _, statErr := os.Lstat(filepath.Join(root, op)); statErr != nil {
 		t.Fatalf("the generation was not retained: %v", statErr)
 	}
-	if _, err := Read(root, op, LayoutPerOp, os.Geteuid()); err != nil {
+	if _, err := Read(root, op, os.Geteuid()); err != nil {
 		t.Fatalf("the retained generation is unreadable: %v", err)
 	}
 }
 
-// TestConfirmFlatLayoutReadsRootRecord pins N5/§6.17: the flat finalize parses
-// <root>/record.json and never <root>/<op32hex>/record.json, while the per-op
-// layout keeps working. The per-operation tree is residue that is neither
-// adopted nor migrated, so a slot that holds one is refused; the root record is
-// still the only generation that can ever be confirmed.
-func TestConfirmFlatLayoutReadsRootRecord(t *testing.T) {
+// TestWriteSyncsStoreRoot is the Task 1r review carry: a published generation
+// must be durable, so Write fsyncs the store root after the record rename. The
+// journal of the Hub producer is written after this call; without the root sync a
+// power loss could leave a backed_up journal next to no database-backup/<op>/ at
+// all, which is data loss with no restore source.
+func TestWriteSyncsStoreRoot(t *testing.T) {
 	root := t.TempDir()
 	op := strings.Repeat("a", 32)
-	record := writeDB(t, root, testSpec(op), []byte("fixture database\n"))
+	stagePerOpDB(t, root, op, []byte("fixture database copy\n"))
 
-	// A decoy per-operation record naming another target: reading it would
-	// refuse the readback below.
-	decoyDir := filepath.Join(root, op)
-	if err := os.MkdirAll(filepath.Join(decoyDir, PayloadDir), 0700); err != nil {
-		t.Fatal(err)
+	var synced []string
+	old := storeRootSync
+	storeRootSync = func(dir string) error {
+		synced = append(synced, dir)
+		// The record must already be published when the root is flushed.
+		if _, err := os.Lstat(filepath.Join(root, op, RecordName)); err != nil {
+			t.Errorf("store root synced before the record was published: %v", err)
+		}
+		return nil
 	}
-	decoy := record
-	decoy.TargetVersion = "9.9.9"
-	decoy.PayloadPath = filepath.Join(decoyDir, PayloadDir)
-	if err := WriteRecord(decoyDir, decoy); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, LayoutFlat, time.Now().UTC()); codeOf(err) != CodeCorrupt {
-		t.Fatalf("flat confirm with per-op residue = %v, want %s", err, CodeCorrupt)
-	}
-	if stored, err := ReadRecord(decoyDir, op, os.Geteuid()); err != nil || stored.State != StateStaged {
-		t.Fatalf("the per-op residue was confirmed: %+v, %v", stored, err)
-	}
-	if err := os.RemoveAll(decoyDir); err != nil {
-		t.Fatal(err)
-	}
+	defer func() { storeRootSync = old }()
 
-	confirmed, err := Confirm(root, op, record.TargetVersion, record.PackageSHA256, LayoutFlat, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("flat confirm: %v", err)
+	if _, err := Write(root, testSpec(op), Payload{Kind: PayloadSingleDB, Check: noCheck}); err != nil {
+		t.Fatalf("write: %v", err)
 	}
-	if confirmed.State != StateConfirmed || confirmed.ConfirmedAt == nil {
-		t.Fatalf("confirmed record = %+v", confirmed)
+	if len(synced) != 1 || filepath.Clean(synced[0]) != filepath.Clean(root) {
+		t.Fatalf("store root syncs = %v, want exactly %q", synced, root)
 	}
-	if confirmed.PayloadPath != filepath.Join(root, PayloadDir) {
-		t.Fatalf("confirmed payload_path = %q, want the slot payload", confirmed.PayloadPath)
-	}
-	stored, err := Read(root, op, LayoutFlat, os.Geteuid())
-	if err != nil || stored.State != StateConfirmed {
-		t.Fatalf("stored flat record = %+v, %v", stored, err)
-	}
+}
 
-	// The per-operation layout still confirms through the same read path.
-	perOpRoot := t.TempDir()
-	perOp := writeTree(t, perOpRoot, testSpec(strings.Repeat("c", 32)))
-	if _, err := Confirm(perOpRoot, perOp.OperationID, perOp.TargetVersion, perOp.PackageSHA256, LayoutPerOp, time.Now().UTC()); err != nil {
-		t.Fatalf("per-op confirm: %v", err)
-	}
-	storedPerOp, err := Read(perOpRoot, perOp.OperationID, LayoutPerOp, os.Geteuid())
-	if err != nil || storedPerOp.State != StateConfirmed {
-		t.Fatalf("stored per-op record = %+v, %v", storedPerOp, err)
+// TestWriteReportsStoreRootSyncFailure pins that the flush is not best-effort: a
+// store root that cannot be flushed is reported, because a generation the kernel
+// may drop is not a rollback source.
+func TestWriteReportsStoreRootSyncFailure(t *testing.T) {
+	root := t.TempDir()
+	op := strings.Repeat("b", 32)
+	stagePerOpDB(t, root, op, []byte("fixture database copy\n"))
+
+	old := storeRootSync
+	storeRootSync = func(string) error { return errors.New("sync failed") }
+	defer func() { storeRootSync = old }()
+
+	if _, err := Write(root, testSpec(op), Payload{Kind: PayloadSingleDB, Check: noCheck}); err == nil {
+		t.Fatal("a failed store root sync was swallowed")
+	} else if codeOf(err) != CodeCorrupt {
+		t.Fatalf("sync failure code = %s, want %s", codeOf(err), CodeCorrupt)
 	}
 }

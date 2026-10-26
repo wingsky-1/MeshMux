@@ -277,13 +277,6 @@ func (s *Store) migrateSchemaChain() error {
 		}
 		version = 15
 	}
-	// The 11d-reserved leg backfill (C2) runs on every open after the version
-	// chain, like the Out transport table below: a database that already sits
-	// at 12 keeps the 11d mirror table it would otherwise have skipped
-	// forever. Idempotent by construction; an older binary ignores the table.
-	if err = ensureSchema11Mirror(tx); err != nil {
-		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
-	}
 	// The Out dial-parameter table is ensured on every open without a version
 	// step: the aggregation schema numbers above 10 are reserved (11 for 11d,
 	// 12/13/14 for Tasks 3/4/5), so Task 2 takes no number. The table is

@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade/rootexec"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/update"
@@ -43,6 +45,12 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update" {
 		os.Exit(runInternalUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-dispatch" {
+		os.Exit(runInternalHubDispatch(os.Args[2:], os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "__internal-hub-update" {
+		os.Exit(runInternalHubUpdate(os.Args[2:], os.Stderr))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "__internal-update-install" {
 		os.Exit(runInternalUpdateInstall(os.Args[2:], os.Stdout, os.Stderr))
@@ -73,6 +81,12 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	if len(args) > 0 && args[0] == "__internal-update" {
 		return runInternalUpdate(args[1:], stdin, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "__internal-hub-dispatch" {
+		return runInternalHubDispatch(args[1:], stderr)
+	}
+	if len(args) > 0 && args[0] == "__internal-hub-update" {
+		return runInternalHubUpdate(args[1:], stderr)
+	}
 	if len(args) > 0 && args[0] == "__internal-update-install" {
 		return runInternalUpdateInstall(args[1:], stdout, stderr)
 	}
@@ -102,6 +116,65 @@ func runWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Write
 	return runNodeInstall(role, args[2:], stdin, stdout, stderr, nodes)
 }
 
+// runInternalHubDispatch is the fixed root oneshot entry. The only flag is the
+// fixed request directory of the path unit; it accepts no target, digest, path
+// or unit attribute from a caller. Every privileged decision is re-derived from
+// the frozen journal/record and the root manifest inside rootexec.
+func runInternalHubDispatch(args []string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-hub-dispatch", flag.ContinueOnError)
+	// Never echo caller-supplied arguments: unknown flags print only the fixed
+	// usage line.
+	flags.SetOutput(io.Discard)
+	requestDir := flags.String("request-dir", "", "fixed request directory")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *requestDir != hubupgrade.RequestDir {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-hub-dispatch --request-dir /run/meshmux-hub/requests")
+		return 2
+	}
+	cfg := rootexec.DispatchConfig{
+		ManifestDir: hubupgrade.RootManifestDir,
+		RequestDir:  hubupgrade.RequestDir,
+		DoneDir:     hubupgrade.RequestDoneDir,
+		ExecRoot:    rootexec.DefaultExecRoot,
+		ResultsDir:  hubupgrade.ResultsDir,
+		WebUnit:     rootexec.DefaultWebUnit,
+		Now:         time.Now,
+	}
+	if err := rootexec.RunDispatch(context.Background(), cfg); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// runInternalHubUpdate is the staged target package's own entry: the
+// dispatcher began this process from a root-only verified copy with the fixed
+// argv of spec §5.6. It accepts no other flag and re-derives every privileged
+// decision from the frozen journal, record and root manifest.
+func runInternalHubUpdate(args []string, stderr io.Writer) int {
+	flags := flag.NewFlagSet("__internal-hub-update", flag.ContinueOnError)
+	// Never echo caller-supplied arguments.
+	flags.SetOutput(io.Discard)
+	var cfg rootexec.UpdateConfig
+	flags.StringVar(&cfg.Target, "target", "", "approved target version")
+	flags.StringVar(&cfg.ExpectedSHA256, "expected-sha256", "", "verified target package SHA-256")
+	flags.StringVar(&cfg.OperationID, "operation-id", "", "operation ID")
+	flags.StringVar(&cfg.DataDir, "data-dir", "", "Hub data directory")
+	flags.StringVar(&cfg.FromVersion, "from-version", "", "running release before the swap")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "USAGE: meshmux __internal-hub-update --target SEMVER --expected-sha256 HEX --operation-id HEX32 --data-dir PATH --from-version SEMVER")
+		return 2
+	}
+	cfg.Root = "/"
+	cfg.Now = time.Now
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	if err := rootexec.RunUpdate(ctx, cfg, node.ExecRunner{}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
 // runInternalUpdate is the private Agent-driven entry. It accepts exactly one
 // fixed argv and never prompts: a terminal without --confirm-target is refused,
 // because only the Agent may approve an upgrade on this host.
@@ -128,7 +201,7 @@ func runInternalUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		return 3
 	}
 	cfg.WorkDir, cfg.FetchManifest = update.DefaultWorkDir, update.HubManifest
-	cfg.CurrentVersion = node.CurrentAgentVersion
+	cfg.CurrentVersion = node.CurrentAgentVersion()
 	cfg.BackupSource = func() (string, error) {
 		// The record must name what this host is running RIGHT NOW, including
 		// the Agent's live LKG bytes, so capture/refresh the durable snapshot

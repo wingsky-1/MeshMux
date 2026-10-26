@@ -7,12 +7,13 @@ package update
 // Agent's update executor (spec C17).
 //
 // Everything below is frozen 11c-3 surface kept for the callers that already
-// exist: the type aliases, the state constants and the wrappers that pin
-// LayoutPerOp + PayloadTree. The Node store's semantics did not change — one
-// 0700 directory per operation, one 0600 metadata record, one 0600 payload copy
-// of the installer snapshot, staged until a confirmed readback releases an older
-// generation to the N-1 GC. Staged packages live in the update work directory
-// and are never collected here (TestBackupGCNeverCollectsStagedPackages).
+// exist: the type aliases, the state constants and the wrappers that pin the
+// per-operation layout and PayloadTree. The Node store's semantics did not
+// change — one 0700 directory per operation, one 0600 metadata record, one 0600
+// payload copy of the installer snapshot, staged until a confirmed readback
+// releases an older generation to the N-1 GC. Staged packages live in the update
+// work directory and are never collected here
+// (TestBackupGCNeverCollectsStagedPackages).
 //
 // The record is metadata only: no key, token or subscription URL is ever written
 // into it. The payload may contain secrets (Reality keys, the subscription
@@ -83,7 +84,7 @@ func backupRootOf(root string) string {
 // RequireBackupDir returns the 0700 directory of one operation, creating the
 // store and the operation directory when absent.
 func RequireBackupDir(root, operationID string) (string, error) {
-	return backup.Dir(backupRootOf(root), backup.LayoutPerOp, operationID)
+	return backup.Dir(backupRootOf(root), operationID)
 }
 
 // WriteBackupRecord promotes the installer snapshot into the private store and
@@ -92,14 +93,14 @@ func RequireBackupDir(root, operationID string) (string, error) {
 // the record file.
 func WriteBackupRecord(root string, spec BackupSpec) (string, error) {
 	dir := backupRootOf(root)
-	record, err := backup.Write(dir, spec, backup.LayoutPerOp, backup.Payload{
+	record, err := backup.Write(dir, spec, backup.Payload{
 		Kind:        backup.PayloadTree,
 		SnapshotDir: spec.SnapshotDir,
 	})
 	if err != nil {
 		return "", err
 	}
-	recordPath, _ := backup.Paths(filepath.Join(dir, record.OperationID), backup.LayoutPerOp)
+	recordPath, _ := backup.Paths(filepath.Join(dir, record.OperationID))
 	return recordPath, nil
 }
 
@@ -107,15 +108,14 @@ func WriteBackupRecord(root string, spec BackupSpec) (string, error) {
 // its payload are read back from disk under the private-mode rules. It never
 // mutates anything.
 func VerifyBackupRecord(root, operationID, fromVersion string, dbSchema int64, policySchema int) (BackupRecord, error) {
-	return backup.Verify(backupRootOf(root), operationID, fromVersion, dbSchema, policySchema,
-		backup.LayoutPerOp, os.Geteuid())
+	return backup.Verify(backupRootOf(root), operationID, fromVersion, dbSchema, policySchema, os.Geteuid())
 }
 
 // GCBackups collects confirmed generations beyond keep, newest first. Staged
 // and failed records are never candidates: a failed upgrade still needs its
 // rollback source.
 func GCBackups(root string, keep int) ([]string, error) {
-	return backup.GC(backupRootOf(root), keep, backup.LayoutPerOp)
+	return backup.GC(backupRootOf(root), keep)
 }
 
 // readBackupRecord reads the record of one known operation directory, state

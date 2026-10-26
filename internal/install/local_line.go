@@ -255,6 +255,18 @@ func writeNodeState(root string, layout nodeLayout, state InstallState) error {
 	return writeState(root, state)
 }
 
+// readLocalLineState reads the co-located Line ledger from its fixed path.
+func readLocalLineState(root string) (InstallState, bool, error) {
+	return readStateAt(root, localLineStatePath)
+}
+
+// ReadLocalLineState is the exported read point for the privileged Hub upgrade
+// executor (#11d Task 6): it must re-pin the Line ledger whose path is a private
+// install constant, never a caller-selected path.
+func ReadLocalLineState(root string) (InstallState, bool, error) {
+	return readLocalLineState(root)
+}
+
 // writeLocalLineState persists the co-located Line ledger to its fixed path.
 func writeLocalLineState(root string, state InstallState) error {
 	if err := ensureDirectory(rooted(root, filepath.Dir(localLineStatePath)), 0700); err != nil {
@@ -411,7 +423,7 @@ func verifySharedAgentVersion(ctx context.Context, opts NodeApplyOptions, logica
 		return &InstallError{Stage: "stage", Code: "MESHMUX_BINARY_INVALID",
 			Recovery: "The Hub-owned MeshMux runtime did not answer the version probe; repair the Hub first."}
 	}
-	if strings.TrimSpace(string(out)) != node.CurrentAgentVersion {
+	if strings.TrimSpace(string(out)) != node.CurrentAgentVersion() {
 		return &InstallError{Stage: "stage", Code: "MESHMUX_BINARY_INVALID",
 			Recovery: "The Hub-owned MeshMux runtime is not the pinned build; repair the Hub and the Line together."}
 	}

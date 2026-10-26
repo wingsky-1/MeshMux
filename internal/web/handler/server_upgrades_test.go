@@ -34,7 +34,7 @@ func markStagedAndActive(t *testing.T, app *Server, nodeID string) int64 {
 		t.Fatal("missing amd64 kernel release")
 	}
 	detail, err := json.Marshal(node.Readback{
-		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion,
+		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
 		AgentSHA256: strings.Repeat("b", 64), KernelVersion: release.Version,
 		KernelSHA256: release.BinarySHA256, ActiveRevision: latest.Revision,
 		ConfigSHA256: latest.ConfigSHA256, LocalActive: true,
@@ -67,7 +67,7 @@ func TestUpgradePageShowsManifestAndStagedVersusActive(t *testing.T) {
 	w := b.req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 200)
 	body := w.Body.String()
-	for _, want := range []string{"meshmux-release/v1", node.CurrentAgentVersion, "2.11.7", "0.29.5",
+	for _, want := range []string{"meshmux-release/v1", node.CurrentAgentVersion(), "2.11.7", "0.29.5",
 		"1.14.3", "1.19.32", "policy_schema", "route_policy_revisions", "upgrade-line",
 		"staged 已回读为 active", "rev 1", `<span class="badge">派生</span>`} {
 		if !strings.Contains(body, want) {
