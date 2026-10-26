@@ -3,8 +3,8 @@ package store
 // Drift guards between the composer's own small rule model and the rule library
 // it consumes.
 //
-// internal/subscription cannot import internal/policy (policy → compiler →
-// subscription is the existing direction), so the composer re-declares the three
+// internal/subscription cannot import internal/policy (policy → subscription is
+// the existing direction), so the composer re-declares the three
 // actions and the six matcher kinds. This file is the single place that proves
 // the two vocabularies are identical: a library action or matcher the composer
 // does not know would silently refuse every subscription that selects it, and a
@@ -13,7 +13,6 @@ package store
 import (
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
@@ -76,7 +75,7 @@ func TestComposerPinsMatchTheRouteVersionLock(t *testing.T) {
 		}
 	}
 	// The route lock agrees on every case, so the two checks cannot drift.
-	routeCases := []compiler.RulesetPin{
+	routeCases := []policy.RulesetPin{
 		{Source: good.Source, Version: good.Version, SHA256: good.SHA256},
 		{Source: "http://rulesets.example.invalid/a.srs", Version: "1", SHA256: good.SHA256},
 		{Source: "https://rulesets.example.invalid/a.srs?x=1", Version: "1", SHA256: good.SHA256},
@@ -94,6 +93,6 @@ func TestComposerPinsMatchTheRouteVersionLock(t *testing.T) {
 }
 
 // composerPinOf converts a route pin into the composer's pin shape.
-func composerPinOf(pin compiler.RulesetPin) subscription.RuleSetPin {
+func composerPinOf(pin policy.RulesetPin) subscription.RuleSetPin {
 	return subscription.RuleSetPin{Source: pin.Source, Version: pin.Version, SHA256: pin.SHA256}
 }

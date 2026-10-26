@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 // Geo and remote rulesets reuse the version lock of ruleset_pin.go: an exact
 // HTTPS source, an immutable version label and a lowercase SHA-256. A policy
@@ -30,7 +30,7 @@ type RuleSetPins struct {
 // Validate checks every supplied pin and proves each reference in rules has a
 // pin. Unreferenced pins are still validated: a malformed pin in the input is a
 // configuration defect even when no rule currently uses it.
-func (p RuleSetPins) Validate(rules []Rule) error {
+func (p RuleSetPins) Validate(rules []CompilerRule) error {
 	for _, pins := range []map[string]RulesetPin{p.GeoSite, p.GeoIP, p.Remote} {
 		for tag, pin := range pins {
 			if !tagPattern.MatchString(tag) {

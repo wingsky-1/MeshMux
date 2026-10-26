@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// serverRouteFixture is the shape compiler.RenderServerRoute emits. Keeping it
-// literal avoids importing the compiler from the node test: the subscription
+// serverRouteFixture is the shape policy.RenderServerRoute emits. Keeping it
+// literal avoids importing the policy package from the node test: the subscription
 // acceptance test imports node, so that edge would close a test-only cycle.
 const serverRouteFixture = `{
   "rules": [

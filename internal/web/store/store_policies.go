@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
@@ -69,9 +69,9 @@ type RoutePolicy struct {
 // escapes the migration is refused by the strict decoder instead of having the
 // fields silently ignored.
 type RoutePolicyPayload struct {
-	Default compiler.Action `json:"default"`
-	Rules   []compiler.Rule `json:"rules"`
-	Note    string          `json:"note,omitempty"`
+	Default policy.CompilerAction `json:"default"`
+	Rules   []policy.CompilerRule `json:"rules"`
+	Note    string                `json:"note,omitempty"`
 }
 
 // retiredPolicyFields are the two top-level keys Task 6 removed. They are
@@ -152,13 +152,13 @@ func validatePolicy(layer PolicyLayer, name string, payload, pins []byte) error 
 		return err
 	}
 	if layer == PolicyLayerClient {
-		if err := (compiler.ClientPolicy{Default: intent.Default, Rules: intent.Rules}).Validate(); err != nil {
+		if err := (policy.ClientPolicy{Default: intent.Default, Rules: intent.Rules}).Validate(); err != nil {
 			return err
 		}
-	} else if err := (compiler.ServerPolicy{Default: intent.Default, Rules: intent.Rules}).Validate(); err != nil {
+	} else if err := (policy.ServerPolicy{Default: intent.Default, Rules: intent.Rules}).Validate(); err != nil {
 		return err
 	}
-	var pinSet compiler.RuleSetPins
+	var pinSet policy.RuleSetPins
 	decoder = json.NewDecoder(bytes.NewReader(pins))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&pinSet) != nil {

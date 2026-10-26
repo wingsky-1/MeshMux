@@ -2,7 +2,7 @@ package store
 
 // Client document wrappers for the publish gate.
 //
-// compiler.RenderSingBox and compiler.RenderMihomo emit routing fragments, not
+// policy.RenderSingBox and policy.RenderMihomo emit routing fragments, not
 // complete client documents: the fragment has no outbounds/proxy-groups and no
 // rule-provider definitions. A kernel cannot validate a fragment on its own
 // (sing-box refuses a route that names an unknown outbound, and Mihomo refuses
@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 // clientTailscaleTag is the endpoint tag the client policy renderer emits.
@@ -83,7 +83,7 @@ func assembleSingBoxClient(fragment []byte) ([]byte, error) {
 //
 // The proxy groups are neutral placeholders: the exporter's group names, with
 // DIRECT as the only member. No endpoint or credential appears here.
-func assembleMihomoClient(fragment []byte, pins compiler.RuleSetPins, rules []compiler.Rule) ([]byte, error) {
+func assembleMihomoClient(fragment []byte, pins policy.RuleSetPins, rules []policy.CompilerRule) ([]byte, error) {
 	body := strings.TrimSpace(string(fragment))
 	if body == "" || !strings.HasPrefix(body, "rules:") {
 		return nil, errors.New("RENDER_MIHOMO_FAILED: the client fragment is not a rules document")
@@ -108,10 +108,10 @@ func assembleMihomoClient(fragment []byte, pins compiler.RuleSetPins, rules []co
 }
 
 // mihomoRuleProviders declares the rule sets the fragment references. The tags
-// are the same target-neutral tags compiler.ruleSetTags emits, and the URL is
+// are the same target-neutral tags policy.ruleSetTags emits, and the URL is
 // the pinned artifact URL, so the gate validates a declared version rather than
 // an inline guess.
-func mihomoRuleProviders(pins compiler.RuleSetPins, rules []compiler.Rule) (string, error) {
+func mihomoRuleProviders(pins policy.RuleSetPins, rules []policy.CompilerRule) (string, error) {
 	tags := map[string]struct{}{}
 	for _, rule := range rules {
 		for _, code := range rule.Match.GeoSite {
@@ -137,7 +137,7 @@ func mihomoRuleProviders(pins compiler.RuleSetPins, rules []compiler.Rule) (stri
 	for _, tag := range ordered {
 		pin, ok := ruleSetPinFor(pins, tag)
 		if !ok {
-			return "", errors.New(compiler.CodeRulesetUnpinned + ": " + tag + " has no version-locked pin")
+			return "", errors.New(policy.CodeRulesetUnpinned + ": " + tag + " has no version-locked pin")
 		}
 		behavior := "domain"
 		if strings.HasPrefix(tag, "geoip-") {
@@ -155,7 +155,7 @@ func mihomoRuleProviders(pins compiler.RuleSetPins, rules []compiler.Rule) (stri
 
 // ruleSetPinFor resolves the pin of one rendered tag. GeoSite and GeoIP tags
 // are prefixed by the renderer; remote tags are used verbatim.
-func ruleSetPinFor(pins compiler.RuleSetPins, tag string) (compiler.RulesetPin, bool) {
+func ruleSetPinFor(pins policy.RuleSetPins, tag string) (policy.RulesetPin, bool) {
 	if code, ok := strings.CutPrefix(tag, "geosite-"); ok {
 		pin, found := pins.GeoSite[code]
 		return pin, found

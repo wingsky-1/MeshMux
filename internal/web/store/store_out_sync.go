@@ -1102,7 +1102,7 @@ func (s *Store) RepublishOutAuthorizations(now time.Time) {
 // It is the Line-side twin of RepublishOutAuthorizations and exists for the same kind
 // of event: a node lifecycle change (Ruling R9 delete). Deleting an Out must not turn
 // the Lines that used it into silent direct egress, so each Line is drained through
-// the ordinary publication chain, where the compiler refuses an Out reference the Hub
+// the ordinary publication chain, where the policy resolver refuses an Out reference the Hub
 // cannot justify (OUT_BINDING_INVALID) and an unavailable Out fails closed
 // (OUT_OFFLINE_FAIL_CLOSED). A Line with no such policy publishes normally.
 //

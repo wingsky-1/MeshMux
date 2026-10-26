@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 import (
 	"crypto/sha256"
@@ -33,11 +33,11 @@ func testModel() subscription.MeshConfigModel {
 // hash.
 func TestGeneratorsFollowPolicyDataNotHardcodedLists(t *testing.T) {
 	policy := ClientPolicy{
-		Default: ActionProxy,
-		Rules: []Rule{
-			{Priority: 10, Match: Match{Domains: []string{"ai.example.invalid"}}, Action: ActionDirect},
-			{Priority: 20, Match: Match{DomainSuffixes: []string{"example.invalid"}}, Action: ActionProxy},
-			{Priority: 30, Match: Match{IPCIDRs: []string{"203.0.113.0/24"}}, Action: ActionDirect},
+		Default: CompilerActionProxy,
+		Rules: []CompilerRule{
+			{Priority: 10, Match: Match{Domains: []string{"ai.example.invalid"}}, Action: CompilerActionDirect},
+			{Priority: 20, Match: Match{DomainSuffixes: []string{"example.invalid"}}, Action: CompilerActionProxy},
+			{Priority: 30, Match: Match{IPCIDRs: []string{"203.0.113.0/24"}}, Action: CompilerActionDirect},
 		},
 	}
 	first, err := RenderSingBox(policy, RuleSetPins{})
@@ -86,7 +86,7 @@ func TestGeneratorsFollowPolicyDataNotHardcodedLists(t *testing.T) {
 		t.Fatalf("mihomo fragment = %q, want %q", mihomo, want)
 	}
 
-	empty, err := RenderSingBox(ClientPolicy{Default: ActionDirect}, RuleSetPins{})
+	empty, err := RenderSingBox(ClientPolicy{Default: CompilerActionDirect}, RuleSetPins{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,11 +111,11 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 	}
 	pins := RuleSetPins{GeoSite: map[string]RulesetPin{"cn": pin}}
 	policy := ClientPolicy{
-		Default: ActionProxy,
-		Rules: []Rule{{
+		Default: CompilerActionProxy,
+		Rules: []CompilerRule{{
 			Priority: 10,
 			Match:    Match{GeoSite: []string{"cn"}},
-			Action:   ActionDirect,
+			Action:   CompilerActionDirect,
 		}},
 	}
 	if _, err := RenderSingBox(policy, pins); err != nil {
@@ -175,12 +175,12 @@ func TestRulesetVersionLockAndChecksum(t *testing.T) {
 // is refused.
 func TestServerPolicyFailsClosedOnOutOffline(t *testing.T) {
 	policy := ServerPolicy{
-		Default:       ActionDirect,
+		Default:       CompilerActionDirect,
 		OutConfigured: true,
-		Rules: []Rule{{
+		Rules: []CompilerRule{{
 			Priority: 10,
 			Match:    Match{Domains: []string{"ai.example.invalid"}},
-			Action:   ActionOut,
+			Action:   CompilerActionOut,
 		}},
 	}
 	if _, err := ResolveServerPolicy(policy); err == nil {
@@ -203,13 +203,13 @@ func TestServerPolicyFailsClosedOnOutOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Rules[0].Action != ActionDirect || resolved.Default != ActionDirect {
+	if resolved.Rules[0].Action != CompilerActionDirect || resolved.Default != CompilerActionDirect {
 		t.Fatalf("audited fallback did not rewrite the Out action: %#v", resolved)
 	}
 
 	policy.OutAvailable = true
 	resolved, err = ResolveServerPolicy(policy)
-	if err != nil || resolved.Rules[0].Action != ActionOut {
+	if err != nil || resolved.Rules[0].Action != CompilerActionOut {
 		t.Fatalf("healthy Out resolved = %#v err=%v", resolved, err)
 	}
 
@@ -220,13 +220,13 @@ func TestServerPolicyFailsClosedOnOutOffline(t *testing.T) {
 		!strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID") {
 		t.Fatalf("missing Out error = %v, want OUT_BINDING_INVALID", err)
 	}
-	direct := ServerPolicy{Default: ActionDirect}
-	if resolved, err := ResolveServerPolicy(direct); err != nil || resolved.Default != ActionDirect {
+	direct := ServerPolicy{Default: CompilerActionDirect}
+	if resolved, err := ResolveServerPolicy(direct); err != nil || resolved.Default != CompilerActionDirect {
 		t.Fatalf("out-free direct policy = %#v err=%v", resolved, err)
 	}
 }
 
-// TestMeshModelIsConsumedReadOnly proves the compiler copies the non-secret view
+// TestMeshModelIsConsumedReadOnly proves the generator copies the non-secret view
 // model and never guesses a missing node: an unknown or empty Line label is
 // refused, while the tailnet prefixes become the Tailscale rule.
 func TestMeshModelIsConsumedReadOnly(t *testing.T) {
@@ -239,7 +239,7 @@ func TestMeshModelIsConsumedReadOnly(t *testing.T) {
 		policy.Mesh.Hostname != model.Hostname || policy.Mesh.ControlURL != model.ControlURL {
 		t.Fatalf("mesh identity was not consumed read-only: %#v", policy.Mesh)
 	}
-	if len(policy.Rules) != 1 || policy.Rules[0].Action != ActionTailscale ||
+	if len(policy.Rules) != 1 || policy.Rules[0].Action != CompilerActionTailscale ||
 		policy.Rules[0].Match.IPCIDRs[0] != "100.64.0.0/10" {
 		t.Fatalf("mesh policy = %#v, want tailnet-first rules", policy)
 	}
@@ -252,7 +252,7 @@ func TestMeshModelIsConsumedReadOnly(t *testing.T) {
 	model.TailnetPrefixes[0] = "198.51.100.0/24"
 	model.LineLabels[0] = "changed"
 	if policy.Mesh.TailnetPrefixes[0] != "100.64.0.0/10" || policy.Mesh.LineLabels[0] != "tokyo-1" {
-		t.Fatal("the compiler retained caller-owned mesh slices")
+		t.Fatal("the generator retained caller-owned mesh slices")
 	}
 	body, err := RenderSingBox(policy, RuleSetPins{})
 	if err != nil || !strings.Contains(string(body), singBoxTailscaleTag) {
@@ -272,23 +272,23 @@ func TestPolicyRejectsConflictsAndCrossRoleActions(t *testing.T) {
 		policy ClientPolicy
 		want   string
 	}{
-		{"duplicate priority", ClientPolicy{Default: ActionProxy, Rules: []Rule{
-			{Priority: 1, Match: Match{Domains: []string{"a.example.invalid"}}, Action: ActionDirect},
-			{Priority: 1, Match: Match{Domains: []string{"b.example.invalid"}}, Action: ActionDirect},
+		{"duplicate priority", ClientPolicy{Default: CompilerActionProxy, Rules: []CompilerRule{
+			{Priority: 1, Match: Match{Domains: []string{"a.example.invalid"}}, Action: CompilerActionDirect},
+			{Priority: 1, Match: Match{Domains: []string{"b.example.invalid"}}, Action: CompilerActionDirect},
 		}}, CodePolicyConflict},
-		{"two matchers", ClientPolicy{Default: ActionProxy, Rules: []Rule{{
+		{"two matchers", ClientPolicy{Default: CompilerActionProxy, Rules: []CompilerRule{{
 			Priority: 1,
 			Match:    Match{Domains: []string{"a.example.invalid"}, IPCIDRs: []string{"203.0.113.0/24"}},
-			Action:   ActionDirect,
+			Action:   CompilerActionDirect,
 		}}}, CodePolicyInvalid},
-		{"host bits", ClientPolicy{Default: ActionProxy, Rules: []Rule{{
-			Priority: 1, Match: Match{IPCIDRs: []string{"203.0.113.7/24"}}, Action: ActionDirect,
+		{"host bits", ClientPolicy{Default: CompilerActionProxy, Rules: []CompilerRule{{
+			Priority: 1, Match: Match{IPCIDRs: []string{"203.0.113.7/24"}}, Action: CompilerActionDirect,
 		}}}, CodePolicyInvalid},
-		{"client out", ClientPolicy{Default: ActionProxy, Rules: []Rule{{
-			Priority: 1, Match: Match{Domains: []string{"a.example.invalid"}}, Action: ActionOut,
+		{"client out", ClientPolicy{Default: CompilerActionProxy, Rules: []CompilerRule{{
+			Priority: 1, Match: Match{Domains: []string{"a.example.invalid"}}, Action: CompilerActionOut,
 		}}}, CodePolicyInvalid},
-		{"empty matcher", ClientPolicy{Default: ActionProxy, Rules: []Rule{{
-			Priority: 1, Action: ActionDirect,
+		{"empty matcher", ClientPolicy{Default: CompilerActionProxy, Rules: []CompilerRule{{
+			Priority: 1, Action: CompilerActionDirect,
 		}}}, CodePolicyInvalid},
 	}
 	for _, tc := range cases {
@@ -298,7 +298,7 @@ func TestPolicyRejectsConflictsAndCrossRoleActions(t *testing.T) {
 			}
 		})
 	}
-	if err := (ServerPolicy{Default: ActionProxy}).Validate(); err == nil ||
+	if err := (ServerPolicy{Default: CompilerActionProxy}).Validate(); err == nil ||
 		!strings.HasPrefix(err.Error(), CodePolicyInvalid) {
 		t.Fatalf("server proxy default error = %v, want %s", err, CodePolicyInvalid)
 	}

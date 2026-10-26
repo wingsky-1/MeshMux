@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 // PolicySchemaVersion is the schema of the stored policy tables. Every
@@ -41,7 +41,7 @@ const (
 
 // Aggregate AI egress states of one server publication. A publication targets
 // every Line, so its receipt describes the whole fleet: the per-Line states of
-// compiler.AIEgressLine, compiler.AIEgressOut and compiler.AIEgressLineFallback stay as
+// policy.AIEgressLine, policy.AIEgressOut and policy.AIEgressLineFallback stay as
 // they are, and a fleet whose Lines disagree is reported as mixed instead of
 // hiding every Line behind the first one.
 const (
@@ -239,15 +239,15 @@ func (s *Store) publishClientDocuments() (int64, []byte, []byte, error) {
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	policy := compiler.ClientPolicy{Default: intent.Default, Rules: intent.Rules}
-	if err := policy.Validate(); err != nil {
+	clientPolicy := policy.ClientPolicy{Default: intent.Default, Rules: intent.Rules}
+	if err := clientPolicy.Validate(); err != nil {
 		return record.Revision, nil, nil, err
 	}
 	pins, err := decodePolicyPins(record.Pins)
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
-	singBoxFragment, err := compiler.RenderSingBox(policy, pins)
+	singBoxFragment, err := policy.RenderSingBox(clientPolicy, pins)
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
@@ -255,11 +255,11 @@ func (s *Store) publishClientDocuments() (int64, []byte, []byte, error) {
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
-	mihomoFragment, err := compiler.RenderMihomo(policy, pins)
+	mihomoFragment, err := policy.RenderMihomo(clientPolicy, pins)
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
-	mihomo, err := assembleMihomoClient(mihomoFragment, pins, policy.Rules)
+	mihomo, err := assembleMihomoClient(mihomoFragment, pins, clientPolicy.Rules)
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
@@ -308,7 +308,7 @@ func (s *Store) publishServerRoute(fallbackToLine bool, operationID string, now 
 		if err != nil {
 			return nil, record.Revision, "", "", nil, err
 		}
-		policy := compiler.ServerPolicy{
+		serverIntent := policy.ServerPolicy{
 			Default:        intent.Default,
 			Rules:          intent.Rules,
 			OutConfigured:  facts.Configured,
@@ -316,15 +316,15 @@ func (s *Store) publishServerRoute(fallbackToLine bool, operationID string, now 
 			FallbackToLine: fallbackToLine && facts.Configured && !facts.Available,
 			OperationID:    operationID,
 		}
-		state, code := policyEgressState(facts, policy.FallbackToLine)
-		resolved, err := compiler.ResolveServerPolicy(policy)
+		state, code := policyEgressState(facts, serverIntent.FallbackToLine)
+		resolved, err := policy.ResolveServerPolicy(serverIntent)
 		if err != nil {
 			return nil, record.Revision, state, code, nil, err
 		}
 		if err := pins.Validate(resolved.Rules); err != nil {
 			return nil, record.Revision, state, code, nil, err
 		}
-		lineFragment, err := compiler.RenderServerRoute(resolved, pins)
+		lineFragment, err := policy.RenderServerRoute(resolved, pins)
 		if err != nil {
 			return nil, record.Revision, state, code, nil, err
 		}
@@ -382,7 +382,7 @@ func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool
 	}
 	return PublishTarget{
 		LineID: lineID, Candidate: candidate, Config: config,
-		ConfigHash: compiler.Hash(config), Egress: egressState, EgressCode: egressCode,
+		ConfigHash: policy.Hash(config), Egress: egressState, EgressCode: egressCode,
 	}, nil
 }
 
@@ -421,27 +421,27 @@ func (s *Store) gatePolicyAssembly(ctx context.Context, verifier PublishVerifier
 // policyEgressState maps the Out facts onto the documented states.
 func policyEgressState(facts OutEgressFacts, fallback bool) (string, string) {
 	if !facts.Configured {
-		return compiler.AIEgressLine, ""
+		return policy.AIEgressLine, ""
 	}
 	if facts.Available {
-		return compiler.AIEgressOut, ""
+		return policy.AIEgressOut, ""
 	}
 	if fallback {
-		return compiler.AIEgressLineFallback, compiler.CodeOutOfflineFailClosed
+		return policy.AIEgressLineFallback, policy.CodeOutOfflineFailClosed
 	}
-	return PolicyEgressFailClosed, compiler.CodeOutOfflineFailClosed
+	return PolicyEgressFailClosed, policy.CodeOutOfflineFailClosed
 }
 
 // AggregatePolicyEgress reduces the per-Line states of one publication to the
 // single state its receipt reports.
 //
-// Each Line keeps its own state: compiler.AIEgressLine, compiler.AIEgressOut,
-// compiler.AIEgressLineFallback or PolicyEgressFailClosed. The receipt reports
+// Each Line keeps its own state: policy.AIEgressLine, policy.AIEgressOut,
+// policy.AIEgressLineFallback or PolicyEgressFailClosed. The receipt reports
 // that state only when every Line agrees; as soon as the Lines differ the
 // result is PolicyEgressMixed, because one Line's egress must never be
 // presented as every Line's egress. Fail-closed is not loosened by the
 // aggregate: a Line whose bound Out cannot carry the traffic still fails the
-// publication through compiler.ResolveServerPolicy (or, when the policy does
+// publication through policy.ResolveServerPolicy (or, when the policy does
 // not use the Out, keeps its own fail-closed row in Targets). The reported
 // code is the first real reason among the Lines, so it always names a state
 // one Line actually reported.
@@ -465,8 +465,8 @@ func AggregatePolicyEgress(states, codes []string) (string, string) {
 	return aggregate, code
 }
 
-func decodePolicyPins(raw json.RawMessage) (compiler.RuleSetPins, error) {
-	pins := compiler.RuleSetPins{}
+func decodePolicyPins(raw json.RawMessage) (policy.RuleSetPins, error) {
+	pins := policy.RuleSetPins{}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return pins, nil
 	}
@@ -485,9 +485,9 @@ var publishRefusalCodes = []string{
 	"POLICY_NOT_FOUND", "POLICY_PINS_INVALID", "POLICY_CORRUPT", "POLICY_SECRET_REFUSED",
 	CodePolicyLayerRetired, // defensive: publication never writes a policy layer
 	CodePolicyPayloadRetired,
-	compiler.CodePolicyInvalid, compiler.CodePolicyConflict, compiler.CodeRulesetUnpinned,
-	compiler.CodeOutOfflineFailClosed, compiler.CodeOutFallbackUnaudited,
-	compiler.CodeRulesetFetchFailed, compiler.CodeRulesetPinInvalid,
+	policy.CodePolicyInvalid, policy.CodePolicyConflict, policy.CodeRulesetUnpinned,
+	policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited,
+	policy.CodeRulesetFetchFailed, policy.CodeRulesetPinInvalid,
 	"OUT_BINDING_INVALID", CodeOutNotAuthorized,
 	CodePublishNoLines, codePublishGate,
 	node.CodePublishSingBoxMissing, node.CodePublishCheckSingBox,
@@ -520,7 +520,7 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		status = 400
 	case "POLICY_NOT_FOUND":
 		status = 404
-	case compiler.CodePolicyConflict, compiler.CodeOutOfflineFailClosed, compiler.CodeOutFallbackUnaudited,
+	case policy.CodePolicyConflict, policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited,
 		"OUT_BINDING_INVALID", CodeOutNotAuthorized, CodePublishTasksInProgress,
 		CodePublishRevisionChanged, codePublishCandidateChanged:
 		status = 409

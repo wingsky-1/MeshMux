@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 // policiesLiveApp returns a console whose mesh model can be built from one
@@ -143,13 +143,13 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
 		t.Fatalf("validate refusal body: %v %.300s", err, w.Body.String())
 	}
-	if refused.OK || refused.ErrorCode != compiler.CodePolicyConflict || !strings.Contains(refused.Detail, "priority 100 shadows") {
+	if refused.OK || refused.ErrorCode != policy.CodePolicyConflict || !strings.Contains(refused.Detail, "priority 100 shadows") {
 		t.Fatalf("validate refusal = %+v", refused)
 	}
 
 	w = b.post("/policies/validate", url.Values{"rules": {"not json"}})
 	requireStatus(t, w, http.StatusBadRequest)
-	if !strings.Contains(w.Body.String(), compiler.CodePolicyInvalid) {
+	if !strings.Contains(w.Body.String(), policy.CodePolicyInvalid) {
 		t.Fatalf("malformed rules lost POLICY_INVALID: %.300s", w.Body.String())
 	}
 }

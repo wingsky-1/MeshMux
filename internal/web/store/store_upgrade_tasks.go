@@ -231,7 +231,7 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 	// Out facts, exactly like a policy publication. An Out that was unbound,
 	// deleted or went offline therefore invalidates the old route instead of
 	// being republished by an upgrade, and a policy that selects it fails closed
-	// here with the compiler's own code.
+	// here with the policy package's own code.
 	serverRoute, err := LineServerRouteTx(tx, nodeID, now)
 	if err != nil {
 		return ApprovedUpgrade{}, err

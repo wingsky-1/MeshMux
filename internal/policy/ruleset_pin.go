@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 // The ruleset version lock and the retained AI ruleset byte verification.
 //

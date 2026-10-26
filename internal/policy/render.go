@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 // Format generators. They consume only policy intent and pinned rulesets; no
 // domain, CIDR or AI list is embedded here. Each function emits a routing
@@ -23,16 +23,16 @@ const (
 	singBoxTailscaleTag = "meshmux-ts"
 )
 
-var singBoxTags = map[Action]string{
-	ActionDirect:    singBoxDirectTag,
-	ActionProxy:     singBoxProxyTag,
-	ActionTailscale: singBoxTailscaleTag,
+var singBoxTags = map[CompilerAction]string{
+	CompilerActionDirect:    singBoxDirectTag,
+	CompilerActionProxy:     singBoxProxyTag,
+	CompilerActionTailscale: singBoxTailscaleTag,
 }
 
-var mihomoTags = map[Action]string{
-	ActionDirect: "DIRECT",
-	ActionProxy:  "PROXY",
-	ActionOut:    "OUT",
+var mihomoTags = map[CompilerAction]string{
+	CompilerActionDirect: "DIRECT",
+	CompilerActionProxy:  "PROXY",
+	CompilerActionOut:    "OUT",
 }
 
 // RenderSingBox renders the client policy as a sing-box 1.14.3 route fragment.
@@ -43,7 +43,7 @@ func RenderSingBox(policy ClientPolicy, pins RuleSetPins) ([]byte, error) {
 	return renderSingBox(policy.Default, policy.Rules, pins)
 }
 
-func renderSingBox(defaultAction Action, rules []Rule, pins RuleSetPins) ([]byte, error) {
+func renderSingBox(defaultAction CompilerAction, rules []CompilerRule, pins RuleSetPins) ([]byte, error) {
 	if err := pins.Validate(rules); err != nil {
 		return nil, err
 	}

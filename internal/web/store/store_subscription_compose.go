@@ -28,8 +28,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -549,23 +549,23 @@ func selectionRulesTx(tx *sql.Tx, revisions []RuleRevision) ([]subscription.Comp
 // activePolicyPinsTx reads the pinned artifacts of the active server policy
 // revision. No active revision means no pins, so a geo/ruleset rule is refused
 // instead of rendering an unversioned reference.
-func activePolicyPinsTx(tx *sql.Tx) (compiler.RuleSetPins, error) {
+func activePolicyPinsTx(tx *sql.Tx) (policy.RuleSetPins, error) {
 	record, _, err := activePolicyIntentTx(tx, PolicyLayerServer)
 	if err != nil {
 		if isPolicyNotFound(err) {
-			return compiler.RuleSetPins{}, nil
+			return policy.RuleSetPins{}, nil
 		}
-		return compiler.RuleSetPins{}, err
+		return policy.RuleSetPins{}, err
 	}
 	return decodePolicyPins(record.Pins)
 }
 
 // pinsForRule maps the artifact pins of the active revision onto one composer
 // rule, keyed by the geo code or the remote tag the rule names.
-func pinsForRule(kind subscription.MatcherKind, values []string, pins compiler.RuleSetPins) map[string]subscription.RuleSetPin {
+func pinsForRule(kind subscription.MatcherKind, values []string, pins policy.RuleSetPins) map[string]subscription.RuleSetPin {
 	out := make(map[string]subscription.RuleSetPin, len(values))
 	for _, value := range values {
-		var pin compiler.RulesetPin
+		var pin policy.RulesetPin
 		var ok bool
 		switch kind {
 		case subscription.MatcherGeoSite:

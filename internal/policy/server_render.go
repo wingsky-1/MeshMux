@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 // Server route fragment: RenderServerRoute assembles only route.rules,
 // route.rule_set and route.final; the "out" outbound body belongs to the Out
@@ -19,9 +19,9 @@ const (
 	singBoxServerFormat = "binary" // pinned artifacts are .srs rule sets
 )
 
-var serverSingBoxTags = map[Action]string{
-	ActionDirect: singBoxDirectTag,
-	ActionOut:    singBoxServerOutTag,
+var serverSingBoxTags = map[CompilerAction]string{
+	CompilerActionDirect: singBoxDirectTag,
+	CompilerActionOut:    singBoxServerOutTag,
 }
 
 type serverRoute struct {
@@ -38,7 +38,7 @@ type serverRuleSet struct {
 }
 
 // RenderServerRoute renders a resolved ServerPolicy in priority order, mapping
-// ActionOut to "out" and ActionDirect to "direct". The caller must run
+// CompilerActionOut to "out" and CompilerActionDirect to "direct". The caller must run
 // ResolveServerPolicy first; a still-unresolved Out reference is refused here
 // (OUT_BINDING_INVALID / OUT_OFFLINE_FAIL_CLOSED), never rendered as direct.
 func RenderServerRoute(policy ServerPolicy, pins RuleSetPins) ([]byte, error) {
@@ -48,9 +48,9 @@ func RenderServerRoute(policy ServerPolicy, pins RuleSetPins) ([]byte, error) {
 	if err := pins.Validate(policy.Rules); err != nil {
 		return nil, err
 	}
-	needsOut := policy.Default == ActionOut
+	needsOut := policy.Default == CompilerActionOut
 	for _, rule := range policy.Rules {
-		needsOut = needsOut || rule.Action == ActionOut
+		needsOut = needsOut || rule.Action == CompilerActionOut
 	}
 	if needsOut && !policy.OutConfigured {
 		return nil, errors.New("OUT_BINDING_INVALID: the server policy references an Out that is not configured")

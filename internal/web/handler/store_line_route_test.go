@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -272,7 +272,7 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsDeleted(t *testing.T) {
 
 // TestSubscriberSyncFailsClosedWhenTheOutIsOffline is the offline half: the
 // binding still exists, but the Out cannot carry the traffic, so an
-// Out-selecting policy refuses with the compiler's own code.
+// Out-selecting policy refuses with the policy package's own code.
 func TestSubscriberSyncFailsClosedWhenTheOutIsOffline(t *testing.T) {
 	f := newOutSyncFixture(t)
 	s, now, line, out := f.store, f.now, f.line, f.out
@@ -291,8 +291,8 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsOffline(t *testing.T) {
 	}
 	markLineOnline(t, s, line, now)
 	err := prepareSubscriberSyncForLine(s, line, now)
-	if err == nil || !hasErrorCode(err, compiler.CodeOutOfflineFailClosed) {
-		t.Fatalf("publication with an offline Out = %v, want %s", err, compiler.CodeOutOfflineFailClosed)
+	if err == nil || !hasErrorCode(err, policy.CodeOutOfflineFailClosed) {
+		t.Fatalf("publication with an offline Out = %v, want %s", err, policy.CodeOutOfflineFailClosed)
 	}
 	if got := candidateCount(t, s, line); got != revisions {
 		t.Fatalf("offline fail-closed publication stored %d revisions, want %d", got, revisions)
@@ -359,7 +359,7 @@ func TestUpgradeApprovalInvalidatesAStaleRoute(t *testing.T) {
 
 // TestUpgradeApprovalRefusesAnUnboundOut keeps the approval fail-closed: the
 // live policy still selects an Out the Line no longer has, so no revision is
-// stored and the receipt names the stable compiler code.
+// stored and the receipt names the stable policy code.
 func TestUpgradeApprovalRefusesAnUnboundOut(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
 	now := app.now()
@@ -430,8 +430,8 @@ func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 	}
 	before := latestRevision(t, app, nodeID)
 	refusal := decodeApprove(t, approveUpgrade(t, b, nodeID, upgradeManifestVersion(t)), 409)
-	if refusal.OK || refusal.ErrorCode != compiler.CodeOutOfflineFailClosed {
-		t.Fatalf("approval with an offline Out = %+v, want %s", refusal, compiler.CodeOutOfflineFailClosed)
+	if refusal.OK || refusal.ErrorCode != policy.CodeOutOfflineFailClosed {
+		t.Fatalf("approval with an offline Out = %+v, want %s", refusal, policy.CodeOutOfflineFailClosed)
 	}
 	if got := latestRevision(t, app, nodeID); got != before {
 		t.Fatalf("refused approval advanced the revision: %d -> %d", before, got)
@@ -440,7 +440,7 @@ func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 
 // TestSubscriberSyncEndpointReportsTheOutRefusal drives the real sync endpoint:
 // the re-derived route can refuse on the Out contract, and the operator sees the
-// compiler's code instead of a generic SUBSCRIBER_SYNC_FAILED. Nothing is stored
+// policy package's code instead of a generic SUBSCRIBER_SYNC_FAILED. Nothing is stored
 // and the previous revision stays live.
 func TestSubscriberSyncEndpointReportsTheOutRefusal(t *testing.T) {
 	app, _ := testApp(t)
@@ -498,7 +498,7 @@ func TestPublishAssemblyStillUsesTheSameOutFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct assembly: %v", err)
 	}
-	if assembly.EgressState != compiler.AIEgressLine || len(assembly.Targets) != 1 {
+	if assembly.EgressState != policy.AIEgressLine || len(assembly.Targets) != 1 {
 		t.Fatalf("assembly = %s/%+v", assembly.EgressState, assembly.Targets)
 	}
 	if _, err := f.store.PublishPolicyAssembly(assembly, f.now); err != nil {

@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 // Policy intent and the format-independent rule model. One rule has exactly one
 // matcher kind so sing-box (AND within a rule) and Mihomo (one line) express the
@@ -14,7 +14,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
-// Stable compiler refusals; only the code leaves the package.
+// Stable policy refusals; only the code leaves the package.
 const (
 	CodePolicyInvalid     = "POLICY_INVALID"
 	CodePolicyConflict    = "POLICY_CONFLICT"
@@ -22,20 +22,22 @@ const (
 	CodeRulesetUnpinned   = "RULESET_UNPINNED"
 )
 
-// Action is the format-independent egress of one rule.
-type Action string
+// CompilerAction is the format-independent egress of one rule.
+type CompilerAction string
 
 const (
-	ActionDirect    Action = "direct"
-	ActionProxy     Action = "proxy"
-	ActionOut       Action = "out"
-	ActionTailscale Action = "tailscale"
+	CompilerActionDirect    CompilerAction = "direct"
+	CompilerActionProxy     CompilerAction = "proxy"
+	CompilerActionOut       CompilerAction = "out"
+	CompilerActionTailscale CompilerAction = "tailscale"
 )
 
-func (a Action) validClient() bool {
-	return a == ActionDirect || a == ActionProxy || a == ActionTailscale
+func (a CompilerAction) validClient() bool {
+	return a == CompilerActionDirect || a == CompilerActionProxy || a == CompilerActionTailscale
 }
-func (a Action) validServer() bool { return a == ActionDirect || a == ActionOut }
+func (a CompilerAction) validServer() bool {
+	return a == CompilerActionDirect || a == CompilerActionOut
+}
 
 // DNSResolver is the resolver class a matched flow must use: domestic traffic
 // resolves domestically, every other egress through an encrypted resolver on
@@ -47,8 +49,8 @@ const (
 	DNSEncrypted DNSResolver = "encrypted"
 )
 
-func resolverFor(action Action) DNSResolver {
-	if action == ActionDirect {
+func resolverFor(action CompilerAction) DNSResolver {
+	if action == CompilerActionDirect {
 		return DNSDomestic
 	}
 	return DNSEncrypted
@@ -121,19 +123,19 @@ func (m Match) Validate() error {
 	return nil
 }
 
-// Rule couples one matcher to one action. Priorities must be strictly ascending
+// CompilerRule couples one matcher to one action. Priorities must be strictly ascending
 // so input order is rendered order and duplicates are a conflict.
-type Rule struct {
+type CompilerRule struct {
 	Priority int
 	Match    Match
-	Action   Action
+	Action   CompilerAction
 }
 
 // ClientPolicy is client intent plus the read-only non-secret mesh view; it
 // carries no credential or Token.
 type ClientPolicy struct {
-	Default Action
-	Rules   []Rule
+	Default CompilerAction
+	Rules   []CompilerRule
 	Mesh    subscription.MeshConfigModel
 }
 
@@ -142,7 +144,7 @@ func (p ClientPolicy) Validate() error {
 	if !p.Default.validClient() {
 		return errors.New(CodePolicyInvalid + ": the client default must be direct, proxy or tailscale")
 	}
-	if err := validateRules(p.Rules, Action.validClient); err != nil {
+	if err := validateRules(p.Rules, CompilerAction.validClient); err != nil {
 		return err
 	}
 	return checkClientConflicts(p.Rules)
@@ -163,12 +165,12 @@ func MeshClientPolicy(model subscription.MeshConfigModel, proxyLine string) (Cli
 		return ClientPolicy{}, errors.New(CodePolicyNodeUnknown + ": the policy must name a Line label present in the mesh model")
 	}
 	policy := ClientPolicy{
-		Default: ActionProxy,
+		Default: CompilerActionProxy,
 		Mesh:    cloneModel(model),
-		Rules: []Rule{{
+		Rules: []CompilerRule{{
 			Priority: 1000,
 			Match:    Match{IPCIDRs: append([]string(nil), model.TailnetPrefixes...)},
-			Action:   ActionTailscale,
+			Action:   CompilerActionTailscale,
 		}},
 	}
 	return policy, policy.Validate()
@@ -183,8 +185,8 @@ func cloneModel(model subscription.MeshConfigModel) subscription.MeshConfigModel
 // ServerPolicy is server intent: Line direct by default, with only named rules
 // allowed to choose the single optional Out.
 type ServerPolicy struct {
-	Default        Action
-	Rules          []Rule
+	Default        CompilerAction
+	Rules          []CompilerRule
 	OutConfigured  bool
 	OutAvailable   bool
 	FallbackToLine bool
@@ -196,7 +198,7 @@ func (p ServerPolicy) Validate() error {
 	if !p.Default.validServer() {
 		return errors.New(CodePolicyInvalid + ": the server default must be direct or out")
 	}
-	return validateRules(p.Rules, Action.validServer)
+	return validateRules(p.Rules, CompilerAction.validServer)
 }
 
 // ResolveServerPolicy applies the Out contract before rendering: an unavailable
@@ -206,9 +208,9 @@ func ResolveServerPolicy(policy ServerPolicy) (ServerPolicy, error) {
 	if err := policy.Validate(); err != nil {
 		return policy, err
 	}
-	needsOut := policy.Default == ActionOut
+	needsOut := policy.Default == CompilerActionOut
 	for _, rule := range policy.Rules {
-		needsOut = needsOut || rule.Action == ActionOut
+		needsOut = needsOut || rule.Action == CompilerActionOut
 	}
 	if !needsOut {
 		return policy, nil
@@ -226,19 +228,19 @@ func ResolveServerPolicy(policy ServerPolicy) (ServerPolicy, error) {
 		return policy, errors.New(CodeOutFallbackUnaudited + ": the explicit line fallback needs an operation id so the deviation can be audited")
 	}
 	resolved := policy
-	resolved.Rules = append([]Rule(nil), policy.Rules...)
-	if resolved.Default == ActionOut {
-		resolved.Default = ActionDirect
+	resolved.Rules = append([]CompilerRule(nil), policy.Rules...)
+	if resolved.Default == CompilerActionOut {
+		resolved.Default = CompilerActionDirect
 	}
 	for index := range resolved.Rules {
-		if resolved.Rules[index].Action == ActionOut {
-			resolved.Rules[index].Action = ActionDirect
+		if resolved.Rules[index].Action == CompilerActionOut {
+			resolved.Rules[index].Action = CompilerActionDirect
 		}
 	}
 	return resolved, nil
 }
 
-func validateRules(rules []Rule, allowed func(Action) bool) error {
+func validateRules(rules []CompilerRule, allowed func(CompilerAction) bool) error {
 	for index, rule := range rules {
 		if rule.Priority <= 0 {
 			return errors.New(CodePolicyInvalid + ": every rule needs a positive priority")

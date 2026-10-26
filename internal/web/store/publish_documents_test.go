@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 func TestAssembleSingBoxClientAddsEndpointOnlyForARouteReference(t *testing.T) {
@@ -65,8 +65,8 @@ func TestAssembleSingBoxClientAddsEndpointOnlyForARouteReference(t *testing.T) {
 func TestMihomoRuleProviderURLIsAQuotedYAMLScalar(t *testing.T) {
 	source := "https://rulesets.example.invalid/2026-10-24/rules:v1#lock"
 	providers, err := mihomoRuleProviders(
-		compiler.RuleSetPins{Remote: map[string]compiler.RulesetPin{"lock": {Source: source}}},
-		[]compiler.Rule{{Match: compiler.Match{RuleSets: []string{"lock"}}}},
+		policy.RuleSetPins{Remote: map[string]policy.RulesetPin{"lock": {Source: source}}},
+		[]policy.CompilerRule{{Match: policy.Match{RuleSets: []string{"lock"}}}},
 	)
 	if err != nil {
 		t.Fatal(err)

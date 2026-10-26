@@ -9,7 +9,7 @@ package store
 //     state (the Out-free deployment), not a degradation;
 //   - an enabled binding whose Out is offline, still converging or partially
 //     failed: the facts report the Out as unavailable together with the stable
-//     reason. The composer/compiler refuses a route that would leak from the
+//     reason. The composer/policy resolver refuses a route that would leak from the
 //     Line address rather than treating the fault as a direct egress.
 //
 // This file only reads. It reuses the T3 derivation (LineOutEgressStatusTx) and

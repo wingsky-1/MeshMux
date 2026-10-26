@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -25,44 +25,44 @@ const defaultServerAIRulesetTag = "ai"
 // without one falls back to the read-only mesh model (client) and
 // DefaultServerPolicy (server). An active payload that no longer validates is
 // never presented as live: the page shows the design draft and the conflict.
-func (app *Server) policySnapshot(now time.Time) (view.PolicyPageView, compiler.ClientPolicy, bool) {
+func (app *Server) policySnapshot(now time.Time) (view.PolicyPageView, policy.ClientPolicy, bool) {
 	out := app.policyOutState(now)
 	_, clientIntent, clientErr := app.ActivePolicyIntent(store.PolicyLayerClient)
 	_, serverIntent, serverErr := app.ActivePolicyIntent(store.PolicyLayerServer)
 	for _, err := range []error{clientErr, serverErr} {
 		if err != nil && !strings.HasPrefix(err.Error(), "POLICY_NOT_FOUND") {
-			return policyBrokenView(err), compiler.ClientPolicy{}, false
+			return policyBrokenView(err), policy.ClientPolicy{}, false
 		}
 	}
-	var policy compiler.ClientPolicy
+	var clientPolicy policy.ClientPolicy
 	if clientErr == nil {
-		policy = compiler.ClientPolicy{Default: clientIntent.Default, Rules: clientIntent.Rules}
-		if err := policy.Validate(); err != nil {
-			return policyBrokenView(err), compiler.ClientPolicy{}, false
+		clientPolicy = policy.ClientPolicy{Default: clientIntent.Default, Rules: clientIntent.Rules}
+		if err := clientPolicy.Validate(); err != nil {
+			return policyBrokenView(err), policy.ClientPolicy{}, false
 		}
 	} else {
 		model, ok := app.policyMeshModel(now)
 		if !ok {
-			return policyFallbackView(), compiler.ClientPolicy{}, false
+			return policyFallbackView(), policy.ClientPolicy{}, false
 		}
 		var err error
-		if policy, err = compiler.DefaultClientPolicy(model, model.LineLabels[0], compiler.ClientDefaults{}); err != nil {
-			return policyFallbackView(), compiler.ClientPolicy{}, false
+		if clientPolicy, err = policy.DefaultClientPolicy(model, model.LineLabels[0], policy.ClientDefaults{}); err != nil {
+			return policyFallbackView(), policy.ClientPolicy{}, false
 		}
 	}
-	var server compiler.ServerPolicy
+	var server policy.ServerPolicy
 	if serverErr == nil {
-		server = compiler.ServerPolicy{Default: serverIntent.Default, Rules: serverIntent.Rules}
+		server = policy.ServerPolicy{Default: serverIntent.Default, Rules: serverIntent.Rules}
 		if err := server.Validate(); err != nil {
-			return policyBrokenView(err), compiler.ClientPolicy{}, false
+			return policyBrokenView(err), policy.ClientPolicy{}, false
 		}
-	} else if server, serverErr = compiler.DefaultServerPolicy(defaultServerAIRulesetTag, nil, nil); serverErr != nil {
-		return policyFallbackView(), compiler.ClientPolicy{}, false
+	} else if server, serverErr = policy.DefaultServerPolicy(defaultServerAIRulesetTag, nil, nil); serverErr != nil {
+		return policyFallbackView(), policy.ClientPolicy{}, false
 	}
 	return view.PolicyPageView{
-		Out: out, Client: policyClientRows(policy), Server: policyServerRows(server, out),
-		Conflicts: policyConflictRows(policy), ClientDefault: clientErr != nil, ServerDefault: serverErr != nil,
-	}, policy, true
+		Out: out, Client: policyClientRows(clientPolicy), Server: policyServerRows(server, out),
+		Conflicts: policyConflictRows(clientPolicy), ClientDefault: clientErr != nil, ServerDefault: serverErr != nil,
+	}, clientPolicy, true
 }
 
 func (app *Server) ActivePolicyIntent(layer store.PolicyLayer) (store.RoutePolicy, store.RoutePolicyPayload, error) {
@@ -128,9 +128,9 @@ func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 	return state
 }
 
-func policyClientRows(policy compiler.ClientPolicy) []view.PolicyRuleView {
-	rows := make([]view.PolicyRuleView, 0, len(policy.Rules)+1)
-	for _, rule := range policy.Rules {
+func policyClientRows(clientPolicy policy.ClientPolicy) []view.PolicyRuleView {
+	rows := make([]view.PolicyRuleView, 0, len(clientPolicy.Rules)+1)
+	for _, rule := range clientPolicy.Rules {
 		rows = append(rows, view.PolicyRuleView{
 			Match:  policyMatcherLabel(rule.Match),
 			Action: policyActionLabel(rule.Action),
@@ -142,13 +142,13 @@ func policyClientRows(policy compiler.ClientPolicy) []view.PolicyRuleView {
 	}
 	return append(rows, view.PolicyRuleView{
 		Match:  "兜底（未命中任何规则）",
-		Action: policyActionLabel(policy.Default),
+		Action: policyActionLabel(clientPolicy.Default),
 		Note:   "客户端层兜底固定为 Line，规则停用后流量回到兜底而不是断网。",
 		State:  "预览",
 	})
 }
 
-func policyMatcherLabel(match compiler.Match) string {
+func policyMatcherLabel(match policy.Match) string {
 	switch {
 	case len(match.SSIDs) > 0:
 		return "家庭 Wi-Fi SSID（" + strings.Join(match.SSIDs, "、") + "）"
@@ -169,27 +169,27 @@ func policyMatcherLabel(match compiler.Match) string {
 	}
 }
 
-func policyActionLabel(action compiler.Action) string {
+func policyActionLabel(action policy.CompilerAction) string {
 	switch action {
-	case compiler.ActionDirect:
+	case policy.CompilerActionDirect:
 		return "直连"
-	case compiler.ActionProxy:
+	case policy.CompilerActionProxy:
 		return "走 Line"
-	case compiler.ActionTailscale:
+	case policy.CompilerActionTailscale:
 		return "直连（Tailnet）"
-	case compiler.ActionOut:
+	case policy.CompilerActionOut:
 		return "Out 直出（可选）"
 	default:
 		return string(action)
 	}
 }
 
-func policyRuleNote(rule compiler.Rule) string {
+func policyRuleNote(rule policy.CompilerRule) string {
 	switch rule.Action {
-	case compiler.ActionTailscale:
+	case policy.CompilerActionTailscale:
 		return "Mesh 内网目标始终直连，防止私有网络流量绕出。"
-	case compiler.ActionDirect:
-		if rule.Match.DNS == compiler.DNSDomestic {
+	case policy.CompilerActionDirect:
+		if rule.Match.DNS == policy.DNSDomestic {
 			return "按地区或例外直连，并使用境内 DNS 解析。"
 		}
 		return "命中后整体直连，流量不进入代理。"
@@ -200,7 +200,7 @@ func policyRuleNote(rule compiler.Rule) string {
 
 // policyServerRows renders the default server intent; an absent Out never
 // promises one.
-func policyServerRows(policy compiler.ServerPolicy, out view.PolicyOutState) []view.PolicyRuleView {
+func policyServerRows(serverIntent policy.ServerPolicy, out view.PolicyOutState) []view.PolicyRuleView {
 	action, note := "Line 直出", "未配置 Out 不是错误：AI 与指定分流按 Line 直出，不生成指向 Out 的规则。"
 	if out == view.PolicyOutActive {
 		action, note = "Out 直出（可选）", "经 Out 直出；Out 不可用时按 fail-closed 处理，不会自动改走 Line。"
@@ -208,10 +208,10 @@ func policyServerRows(policy compiler.ServerPolicy, out view.PolicyOutState) []v
 	if out == view.PolicyOutDegraded {
 		action, note = "Out 故障 · fail-closed", "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
 	}
-	rows := make([]view.PolicyRuleView, 0, len(policy.Rules)+1)
-	for _, rule := range policy.Rules {
+	rows := make([]view.PolicyRuleView, 0, len(serverIntent.Rules)+1)
+	for _, rule := range serverIntent.Rules {
 		row := view.PolicyRuleView{Match: policyMatcherLabel(rule.Match), Action: "Line 直出", Note: note, State: "启用"}
-		if rule.Action == compiler.ActionOut {
+		if rule.Action == policy.CompilerActionOut {
 			row.Action = action
 		}
 		rows = append(rows, row)
@@ -219,8 +219,8 @@ func policyServerRows(policy compiler.ServerPolicy, out view.PolicyOutState) []v
 	return append(rows, view.PolicyRuleView{Match: "兜底（默认出口）", Action: "Line 直出", Note: "服务端层兜底固定为 Line；Out 故障只影响指定到 Out 的流量。", State: "启用"})
 }
 
-func policyConflictRows(policy compiler.ClientPolicy) []view.PolicyConflictView {
-	if err := policy.Validate(); err != nil {
+func policyConflictRows(clientPolicy policy.ClientPolicy) []view.PolicyConflictView {
+	if err := clientPolicy.Validate(); err != nil {
 		return []view.PolicyConflictView{{Detail: policyErrorDetail(err), Blocked: true}}
 	}
 	return []view.PolicyConflictView{{Detail: "当前生效的客户端策略通过优先级重叠与 DNS 一致性校验。", Blocked: false}}

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 type policyServerPreviewOut struct {
@@ -35,7 +35,7 @@ func (app *Server) policiesServerPreview(w http.ResponseWriter, r *http.Request,
 	var input policyServerPreviewInput
 	raw := strings.TrimSpace(r.PostForm.Get("preview"))
 	if raw == "" || json.Unmarshal([]byte(raw), &input) != nil {
-		app.writePolicyServerPreview(w, r, http.StatusBadRequest, policyServerPreviewResponse{ErrorCode: compiler.CodePolicyInvalid})
+		app.writePolicyServerPreview(w, r, http.StatusBadRequest, policyServerPreviewResponse{ErrorCode: policy.CodePolicyInvalid})
 		return
 	}
 	fragment, state, code, err := previewPolicy(input)
@@ -49,26 +49,26 @@ func (app *Server) policiesServerPreview(w http.ResponseWriter, r *http.Request,
 }
 
 func previewPolicy(input policyServerPreviewInput) (string, string, string, error) {
-	policy, err := compiler.DefaultServerPolicy(input.AIRuleset, input.Domains, input.CIDRs)
+	serverIntent, err := policy.DefaultServerPolicy(input.AIRuleset, input.Domains, input.CIDRs)
 	if err != nil {
 		return "", "", "", err
 	}
 	state, code := previewEgressState(input.Out)
-	policy.OutConfigured, policy.OutAvailable = input.Out.Configured, input.Out.Available
-	policy.FallbackToLine, policy.OperationID = input.Out.FallbackToLine, strings.TrimSpace(input.Out.OperationID)
+	serverIntent.OutConfigured, serverIntent.OutAvailable = input.Out.Configured, input.Out.Available
+	serverIntent.FallbackToLine, serverIntent.OperationID = input.Out.FallbackToLine, strings.TrimSpace(input.Out.OperationID)
 	if !input.Out.Configured {
-		for index := range policy.Rules {
-			policy.Rules[index].Action = compiler.ActionDirect
+		for index := range serverIntent.Rules {
+			serverIntent.Rules[index].Action = policy.CompilerActionDirect
 		}
 	}
-	if policy, err = compiler.ResolveServerPolicy(policy); err != nil {
+	if serverIntent, err = policy.ResolveServerPolicy(serverIntent); err != nil {
 		return "", "", "", err
 	}
-	pins := compiler.RuleSetPins{}
-	if err = pins.Validate(policy.Rules); err != nil {
+	pins := policy.RuleSetPins{}
+	if err = pins.Validate(serverIntent.Rules); err != nil {
 		return "", "", "", err
 	}
-	fragment, err := compiler.RenderServerRoute(policy, pins)
+	fragment, err := policy.RenderServerRoute(serverIntent, pins)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -81,15 +81,15 @@ func previewPolicy(input policyServerPreviewInput) (string, string, string, erro
 
 func previewEgressState(out policyServerPreviewOut) (string, string) {
 	if !out.Configured {
-		return compiler.AIEgressLine, ""
+		return policy.AIEgressLine, ""
 	}
 	if out.Available {
-		return compiler.AIEgressOut, ""
+		return policy.AIEgressOut, ""
 	}
 	if out.FallbackToLine && strings.TrimSpace(out.OperationID) != "" {
-		return compiler.AIEgressLineFallback, compiler.CodeOutOfflineFailClosed
+		return policy.AIEgressLineFallback, policy.CodeOutOfflineFailClosed
 	}
-	return "fail-closed", compiler.CodeOutOfflineFailClosed
+	return "fail-closed", policy.CodeOutOfflineFailClosed
 }
 
 func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Request, err error) {
@@ -97,7 +97,7 @@ func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Reques
 	app.event(r, code)
 	status := http.StatusUnprocessableEntity
 	switch code {
-	case compiler.CodeOutOfflineFailClosed, compiler.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID":
+	case policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID":
 		status = http.StatusConflict
 	}
 	app.writePolicyServerPreview(w, r, status, policyServerPreviewResponse{ErrorCode: code})
@@ -106,14 +106,14 @@ func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Reques
 func previewFailure(err error) string {
 	code, _, _ := strings.Cut(err.Error(), ": ")
 	for _, known := range []string{
-		compiler.CodePolicyInvalid, compiler.CodeRulesetUnpinned, compiler.CodeOutOfflineFailClosed,
-		compiler.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID",
+		policy.CodePolicyInvalid, policy.CodeRulesetUnpinned, policy.CodeOutOfflineFailClosed,
+		policy.CodeOutFallbackUnaudited, "OUT_BINDING_INVALID",
 	} {
 		if code == known {
 			return code
 		}
 	}
-	return compiler.CodePolicyInvalid
+	return policy.CodePolicyInvalid
 }
 
 func (app *Server) writePolicyServerPreview(w http.ResponseWriter, r *http.Request, status int, body policyServerPreviewResponse) {

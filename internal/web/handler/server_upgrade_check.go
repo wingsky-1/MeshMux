@@ -40,7 +40,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
@@ -291,17 +291,17 @@ func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, er
 			"当前快照无法生成合法的升级链。", "请先复核该节点配置；未写入任何升级记录。")
 	// The approval re-derives the Line route from the live policy, so it can
 	// meet the same Out contract a publication does. The refusal is reported
-	// with the compiler's own stable code and the operator's next step (fix the
+	// with the policy package's own stable code and the operator's next step (fix the
 	// Out, or publish a direct server policy) instead of a generic retry hint.
 	case strings.HasPrefix(code, "OUT_BINDING_INVALID"):
 		app.writeUpgradeFailure(w, r, http.StatusConflict, "OUT_BINDING_INVALID",
 			"当前服务端策略指向一个该线路没有的 Out。", "请先绑定 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
-	case strings.HasPrefix(code, compiler.CodeOutOfflineFailClosed):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, compiler.CodeOutOfflineFailClosed,
+	case strings.HasPrefix(code, policy.CodeOutOfflineFailClosed):
+		app.writeUpgradeFailure(w, r, http.StatusConflict, policy.CodeOutOfflineFailClosed,
 			"当前服务端策略指向的 Out 不可用。", "请恢复 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
 	case strings.HasPrefix(code, "POLICY_CORRUPT"), strings.HasPrefix(code, "POLICY_PINS_INVALID"),
-		strings.HasPrefix(code, compiler.CodePolicyInvalid), strings.HasPrefix(code, compiler.CodePolicyConflict),
-		strings.HasPrefix(code, compiler.CodeRulesetUnpinned):
+		strings.HasPrefix(code, policy.CodePolicyInvalid), strings.HasPrefix(code, policy.CodePolicyConflict),
+		strings.HasPrefix(code, policy.CodeRulesetUnpinned):
 		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_CHAIN_INVALID",
 			"当前 active 服务端策略无法解析出线路路由。", "请先修复并重新发布服务端策略；未写入任何升级记录。")
 	default:

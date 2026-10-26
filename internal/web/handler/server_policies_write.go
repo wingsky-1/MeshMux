@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 // policyWriteRequest is shared by the four actions; unused fields are ignored.
@@ -60,12 +60,12 @@ func (app *Server) policiesCreate(w http.ResponseWriter, r *http.Request, _ sess
 	if !ok {
 		return
 	}
-	policy, err := app.store.CreateRoutePolicy(store.PolicyLayer(strings.TrimSpace(in.Layer)), in.Name, in.Payload, in.Pins, in.OperationID, app.now())
+	stored, err := app.store.CreateRoutePolicy(store.PolicyLayer(strings.TrimSpace(in.Layer)), in.Name, in.Payload, in.Pins, in.OperationID, app.now())
 	if err != nil {
 		app.failPolicyWrite(w, r, err)
 		return
 	}
-	app.writePolicyWrite(w, r, http.StatusCreated, policyWriteResponse{OK: true, ID: policy.ID, Revision: policy.Revision, Status: string(policy.Status)})
+	app.writePolicyWrite(w, r, http.StatusCreated, policyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
 }
 
 func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ session) {
@@ -73,12 +73,12 @@ func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ sess
 	if !ok {
 		return
 	}
-	policy, err := app.store.ReviseRoutePolicy(strings.TrimSpace(in.ID), in.Payload, in.Pins, in.OperationID, app.now())
+	stored, err := app.store.ReviseRoutePolicy(strings.TrimSpace(in.ID), in.Payload, in.Pins, in.OperationID, app.now())
 	if err != nil {
 		app.failPolicyWrite(w, r, err)
 		return
 	}
-	app.writePolicyWrite(w, r, http.StatusOK, policyWriteResponse{OK: true, ID: policy.ID, Revision: policy.Revision, Status: string(policy.Status)})
+	app.writePolicyWrite(w, r, http.StatusOK, policyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
 }
 
 func (app *Server) policiesActivate(w http.ResponseWriter, r *http.Request, _ session) {
@@ -94,12 +94,12 @@ func (app *Server) policyTransition(w http.ResponseWriter, r *http.Request, tran
 	if !ok {
 		return
 	}
-	policy, err := transition(strings.TrimSpace(in.ID), in.Revision, in.OperationID, app.now())
+	stored, err := transition(strings.TrimSpace(in.ID), in.Revision, in.OperationID, app.now())
 	if err != nil {
 		app.failPolicyWrite(w, r, err)
 		return
 	}
-	app.writePolicyWrite(w, r, http.StatusOK, policyWriteResponse{OK: true, ID: policy.ID, Revision: policy.Revision, Status: string(policy.Status)})
+	app.writePolicyWrite(w, r, http.StatusOK, policyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
 }
 
 // policyWriteFailure maps a sanitized store error onto the HTTP contract.
@@ -110,7 +110,7 @@ func policyWriteFailure(err error) (int, string) {
 	}
 	switch code {
 	case "POLICY_OPERATION_REQUIRED", "POLICY_LAYER_INVALID", "POLICY_NAME_INVALID",
-		"POLICY_PAYLOAD_INVALID", "POLICY_PINS_INVALID", compiler.CodePolicyInvalid,
+		"POLICY_PAYLOAD_INVALID", "POLICY_PINS_INVALID", policy.CodePolicyInvalid,
 		store.CodePolicyPayloadRetired:
 		return http.StatusBadRequest, code
 	case "POLICY_NOT_FOUND":

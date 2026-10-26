@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 import (
 	"encoding/json"
@@ -11,13 +11,13 @@ import (
 // version-locked rule_set, determinism and no embedded AI list.
 func TestRenderServerRouteFollowsPolicyAndPins(t *testing.T) {
 	policy := ServerPolicy{
-		Default:       ActionDirect,
+		Default:       CompilerActionDirect,
 		OutConfigured: true,
 		OutAvailable:  true,
-		Rules: []Rule{
-			{Priority: 10, Match: Match{Domains: []string{"chat.example.invalid"}}, Action: ActionOut},
-			{Priority: 20, Match: Match{IPCIDRs: []string{"203.0.113.0/24"}}, Action: ActionDirect},
-			{Priority: 30, Match: Match{GeoSite: []string{"ai"}}, Action: ActionOut},
+		Rules: []CompilerRule{
+			{Priority: 10, Match: Match{Domains: []string{"chat.example.invalid"}}, Action: CompilerActionOut},
+			{Priority: 20, Match: Match{IPCIDRs: []string{"203.0.113.0/24"}}, Action: CompilerActionDirect},
+			{Priority: 30, Match: Match{GeoSite: []string{"ai"}}, Action: CompilerActionOut},
 		},
 	}
 	pin := map[string]RulesetPin{"ai": {
@@ -57,7 +57,7 @@ func TestRenderServerRouteFollowsPolicyAndPins(t *testing.T) {
 // TestRenderServerRouteRefusals covers malformed matchers, unpinned rulesets
 // and an Out that the caller did not resolve.
 func TestRenderServerRouteRefusals(t *testing.T) {
-	base := ServerPolicy{Default: ActionDirect, OutConfigured: true, OutAvailable: true}
+	base := ServerPolicy{Default: CompilerActionDirect, OutConfigured: true, OutAvailable: true}
 	out := Match{Domains: []string{"chat.example.invalid"}}
 	cases := []struct {
 		name   string
@@ -68,7 +68,7 @@ func TestRenderServerRouteRefusals(t *testing.T) {
 		{"invalid domain", withRule(base, Match{Domains: []string{"Chat.Example.invalid"}}), RuleSetPins{}, CodePolicyInvalid},
 		{"invalid cidr", withRule(base, Match{IPCIDRs: []string{"203.0.113.7/24"}}), RuleSetPins{}, CodePolicyInvalid},
 		{"unpinned geosite", withRule(base, Match{GeoSite: []string{"ai"}}), RuleSetPins{}, CodeRulesetUnpinned},
-		{"unbound out", withRule(ServerPolicy{Default: ActionDirect}, out), RuleSetPins{}, "OUT_BINDING_INVALID"},
+		{"unbound out", withRule(ServerPolicy{Default: CompilerActionDirect}, out), RuleSetPins{}, "OUT_BINDING_INVALID"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,6 +80,6 @@ func TestRenderServerRouteRefusals(t *testing.T) {
 }
 
 func withRule(policy ServerPolicy, match Match) ServerPolicy {
-	policy.Rules = []Rule{{Priority: 10, Match: match, Action: ActionOut}}
+	policy.Rules = []CompilerRule{{Priority: 10, Match: match, Action: CompilerActionOut}}
 	return policy
 }

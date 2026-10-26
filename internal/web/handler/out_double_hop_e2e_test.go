@@ -60,8 +60,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/store"
 )
@@ -389,16 +389,16 @@ func (f *doubleHopFixture) outDocument(t *testing.T) []byte {
 // the real Out egress it attached.
 func (f *doubleHopFixture) lineDocument(t *testing.T) []byte {
 	t.Helper()
-	policy, err := compiler.ResolveServerPolicy(compiler.ServerPolicy{
-		Default:       compiler.ActionDirect,
-		Rules:         []compiler.Rule{{Priority: 100, Match: compiler.Match{Domains: []string{doubleHopDomain}}, Action: compiler.ActionOut}},
+	serverIntent, err := policy.ResolveServerPolicy(policy.ServerPolicy{
+		Default:       policy.CompilerActionDirect,
+		Rules:         []policy.CompilerRule{{Priority: 100, Match: policy.Match{Domains: []string{doubleHopDomain}}, Action: policy.CompilerActionOut}},
 		OutConfigured: true,
 		OutAvailable:  true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fragment, err := compiler.RenderServerRoute(policy, compiler.RuleSetPins{})
+	fragment, err := policy.RenderServerRoute(serverIntent, policy.RuleSetPins{})
 	if err != nil {
 		t.Fatalf("the server route did not render: %v", err)
 	}

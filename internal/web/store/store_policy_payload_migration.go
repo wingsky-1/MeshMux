@@ -4,7 +4,7 @@ package store
 //
 // The legacy client layer payload carried top-level `exceptions` and `ssids`.
 // After the rule library landed (Task 3/4) neither field reached a rendered
-// document: the publication path built compiler.ClientPolicy from `default`
+// document: the publication path built policy.ClientPolicy from `default`
 // and `rules` only, so a stored exceptions/ssids value looked applied while no
 // byte changed. Task 6 refuses those keys on every write (and on every read
 // that bypasses the write path) and this leg removes them from rows written by

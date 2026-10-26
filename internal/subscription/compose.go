@@ -7,8 +7,8 @@ package subscription
 // can be re-derived and compared instead of being trusted from a cached copy.
 //
 // The composer owns its own small rule model instead of importing
-// internal/compiler: compiler already imports this package (the mesh model), so
-// the dependency would be a cycle. The two models share the same six matcher
+// internal/policy: policy already imports this package (the mesh model), so the
+// dependency would be a cycle. The two models share the same six matcher
 // kinds and the same canonical value rules; compose_drift_test.go compares both
 // so they cannot silently diverge.
 //
@@ -88,8 +88,8 @@ const (
 )
 
 // RuleSetPin is the version lock of one external rule-set artifact. It mirrors
-// route.RulesetPin (HTTPS source, immutable version, lowercase SHA-256); the
-// composer re-implements the check because it cannot import internal/route
+// policy.RulesetPin (HTTPS source, immutable version, lowercase SHA-256); the
+// composer re-implements the check because it cannot import internal/policy
 // without a cycle. compose_drift_test.go keeps the two in step.
 type RuleSetPin struct {
 	Source  string

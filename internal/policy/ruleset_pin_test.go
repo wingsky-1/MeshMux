@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 )
 
 // testRulesetPayload is the bytes a fake fetch returns. It never leaves the
-// test: the compiler package treats a ruleset as opaque bytes and only proves
+// test: this package treats a ruleset as opaque bytes and only proves
 // the pinned digest.
 var testRulesetPayload = []byte(`{"version":1,"rules":[{"domain_suffix":["example.invalid"]}]}`)
 

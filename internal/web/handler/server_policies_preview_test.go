@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 func previewServerPolicy(t *testing.T, b *browser, body string) (policyServerPreviewResponse, int) {
@@ -31,13 +31,13 @@ func TestPoliciesServerPreview(t *testing.T) {
 		code     string
 		fragment string
 	}{
-		{`{"domains":["chat.example.invalid"],"out":{"configured":false}}`, 200, compiler.AIEgressLine, "", `"outbound": "direct"`},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"available":true}}`, 200, compiler.AIEgressOut, "", `"outbound": "out"`},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true}}`, 409, "", compiler.CodeOutOfflineFailClosed, ""},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true}}`, 409, "", compiler.CodeOutFallbackUnaudited, ""},
-		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true,"operation_id":"preview-op"}}`, 200, compiler.AIEgressLineFallback, compiler.CodeOutOfflineFailClosed, `"outbound": "direct"`},
-		{`{"ai_ruleset":"ai"}`, 422, "", compiler.CodeRulesetUnpinned, ""},
-		{`not json`, 400, "", compiler.CodePolicyInvalid, ""},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":false}}`, 200, policy.AIEgressLine, "", `"outbound": "direct"`},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"available":true}}`, 200, policy.AIEgressOut, "", `"outbound": "out"`},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true}}`, 409, "", policy.CodeOutOfflineFailClosed, ""},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true}}`, 409, "", policy.CodeOutFallbackUnaudited, ""},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true,"operation_id":"preview-op"}}`, 200, policy.AIEgressLineFallback, policy.CodeOutOfflineFailClosed, `"outbound": "direct"`},
+		{`{"ai_ruleset":"ai"}`, 422, "", policy.CodeRulesetUnpinned, ""},
+		{`not json`, 400, "", policy.CodePolicyInvalid, ""},
 	}
 	for _, tc := range cases {
 		response, status := previewServerPolicy(t, b, tc.body)

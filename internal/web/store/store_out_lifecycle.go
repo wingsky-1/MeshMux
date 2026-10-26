@@ -19,7 +19,7 @@ package store
 //
 // Lines that used to egress through the deleted Out are NOT silently turned into
 // direct egress. Their route is re-derived by the existing drain chain, and the
-// compiler's own fail-closed rule refuses a policy that names an Out the Hub no
+// policy package's own fail-closed rule refuses a policy that names an Out the Hub no
 // longer has (OUT_BINDING_INVALID; a requirement of an unavailable Out is
 // OUT_OFFLINE_FAIL_CLOSED). See RepublishLineAuthorizations.
 
@@ -119,7 +119,7 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
 	// The Out is gone, so any policy that still names it must be re-derived for every
-	// Line: the compiler refuses an Out reference the Hub cannot justify, so the Line's
+	// Line: the policy resolver refuses an Out reference the Hub cannot justify, so the Line's
 	// next publication fails closed instead of silently becoming direct.
 	s.RepublishLineAuthorizations(now)
 	return nil

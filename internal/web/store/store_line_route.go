@@ -14,13 +14,13 @@ package store
 // Line's current egress facts, exactly the pair the publication path renders.
 // Every implicit publisher (subscriber synchronization and upgrade approval)
 // calls lineServerRouteTx, so a route can never enter a candidate without
-// passing compiler.ResolveServerPolicy again.
+// passing policy.ResolveServerPolicy again.
 //
 // Fail-closed is unchanged and is not relaxed for these implicit publications:
 // they carry no operator opt-in and no operation id, so an Out-selecting policy
-// whose Out is unbound, deleted or unavailable is refused with the compiler's
-// own stable code and the previous revision stays live. A policy that does not
-// select the Out renders in any Out state.
+// whose Out is unbound, deleted or unavailable is refused with the policy
+// package's own stable code and the previous revision stays live. A policy
+// that does not select the Out renders in any Out state.
 
 import (
 	"bytes"
@@ -29,8 +29,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 // lineServerRouteTx returns the route fragment a Line must publish now, or nil
@@ -85,20 +85,20 @@ func LineServerRouteTx(tx *sql.Tx, nodeID string, now time.Time) (json.RawMessag
 	// Implicit publications take no Line fallback: they have no operation id,
 	// so an unavailable Out must stay a refusal instead of becoming an
 	// unaudited direct egress.
-	policy := compiler.ServerPolicy{
+	serverIntent := policy.ServerPolicy{
 		Default:       intent.Default,
 		Rules:         intent.Rules,
 		OutConfigured: facts.Configured,
 		OutAvailable:  facts.Available,
 	}
-	resolved, err := compiler.ResolveServerPolicy(policy)
+	resolved, err := policy.ResolveServerPolicy(serverIntent)
 	if err != nil {
 		return nil, err
 	}
 	if err := pins.Validate(resolved.Rules); err != nil {
 		return nil, err
 	}
-	fragment, err := compiler.RenderServerRoute(resolved, pins)
+	fragment, err := policy.RenderServerRoute(resolved, pins)
 	if err != nil {
 		return nil, err
 	}

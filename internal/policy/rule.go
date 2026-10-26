@@ -4,8 +4,6 @@ import (
 	"errors"
 	"regexp"
 	"strings"
-
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 )
 
 // Stable rule-library refusal codes. Only the code (before ": ") is stable;
@@ -31,7 +29,7 @@ const (
 )
 
 // MatcherKind is the single matcher family of one rule. Exactly six are
-// stocked; compiler.Match.SSIDs stays usable for other layers but is never a
+// stocked; Match.SSIDs stays usable for other layers but is never a
 // library kind (ADR-0008 §5).
 type MatcherKind string
 
@@ -81,9 +79,9 @@ type Rule struct {
 
 // Validate enforces the library contract: a slug key outside the reserved
 // preset namespace, a guarded display name, one of the three actions, one of
-// the six matcher kinds, and canonical matcher values under compiler
-// semantics. The preset- refusal lives here (operator-input depth) and again
-// on every store write path; seeded preset rows bypass Validate entirely
+// the six matcher kinds, and canonical matcher values under the shared
+// matcher semantics. The preset- refusal lives here (operator-input depth) and
+// again on every store write path; seeded preset rows bypass Validate entirely
 // (SeedPresetsTx inserts them directly), so validating a stored preset row as
 // operator input is a caller error (I3).
 func (r Rule) Validate() error {
@@ -148,21 +146,21 @@ func ruleInvalidDetail(err error) string {
 }
 
 // ToCompilerMatchWith maps one rule onto the shared matcher model for value
-// validation. The action is deliberately not mapped: reject has no compiler
+// validation. The action is deliberately not mapped: reject has no generator
 // counterpart, and the composer (Task 4) owns the action translation.
-func (r Rule) ToCompilerMatchWith(values []string) compiler.Match {
+func (r Rule) ToCompilerMatchWith(values []string) Match {
 	switch r.Kind {
 	case MatcherDomain:
-		return compiler.Match{Domains: values}
+		return Match{Domains: values}
 	case MatcherDomainSuffix:
-		return compiler.Match{DomainSuffixes: values}
+		return Match{DomainSuffixes: values}
 	case MatcherIPCIDR:
-		return compiler.Match{IPCIDRs: values}
+		return Match{IPCIDRs: values}
 	case MatcherGeoSite:
-		return compiler.Match{GeoSite: values}
+		return Match{GeoSite: values}
 	case MatcherGeoIP:
-		return compiler.Match{GeoIP: values}
+		return Match{GeoIP: values}
 	default:
-		return compiler.Match{RuleSets: values}
+		return Match{RuleSets: values}
 	}
 }

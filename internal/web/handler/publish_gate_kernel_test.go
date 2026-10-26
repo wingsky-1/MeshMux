@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 // realPublishGate builds the production verifier against the pinned kernel.
@@ -98,7 +98,7 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the real kernel refused the Out-free Line candidate: %v", err)
 	}
-	if assembly.EgressState != compiler.AIEgressLine {
+	if assembly.EgressState != policy.AIEgressLine {
 		t.Fatalf("egress = %s/%s, want line", assembly.EgressState, assembly.EgressCode)
 	}
 	if tags := gatedLineOutbounds(t, assembly); len(tags) != 1 || tags["direct"] != "direct" {
@@ -123,7 +123,7 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the real kernel refused the Out-selecting Line candidate: %v", err)
 	}
-	if assembly.EgressState != compiler.AIEgressOut {
+	if assembly.EgressState != policy.AIEgressOut {
 		t.Fatalf("egress = %s/%s, want out", assembly.EgressState, assembly.EgressCode)
 	}
 	tags := gatedLineOutbounds(t, assembly)
@@ -132,7 +132,7 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 	}
 	// The published digest is the digest of the checked bytes, so the gate and
 	// the node agree on the exact document.
-	if assembly.Targets[0].ConfigHash != compiler.Hash(assembly.Targets[0].Config) {
+	if assembly.Targets[0].ConfigHash != policy.Hash(assembly.Targets[0].Config) {
 		t.Fatal("the target digest does not match the gated document")
 	}
 	if !strings.Contains(assembly.Targets[0].ConfigHash, "") || node.SingBoxPublishVersion == "" {

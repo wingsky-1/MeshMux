@@ -60,8 +60,8 @@ type singBoxSSInbound struct {
 	Password   string `json:"password"`
 }
 
-// Server document egress tags. compiler.RenderServerRoute maps ActionDirect to
-// "direct" and ActionOut to "out"; the candidate must declare every tag its
+// Server document egress tags. policy.RenderServerRoute maps CompilerActionDirect
+// to "direct" and CompilerActionOut to "out"; the candidate must declare every tag its
 // route names, or the kernel document would reference an egress it does not
 // carry.
 const (
@@ -252,8 +252,8 @@ func CompileCandidate(c Candidate) ([]byte, error) {
 }
 
 // CompileCandidateWithRoute renders a Line candidate with the route fragment
-// already produced by compiler.RenderServerRoute and the resolved Out fact.
-// The fragment crosses as JSON because node must not import compiler: the
+// already produced by policy.RenderServerRoute and the resolved Out fact.
+// The fragment crosses as JSON because node must not import policy: the
 // subscription acceptance test imports node, which would close a test cycle.
 // The caller must resolve the policy first; a fragment that references the
 // "out" tag while no Out is configured is refused with OUT_BINDING_INVALID,

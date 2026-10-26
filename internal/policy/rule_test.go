@@ -19,7 +19,7 @@ func TestRuleValidateAcceptsAllSixMatcherKinds(t *testing.T) {
 			t.Fatalf("%s (%s) refused: %v", r.StableKey, r.Kind, err)
 		}
 		if got := r.ToCompilerMatchWith(r.Values); len(got.Domains)+len(got.DomainSuffixes)+len(got.IPCIDRs)+len(got.GeoSite)+len(got.GeoIP)+len(got.RuleSets) != len(r.Values) {
-			t.Fatalf("%s compiler bridge dropped values: %+v", r.StableKey, got)
+			t.Fatalf("%s matcher bridge dropped values: %+v", r.StableKey, got)
 		}
 	}
 }

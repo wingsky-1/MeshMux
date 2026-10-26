@@ -15,7 +15,7 @@ import (
 
 // This file freezes the stable error_code values of the domains that the
 // internal regroup (docs/superpowers/plans/2026-10-26-internal-regroup.md, C1)
-// moves around: route, jobs, compiler, policy, hubupgrade, update, node and web.
+// moves around: route, jobs, policy, hubupgrade, update, node and web.
 // A code is compared by VALUE only, never by identifier or by the package that
 // declares it, so a rename, a package move or a package merge cannot silently
 // change what an operator, a log line or a client sees. Adding, removing or
@@ -27,8 +27,8 @@ import (
 // also means the test keeps working when a domain is physically moved.
 
 // errorCodeDomains is the set of package names whose Code* constants are
-// frozen. Package names, not paths: the regroup moves route into compiler or
-// policy (Task 3), jobs into upgrade (Task 6), update and hubupgrade under
+// frozen. Package names, not paths: the regroup moves route into policy
+// (Tasks 3-4), jobs into upgrade (Task 6), update and hubupgrade under
 // upgrade (Task 7), and protocol under node (Task 5), and in every case the
 // constant keeps its value. internal/web is not a single package any more, so
 // its handler/store/view packages are listed by name as well.
@@ -44,7 +44,6 @@ import (
 var errorCodeDomains = map[string]bool{
 	"route":      true,
 	"jobs":       true,
-	"compiler":   true,
 	"policy":     true,
 	"hubupgrade": true,
 	"update":     true,

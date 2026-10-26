@@ -1,4 +1,4 @@
-package compiler
+package policy
 
 // 10b-1 client policy: default CN/international/Tailnet/SSID intent, conflict
 // refusal and the hit explanation. Storage is 10b-2.
@@ -24,31 +24,31 @@ func DefaultClientPolicy(model subscription.MeshConfigModel, proxyLine string, d
 	if err != nil {
 		return ClientPolicy{}, err
 	}
-	var rules []Rule
+	var rules []CompilerRule
 	if prefixes := append(append([]string{}, model.TailnetPrefixes...), defaults.RemoteLANPrefixes...); len(prefixes) > 0 {
-		rules = append(rules, Rule{100, Match{IPCIDRs: prefixes, DNS: DNSEncrypted}, ActionTailscale})
+		rules = append(rules, CompilerRule{100, Match{IPCIDRs: prefixes, DNS: DNSEncrypted}, CompilerActionTailscale})
 	}
-	rules = append(rules, Rule{200, Match{GeoSite: []string{"cn"}, DNS: DNSDomestic}, ActionDirect})
+	rules = append(rules, CompilerRule{200, Match{GeoSite: []string{"cn"}, DNS: DNSDomestic}, CompilerActionDirect})
 	if len(defaults.Exceptions) > 0 {
-		rules = append(rules, Rule{300, Match{Domains: defaults.Exceptions, DNS: DNSDomestic}, ActionDirect})
+		rules = append(rules, CompilerRule{300, Match{Domains: defaults.Exceptions, DNS: DNSDomestic}, CompilerActionDirect})
 	}
 	policy.Rules = rules
 	return policy, policy.Validate()
 }
 
 // checkClientConflicts refuses an order that would silently shadow a rule.
-func checkClientConflicts(rules []Rule) error {
+func checkClientConflicts(rules []CompilerRule) error {
 	tailnet := 0
 	for _, rule := range rules {
-		if rule.Action == ActionTailscale && tailnet == 0 {
+		if rule.Action == CompilerActionTailscale && tailnet == 0 {
 			tailnet = rule.Priority
 		}
 	}
 	for index, rule := range rules {
-		if tailnet != 0 && rule.Action != ActionTailscale && rule.Priority < tailnet && len(rule.Match.SSIDs) == 0 {
+		if tailnet != 0 && rule.Action != CompilerActionTailscale && rule.Priority < tailnet && len(rule.Match.SSIDs) == 0 {
 			return fmt.Errorf("%s: priority %d precedes the tailnet rule at priority %d", CodePolicyConflict, rule.Priority, tailnet)
 		}
-		if len(rule.Match.SSIDs) > 0 && (index > 0 || rule.Action != ActionDirect) {
+		if len(rule.Match.SSIDs) > 0 && (index > 0 || rule.Action != CompilerActionDirect) {
 			return fmt.Errorf("%s: priority %d: an SSID rule must be first and direct", CodePolicyConflict, rule.Priority)
 		}
 	}
@@ -85,15 +85,15 @@ func (m Match) samples() []string {
 type HitExplanation struct {
 	Priority int
 	Matcher  string
-	Action   Action
+	Action   CompilerAction
 	Egress   string
 	DNS      DNSResolver
 }
 
-var clientEgress = map[Action]string{
-	ActionDirect:    "direct",
-	ActionProxy:     "meshmux-selector (selected Line)",
-	ActionTailscale: "meshmux-ts (Tailscale endpoint)",
+var clientEgress = map[CompilerAction]string{
+	CompilerActionDirect:    "direct",
+	CompilerActionProxy:     "meshmux-selector (selected Line)",
+	CompilerActionTailscale: "meshmux-ts (Tailscale endpoint)",
 }
 
 // ExplainHit reports the first expressible match, else the fallback; geo and

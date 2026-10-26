@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
+	"github.com/wingsky-1/MeshMux/internal/policy"
 )
 
 type policyValidationResponse struct {
@@ -25,21 +25,21 @@ type policyValidationResponse struct {
 // policiesExplain resolves one target against the same snapshot policy.
 func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess session) {
 	target := strings.TrimSpace(r.URL.Query().Get("target"))
-	page, policy, ok := app.policySnapshot(app.now())
+	page, clientPolicy, ok := app.policySnapshot(app.now())
 	page.Target = target
 	if target == "" {
 		app.renderPolicies(w, r, sess, page)
 		return
 	}
 	if len(target) > 253 {
-		app.fail(w, r, http.StatusBadRequest, compiler.CodePolicyInvalid, "目标长度超出域名或 IP 的合理范围。", "请缩短后重试。")
+		app.fail(w, r, http.StatusBadRequest, policy.CodePolicyInvalid, "目标长度超出域名或 IP 的合理范围。", "请缩短后重试。")
 		return
 	}
 	if !ok {
 		app.renderPolicies(w, r, sess, page)
 		return
 	}
-	hit, err := compiler.ExplainHit(target, policy)
+	hit, err := policy.ExplainHit(target, clientPolicy)
 	if err != nil {
 		code, _ := policyFailure(err)
 		app.fail(w, r, http.StatusConflict, code, "无法计算命中说明。", "请检查策略后重试。")
@@ -49,7 +49,7 @@ func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess 
 	app.renderPolicies(w, r, sess, page)
 }
 
-func policyHitResult(hit compiler.HitExplanation, target string) view.PolicyHitView {
+func policyHitResult(hit policy.HitExplanation, target string) view.PolicyHitView {
 	rule := fmt.Sprintf("优先级 %d · %s", hit.Priority, hit.Matcher)
 	title := "命中说明：" + target
 	if hit.Priority == 0 {
@@ -57,7 +57,7 @@ func policyHitResult(hit compiler.HitExplanation, target string) view.PolicyHitV
 		title = "兜底路径：" + target
 	}
 	dns := "境内 DNS，解析出口与访问出口一致"
-	if hit.DNS == compiler.DNSEncrypted {
+	if hit.DNS == policy.DNSEncrypted {
 		dns = "加密 DNS，解析出口与访问出口一致"
 	}
 	return view.PolicyHitView{
@@ -78,22 +78,22 @@ func policyHitResult(hit compiler.HitExplanation, target string) view.PolicyHitV
 func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ session) {
 	raw := strings.TrimSpace(r.PostForm.Get("rules"))
 	if raw == "" {
-		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: compiler.CodePolicyInvalid, Detail: "缺少 rules 字段（JSON）"})
+		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "缺少 rules 字段（JSON）"})
 		return
 	}
 	var input struct {
-		Default compiler.Action `json:"default"`
-		Rules   []compiler.Rule `json:"rules"`
+		Default policy.CompilerAction `json:"default"`
+		Rules   []policy.CompilerRule `json:"rules"`
 	}
 	if err := json.Unmarshal([]byte(raw), &input); err != nil {
-		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: compiler.CodePolicyInvalid, Detail: "rules 不是合法的策略 JSON"})
+		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "rules 不是合法的策略 JSON"})
 		return
 	}
 	if input.Default == "" {
-		input.Default = compiler.ActionProxy
+		input.Default = policy.CompilerActionProxy
 	}
-	policy := compiler.ClientPolicy{Default: input.Default, Rules: input.Rules}
-	if err := policy.Validate(); err != nil {
+	clientPolicy := policy.ClientPolicy{Default: input.Default, Rules: input.Rules}
+	if err := clientPolicy.Validate(); err != nil {
 		code, detail := policyFailure(err)
 		app.event(r, "POLICY_VALIDATION_REJECTED")
 		app.writePolicyValidation(w, r, http.StatusUnprocessableEntity, policyValidationResponse{ErrorCode: code, Detail: detail, Rules: len(input.Rules)})
@@ -110,12 +110,12 @@ func (app *Server) writePolicyValidation(w http.ResponseWriter, r *http.Request,
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// policyFailure splits a stable compiler code from its detail.
+// policyFailure splits a stable policy code from its detail.
 func policyFailure(err error) (string, string) {
-	for _, code := range []string{compiler.CodePolicyConflict, compiler.CodePolicyInvalid, compiler.CodePolicyNodeUnknown} {
+	for _, code := range []string{policy.CodePolicyConflict, policy.CodePolicyInvalid, policy.CodePolicyNodeUnknown} {
 		if prefix := code + ": "; strings.HasPrefix(err.Error(), prefix) {
 			return code, strings.TrimPrefix(err.Error(), prefix)
 		}
 	}
-	return compiler.CodePolicyInvalid, err.Error()
+	return policy.CodePolicyInvalid, err.Error()
 }
