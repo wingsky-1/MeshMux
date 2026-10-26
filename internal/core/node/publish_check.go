@@ -16,6 +16,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 const (
@@ -67,14 +69,17 @@ func CheckSingBoxDocument(ctx context.Context, runner CommandRunner, binary, con
 
 // CheckMihomoDocument asks the pinned Mihomo binary whether one assembled
 // client document is valid. The version is proven first: `mihomo -v` must name
-// MihomoVersion, so a host that carries a different release cannot pass a
-// document this build never validated.
+// MihomoVersion exactly, so a host that carries a different release cannot pass
+// a document this build never validated.
 func CheckMihomoDocument(ctx context.Context, runner CommandRunner, binary, configPath, dataDir string) (string, error) {
 	if strings.TrimSpace(binary) == "" {
 		return "", errors.New(CodePublishMihomoMissing + ": the pinned mihomo binary is not configured")
 	}
 	version, err := runner.Run(ctx, binary, "-v")
-	if err != nil || !strings.Contains(string(version), MihomoVersion) {
+	if err != nil {
+		return "", errors.New(CodePublishMihomoVersion + ": the binary is not the pinned mihomo " + MihomoVersion)
+	}
+	if _, ok := protocol.ReportedVersion(string(version), MihomoVersion); !ok {
 		return "", errors.New(CodePublishMihomoVersion + ": the binary is not the pinned mihomo " + MihomoVersion)
 	}
 	if configPath == "" || dataDir == "" {

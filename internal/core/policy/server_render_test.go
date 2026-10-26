@@ -83,3 +83,45 @@ func withRule(policy ServerPolicy, match Match) ServerPolicy {
 	policy.Rules = []CompilerRule{{Priority: 10, Match: match, Action: CompilerActionOut}}
 	return policy
 }
+
+// TestOutReferenceJudgementIsShared pins the one Out judgement. RenderServerRoute
+// and ResolveServerPolicy used to compute "does this policy need an Out?" with
+// two separate loops; either copy could drift and let one path render a route the
+// other refuses. The predicate is now the single answer, so a policy that routes
+// through the Out — by default or by any rule — is the same set in both.
+func TestOutReferenceJudgementIsShared(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy ServerPolicy
+		want   bool
+	}{
+		{"empty", ServerPolicy{Default: CompilerActionDirect}, false},
+		{"default out", ServerPolicy{Default: CompilerActionOut}, true},
+		{"rule out", ServerPolicy{Default: CompilerActionDirect, Rules: []CompilerRule{
+			{Priority: 10, Match: Match{Domains: []string{"a.example.invalid"}}, Action: CompilerActionOut},
+		}}, true},
+		{"late rule out", ServerPolicy{Default: CompilerActionDirect, Rules: []CompilerRule{
+			{Priority: 10, Match: Match{Domains: []string{"a.example.invalid"}}, Action: CompilerActionDirect},
+			{Priority: 20, Match: Match{IPCIDRs: []string{"203.0.113.0/24"}}, Action: CompilerActionOut},
+		}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.policy.referencesOut(); got != tc.want {
+				t.Fatalf("referencesOut() = %v, want %v", got, tc.want)
+			}
+			// A configured but offline Out is refused identically by both paths
+			// whenever the predicate is true, and neither path complains when it
+			// is false.
+			unconfigured := tc.policy
+			unconfigured.OutConfigured = false
+			unconfigured.OutAvailable = false
+			if _, err := ResolveServerPolicy(unconfigured); (err != nil) != tc.want {
+				t.Fatalf("ResolveServerPolicy() error = %v, want out-needed = %v", err, tc.want)
+			}
+			if _, err := RenderServerRoute(unconfigured, RuleSetPins{}); (err != nil) != tc.want {
+				t.Fatalf("RenderServerRoute() error = %v, want out-needed = %v", err, tc.want)
+			}
+		})
+	}
+}

@@ -13,8 +13,8 @@
 //
 // Byte assembly does not happen here. Client documents for the publish gate live
 // in the child package clientdoc; routing fragments, rule-set pins and selection
-// identity live in internal/policy and internal/subscription. store calls them
-// and persists the outcome.
+// identity live in internal/core/policy and internal/core/subscription. store
+// calls them and persists the outcome.
 //
 // # Subscription aggregation (ADR-0008)
 //

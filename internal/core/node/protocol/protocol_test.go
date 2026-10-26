@@ -389,3 +389,42 @@ func TestUpgradeKindsStayReserved(t *testing.T) {
 		}
 	}
 }
+
+// TestReportedVersionIsExact pins the version probe both kernel gates share. A
+// kernel prints a sentence, and the Agent may print more than one release, so
+// the scan covers the whole output; the comparison is per token, because a
+// substring search would accept a longer or prerelease build of the same pin.
+func TestReportedVersionIsExact(t *testing.T) {
+	accepted := map[string]struct{ output, want string }{
+		"mihomo":       {"Mihomo Meta v1.19.32 linux amd64", "1.19.32"},
+		"sing-box":     {"sing-box version 1.14.3", "1.14.3"},
+		"bare":         {"v1.14.3", "1.14.3"},
+		"no prefix":    {"1.14.3", "1.14.3"},
+		"two releases": {"agent 0.9.0 kernel 1.14.3 platform x", "1.14.3"},
+	}
+	for name, input := range accepted {
+		if _, ok := ReportedVersion(input.output, input.want); !ok {
+			t.Fatalf("%s output %q did not prove %s", name, input.output, input.want)
+		}
+	}
+
+	refused := []string{
+		"",
+		"Mihomo Meta v1.19.320 linux amd64",
+		"Mihomo Meta v1.19.3 linux amd64",
+		"Mihomo Meta v1.19.32-beta linux amd64",
+		"sing-box version 1.14",
+		"sing-box version 1.14.30",
+		"built from 1.14.3.1",
+		"mihomo-meta v1.19.32-linux-amd64",
+	}
+	for _, output := range refused {
+		if token, ok := ReportedVersion(output, "1.14.3"); ok || token != "" {
+			t.Fatalf("output %q wrongly proved 1.14.3 via %q", output, token)
+		}
+	}
+	// The evidence token is the release without its "v", so a caller can name it.
+	if token, ok := ReportedVersion("Mihomo Meta v1.19.32 linux amd64", "1.19.32"); !ok || token != "1.19.32" {
+		t.Fatalf("token = %q ok = %v", token, ok)
+	}
+}

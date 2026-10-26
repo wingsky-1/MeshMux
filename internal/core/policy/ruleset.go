@@ -47,12 +47,12 @@ func (p RuleSetPins) Validate(rules []CompilerRule) error {
 	for _, rule := range rules {
 		for _, code := range rule.Match.GeoSite {
 			if _, ok := p.GeoSite[code]; !ok {
-				return errors.New(CodeRulesetUnpinned + ": geosite-" + code + " has no version-locked pin")
+				return errors.New(CodeRulesetUnpinned + ": " + ir.GeoSiteTag(code) + " has no version-locked pin")
 			}
 		}
 		for _, code := range rule.Match.GeoIP {
 			if _, ok := p.GeoIP[code]; !ok {
-				return errors.New(CodeRulesetUnpinned + ": geoip-" + code + " has no version-locked pin")
+				return errors.New(CodeRulesetUnpinned + ": " + ir.GeoIPTag(code) + " has no version-locked pin")
 			}
 		}
 		for _, tag := range rule.Match.RuleSets {

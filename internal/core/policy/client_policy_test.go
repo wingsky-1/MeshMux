@@ -99,3 +99,49 @@ func TestClientPolicyRefusesConflicts(t *testing.T) {
 		t.Fatalf("ordered exception refused: %v", err)
 	}
 }
+
+// TestDefaultClientPrioritiesAreTheNamedOnes pins the client default order to the
+// exported ClientPriority* constants. The numbers used to be literals in the
+// builder while the conflict check read the resulting order, so a renumbering
+// could reorder the document silently; the builder now names the constants and
+// this test proves they are the order the contract states.
+func TestDefaultClientPrioritiesAreTheNamedOnes(t *testing.T) {
+	policy, err := DefaultClientPolicy(testModel(), "tokyo-1", ClientDefaults{
+		Exceptions: []string{"dl.example.invalid"}, RemoteLANPrefixes: []string{"192.168.50.0/24"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		priority int
+		action   CompilerAction
+	}{
+		{ClientPriorityTailnet, CompilerActionTailscale},
+		{ClientPriorityDomestic, CompilerActionDirect},
+		{ClientPriorityExceptions, CompilerActionDirect},
+	}
+	if len(policy.Rules) != len(want) {
+		t.Fatalf("rules = %d, want %d", len(policy.Rules), len(want))
+	}
+	for index, expected := range want {
+		if policy.Rules[index].Priority != expected.priority || policy.Rules[index].Action != expected.action {
+			t.Fatalf("rule %d = {%d %s}, want {%d %s}", index,
+				policy.Rules[index].Priority, policy.Rules[index].Action, expected.priority, expected.action)
+		}
+	}
+	if !(ClientPriorityTailnet < ClientPriorityDomestic &&
+		ClientPriorityDomestic < ClientPriorityExceptions &&
+		ClientPriorityExceptions < ClientPriorityMesh) {
+		t.Fatalf("client priorities are not ascending: %d %d %d %d",
+			ClientPriorityTailnet, ClientPriorityDomestic, ClientPriorityExceptions, ClientPriorityMesh)
+	}
+	// The mesh-only derivation uses the priority MeshClientPolicy names, so an
+	// operator policy that keeps it can be combined with the defaults unchanged.
+	mesh, err := MeshClientPolicy(testModel(), "tokyo-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mesh.Rules) != 1 || mesh.Rules[0].Priority != ClientPriorityMesh {
+		t.Fatalf("mesh-only policy = %#v", mesh.Rules)
+	}
+}

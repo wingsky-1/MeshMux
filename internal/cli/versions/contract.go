@@ -10,8 +10,9 @@ import "strconv"
 //
 // Ownership and direction:
 //   - layer: core leaf (the bottom of the internal DAG);
-//   - consumers: internal/install, internal/update, internal/hubupgrade,
-//     internal/hubupgrade/rootexec, internal/webcmd, internal/upgrade;
+//   - consumers: internal/cli/install, internal/cli/update,
+//     internal/cli/hubupgrade, internal/cli/hubupgrade/rootexec,
+//     internal/cli/webcmd, internal/cli/upgrade, internal/core/meshnet;
 //   - imports: standard library only. Never add an internal edge here.
 //
 // A literal that appears in more than one of those packages belongs here, not

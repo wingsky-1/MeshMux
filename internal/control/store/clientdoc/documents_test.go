@@ -97,3 +97,36 @@ func TestMihomoRefusesAnUnpinnedRuleSet(t *testing.T) {
 		t.Fatalf("Mihomo() = %v, want %s", err, policy.CodeRulesetUnpinned)
 	}
 }
+
+// TestMihomoResolvesGeoProvidersThroughTheSharedVocabulary pins the geo tag
+// round trip at the adapter boundary. The tag is produced by the policy
+// renderer and read back here to choose the pin and the provider behavior; both
+// directions go through internal/core/subscription/ir, so a GeoSite code can
+// never be looked up as a GeoIP pin even when the two share a code.
+func TestMihomoResolvesGeoProvidersThroughTheSharedVocabulary(t *testing.T) {
+	pins := policy.RuleSetPins{
+		GeoSite: map[string]policy.RulesetPin{"cn": {Source: "https://rulesets.example.invalid/geosite/cn.srs"}},
+		GeoIP:   map[string]policy.RulesetPin{"cn": {Source: "https://rulesets.example.invalid/geoip/cn.srs"}},
+	}
+	providers, err := mihomoRuleProviders(pins, []policy.CompilerRule{{Match: policy.Match{
+		GeoSite: []string{"cn"},
+		GeoIP:   []string{"cn"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(providers, "geosite-cn:") || !strings.Contains(providers, "geoip-cn:") {
+		t.Fatalf("providers do not declare both geo tags:\n%s", providers)
+	}
+	// The two entries must point at their own artifact and carry their own
+	// behavior; a shared code must not collapse them into one provider.
+	for _, want := range []struct{ tag, behavior, source string }{
+		{"geosite-cn", "domain", pins.GeoSite["cn"].Source},
+		{"geoip-cn", "ipcidr", pins.GeoIP["cn"].Source},
+	} {
+		block := "  " + want.tag + ":\n    type: http\n    behavior: " + want.behavior + "\n    url: \"" + want.source + "\"\n"
+		if !strings.Contains(providers, block) {
+			t.Fatalf("provider %s is not the expected block %q:\n%s", want.tag, block, providers)
+		}
+	}
+}

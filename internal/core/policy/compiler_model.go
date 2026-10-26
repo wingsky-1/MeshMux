@@ -165,7 +165,7 @@ func MeshClientPolicy(model ir.MeshView, proxyLine string) (ClientPolicy, error)
 		Default: CompilerActionProxy,
 		Mesh:    cloneModel(model),
 		Rules: []CompilerRule{{
-			Priority: 1000,
+			Priority: ClientPriorityMesh,
 			Match:    Match{IPCIDRs: append([]string(nil), model.TailnetPrefixes...)},
 			Action:   CompilerActionTailscale,
 		}},
@@ -200,6 +200,23 @@ func (p ServerPolicy) Validate() error {
 	return validateRules(p.Rules, CompilerAction.validServer)
 }
 
+// referencesOut reports whether the policy routes anything through the Out at
+// all: its default egress or any rule. It is the single Out judgement shared by
+// ResolveServerPolicy (which applies the Out contract before rendering) and
+// RenderServerRoute (which refuses a still-unresolved Out), so the two cannot
+// disagree about whether a policy needs an Out.
+func (p ServerPolicy) referencesOut() bool {
+	if p.Default == CompilerActionOut {
+		return true
+	}
+	for _, rule := range p.Rules {
+		if rule.Action == CompilerActionOut {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolveServerPolicy applies the Out contract before rendering: an unavailable
 // Out never becomes direct silently. Only an explicit opt-in with an operation
 // id may fall back, and the fallback rewrites Out actions to direct.
@@ -207,11 +224,7 @@ func ResolveServerPolicy(policy ServerPolicy) (ServerPolicy, error) {
 	if err := policy.Validate(); err != nil {
 		return policy, err
 	}
-	needsOut := policy.Default == CompilerActionOut
-	for _, rule := range policy.Rules {
-		needsOut = needsOut || rule.Action == CompilerActionOut
-	}
-	if !needsOut {
+	if !policy.referencesOut() {
 		return policy, nil
 	}
 	if !policy.OutConfigured {

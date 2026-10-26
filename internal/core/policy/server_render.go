@@ -14,6 +14,7 @@ import (
 	"errors"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription/ir"
 )
 
 const (
@@ -50,10 +51,7 @@ func RenderServerRoute(policy ServerPolicy, pins RuleSetPins) ([]byte, error) {
 	if err := pins.Validate(policy.Rules); err != nil {
 		return nil, err
 	}
-	needsOut := policy.Default == CompilerActionOut
-	for _, rule := range policy.Rules {
-		needsOut = needsOut || rule.Action == CompilerActionOut
-	}
+	needsOut := policy.referencesOut()
 	if needsOut && !policy.OutConfigured {
 		return nil, errors.New("OUT_BINDING_INVALID: the server policy references an Out that is not configured")
 	}
@@ -103,10 +101,10 @@ func serverRuleSets(match Match, pins RuleSetPins, declared map[string]struct{})
 		sets = append(sets, serverRuleSet{Type: "remote", Tag: tag, Format: singBoxServerFormat, URL: pin.Source})
 	}
 	for _, code := range match.GeoSite {
-		add("geosite-"+code, pins.GeoSite[code])
+		add(ir.GeoSiteTag(code), pins.GeoSite[code])
 	}
 	for _, code := range match.GeoIP {
-		add("geoip-"+code, pins.GeoIP[code])
+		add(ir.GeoIPTag(code), pins.GeoIP[code])
 	}
 	for _, tag := range match.RuleSets {
 		add(tag, pins.Remote[tag])

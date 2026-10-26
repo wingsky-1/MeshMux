@@ -25,6 +25,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription/ir"
 )
 
 // SingBox wraps a rendered client route fragment into the native sing-box
@@ -121,10 +122,10 @@ func mihomoRuleProviders(pins policy.RuleSetPins, rules []policy.CompilerRule) (
 	tags := map[string]struct{}{}
 	for _, rule := range rules {
 		for _, code := range rule.Match.GeoSite {
-			tags["geosite-"+code] = struct{}{}
+			tags[ir.GeoSiteTag(code)] = struct{}{}
 		}
 		for _, code := range rule.Match.GeoIP {
-			tags["geoip-"+code] = struct{}{}
+			tags[ir.GeoIPTag(code)] = struct{}{}
 		}
 		for _, tag := range rule.Match.RuleSets {
 			tags[tag] = struct{}{}
@@ -146,7 +147,7 @@ func mihomoRuleProviders(pins policy.RuleSetPins, rules []policy.CompilerRule) (
 			return "", errors.New(policy.CodeRulesetUnpinned + ": " + tag + " has no version-locked pin")
 		}
 		behavior := "domain"
-		if strings.HasPrefix(tag, "geoip-") {
+		if kind, _, isGeo := ir.SplitGeoTag(tag); isGeo && kind == ir.MatcherGeoIP {
 			behavior = "ipcidr"
 		}
 		out.WriteString("  " + tag + ":\n")
@@ -162,11 +163,11 @@ func mihomoRuleProviders(pins policy.RuleSetPins, rules []policy.CompilerRule) (
 // ruleSetPinFor resolves the pin of one rendered tag. GeoSite and GeoIP tags
 // are prefixed by the renderer; remote tags are used verbatim.
 func ruleSetPinFor(pins policy.RuleSetPins, tag string) (policy.RulesetPin, bool) {
-	if code, ok := strings.CutPrefix(tag, "geosite-"); ok {
-		pin, found := pins.GeoSite[code]
-		return pin, found
-	}
-	if code, ok := strings.CutPrefix(tag, "geoip-"); ok {
+	if kind, code, isGeo := ir.SplitGeoTag(tag); isGeo {
+		if kind == ir.MatcherGeoSite {
+			pin, found := pins.GeoSite[code]
+			return pin, found
+		}
 		pin, found := pins.GeoIP[code]
 		return pin, found
 	}

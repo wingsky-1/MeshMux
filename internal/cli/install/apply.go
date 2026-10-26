@@ -28,6 +28,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 const (
@@ -749,7 +750,13 @@ func artifactErrorCode(err error) string {
 
 func verifyBinaryVersion(ctx context.Context, runner CommandRunner, path, version string) error {
 	output, err := runner.Run(ctx, path, "version")
-	if err != nil || !strings.Contains(string(output), version) {
+	if err != nil {
+		return errors.New("BINARY_VERSION_INVALID")
+	}
+	// The release is compared exactly, not searched for: a binary that merely
+	// mentions the pinned version in a build tag, or carries a longer release
+	// such as 1.19.320, is a different artifact.
+	if _, ok := protocol.ReportedVersion(string(output), version); !ok {
 		return errors.New("BINARY_VERSION_INVALID")
 	}
 	return nil

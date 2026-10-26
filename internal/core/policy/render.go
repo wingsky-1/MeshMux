@@ -14,6 +14,7 @@ import (
 	"net/netip"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription/ir"
 )
 
 // CodeRenderUnsupported marks a policy the target format cannot express.
@@ -153,10 +154,10 @@ func mihomoRuleLines(match Match, action string) []string {
 func ruleSetTags(match Match) []string {
 	tags := make([]string, 0, len(match.GeoSite)+len(match.GeoIP)+len(match.RuleSets))
 	for _, code := range match.GeoSite {
-		tags = append(tags, "geosite-"+code)
+		tags = append(tags, ir.GeoSiteTag(code))
 	}
 	for _, code := range match.GeoIP {
-		tags = append(tags, "geoip-"+code)
+		tags = append(tags, ir.GeoIPTag(code))
 	}
 	return append(tags, match.RuleSets...)
 }

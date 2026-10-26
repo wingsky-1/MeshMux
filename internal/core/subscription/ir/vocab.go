@@ -44,6 +44,36 @@ const (
 	MatcherRuleSet      MatcherKind = "ruleset"
 )
 
+// Geo rule-set tag spellings. A GeoSite or GeoIP matcher renders as the kernel
+// rule-set tag "<kind>-<code>", so the composer, the policy generators, the
+// pin check and the client-document adapter all name the same tag. The prefix
+// is derived from the matcher kind instead of being retyped, so the two can
+// never drift.
+const (
+	GeoSiteTagPrefix = string(MatcherGeoSite) + "-"
+	GeoIPTagPrefix   = string(MatcherGeoIP) + "-"
+)
+
+// GeoSiteTag returns the rendered rule-set tag of one GeoSite code.
+func GeoSiteTag(code string) string { return GeoSiteTagPrefix + code }
+
+// GeoIPTag returns the rendered rule-set tag of one GeoIP code.
+func GeoIPTag(code string) string { return GeoIPTagPrefix + code }
+
+// SplitGeoTag reports whether tag is a rendered geo rule-set tag and returns
+// its matcher kind plus the code part after the prefix. An empty code is not a
+// tag. A version suffix (for example "cn@2026.10.21") stays part of the code:
+// the caller decides what it accepts.
+func SplitGeoTag(tag string) (MatcherKind, string, bool) {
+	if code, ok := strings.CutPrefix(tag, GeoSiteTagPrefix); ok && code != "" {
+		return MatcherGeoSite, code, true
+	}
+	if code, ok := strings.CutPrefix(tag, GeoIPTagPrefix); ok && code != "" {
+		return MatcherGeoIP, code, true
+	}
+	return "", "", false
+}
+
 // TailnetIPv4Prefix and TailnetIPv6Prefix are the address ranges the managed
 // Headscale instance hands to mesh devices. The mesh domain and the mesh
 // exporter both read them from here, so a route check, the rendered Headscale

@@ -19,6 +19,22 @@ type ClientDefaults struct {
 	RemoteLANPrefixes []string
 }
 
+// ClientPriority* are the default priorities of the client intent, exported so
+// the Web rows and the tests name the same order instead of retyping it. They
+// must stay strictly ascending and unique: Validate refuses an order that is
+// not, and a conflict check reads the order to prove no rule shadows another.
+const (
+	// ClientPriorityTailnet is the mesh/LAN direct-route rule.
+	ClientPriorityTailnet = 100
+	// ClientPriorityDomestic is the domestic GeoSite direct rule.
+	ClientPriorityDomestic = 200
+	// ClientPriorityExceptions is the operator's direct-domain exception list.
+	ClientPriorityExceptions = 300
+	// ClientPriorityMesh is the tailnet rule MeshClientPolicy derives on its
+	// own, before DefaultClientPolicy replaces the list with the fuller order.
+	ClientPriorityMesh = 1000
+)
+
 // DefaultClientPolicy is the issue #10 default; the selected Line is final.
 func DefaultClientPolicy(model ir.MeshView, proxyLine string, defaults ClientDefaults) (ClientPolicy, error) {
 	policy, err := MeshClientPolicy(model, proxyLine)
@@ -27,11 +43,11 @@ func DefaultClientPolicy(model ir.MeshView, proxyLine string, defaults ClientDef
 	}
 	var rules []CompilerRule
 	if prefixes := append(append([]string{}, model.TailnetPrefixes...), defaults.RemoteLANPrefixes...); len(prefixes) > 0 {
-		rules = append(rules, CompilerRule{100, Match{IPCIDRs: prefixes, DNS: DNSEncrypted}, CompilerActionTailscale})
+		rules = append(rules, CompilerRule{ClientPriorityTailnet, Match{IPCIDRs: prefixes, DNS: DNSEncrypted}, CompilerActionTailscale})
 	}
-	rules = append(rules, CompilerRule{200, Match{GeoSite: []string{"cn"}, DNS: DNSDomestic}, CompilerActionDirect})
+	rules = append(rules, CompilerRule{ClientPriorityDomestic, Match{GeoSite: []string{"cn"}, DNS: DNSDomestic}, CompilerActionDirect})
 	if len(defaults.Exceptions) > 0 {
-		rules = append(rules, CompilerRule{300, Match{Domains: defaults.Exceptions, DNS: DNSDomestic}, CompilerActionDirect})
+		rules = append(rules, CompilerRule{ClientPriorityExceptions, Match{Domains: defaults.Exceptions, DNS: DNSDomestic}, CompilerActionDirect})
 	}
 	policy.Rules = rules
 	return policy, policy.Validate()

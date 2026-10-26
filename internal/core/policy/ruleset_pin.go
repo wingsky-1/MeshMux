@@ -3,7 +3,7 @@ package policy
 // The ruleset version lock and the retained AI ruleset byte verification.
 //
 // Issue #8 originally resolved one AI egress decision here. The rule library
-// (internal/policy + the subscription composer, ADR-0008) now owns that
+// (internal/core/policy + the subscription composer, ADR-0008) now owns that
 // decision, so the decision types and functions were removed in Task 6. What
 // remains is the version lock itself, which is still the only contract for a
 // pinned artifact:

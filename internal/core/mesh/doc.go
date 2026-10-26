@@ -4,7 +4,7 @@
 //
 // The package performs no I/O against any subsystem: it does not call
 // Headscale (API or CLI), HTTP, SQLite or the file system, and it imports
-// neither internal/web nor internal/install. The only external capability it
+// neither internal/web nor internal/cli/install. The only external capability it
 // uses is crypto/rand for identity and secret generation. Persistence, request
 // handling and the Headscale adapter stay outside: they keep the stable
 // Headscale node id reference and apply the state machines defined here.
@@ -21,8 +21,8 @@
 //   - the enrollment key lifecycle issued → consumed / expired / revoked, a
 //     fixed 15-minute lifetime, hash-only storage and irreversible consumption.
 //
-// The mesh/node boundary is unchanged: internal/node is the sing-box runtime,
-// fixed host layout and Agent data contract on a Line host; mesh is the
+// The mesh/node boundary is unchanged: internal/core/node is the sing-box
+// runtime, fixed host layout and Agent data contract on a Line host; mesh is the
 // Headscale-side device identity and enrollment state. mesh defines no second
 // Node or Agent model and executes no Agent action.
 //

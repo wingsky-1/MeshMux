@@ -37,7 +37,7 @@ const (
 	exportClientPort = 1080
 	// exportSingBoxSelectorTag is the stable tag of the sing-box selector
 	// outbound. It never changes with a rename or a reorder. The value is owned
-	// by the node wire contract (internal/node/protocol).
+	// by the node wire contract (internal/core/node/protocol).
 	exportSingBoxSelectorTag = protocol.SelectorTag
 	// exportSingBoxDirectTag is the explicit direct outbound tag. It exists
 	// so the configuration never depends on an implicit default and never

@@ -34,7 +34,7 @@ import (
 //
 // These names are IR identifiers, not kernel tags: a maker maps "block" to the
 // kernel's block tag and "line-out" to the Out tag, which is exactly why the
-// tag literals live in internal/node/protocol and not here.
+// tag literals live in internal/core/node/protocol and not here.
 type composeEgress string
 
 const (
@@ -174,7 +174,7 @@ func buildComposeRuleSets(rules []composeRenderedRule) []composeRuleSet {
 			}
 			declared[tag] = struct{}{}
 			behavior := "domain"
-			if strings.HasPrefix(tag, "geoip-") {
+			if kind, _, isGeo := ir.SplitGeoTag(tag); isGeo && kind == ir.MatcherGeoIP {
 				behavior = "ipcidr"
 			}
 			sets = append(sets, composeRuleSet{Tag: tag, Source: rule.sources[index], Behavior: behavior})

@@ -53,21 +53,23 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
-// HeadscaleVersion is the single pinned Headscale release of a MeshMux Hub, and
-// the release the fixed argv table of this adapter was written against. The
-// installer artifact manifest and the generated configuration must name the same
-// release; they read internal/versions, and the drift test in internal/install
-// fails if the two ever disagree.
+// HeadscaleVersion is the pinned Headscale release of a MeshMux Hub, and the
+// release the fixed argv table of this adapter was written against. It is a
+// re-export of internal/cli/versions, the module's zero-internal-import pin
+// leaf, so the installer artifact manifest, the generated configuration and
+// this handshake read one literal: a release bump cannot update the downloaded
+// binary while leaving the command contract behind. The drift test in
+// internal/install still compares the installer's re-export against this one.
 //
-// The literal is repeated here instead of imported so this adapter stays a
-// zero-internal-import leaf (C0): a control-plane adapter that can be reviewed,
-// tested and reasoned about without the rest of the module. The version is part
-// of its own contract — the handshake below refuses any other release — so a
-// silent re-export would hide the one constant a reviewer must check when the
-// argv table changes.
-const HeadscaleVersion = "0.29.5"
+// The version is part of this adapter's own contract — the handshake below
+// refuses any other release — so it stays an exported constant here: a reviewer
+// checking the argv table has one name to read, and the import is the shared
+// pin leaf rather than a domain package.
+const HeadscaleVersion = versions.HeadscaleVersion
 
 // The stable codes this package reports. They are the diagnostic contract: a
 // caller logs the code and the operation id, never the Headscale stderr text,

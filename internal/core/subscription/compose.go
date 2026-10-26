@@ -7,9 +7,10 @@ package subscription
 // can be re-derived and compared instead of being trusted from a cached copy.
 //
 // The composer and the policy generators share one vocabulary from
-// internal/subscription/ir (six matcher kinds, three actions, the pin and CIDR
-// predicates). The IR package is the subscription layer's own definition, so the
-// composer imports downward only and policy imports it without a cycle: there is
+// internal/core/subscription/ir (six matcher kinds, three actions, the pin and
+// CIDR predicates). The IR package is the subscription layer's own definition,
+// so the composer imports downward only and policy imports it without a cycle:
+// there is
 // no second copy left to drift.
 //
 // Composition never executes anything. A selected Out is recorded and rendered into
@@ -325,9 +326,9 @@ func composeRuleTargets(rule ComposeRule) ([]string, []string, []string, error) 
 			tag := value + "@" + pin.Version
 			switch rule.Kind {
 			case MatcherGeoSite:
-				tag = "geosite-" + tag
+				tag = ir.GeoSiteTag(tag)
 			case MatcherGeoIP:
-				tag = "geoip-" + tag
+				tag = ir.GeoIPTag(tag)
 			}
 			tags = append(tags, tag)
 			sources = append(sources, pin.Source)

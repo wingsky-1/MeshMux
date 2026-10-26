@@ -154,3 +154,25 @@ func TestPublishGateAgainstRealKernels(t *testing.T) {
 		t.Fatalf("mihomo refused the assembled client document: %v", err)
 	}
 }
+
+// TestCheckMihomoDocumentRefusesNearMissVersions pins the exact comparison: a
+// build whose release merely starts with the pin, or a prerelease of it, would
+// validate a schema this gate was never written against.
+func TestCheckMihomoDocumentRefusesNearMissVersions(t *testing.T) {
+	for _, output := range []string{
+		"Mihomo Meta v" + MihomoVersion + "0 linux amd64",
+		"Mihomo Meta v" + MihomoVersion + "-beta linux amd64",
+		"Mihomo Meta v1.19.3 linux amd64",
+		"Mihomo Meta linux amd64",
+	} {
+		runner := &gateRunner{output: []byte(output)}
+		if _, err := CheckMihomoDocument(context.Background(), runner, "/usr/bin/mihomo", "/tmp/x.yaml", "/tmp"); err == nil ||
+			!strings.HasPrefix(err.Error(), CodePublishMihomoVersion) {
+			t.Fatalf("version output %q = %v", output, err)
+		}
+		// The refusal is decided by the probe alone: no config check runs.
+		if len(runner.calls) != 1 {
+			t.Fatalf("version output %q ran %d commands, want only the probe", output, len(runner.calls))
+		}
+	}
+}

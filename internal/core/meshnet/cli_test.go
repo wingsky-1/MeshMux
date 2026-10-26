@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
 // recordedCall is one argv the fake executor observed.
@@ -956,5 +958,18 @@ func TestCodeOfIgnoresForeignErrors(t *testing.T) {
 	wrapped := errors.Join(errors.New("context"), failure(CodeTimeout))
 	if got := CodeOf(wrapped); got != CodeTimeout {
 		t.Fatalf("CodeOf(joined) = %q", got)
+	}
+}
+
+// TestPinnedVersionComesFromTheVersionsLeaf proves the adapter does not carry a
+// second literal. It used to repeat the release to stay a leaf; the pin now has
+// one definition in internal/cli/versions, which every layer may import, so a
+// bump there changes the handshake here and the installer manifest together.
+func TestPinnedVersionComesFromTheVersionsLeaf(t *testing.T) {
+	if HeadscaleVersion != versions.HeadscaleVersion {
+		t.Fatalf("adapter pin = %q, versions leaf = %q", HeadscaleVersion, versions.HeadscaleVersion)
+	}
+	if versions.HeadscaleVersion != "0.29.5" {
+		t.Fatalf("versions leaf = %q; the argv table above was written for 0.29.5", versions.HeadscaleVersion)
 	}
 }

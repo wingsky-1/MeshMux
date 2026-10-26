@@ -14,7 +14,7 @@ package subscription
 // matcher and the makers that can express it (the others keep refusing it); a
 // new kernel version is a new maker beside these, and an existing maker's bytes
 // never change because a version was added. Every new egress tag belongs in
-// internal/node/protocol, never as a literal here.
+// internal/core/node/protocol, never as a literal here.
 
 import (
 	"encoding/json"

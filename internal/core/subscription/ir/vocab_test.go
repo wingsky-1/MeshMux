@@ -85,3 +85,53 @@ func TestMeshViewValidateIsTheAntiCorruptionBoundary(t *testing.T) {
 		})
 	}
 }
+
+// TestGeoTagVocabulary pins the one spelling of a rendered geo rule-set tag.
+// The composer prefixes a code with the matcher kind, the policy generators and
+// the client-document adapter read the tag back, so the round trip must hold
+// for the codes the pin maps are keyed by.
+func TestGeoTagVocabulary(t *testing.T) {
+	if GeoSiteTagPrefix != "geosite-" || GeoIPTagPrefix != "geoip-" {
+		t.Fatalf("prefixes = %q/%q; the rendered kernel tags are frozen", GeoSiteTagPrefix, GeoIPTagPrefix)
+	}
+	for code, want := range map[string]struct{ site, ip string }{
+		"cn":               {"geosite-cn", "geoip-cn"},
+		"ai@2026.10.21":    {"geosite-ai@2026.10.21", "geoip-ai@2026.10.21"},
+		"private@20261026": {"geosite-private@20261026", "geoip-private@20261026"},
+	} {
+		if got := GeoSiteTag(code); got != want.site {
+			t.Fatalf("GeoSiteTag(%q) = %q, want %q", code, got, want.site)
+		}
+		if got := GeoIPTag(code); got != want.ip {
+			t.Fatalf("GeoIPTag(%q) = %q, want %q", code, got, want.ip)
+		}
+	}
+
+	// Round trip: every rendered tag names its kind and its code, so the adapter
+	// that resolves a pin can never read a GeoSite tag as a GeoIP one.
+	for _, tag := range []string{"geosite-cn", "geoip-cn", "geosite-ai@2026.10.21", "geoip-ai@2026.10.21"} {
+		kind, code, ok := SplitGeoTag(tag)
+		if !ok {
+			t.Fatalf("%q is not recognised as a geo tag", tag)
+		}
+		rendered := ""
+		switch kind {
+		case MatcherGeoSite:
+			rendered = GeoSiteTag(code)
+		case MatcherGeoIP:
+			rendered = GeoIPTag(code)
+		default:
+			t.Fatalf("%q resolved to matcher kind %q", tag, kind)
+		}
+		if rendered != tag {
+			t.Fatalf("round trip of %q = %q", tag, rendered)
+		}
+	}
+
+	// A remote tag is not a geo tag, and a bare prefix names no code.
+	for _, tag := range []string{"", "cn", "ai@20261026", "geosite", "geosite-", "geoip-", "GEOSITE-cn", "xgeosite-cn"} {
+		if _, _, ok := SplitGeoTag(tag); ok {
+			t.Fatalf("%q was accepted as a geo rule-set tag", tag)
+		}
+	}
+}

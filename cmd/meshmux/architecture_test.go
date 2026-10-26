@@ -31,10 +31,6 @@ var internalDAGLeafs = []struct {
 	// protocol moves to internal/core/node/protocol (Task 5); the zero-internal
 	// import contract holds at either path.
 	{"protocol", []string{"internal/protocol", "internal/core/node/protocol"}},
-	// headscale was merged into the meshnet domain as internal/core/meshnet
-	// (Task 6) and stays a leaf there: the adapter describes an external
-	// process, so it must not reach into internal/core/mesh or the installer.
-	{"meshnet", []string{"internal/core/meshnet"}},
 	{"backup", []string{"internal/cli/backup"}},
 	// jobs was merged into internal/cli/upgrade (Task 6). The release target lives in
 	// that package next to the manifest, so it is no longer a leaf of its own;
@@ -56,6 +52,14 @@ var internalDAGHubUpgradeCandidates = []string{"internal/cli/hubupgrade", "inter
 // means node reached into a domain it does not own.
 var internalDAGNodeAllowed = []string{"internal/protocol", "internal/core/node/protocol", "internal/cli/buildinfo"}
 
+// internalDAGMeshnetAllowed is meshnet's complete internal dependency set. The
+// adapter used to repeat the Headscale pin as a literal to stay a leaf; the pin
+// now has one definition in internal/cli/versions, which every layer may import,
+// so the edge is that one leaf and nothing else. Reaching into internal/core/mesh
+// or internal/cli/install here would put a control-plane adapter above the
+// domain it belongs to.
+var internalDAGMeshnetAllowed = []string{"internal/cli/versions"}
+
 // internalPackageGraph is the ./internal/... production import graph. Test-only
 // imports are excluded: a _test.go import may legally point back at a package
 // that imports the tested one, and it is not part of the shipped binary.
@@ -65,7 +69,7 @@ type internalPackageGraph struct {
 	errors   map[string]string   // package path -> go list error, when any
 }
 
-// full resolves a module-relative path such as "internal/route".
+// full resolves a module-relative path such as "internal/core/policy".
 func (g internalPackageGraph) full(relative string) string {
 	return g.module + "/" + relative
 }
@@ -176,6 +180,22 @@ func TestArchitectureDAG(t *testing.T) {
 		for _, imported := range graph.internalImports(path) {
 			if !allowed[imported] {
 				t.Errorf("internal/core/node imports %s; its internal dependencies are frozen to protocol and buildinfo", imported)
+			}
+		}
+	})
+
+	t.Run("meshnet imports only the version pin leaf", func(t *testing.T) {
+		path := graph.full("internal/core/meshnet")
+		if !graph.has(path) {
+			t.Fatalf("internal/core/meshnet is missing from ./internal/...")
+		}
+		allowed := make(map[string]bool, len(internalDAGMeshnetAllowed))
+		for _, relative := range internalDAGMeshnetAllowed {
+			allowed[graph.full(relative)] = true
+		}
+		for _, imported := range graph.internalImports(path) {
+			if !allowed[imported] {
+				t.Errorf("internal/core/meshnet imports %s; the Headscale adapter may read the pin leaf and nothing else", imported)
 			}
 		}
 	})

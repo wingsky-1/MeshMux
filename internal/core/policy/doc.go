@@ -17,9 +17,9 @@
 //
 // The vocabulary the two layers must agree on (actions, matcher kinds, pin and
 // CIDR predicates, the mesh view) lives in the child package
-// internal/subscription/ir. Policy imports it downward; the composer imports it
-// as its own definition. Neither direction needs a second copy of a value or a
-// predicate.
+// internal/core/subscription/ir. Policy imports it downward; the composer
+// imports it as its own definition. Neither direction needs a second copy of a
+// value or a predicate.
 //
 // The two layers keep distinct names for their own vocabularies: stored
 // library rows use Action/Rule, while generator intent uses
@@ -44,13 +44,13 @@
 //     call it: pins are the future consumption path, and the byte check is the
 //     contract that makes them safe (Task 6 Keep list).
 //
-// Dependency direction: policy imports internal/subscription/ir (the shared
-// vocabulary and the read-only mesh view), internal/node/protocol (the kernel
-// tags and wire grammars) and the standard library. It deliberately does NOT
-// import the subscription package: the merged compiler must not call back into
-// the composer. It never imports internal/web/*; the Hub SQLite migration in
-// internal/control/store reuses SchemaDDL and SeedPresetsTx, and the handler calls
-// the Store on the same *sql.DB the web store owns.
+// Dependency direction: policy imports internal/core/subscription/ir (the
+// shared vocabulary and the read-only mesh view), internal/core/node/protocol
+// (the kernel tags and wire grammars) and the standard library. It deliberately
+// does NOT import the subscription package: the merged compiler must not call
+// back into the composer. It never imports internal/web/*; the Hub SQLite
+// migration in internal/control/store reuses SchemaDDL and SeedPresetsTx, and the
+// handler calls the Store on the same *sql.DB the web store owns.
 //
 // Module boundary: a ClientPolicy's mesh view is a foreign value, so
 // MeshClientPolicy validates its shape (ir.MeshView.Validate: identity, labels,
@@ -75,7 +75,7 @@
 // 与订阅分流也不同——订阅分流负责把同一份用户集合渲染为不同客户端所需的
 // sing-box 与 Mihomo 文档，属于渲染层的表达选择；版本锁只描述制品的可验证性，
 // 不渲染配置，不读写订阅 Token，也不定义 Out 的安装或升级流程。它同样不执行
-// 任何主机动作：验证、下发与回读属于 internal/node 与 internal/web。
+// 任何主机动作：验证、下发与回读属于 internal/core/node 与 internal/web。
 //
 // See ADR-0007 for the original placeholder scope, the 10a revision and the
 // excluded cross-source ACL work.

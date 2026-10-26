@@ -143,6 +143,30 @@ func ValidParamKey(value string) bool  { return paramKey.MatchString(value) }
 func ValidShortID(value string) bool { return shortIDRE.MatchString(value) }
 func ValidUUIDv4(value string) bool  { return uuidV4RE.MatchString(value) }
 
+// ReportedVersion reports whether a kernel's own version output names want
+// exactly and returns the token that proved it. Both pinned kernels print a
+// sentence rather than a bare value ("Mihomo Meta v1.19.32 linux amd64",
+// "sing-box version 1.14.3"), and a program may print more than one release
+// (the Agent reports its own version beside the kernel's), so the whole output
+// is scanned. A token counts only when its optional leading "v" is followed by a
+// release and that release is exactly want: a substring search would also accept
+// "v1.19.320", "1.19.32-beta" or a build tag that merely quotes the pin, which
+// are all different binaries.
+//
+// The caller keeps its own stable code; this returns the evidence only.
+func ReportedVersion(output string, want string) (string, bool) {
+	for _, field := range strings.Fields(output) {
+		candidate := strings.TrimPrefix(field, "v")
+		if candidate == "" || !semverRE.MatchString(candidate) {
+			continue
+		}
+		if candidate == want {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
 // Task is the frozen envelope. Every field is mandatory so Issue #11 can
 // reuse operation_id/revision/idempotency without a protocol rewrite.
 type Task struct {
