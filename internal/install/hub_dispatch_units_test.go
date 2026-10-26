@@ -126,7 +126,7 @@ func TestHubRuntimeDirsDeclaredWritable(t *testing.T) {
 	if len(readWritePaths) == 0 {
 		t.Fatalf("the web unit declares no ReadWritePaths:\n%s", web)
 	}
-	for _, want := range []string{"/run/meshmux-hub/requests", "/run/meshmux-hub/staging"} {
+	for _, want := range []string{"/run/meshmux-hub/requests", "/run/meshmux-hub/staging", "/run/meshmux-hub/boot"} {
 		found := false
 		for _, path := range readWritePaths {
 			if path == want {
@@ -141,6 +141,7 @@ func TestHubRuntimeDirsDeclaredWritable(t *testing.T) {
 	tmpfiles := files[hubTmpfilesPath]
 	for _, line := range []string{
 		"d /run/meshmux-hub/staging 0730 root meshmux",
+		"d /run/meshmux-hub/boot 0730 root meshmux",
 	} {
 		if !strings.Contains(tmpfiles, line+"\n") {
 			t.Fatalf("the tmpfiles drop-in does not create %q:\n%s", line, tmpfiles)
@@ -151,7 +152,7 @@ func TestHubRuntimeDirsDeclaredWritable(t *testing.T) {
 	if err := ensureHubUpgradeLayout(root); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{"/run/meshmux-hub", "/run/meshmux-hub/requests", "/run/meshmux-hub/staging"} {
+	for _, dir := range []string{"/run/meshmux-hub", "/run/meshmux-hub/requests", "/run/meshmux-hub/staging", "/run/meshmux-hub/boot"} {
 		info, err := os.Lstat(filepath.Join(root, strings.TrimPrefix(dir, "/")))
 		if err != nil {
 			t.Fatalf("the installer layout does not pre-create %s (the web unit then fails 226/NAMESPACE): %v", dir, err)

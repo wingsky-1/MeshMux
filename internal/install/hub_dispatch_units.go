@@ -84,6 +84,7 @@ const hubTmpfiles = `# MeshMux Hub upgrade runtime and dispatcher state (#11d).
 d /run/meshmux-hub 0730 root meshmux
 d /run/meshmux-hub/requests 0730 root meshmux
 d /run/meshmux-hub/staging 0730 root meshmux
+d /run/meshmux-hub/boot 0730 root meshmux
 d /run/meshmux-hub/requests.done 0700 root root
 d /var/lib/meshmux-installer 0711 root root
 d /var/lib/meshmux-installer/hub-upgrade 0755 root root
@@ -140,7 +141,7 @@ func ensureHubUpgradeLayout(root string) error {
 	if err := ensureDirectory(runtimeDir, 0730); err != nil {
 		return err
 	}
-	for _, name := range []string{"requests", "staging"} {
+	for _, name := range []string{"requests", "staging", "boot"} {
 		if err := ensureDirectory(filepath.Join(runtimeDir, name), 0730); err != nil {
 			return err
 		}
@@ -180,7 +181,7 @@ func ensureHubUpgradeOwnership(root string) error {
 		return errors.New("HUB_UPGRADE_STATE_LAYOUT_FAILED")
 	}
 	runtimeDir := rooted(root, "/run/meshmux-hub")
-	for _, dir := range []string{runtimeDir, filepath.Join(runtimeDir, "requests"), filepath.Join(runtimeDir, "staging")} {
+	for _, dir := range []string{runtimeDir, filepath.Join(runtimeDir, "requests"), filepath.Join(runtimeDir, "staging"), filepath.Join(runtimeDir, "boot")} {
 		if err := os.Chown(dir, 0, gid); err != nil {
 			return errors.New("HUB_UPGRADE_STATE_LAYOUT_FAILED")
 		}

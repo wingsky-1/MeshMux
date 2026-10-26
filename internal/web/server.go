@@ -97,6 +97,11 @@ type Server struct {
 	// hubApply is the handoff seam of the Hub apply route (#11d Task 5). Same
 	// rule as hubBackup: production leaves it nil, a test replaces it.
 	hubApply func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error)
+	// hubRequestDir and hubResultsDir are the fixed /run and installer result
+	// trees. They are fields only so a B-level test can point the restore route
+	// and the /tasks block at a private fixture; production leaves them empty.
+	hubRequestDir string
+	hubResultsDir string
 	// reconcileMu guards the reconcile ticker handles. The ticker runs one
 	// journal pass every 30s; only the startup pass may judge identity and
 	// confirm (spec §5.5).
@@ -263,6 +268,11 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// a backed-up operation, stages the root-pinned target package and queues one
 	// request under /run. It never waits for the upgrade and never claims one.
 	r.Post("/tasks/hub-upgrade/apply", jsonAPI(app.mutation(app.tasksHubUpgradeApply, true)))
+	// The Hub restore (#11d Task 7): one authenticated mutation that queues the
+	// old package's restore executor. The receipt is "restoring" — a request
+	// exists, not a restored host; the result and the restored marker are the
+	// evidence. Root can run the same executor from a console without the Web.
+	r.Post("/tasks/hub-upgrade/restore", jsonAPI(app.mutation(app.tasksHubUpgradeRestore, true)))
 	// Route approval is a separate, explicit action: the page's read-only
 	// snapshot never moves a prefix to approved on its own.
 	r.Post("/mesh/routes/approve", app.mutation(app.meshRouteApprove, true))
@@ -801,6 +811,16 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 	s.clearFormCookie(w)
 	s.event(r, "PASSWORD_CHANGED")
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// Healthy reports whether the database still answers the /healthz SELECT 1
+// contract. It is the watchdog predicate, deliberately the same fact /healthz
+// exposes: identity, queue depth and page rendering are not liveness.
+func (s *Server) Healthy() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var one int
+	return s.store.db.QueryRowContext(ctx, "SELECT 1").Scan(&one) == nil
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

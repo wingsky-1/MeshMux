@@ -16,6 +16,24 @@ import (
 
 const codeUnitShape = "HUB_RESTORE_UNIT_SHAPE_INVALID"
 
+// safeExecArg reports whether an argv element needs no systemd quoting.
+// Anything else is rendered inside double quotes with the escapes systemd
+// understands.
+func safeExecArg(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	for _, r := range arg {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("_./:@=+-,", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ParseWebExecStart returns the argv of exactly one simple ExecStart line in
 // [Service]. systemd's basic quoting is supported; command lines, environment
 // files, multiple lines and continuations are not.
@@ -173,4 +191,116 @@ func splitExecArgs(value string) ([]string, error) {
 	}
 	flush()
 	return args, nil
+}
+
+// RenderDataDirDropIn renders the one restore drop-in: the base unit is never
+// edited; this file resets ExecStart and repeats the same argv with only the
+// --data-dir value replaced (spec §5.7). The output is deliberately a full
+// unit fragment, so an operator can inspect exactly what systemd will run.
+func RenderDataDirDropIn(argv []string, dataDir string) (string, error) {
+	if len(argv) == 0 || !filepath.IsAbs(argv[0]) {
+		return "", fail(codeUnitShape, "the web unit has no absolute executable")
+	}
+	if !cleanAbsolutePath(dataDir) {
+		return "", fail(codeUnitShape, "the restore data directory is not a clean absolute path")
+	}
+	if _, err := DataDirFromArgv(argv); err != nil {
+		return "", err
+	}
+	replaced := make([]string, 0, len(argv))
+	found := false
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "--data-dir":
+			if i+1 >= len(argv) {
+				return "", fail(codeUnitShape, "the web unit names --data-dir without a value")
+			}
+			replaced = append(replaced, arg, dataDir)
+			i++
+			found = true
+		case strings.HasPrefix(arg, "--data-dir="):
+			replaced = append(replaced, "--data-dir="+dataDir)
+			found = true
+		default:
+			replaced = append(replaced, arg)
+		}
+	}
+	if !found {
+		return "", fail(codeUnitShape, "the web unit does not name --data-dir")
+	}
+	var line strings.Builder
+	for i, arg := range replaced {
+		if i > 0 {
+			line.WriteByte(' ')
+		}
+		rendered, err := renderExecArg(arg)
+		if err != nil {
+			return "", err
+		}
+		line.WriteString(rendered)
+	}
+	var out strings.Builder
+	out.WriteString("# MeshMux Hub restore (#11d): the base unit stays unchanged; only --data-dir moves.\n")
+	out.WriteString("[Service]\n")
+	out.WriteString("ExecStart=\n")
+	out.WriteString("ExecStart=")
+	out.WriteString(line.String())
+	out.WriteString("\n")
+	return out.String(), nil
+}
+
+// renderExecArg writes one systemd ExecStart argument. The safe set is rendered
+// verbatim; everything else is double-quoted with backslash escaping, and "%"
+// is doubled because systemd treats a single percent as a specifier.
+func renderExecArg(arg string) (string, error) {
+	if strings.ContainsAny(arg, "\x00\n\r") {
+		return "", fail(codeUnitShape, "a web unit argument carries a control byte")
+	}
+	escaped := strings.ReplaceAll(arg, "%", "%%")
+	if safeExecArg(arg) {
+		return escaped, nil
+	}
+	escaped = strings.ReplaceAll(escaped, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`, nil
+}
+
+// ApplyExecStartDropIn folds the ExecStart assignments of one root-owned drop-in
+// onto the effective argv. An empty value resets; a second non-empty value is
+// ambiguous for a simple service and is refused, exactly as the dispatcher
+// already treats the effective Web unit.
+func ApplyExecStartDropIn(current []string, unit string) ([]string, error) {
+	section := ""
+	for _, raw := range strings.Split(unit, "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSpace(line[1 : len(line)-1])
+			continue
+		}
+		if section != "Service" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(key) != "ExecStart" {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			current = nil
+			continue
+		}
+		if current != nil {
+			return nil, fail(codeUnitShape, "the web drop-in adds a second effective ExecStart")
+		}
+		parsed, err := ParseWebExecStart("[Service]\nExecStart=" + value + "\n")
+		if err != nil {
+			return nil, err
+		}
+		current = parsed
+	}
+	return current, nil
 }

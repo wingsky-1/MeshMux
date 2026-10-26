@@ -640,10 +640,20 @@ func (p *reconciler) clearSupersededMarker(ops []Op) {
 	}
 }
 
-// ReadRestoredMarker returns the restore fact of this data directory. A missing
-// marker is (zero, false, nil); a malformed, loose or symlinked one is an error
-// (a lossy state must never be plausible-but-unreadable).
+// ReadRestoredMarker returns the restore fact of this data directory for the
+// current account. The Web (meshmux) writes the marker, so the root executor
+// must use ReadRestoredMarkerFor with that expected account instead of assuming
+// its own euid.
 func ReadRestoredMarker(dataDir string) (RestoredMarker, bool, error) {
+	return ReadRestoredMarkerFor(dataDir, os.Geteuid())
+}
+
+// ReadRestoredMarkerFor returns the restore fact of this data directory for the
+// named owner. A missing marker is (zero, false, nil); a malformed, loose,
+// foreign-owned or symlinked one is an error (a lossy state must never be
+// plausible-but-unreadable). Being able to read a marker is not authority: the
+// only decisions it drives are an op-scoped refusal or a sticky journal state.
+func ReadRestoredMarkerFor(dataDir string, expectedOwner int) (RestoredMarker, bool, error) {
 	var marker RestoredMarker
 	root, err := dataPath(dataDir, HubUpgradeDir)
 	if err != nil {
@@ -658,7 +668,7 @@ func ReadRestoredMarker(dataDir string) (RestoredMarker, bool, error) {
 		return marker, false, fail("HUB_RESTORE_MARKER_INVALID", "the restored marker could not be inspected")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
-		info.Mode().Perm() != 0600 || !ownedBy(os.Geteuid(), info) || info.Size() > JournalMaxBytes {
+		info.Mode().Perm() != 0600 || !ownedBy(expectedOwner, info) || info.Size() > JournalMaxBytes {
 		return marker, false, fail("HUB_RESTORE_MARKER_INVALID", "the restored marker is not a private 0600 file")
 	}
 	body, err := os.ReadFile(path)
