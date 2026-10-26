@@ -45,7 +45,7 @@ type meshFixtureMetadata struct {
 // supplementary group membership of `meshmux-headscale` is the one under test:
 //
 //	sudo -u meshmux env MESHMUX_MESH_HUB_FIXTURE_DIR=/tmp/meshmux-mesh-fixture \
-//	  /tmp/web.test -test.run '^TestMeshHubFixture$' -test.v
+//	  /tmp/web-handler.test -test.run '^TestMeshHubFixture$' -test.v
 //
 // The directory must be fresh (it holds SQLite and the event log) and is owned
 // by that account. No real tailnet client registers a node here, so this run
