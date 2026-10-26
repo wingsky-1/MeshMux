@@ -38,8 +38,8 @@ const (
 	// transientCaps is the capability bounding set of the unit, audited against
 	// the install code paths rather than guessed (spec §6, amended 2026-10-24):
 	//
-	//	CAP_CHOWN          os.Chown on every managed file (install/node_apply.go:449,
-	//	                   install/apply.go:459) and the chown(1) calls that set the
+	//	CAP_CHOWN          os.Chown on every managed file (install/apply_shared.go:restoreFileSnapshots,
+	//	                   shared by install/node_apply.go + install/apply.go rollback) and the chown(1) calls that set the
 	//	                   Agent data directory to root:meshmux-agent
 	//	                   (install/node_apply.go:731, :1140).
 	//	CAP_NET_ADMIN      every nft call: install/node_stage.go:144 (`nft -c`),

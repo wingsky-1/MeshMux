@@ -38,31 +38,72 @@ type fixturePublishVerifier struct {
 }
 
 func (v *fixturePublishVerifier) CheckSingBox(_ context.Context, document []byte) (string, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.singBoxCalls++
-	v.singBoxDocs = append(v.singBoxDocs, append([]byte(nil), document...))
-	if v.missingSingBox {
-		return "", errors.New(node.CodePublishSingBoxMissing + ": the pinned sing-box binary is missing")
-	}
-	if v.rejectSingBoxAt == v.singBoxCalls {
-		return "", errors.New(node.CodePublishCheckSingBox + ": sing-box refused the assembled document")
-	}
-	return "sing-box " + node.SingBoxPublishVersion + " accepted the assembled document", nil
+	return v.check(fixtureSingBoxGate, fixtureGateRun{
+		calls:    &v.singBoxCalls,
+		docs:     &v.singBoxDocs,
+		rejectAt: &v.rejectSingBoxAt,
+		missing:  &v.missingSingBox,
+	}, document)
 }
 
 func (v *fixturePublishVerifier) CheckMihomo(_ context.Context, document []byte) (string, error) {
+	return v.check(fixtureMihomoGate, fixtureGateRun{
+		calls:    &v.mihomoCalls,
+		docs:     &v.mihomoDocs,
+		rejectAt: &v.rejectMihomoAt,
+		missing:  &v.missingMihomo,
+	}, document)
+}
+
+// fixtureGate names the binary and the stable codes of one kernel. The fixture
+// reports the same wording the real gate does.
+type fixtureGate struct {
+	binary   string
+	version  string
+	missing  string
+	rejected string
+}
+
+var (
+	fixtureSingBoxGate = fixtureGate{
+		binary:   "sing-box",
+		version:  node.SingBoxPublishVersion,
+		missing:  node.CodePublishSingBoxMissing,
+		rejected: node.CodePublishCheckSingBox,
+	}
+	fixtureMihomoGate = fixtureGate{
+		binary:   "mihomo",
+		version:  node.MihomoVersion,
+		missing:  node.CodePublishMihomoMissing,
+		rejected: node.CodePublishCheckMihomo,
+	}
+)
+
+// fixtureGateRun points at the counters and switches of one kernel, so both
+// checks share one implementation while the verifier keeps one field set per
+// kernel.
+type fixtureGateRun struct {
+	calls    *int
+	docs     *[][]byte
+	rejectAt *int
+	missing  *bool
+}
+
+// check records one checked document and applies the two refusal rules of the
+// real gate: a missing kernel is a refusal with its own stable code, never a
+// pass, and a rejection carries no document content.
+func (v *fixturePublishVerifier) check(gate fixtureGate, run fixtureGateRun, document []byte) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.mihomoCalls++
-	v.mihomoDocs = append(v.mihomoDocs, append([]byte(nil), document...))
-	if v.missingMihomo {
-		return "", errors.New(node.CodePublishMihomoMissing + ": the pinned mihomo binary is missing")
+	(*run.calls)++
+	*run.docs = append(*run.docs, append([]byte(nil), document...))
+	if *run.missing {
+		return "", errors.New(gate.missing + ": the pinned " + gate.binary + " binary is missing")
 	}
-	if v.rejectMihomoAt == v.mihomoCalls {
-		return "", errors.New(node.CodePublishCheckMihomo + ": mihomo refused the assembled document")
+	if *run.rejectAt == *run.calls {
+		return "", errors.New(gate.rejected + ": " + gate.binary + " refused the assembled document")
 	}
-	return "mihomo " + node.MihomoVersion + " accepted the assembled document", nil
+	return gate.binary + " " + gate.version + " accepted the assembled document", nil
 }
 
 // hasSingBoxDocument reports whether one checked document contains needle.

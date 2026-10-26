@@ -561,12 +561,10 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 	return OutSyncPending, CodeOutSyncPending, nil
 }
 
-// queryIDsTx runs one bounded identifier query inside the caller's transaction.
-func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
-	rows, err := tx.Query(query, args...)
-	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
+// scanIDRows drains one single-column identifier result set, closing it before the
+// caller opens another statement or transaction on the single-connection pool.
+// Every failure maps to the same stable code so callers never leak driver detail.
+func scanIDRows(rows *sql.Rows) ([]string, error) {
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
@@ -580,6 +578,15 @@ func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
 	return out, nil
+}
+
+// queryIDsTx runs one bounded identifier query inside the caller's transaction.
+func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, errors.New("DATABASE_UNAVAILABLE")
+	}
+	return scanIDRows(rows)
 }
 
 // selectedEgressIDsForLineTx returns every egress the Line's selection names:
@@ -1011,19 +1018,7 @@ func storeIDs(db *sql.DB, query string, args ...any) ([]string, error) {
 	if err != nil {
 		return nil, errors.New("DATABASE_UNAVAILABLE")
 	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
-		}
-		out = append(out, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return out, nil
+	return scanIDRows(rows)
 }
 
 // drainOutsForLine is the "Line event" half of the coordination: a Line that just

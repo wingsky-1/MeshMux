@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"os"
 	"time"
 )
 
@@ -42,6 +43,36 @@ func validateStagedUnits(ctx context.Context, runner CommandRunner, unitPaths []
 		return fail2banErr
 	}
 	return nil
+}
+
+// restoreFileSnapshots undoes the staged file set recorded by the apply step.
+// Snapshots are restored in reverse order, targets this operation created are
+// removed, and restored targets are re-owned only when the installer runs
+// against the live root. It reports whether every step succeeded so the caller
+// can escalate a failed rollback to ROLLBACK_FAILED. Unit stop/start,
+// daemon-reload and ledger reconciliation stay with the caller because Hub and
+// Node differ there.
+func restoreFileSnapshots(root string, snapshots []fileSnapshot) bool {
+	ok := true
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		s := snapshots[i]
+		if !s.Exists {
+			if err := os.Remove(s.Target); err != nil && !os.IsNotExist(err) {
+				ok = false
+			}
+			continue
+		}
+		if err := copyAtomic(s.Backup, s.Target, s.Mode.Perm()); err != nil {
+			ok = false
+			continue
+		}
+		if root == "/" {
+			if err := os.Chown(s.Target, s.UID, s.GID); err != nil {
+				ok = false
+			}
+		}
+	}
+	return ok
 }
 
 // ensureFail2banRunning starts Fail2ban when it is inactive, otherwise reloads
