@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // TestStagedGCKeepsTheCurrentAndPreviousRevision is the end-to-end rule: after

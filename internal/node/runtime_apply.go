@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 func (r *Runtime) check(ctx context.Context, revision int64, allowed []string) (protocol.TaskResult, error) {

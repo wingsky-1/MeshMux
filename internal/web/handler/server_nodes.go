@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // agentAPI reports whether the path is an outbound-Agent endpoint. These

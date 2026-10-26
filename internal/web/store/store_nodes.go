@@ -10,7 +10,7 @@ import (
 	"time"
 
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 const OfflineAfter = 2 * time.Minute

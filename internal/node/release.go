@@ -1,6 +1,6 @@
 package node
 
-import "github.com/wingsky-1/MeshMux/internal/protocol"
+import "github.com/wingsky-1/MeshMux/internal/node/protocol"
 
 // KernelVersion is the only sing-box version accepted by the node contract.
 const KernelVersion = protocol.SingBoxVersion

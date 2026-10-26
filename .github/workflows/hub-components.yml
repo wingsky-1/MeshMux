@@ -4,6 +4,7 @@ on:
     paths:
       - 'internal/install/**'
       - 'internal/node/**'
+      - 'internal/node/protocol/**'
       - 'internal/protocol/**'
       - 'internal/web/**'
       - 'cmd/meshmux/**'

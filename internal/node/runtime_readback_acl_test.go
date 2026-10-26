@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // aclTask builds one config task carrying the Hub-side allowlist.

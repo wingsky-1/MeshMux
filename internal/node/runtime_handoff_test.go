@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // writeInFlightHandoff stores the marker of one running install. ChildPID is

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 func createPendingNode(t *testing.T, app *Server, role, name string, vless, ssh int) (store.Node, string) {

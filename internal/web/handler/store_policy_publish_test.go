@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
 )
 
 // publishFixture is one Hub with a paired Line, stored transport and an active

@@ -22,7 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 const (

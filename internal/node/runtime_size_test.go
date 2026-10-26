@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // testStateKey builds a deterministic 32-hex cache key for one cache entry.

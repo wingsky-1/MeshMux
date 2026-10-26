@@ -29,7 +29,7 @@ import (
 	"time"
 
 	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // nodeColumns is the exact column set of nodes, in the order the rebuild

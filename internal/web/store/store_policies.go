@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 

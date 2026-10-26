@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // revertRecorder is the node-side half of the revert seam. The production

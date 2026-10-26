@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // The synthetic secret set one v2 candidate carries. The values never leave

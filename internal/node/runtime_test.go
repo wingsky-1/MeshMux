@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 type runtimeTestController struct {

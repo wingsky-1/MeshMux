@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 func (r *Runtime) readback(ctx context.Context, revision int64, allowed []string, hasAllowed bool) (protocol.TaskResult, error) {

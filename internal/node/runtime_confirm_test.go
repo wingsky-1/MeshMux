@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // confirmCall is one ConfirmVersion invocation of the fixture confirmer.
