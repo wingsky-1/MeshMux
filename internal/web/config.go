@@ -14,8 +14,8 @@
 // store_node_candidates.go and aliased as subscriberChainKinds in
 // store_subscriber_sync.go, so producers and consumers cannot drift.
 //
-// The package imports internal/node for the node domain contract and does not
-// import internal/install; installation stays behind the CLI boundary.
+// The package imports internal/core/node for the node domain contract and does not
+// import internal/cli/install; installation stays behind the CLI boundary.
 package web
 
 import (

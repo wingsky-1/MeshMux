@@ -267,7 +267,7 @@ func prepareMeshFixtureDir(dir string) error {
 
 // TestMeshHeadscaleWiringIsPinned proves the production page is wired to the
 // pinned local CLI adapter, not to an injectable command or a remote client.
-// The adapter's own argv table is covered in internal/meshnet; this is the
+// The adapter's own argv table is covered in internal/core/meshnet; this is the
 // Web-side half of the command-assembly contract.
 func TestMeshHeadscaleWiringIsPinned(t *testing.T) {
 	app, _ := testApp(t)

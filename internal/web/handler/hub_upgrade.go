@@ -5,7 +5,7 @@ package handler
 // token, a bounded form, and an operation id on every receipt.
 //
 // The Web process owns the SQLite handle, so it supplies the four database
-// callbacks while internal/hubupgrade owns the order and every file write. The
+// callbacks while internal/cli/hubupgrade owns the order and every file write. The
 // receipt only claims "staged": it names the operation and the verified
 // per-operation backup, never an applied upgrade. The irreversible approval bit
 // is not read here: single flight is journal-only (R2), and Task 5 re-reads the

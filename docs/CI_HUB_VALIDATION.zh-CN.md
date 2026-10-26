@@ -24,7 +24,7 @@ Issue #6 Node 的 L1/L2/L3 状态见 [验收标准](ACCEPTANCE.zh-CN.md#issue-6-
 单独运行官方 Debian 13 容器，不需在 CI 主机安装第三方服务。
 - amd64、arm64 使用 GitHub Actions 对应原生 Linux runner，构建 Go fixture 与 Web。
 - 启动 `debian:13` 容器，从 GitHub 固定发行 URL 下载 Caddy **2.11.7** 与 Headscale **0.29.5**，按代码锁定的同一 SHA-256 校验。
-- 从实际候选渲染（`internal/install` 的 `candidateFiles`）生成配置；隔离 Headscale 的 SQLite、Noise/DERP 私钥、Unix Socket 到容器临时路径。
+- 从实际候选渲染（`internal/cli/install` 的 `candidateFiles`）生成配置；隔离 Headscale 的 SQLite、Noise/DERP 私钥、Unix Socket 到容器临时路径。
 - 官方 `caddy validate`、`headscale configtest`、`systemd-analyze verify` 和 `fail2ban-client -t`。
 - 同一个已按 in-tree pin 校验的 sing-box 1.14.3 还跑 Line 候选的真实 `sing-box check`（有 Out / 无 Out / `block` 三种路由）与发布门禁（存储的 Out 候选），见 `scripts/ci-node-reality.sh`；这是文档 schema 校验，不是流量证据。
 - 任一步失败则 CI 失败；无条件保留 root 或 apt 日志并非必须，失效时上传脱敏定位信息即可。
@@ -60,9 +60,9 @@ Cloudflare 灰云 DNS、真实 ACME TLS、UDP/3478、Headscale 特殊控制协�
 
 ## PR B CI 运行入口
 
-- **L1**：GitHub Actions `ci`（`go test ./...` / `go test -race ./...`），含 `internal/install/apply_test.go` 的随机私有目录注入、幂等性及回滚。测试进程没有操作真实 `/etc` 的权利。
+- **L1**：GitHub Actions `ci`（`go test ./...` / `go test -race ./...`），含 `internal/cli/install/apply_test.go` 的随机私有目录注入、幂等性及回滚。测试进程没有操作真实 `/etc` 的权利。
 - **L2**：`hub-components` 的 amd64、arm64 官方二进制校验，额外上传短期保留的 `hub-installer-<arch>` 和对应 `SHA256SUMS`，并非稳定 release。
-- **L3**：`hub-vm` 工作流在触及 `internal/install/**`、`cmd/meshmux/**`、`cmd/meshmux-web/**`、`scripts/ci-hub-vm.sh` 或相关文档/workflow 的 PR 上自动触发，也支持 `verify/issue5-hub-vm-*` 分支 push 与带 `ref` 输入的手动运行；启动带 SHA-512 固定校验的 Debian 13 官方 qcow2 / systemd。`internal/install/vm_test.go` 仅在 `MESHMUX_HUB_SYSTEM_VM=1` 时激活；虚拟机才执行安装器、故障修复与重启、真实 Fail2ban nftables ban/unban。实验性的内部签发证书只用于隔离 CI；正式 CLI 不能启用。
+- **L3**：`hub-vm` 工作流在触及 `internal/cli/install/**`、`cmd/meshmux/**`、`cmd/meshmux-web/**`、`scripts/ci-hub-vm.sh` 或相关文档/workflow 的 PR 上自动触发，也支持 `verify/issue5-hub-vm-*` 分支 push 与带 `ref` 输入的手动运行；启动带 SHA-512 固定校验的 Debian 13 官方 qcow2 / systemd。`internal/cli/install/vm_test.go` 仅在 `MESHMUX_HUB_SYSTEM_VM=1` 时激活；虚拟机才执行安装器、故障修复与重启、真实 Fail2ban nftables ban/unban。实验性的内部签发证书只用于隔离 CI；正式 CLI 不能启用。
 
 QEMU 若没有 `/dev/kvm` 则改用 TCG 软件模拟；有条件时验证速度更快。**L3 必须有明确成功运行链接，不能以脚本存在或启动 QEMU 代替成功。**
 

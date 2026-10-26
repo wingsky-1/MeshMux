@@ -53,7 +53,7 @@ func routeCallIndex(calls []string, name string) int {
 // accept_routes=false, so it could not reach an advertised prefix anyway. The
 // page keeps the stock Tailscale client and its join command with the declared
 // prefixes; that client owns its own --accept-routes choice, which the Hub does
-// not set. The exporter's own purpose table is pinned in internal/subscription.
+// not set. The exporter's own purpose table is pinned in internal/core/subscription.
 func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.now()

@@ -64,7 +64,7 @@
 | OUT_DELETED | Out 路由删除且 ACL 清空已发布 | operation_id + 稳定码；未下发时改记 OUT_SYNC_PENDING |
 | MESH_ROUTE_UNTRACKED_DROPPED | Mesh 子网路由批准/撤销批准时，Headscale 已批准集合中存在适配器会拒绝、无法随整表替换发送的条目（退出路由 /0、带主机位等），该条目被移出集合 | operation_id + 稳定码，逐条记录；不含前缀本身。批准/撤销请求本身仍成功，页面以计数披露 |
 
-说明：`LINE_NOT_RETIRED` 由 #8-C 引入，此处只补登记、不改归属；`BOOTSTRAP_ACL_UNAVAILABLE` / `BOOTSTRAP_ACL_INVALID` 只在 #8-B 的中间提交存在过，同一 PR 内随「bootstrap 只做形状断言、不以受管文件自证」修正被删除，从未进入 `main`。**本表不声称覆盖全部稳定码**：`internal/install` 与 `internal/node` 的阶段码（`ACL_*`、`OUT_ACL_READBACK_FAILED`、`LKG_*`、`BOOTSTRAP_*` 等）以对应包的返回值与任务结果为准；`OUT_ACL_UNATTESTED` 仍保留在基础表，用于「远端 ACL 无法 attest」这一独立事实。
+说明：`LINE_NOT_RETIRED` 由 #8-C 引入，此处只补登记、不改归属；`BOOTSTRAP_ACL_UNAVAILABLE` / `BOOTSTRAP_ACL_INVALID` 只在 #8-B 的中间提交存在过，同一 PR 内随「bootstrap 只做形状断言、不以受管文件自证」修正被删除，从未进入 `main`。**本表不声称覆盖全部稳定码**：`internal/cli/install` 与 `internal/core/node` 的阶段码（`ACL_*`、`OUT_ACL_READBACK_FAILED`、`LKG_*`、`BOOTSTRAP_*` 等）以对应包的返回值与任务结果为准；`OUT_ACL_UNATTESTED` 仍保留在基础表，用于「远端 ACL 无法 attest」这一独立事实。
 
 ## UI 交互
 

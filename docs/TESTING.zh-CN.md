@@ -20,29 +20,29 @@
 | `MESHMUX_TEST_PROCESS` | `cmd/meshmux-web/main_test.go:154` | 子进程 helper 开关；仅当值为 `1` 时 `TestServiceHelperProcess` 启动真实 Web 服务 | 单测：`cmd/meshmux-web` 包（`ci` / `go` job）；由同文件 `:33` 的父测试设置 | 非 `1`（含未设置）时 helper 立即 `return`，父测试不受影响 |
 | `MESHMUX_TEST_ADDR` | `cmd/meshmux-web/main_test.go:157` | helper 的 `--listen` / `--origin` 地址 | 同上 | 无内置默认值；只在 helper 进程读取，父测试总会写入随机回环端口 |
 | `MESHMUX_TEST_DIR` | `cmd/meshmux-web/main_test.go:159` | helper 的 `--data-dir` | 同上 | 无内置默认值；父测试总会写入临时目录 |
-| `MESHMUX_HUB_SYSTEM_VM` | `internal/install/vm_test.go:21` | Hub 全系统 VM 验收总开关 | VM / `hub-vm` job `debian13-systemd`，profile `hub`（`scripts/ci-hub-vm.sh:132` 设置） | 非 `1` 时 `TestHubSystemVM` `t.Skip`，普通 `go test ./...` 不会执行 |
-| `MESHMUX_HUB_SYSTEM_PHASE` | `internal/install/vm_test.go:87` | 阶段选择：`install` 首装，`post-reboot` 重启后持久性 | 同上（`scripts/ci-hub-vm.sh:132` 传 `install`，`:147` 传 `post-reboot`） | 无默认值；空值落入 `internal/install/vm_test.go:170` 的 `invalid VM-only phase` 致命失败 |
-| `MESHMUX_LOCAL_LINE_VM` | `internal/install/local_line_vm_test.go:41` | 同机 Line 生命周期 VM 验收开关 | VM / `hub-vm` job，profile `hub`（`scripts/ci-hub-vm.sh:156,170` 设置） | 非 `1` 时 `TestLocalLineSystemVM` `t.Skip` |
-| `MESHMUX_LOCAL_LINE_PHASE` | `internal/install/local_line_vm_test.go:50` | 阶段选择：`install` / `post-reboot` | 同上 | 空值默认 `install`（`:51-53`）；其他值致命失败 |
-| `MESHMUX_NODE_SYSTEM_VM` | `internal/install/node_vm_test.go:45` | Node 全系统 VM 验收开关 | VM / `hub-vm` job，profiles `edge`、`out`（`scripts/ci-node-vm.sh:260,277`）；本地 docker harness `scripts/ci-node-local.sh:113,122` | 非 `1` 时 `TestNodeSystemVM` `t.Skip` |
-| `MESHMUX_NODE_ROLE` | `internal/install/node_vm_test.go:54` | 被测节点角色：`edge` 或 `out` | 同上 | 无默认值；空值或其他值在 `:56` 致命失败（`fixture role must be edge or out`） |
-| `MESHMUX_NODE_PHASE` | `internal/install/node_vm_test.go:58` | 阶段选择：`install` / `post-reboot` | 同上 | 无默认值；空值或其他值在 `:60` 致命失败 |
-| `MESHMUX_NODE_FIXTURE_STATUS` | `internal/install/node_vm_test.go:62` | runner 侧 Hub fixture 产出的 `node-fixture.json` 路径（guest 内为 `/tmp/node-fixture.status`） | 同上（`scripts/ci-node-vm.sh:260,277` 设置；`:242` 把 runner 侧文件复制为 guest 的 `/tmp/node-fixture.status`） | 空值在 `:65` 致命失败；status 与 CA 路径都必需 |
-| `MESHMUX_NODE_FIXTURE_CA` | `internal/install/node_vm_test.go:63` | fixture 私有 CA 证书路径，装入 guest 系统信任库 | 同上（`scripts/ci-node-vm.sh:260,277` 设置；`:243` 复制为 guest 的 `/tmp/node-fixture-ca.crt`） | 空值在 `:65` 致命失败 |
-| `MESHMUX_NODE_MESHMUX_BIN` | `internal/install/node_vm_test.go:82` | 被测 `meshmux` 可执行文件路径 | 本地 docker harness `scripts/ci-node-local.sh:113,122`；`hub-vm` 不设置，使用 guest 默认布局 | 默认 `/tmp/meshmux`（`:83-85`） |
-| `MESHMUX_NODE_FIXTURE_DIR` | `internal/install/node_ci_test.go:41` | 把 Node 候选、ACL、unit、jail 渲染到指定目录 | L2 / `hub-components` job `debian13`，step “Debian 13 Node component configuration checks (Issue #6 PR-B L2)”（`scripts/ci-node-components.sh:38` 设置） | 空值时 `TestWriteNodeComponentFixtures` `t.Skip`，普通单测不写文件 |
-| `MESHMUX_HUB_FIXTURE_DIR` | `internal/install/ci_test.go:57` | 把 Hub 候选配置渲染到指定目录 | L2 / `hub-components` job `debian13`，step “Debian 13 official component configuration checks”（`scripts/ci-hub-components.sh:51` 设置） | 空值时 `TestWriteComponentFixtures` `t.Skip` |
-| `MESHMUX_SINGBOX_TEST_BINARY` | `internal/subscription/export_integration_test.go:86`（常量 `envSingBoxBinary`，`:20`）、`internal/node/render_route_test.go:165`、`internal/node/publish_check_test.go:127`、`internal/web/publish_gate_kernel_test.go:29` | 真实 sing-box 二进制：订阅导入导出、Line 候选（有 Out/无 Out/block 三种路由）与发布门禁（存储的 Out 候选） | L2 / `subscription-clients` job `clients`（`scripts/ci-subscription-clients.sh:175` 设置）；L2 / `hub-components` job 的 REALITY step（`scripts/ci-node-reality.sh:235` 用同一个已校验内核设置） | 订阅检查在客户端变量都未设置时 `t.Skip`（只设一个在 `:92-96` 致命失败）；node/web 的真实 check 在空值时 `t.Skip`，REALITY step 里 `t.Skip` 视为失败；路径必须绝对且可执行 |
-| `MESHMUX_MIHOMO_TEST_BINARY` | `internal/subscription/export_integration_test.go:87`（常量 `envMihomoBinary`，`:21`） | 真实 mihomo 客户端二进制 | 同上（`scripts/ci-subscription-clients.sh:176` 设置） | 同上 |
-| `MESHMUX_REALITY_CHECK_BINARY` | `internal/node/reality_check_test.go:30` | 固定版本 sing-box，供 `TestRealityNativeCheck` 校验候选 REALITY 配置 | L2 / `hub-components` job，step “Debian 13 native REALITY acceptance fixture (Issue #7 first PR L2)”（`scripts/ci-node-reality.sh:197` 设置）；`hub-vm` profiles `edge`/`out`（`scripts/ci-node-vm.sh:191` 设置） | 空值时 `t.Skip`；非绝对路径、非常规文件或摘要不匹配时致命失败 |
-| `MESHMUX_REALITY_INTEGRATION_BINARY` | `internal/node/reality_integration_test.go:165`（常量 `realityIntegrationBinaryEnv`，`:75`） | 同上，供 `TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials` 做真实握手 | 同上（`scripts/ci-node-reality.sh:198`、`scripts/ci-node-vm.sh:192` 设置） | 空值时 `t.Skip`；摘要必须匹配 in-tree pin |
-| `MESHMUX_REALITY_PIN_DIR` | `internal/node/reality_integration_test.go:590` | 把 in-tree release pin 渲染为 `releases.tsv` 供 CI 下载校验 | L2 / `hub-components` job，REALITY step（`scripts/ci-node-reality.sh:103` 设置） | 空值时 `TestWriteRealityReleasePin` `t.Skip` |
-| `MESHMUX_WEBCMD_HELPER` | `internal/webcmd/command_test.go:26`（常量 `helperEnv`，`:19`） | webcmd 子进程 helper 开关；仅 `1` 时执行 `Run` | 单测：`internal/webcmd` 包（`ci` / `go` job）；由同文件 `:44` 设置 | 非 `1` 时 helper `return`，父测试不受影响 |
-| `MESHMUX_WEBCMD_ARGS` | `internal/webcmd/command_test.go:30`（常量 `argsEnv`，`:20`） | helper 接收的 JSON 参数数组 | 同上 | 无内置默认值；父测试总会写入；JSON 非法时以退出码 97 失败 |
-| `MESHMUX_NODE_HUB_FIXTURE_DIR` | `internal/web/node_fixture_test.go:47` | 启动真实 Web Hub fixture（持久 SQLite + 私有 CA）的数据目录 | VM / `hub-vm` profiles `edge`/`out`（`scripts/ci-node-vm.sh:210`）；本地 docker harness `scripts/ci-node-local.sh:101` | 空值时 `TestNodeHubFixture` `t.Skip`，普通单测不监听端口 |
-| `MESHMUX_NODE_HUB_FIXTURE_ROLE` | `internal/web/node_fixture_test.go:51` | fixture 节点角色：`edge` 或 `out` | 同上 | 无默认值；空值或其他值在 `:53` 致命失败 |
-| `MESHMUX_NODE_HUB_FIXTURE_ORIGIN_HOST` | `internal/web/node_fixture_test.go:172` | fixture 对外 Origin 主机名白名单 | 同上（`scripts/ci-node-vm.sh:210` 设为 `10.0.2.2`，走 QEMU slirp） | 空值默认 `127.0.0.1`（`:173-175`）；只接受 `127.0.0.1` 与 `10.0.2.2` |
-| `MESHMUX_NODE_HUB_FIXTURE_SSH_PORT` | `internal/web/node_fixture_test.go:235` | fixture 对外公布的 SSH 端口 | 同上（`scripts/ci-node-vm.sh:210`、`scripts/ci-node-local.sh:101` 设为 `22`） | 空值默认 `2222`（`:236-238`）；必须在 1–65535 且不等于 VLESS 端口 8443 |
+| `MESHMUX_HUB_SYSTEM_VM` | `internal/cli/install/vm_test.go:21` | Hub 全系统 VM 验收总开关 | VM / `hub-vm` job `debian13-systemd`，profile `hub`（`scripts/ci-hub-vm.sh:132` 设置） | 非 `1` 时 `TestHubSystemVM` `t.Skip`，普通 `go test ./...` 不会执行 |
+| `MESHMUX_HUB_SYSTEM_PHASE` | `internal/cli/install/vm_test.go:87` | 阶段选择：`install` 首装，`post-reboot` 重启后持久性 | 同上（`scripts/ci-hub-vm.sh:132` 传 `install`，`:147` 传 `post-reboot`） | 无默认值；空值落入 `internal/cli/install/vm_test.go:170` 的 `invalid VM-only phase` 致命失败 |
+| `MESHMUX_LOCAL_LINE_VM` | `internal/cli/install/local_line_vm_test.go:41` | 同机 Line 生命周期 VM 验收开关 | VM / `hub-vm` job，profile `hub`（`scripts/ci-hub-vm.sh:156,170` 设置） | 非 `1` 时 `TestLocalLineSystemVM` `t.Skip` |
+| `MESHMUX_LOCAL_LINE_PHASE` | `internal/cli/install/local_line_vm_test.go:50` | 阶段选择：`install` / `post-reboot` | 同上 | 空值默认 `install`（`:51-53`）；其他值致命失败 |
+| `MESHMUX_NODE_SYSTEM_VM` | `internal/cli/install/node_vm_test.go:45` | Node 全系统 VM 验收开关 | VM / `hub-vm` job，profiles `edge`、`out`（`scripts/ci-node-vm.sh:260,277`）；本地 docker harness `scripts/ci-node-local.sh:113,122` | 非 `1` 时 `TestNodeSystemVM` `t.Skip` |
+| `MESHMUX_NODE_ROLE` | `internal/cli/install/node_vm_test.go:54` | 被测节点角色：`edge` 或 `out` | 同上 | 无默认值；空值或其他值在 `:56` 致命失败（`fixture role must be edge or out`） |
+| `MESHMUX_NODE_PHASE` | `internal/cli/install/node_vm_test.go:58` | 阶段选择：`install` / `post-reboot` | 同上 | 无默认值；空值或其他值在 `:60` 致命失败 |
+| `MESHMUX_NODE_FIXTURE_STATUS` | `internal/cli/install/node_vm_test.go:62` | runner 侧 Hub fixture 产出的 `node-fixture.json` 路径（guest 内为 `/tmp/node-fixture.status`） | 同上（`scripts/ci-node-vm.sh:260,277` 设置；`:242` 把 runner 侧文件复制为 guest 的 `/tmp/node-fixture.status`） | 空值在 `:65` 致命失败；status 与 CA 路径都必需 |
+| `MESHMUX_NODE_FIXTURE_CA` | `internal/cli/install/node_vm_test.go:63` | fixture 私有 CA 证书路径，装入 guest 系统信任库 | 同上（`scripts/ci-node-vm.sh:260,277` 设置；`:243` 复制为 guest 的 `/tmp/node-fixture-ca.crt`） | 空值在 `:65` 致命失败 |
+| `MESHMUX_NODE_MESHMUX_BIN` | `internal/cli/install/node_vm_test.go:82` | 被测 `meshmux` 可执行文件路径 | 本地 docker harness `scripts/ci-node-local.sh:113,122`；`hub-vm` 不设置，使用 guest 默认布局 | 默认 `/tmp/meshmux`（`:83-85`） |
+| `MESHMUX_NODE_FIXTURE_DIR` | `internal/cli/install/node_ci_test.go:41` | 把 Node 候选、ACL、unit、jail 渲染到指定目录 | L2 / `hub-components` job `debian13`，step “Debian 13 Node component configuration checks (Issue #6 PR-B L2)”（`scripts/ci-node-components.sh:38` 设置） | 空值时 `TestWriteNodeComponentFixtures` `t.Skip`，普通单测不写文件 |
+| `MESHMUX_HUB_FIXTURE_DIR` | `internal/cli/install/ci_test.go:57` | 把 Hub 候选配置渲染到指定目录 | L2 / `hub-components` job `debian13`，step “Debian 13 official component configuration checks”（`scripts/ci-hub-components.sh:51` 设置） | 空值时 `TestWriteComponentFixtures` `t.Skip` |
+| `MESHMUX_SINGBOX_TEST_BINARY` | `internal/core/subscription/export_integration_test.go:86`（常量 `envSingBoxBinary`，`:20`）、`internal/core/node/render_route_test.go:165`、`internal/core/node/publish_check_test.go:127`、`internal/web/handler/publish_gate_kernel_test.go:29` | 真实 sing-box 二进制：订阅导入导出、Line 候选（有 Out/无 Out/block 三种路由）与发布门禁（存储的 Out 候选） | L2 / `subscription-clients` job `clients`（`scripts/ci-subscription-clients.sh:175` 设置）；L2 / `hub-components` job 的 REALITY step（`scripts/ci-node-reality.sh:235` 用同一个已校验内核设置） | 订阅检查在客户端变量都未设置时 `t.Skip`（只设一个在 `:92-96` 致命失败）；node/web 的真实 check 在空值时 `t.Skip`，REALITY step 里 `t.Skip` 视为失败；路径必须绝对且可执行 |
+| `MESHMUX_MIHOMO_TEST_BINARY` | `internal/core/subscription/export_integration_test.go:87`（常量 `envMihomoBinary`，`:21`） | 真实 mihomo 客户端二进制 | 同上（`scripts/ci-subscription-clients.sh:176` 设置） | 同上 |
+| `MESHMUX_REALITY_CHECK_BINARY` | `internal/core/node/reality_check_test.go:30` | 固定版本 sing-box，供 `TestRealityNativeCheck` 校验候选 REALITY 配置 | L2 / `hub-components` job，step “Debian 13 native REALITY acceptance fixture (Issue #7 first PR L2)”（`scripts/ci-node-reality.sh:197` 设置）；`hub-vm` profiles `edge`/`out`（`scripts/ci-node-vm.sh:191` 设置） | 空值时 `t.Skip`；非绝对路径、非常规文件或摘要不匹配时致命失败 |
+| `MESHMUX_REALITY_INTEGRATION_BINARY` | `internal/core/node/reality_integration_test.go:165`（常量 `realityIntegrationBinaryEnv`，`:75`） | 同上，供 `TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials` 做真实握手 | 同上（`scripts/ci-node-reality.sh:198`、`scripts/ci-node-vm.sh:192` 设置） | 空值时 `t.Skip`；摘要必须匹配 in-tree pin |
+| `MESHMUX_REALITY_PIN_DIR` | `internal/core/node/reality_integration_test.go:590` | 把 in-tree release pin 渲染为 `releases.tsv` 供 CI 下载校验 | L2 / `hub-components` job，REALITY step（`scripts/ci-node-reality.sh:103` 设置） | 空值时 `TestWriteRealityReleasePin` `t.Skip` |
+| `MESHMUX_WEBCMD_HELPER` | `internal/cli/webcmd/command_test.go:26`（常量 `helperEnv`，`:19`） | webcmd 子进程 helper 开关；仅 `1` 时执行 `Run` | 单测：`internal/cli/webcmd` 包（`ci` / `go` job）；由同文件 `:44` 设置 | 非 `1` 时 helper `return`，父测试不受影响 |
+| `MESHMUX_WEBCMD_ARGS` | `internal/cli/webcmd/command_test.go:30`（常量 `argsEnv`，`:20`） | helper 接收的 JSON 参数数组 | 同上 | 无内置默认值；父测试总会写入；JSON 非法时以退出码 97 失败 |
+| `MESHMUX_NODE_HUB_FIXTURE_DIR` | `internal/web/handler/node_fixture_test.go:47` | 启动真实 Web Hub fixture（持久 SQLite + 私有 CA）的数据目录 | VM / `hub-vm` profiles `edge`/`out`（`scripts/ci-node-vm.sh:210`）；本地 docker harness `scripts/ci-node-local.sh:101` | 空值时 `TestNodeHubFixture` `t.Skip`，普通单测不监听端口 |
+| `MESHMUX_NODE_HUB_FIXTURE_ROLE` | `internal/web/handler/node_fixture_test.go:51` | fixture 节点角色：`edge` 或 `out` | 同上 | 无默认值；空值或其他值在 `:53` 致命失败 |
+| `MESHMUX_NODE_HUB_FIXTURE_ORIGIN_HOST` | `internal/web/handler/node_fixture_test.go:172` | fixture 对外 Origin 主机名白名单 | 同上（`scripts/ci-node-vm.sh:210` 设为 `10.0.2.2`，走 QEMU slirp） | 空值默认 `127.0.0.1`（`:173-175`）；只接受 `127.0.0.1` 与 `10.0.2.2` |
+| `MESHMUX_NODE_HUB_FIXTURE_SSH_PORT` | `internal/web/handler/node_fixture_test.go:235` | fixture 对外公布的 SSH 端口 | 同上（`scripts/ci-node-vm.sh:210`、`scripts/ci-node-local.sh:101` 设为 `22`） | 空值默认 `2222`（`:236-238`）；必须在 1–65535 且不等于 VLESS 端口 8443 |
 
 合计：26 个变量；部分变量（如 `MESHMUX_SINGBOX_TEST_BINARY`）在多个测试包里各有一处读取点，其中 5 个变量的读取调用以包级常量作参数，常量定义位置已列在读取点后。
 
@@ -58,7 +58,7 @@
 
 ## 4. 已排除的 lookalike
 
-- `MESHMUX_BINARY_INVALID`：稳定错误码，不是环境变量，没有读取点。证据：`internal/install/apply.go:348,744`、`internal/install/local_line.go:334,390,394,416,420`、`internal/install/node_apply.go:281` 均把它作为 `InstallError.Code` 或 `errors.New` 的文本。
+- `MESHMUX_BINARY_INVALID`：稳定错误码，不是环境变量，没有读取点。证据：`internal/cli/install/apply.go:348,744`、`internal/cli/install/local_line.go:334,390,394,416,420`、`internal/cli/install/node_apply.go:281` 均把它作为 `InstallError.Code` 或 `errors.New` 的文本。
 - 其他含 `MESHMUX_` 的命中若出现在脚本、注释或文档里，只是上述变量名的设置方或引用，不是独立变量；表内不重复收录。
 - 生产代码不读取 `MESHMUX_*`：`grep -rn 'os.Getenv\|os.LookupEnv\|syscall.Getenv' --include='*.go'` 的全部命中都在 `*_test.go`。
 
@@ -67,12 +67,12 @@
 常规本地流程（gofmt、vet、test、race、build）见 [DEVELOPMENT](DEVELOPMENT.zh-CN.md) 的“本地运行”小节，本文不重复。
 
 - 全量门禁：`make verify`。它依次执行 `fmt`、`vet`、`staticcheck`、`test`、`race`、`build`（`Makefile:34`），与 `ci` job `go` 的 step “Verify”（`.github/workflows/ci.yml:27`）一致；构建产物为 `/tmp/meshmux` 与 `/tmp/meshmux-web`（`Makefile:12,59-60`）。staticcheck 版本固定在 `Makefile:17`，首次运行需要下载模块。
-- 单包与快速回路：`go test ./...`；只跑一个包时用 `go test ./internal/install`、`go test ./internal/node`，加 `-run` 限定用例。竞态检测用 `go test -race ./...`。
+- 单包与快速回路：`go test ./...`；只跑一个包时用 `go test ./internal/cli/install`、`go test ./internal/core/node`，加 `-run` 限定用例。竞态检测用 `go test -race ./...`。
 - 启用 opt-in 测试：第 2 节的变量未设置时相关测试会 `t.Skip`，因此 `go test ./...` 天然只跑 L1。示例：
 
   ~~~sh
   MESHMUX_REALITY_CHECK_BINARY=/abs/path/to/pinned/sing-box \
-    go test ./internal/node -run '^TestRealityNativeCheck$' -v
+    go test ./internal/core/node -run '^TestRealityNativeCheck$' -v
   ~~~
 
   需要真实客户端二进制的订阅导入检查，同时设置 `MESHMUX_SINGBOX_TEST_BINARY` 与 `MESHMUX_MIHOMO_TEST_BINARY`。

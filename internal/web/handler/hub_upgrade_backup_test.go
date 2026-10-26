@@ -3,7 +3,7 @@ package handler
 // HTTP tests for the Hub backup producer surface (#11d Task 3r, spec §5.2): one
 // authenticated management mutation on the existing boundary, with the callbacks
 // the Web process alone can supply (VACUUM, integrity check, real user_version,
-// free space). The producer itself is tested in internal/hubupgrade; here we
+// free space). The producer itself is tested in internal/cli/hubupgrade; here we
 // prove the route, the receipt and the wiring of the store-backed callbacks.
 
 import (

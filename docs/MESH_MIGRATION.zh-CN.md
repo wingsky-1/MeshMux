@@ -215,7 +215,7 @@ MeshMux 不能读取或修改外部控制面，因此不存在原子路由接管
 | `revoking` | 可能仍存在 | 是 | 否 | 重试远端删除直到 `revoked`；期间不得复用名字或新建同名设备。 |
 | `revoked` | 已确认不存在 | 否（终态释放） | 否 | 新建 `subnet_router` 设备并重新入网；旧记录不可复活。 |
 
-`registered` 不能签发第二个一次性 Key；`failed`/`revoked` 不能通过 rekey 复活。状态迁移仍以 `internal/mesh` 的领域规则为准：`revoked` 是唯一终态，`revoking` 只能由确认删除收敛。
+`registered` 不能签发第二个一次性 Key；`failed`/`revoked` 不能通过 rekey 复活。状态迁移仍以 `internal/core/mesh` 的领域规则为准：`revoked` 是唯一终态，`revoking` 只能由确认删除收敛。
 
 ### 8.2 同一台 NAS 重装
 

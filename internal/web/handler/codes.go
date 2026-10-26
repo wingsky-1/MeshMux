@@ -13,7 +13,7 @@ import (
 // produce (store.CodePolicyLayerRetired, policy.CodeOutOfflineFailClosed, …);
 // every constant here is one the handler itself emits or compares against, so
 // the literal exists exactly once and every use names it. The golden test in
-// internal/upgrade freezes the values, not the identifiers, so a rename is a
+// internal/cli/upgrade freezes the values, not the identifiers, so a rename is a
 // build fix and a value change is a visible diff.
 //
 // The regexp aliases follow the same rule: the lexical grammar of an operation
