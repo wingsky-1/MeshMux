@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // testSubscriberForLine returns the active subscriber that serves one Line,

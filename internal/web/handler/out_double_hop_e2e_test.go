@@ -60,10 +60,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
 )
 
 // doubleHopDomain is the AI domain of the fixture. It is a reserved invalid name,

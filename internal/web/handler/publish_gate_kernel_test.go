@@ -13,7 +13,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"os"
 	"path/filepath"
 	"strings"

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
 )
 
 // seedLegacyClientPolicyStore inserts one active client revision for a legacy

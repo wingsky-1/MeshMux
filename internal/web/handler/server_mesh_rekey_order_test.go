@@ -11,7 +11,7 @@ package handler
 //   - an expired device reaches pending only together with a usable key.
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/url"
 	"strings"

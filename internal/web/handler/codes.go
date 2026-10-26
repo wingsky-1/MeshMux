@@ -17,8 +17,8 @@ import (
 // build fix and a value change is a visible diff.
 //
 // The regexp aliases follow the same rule: the lexical grammar of an operation
-// id, a digest and a release version is frozen in internal/backup/grammar.go
-// (and re-exported by internal/node/protocol for the wire), so this package
+// id, a digest and a release version is frozen in internal/cli/backup/grammar.go
+// (and re-exported by internal/core/node/protocol for the wire), so this package
 // imports the predicates instead of compiling a private copy that could drift
 // from the producers.
 const (
@@ -52,9 +52,6 @@ const (
 	codePolicyCorrupt = "POLICY_CORRUPT"
 	// codePolicyPinsInvalid is the malformed pins JSON refusal.
 	codePolicyPinsInvalid = "POLICY_PINS_INVALID"
-	// codePolicyWriteFailed is the generic persistence failure of a policy
-	// write after validation passed.
-	codePolicyWriteFailed = "POLICY_WRITE_FAILED"
 	// codeTasksInProgress marks a node whose task chain is still running.
 	codeTasksInProgress = "TASKS_IN_PROGRESS"
 	// codeUpgradeAlreadyCurrent and codeUpgradeAgentUnobserved are the
@@ -125,9 +122,6 @@ func isValidNodeID(value string) bool { return protocol.ValidID(value) }
 func isValidOperationID(value string) bool { return backup.ValidOperationID(value) }
 
 // isValidReleaseVersion reports whether value is a pinned SemVer release. The
-// shape is frozen in internal/backup/grammar.go; the manifest producers and
+// shape is frozen in internal/cli/backup/grammar.go; the manifest producers and
 // the approval route must accept exactly the same bytes.
 func isValidReleaseVersion(version string) bool { return backup.ValidReleaseVersion(version) }
-
-// isValidDigest reports whether value is a lowercase SHA-256 in hexadecimal.
-func isValidDigest(value string) bool { return backup.ValidDigest(value) }

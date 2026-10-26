@@ -10,7 +10,7 @@ import (
 
 // Server is the thin assembly over the handler runtime. All HTTP behavior,
 // session authentication and routing live in internal/web/handler; all
-// persistence lives in internal/web/store; all rendering lives in
+// persistence lives in internal/control/store; all rendering lives in
 // internal/web/view. This type only converts the operator configuration,
 // delegates construction, and exposes the handler for serving and closing.
 type Server struct {

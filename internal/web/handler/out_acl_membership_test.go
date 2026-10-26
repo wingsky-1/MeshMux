@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
 )
 
 // selectOut writes the subscription-side edge that carries an Out selection. Under

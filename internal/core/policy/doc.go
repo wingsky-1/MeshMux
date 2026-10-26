@@ -49,7 +49,7 @@
 // tags and wire grammars) and the standard library. It deliberately does NOT
 // import the subscription package: the merged compiler must not call back into
 // the composer. It never imports internal/web/*; the Hub SQLite migration in
-// internal/web/store reuses SchemaDDL and SeedPresetsTx, and the handler calls
+// internal/control/store reuses SchemaDDL and SeedPresetsTx, and the handler calls
 // the Store on the same *sql.DB the web store owns.
 //
 // Module boundary: a ClientPolicy's mesh view is a foreign value, so

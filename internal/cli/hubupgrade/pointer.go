@@ -5,7 +5,7 @@ package hubupgrade
 // <data-dir>/database-backup/record.json.
 //
 // It exists for exactly one reader: the frozen `schemaTooNew` check of 11c-3
-// (internal/web/store_database_gate.go) does an existence-only Lstat of that
+// (internal/control/store/store_database_gate.go) does an existence-only Lstat of that
 // flat path, so an old binary must still be able to point an operator at a
 // verified backup record after the store moved to per-operation directories.
 // Nothing in 11d reads it: Read/Verify/Confirm/GC/restore/dispatcher/approve all

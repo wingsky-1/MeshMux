@@ -11,7 +11,7 @@ package handler
 
 import (
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/url"
 	"reflect"
 	"strings"

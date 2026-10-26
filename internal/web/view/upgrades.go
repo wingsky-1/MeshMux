@@ -20,7 +20,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // UpgradeSnapshot is the whole page input. An invalid manifest is shown as a

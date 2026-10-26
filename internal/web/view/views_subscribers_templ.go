@@ -17,7 +17,7 @@ import templruntime "github.com/a-h/templ/runtime"
 //
 // A queued publication, a delivered task or a successful Hub write is never
 // rendered as a confirmed remote state.
-import "github.com/wingsky-1/MeshMux/internal/web/store"
+import "github.com/wingsky-1/MeshMux/internal/control/store"
 
 func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
