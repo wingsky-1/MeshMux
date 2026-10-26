@@ -1,3 +1,4 @@
+//go:generate go run github.com/a-h/templ/cmd/templ@v0.3.1070 generate
 package view
 
 import "github.com/wingsky-1/MeshMux/internal/web/store"
