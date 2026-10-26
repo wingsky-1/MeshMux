@@ -9,7 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // ClientDefaults configures the default client policy.
@@ -19,7 +20,7 @@ type ClientDefaults struct {
 }
 
 // DefaultClientPolicy is the issue #10 default; the selected Line is final.
-func DefaultClientPolicy(model subscription.MeshConfigModel, proxyLine string, defaults ClientDefaults) (ClientPolicy, error) {
+func DefaultClientPolicy(model ir.MeshView, proxyLine string, defaults ClientDefaults) (ClientPolicy, error) {
 	policy, err := MeshClientPolicy(model, proxyLine)
 	if err != nil {
 		return ClientPolicy{}, err
@@ -91,9 +92,9 @@ type HitExplanation struct {
 }
 
 var clientEgress = map[CompilerAction]string{
-	CompilerActionDirect:    "direct",
-	CompilerActionProxy:     "meshmux-selector (selected Line)",
-	CompilerActionTailscale: "meshmux-ts (Tailscale endpoint)",
+	CompilerActionDirect:    protocol.OutboundDirectTag,
+	CompilerActionProxy:     protocol.SelectorTag + " (selected Line)",
+	CompilerActionTailscale: protocol.TailscaleEndpointTag + " (Tailscale endpoint)",
 }
 
 // ExplainHit reports the first expressible match, else the fallback; geo and

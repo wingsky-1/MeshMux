@@ -7,13 +7,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 const (
 	realityKeyBytes = 32
 	realityKeyChars = 43
-	shortIDBytes    = 8
-	shortIDChars    = 16
+	// shortIDBytes is the raw REALITY short-id length; the canonical spelling is
+	// its 16 hex characters, validated through the shared wire grammar.
+	shortIDBytes = 8
 )
 
 // RealityKeyPair is the canonical textual form of one X25519 key pair used by
@@ -50,15 +53,12 @@ func NewShortID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-// ValidateShortID accepts exactly 16 lowercase hexadecimal characters.
+// ValidateShortID accepts exactly 16 lowercase hexadecimal characters. The
+// spelling is the wire grammar's (protocol.ValidShortID), so a generated short
+// id is exactly what the node's candidate reader accepts.
 func ValidateShortID(value string) error {
-	if len(value) != shortIDChars {
+	if !protocol.ValidShortID(value) {
 		return errors.New("SHORT_ID_INVALID: need 16 lowercase hex characters")
-	}
-	for i := 0; i < len(value); i++ {
-		if !isLowerHex(value[i]) {
-			return errors.New("SHORT_ID_INVALID: need 16 lowercase hex characters")
-		}
 	}
 	return nil
 }

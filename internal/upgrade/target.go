@@ -2,7 +2,8 @@ package upgrade
 
 import (
 	"errors"
-	"regexp"
+
+	"github.com/wingsky-1/MeshMux/internal/backup"
 )
 
 // This file is the release-target half of the package, merged from internal/jobs
@@ -27,7 +28,7 @@ import (
 // shape every other operation_id in MeshMux uses. It is a separate expression
 // from the manifest validators below because those describe release documents,
 // not task revisions.
-var operationID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var operationID = backup.OperationIDPattern
 
 // ValidateOperationID requires the correlation id every revision carries. An
 // empty value is a missing correlation, never a valid default.

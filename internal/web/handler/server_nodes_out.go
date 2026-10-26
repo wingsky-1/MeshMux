@@ -20,17 +20,21 @@ import (
 // outTransportSet stores the dial address of one Out node. The port is taken from
 // the node record itself, so it always matches the VLESS port by construction; only
 // the server address comes from the form.
+//
+// Flow: parse (out_id, server) → load the node (404 when unknown) → store the
+// transport → re-render the page with the receipt. The port never comes from the
+// form, so the stored pair cannot disagree with the VLESS listener.
 func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess session) {
 	now := s.now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	server := strings.TrimSpace(r.PostForm.Get("server"))
 	node, err := s.store.GetNodeAt(outID, now)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
-			s.fail(w, r, 404, "OUT_NOT_FOUND", "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。")
+		if strings.HasPrefix(err.Error(), codeNodeNotFound) {
+			s.fail(w, r, 404, codeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。")
 			return
 		}
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点。", "请检查数据库。")
 		return
 	}
 	transport, err := s.store.SetOutTransport(outID, server, node.VlessPort, now)
@@ -103,14 +107,14 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 	if r.PostForm.Get("confirm") != "1" {
 		node, err := s.store.GetNodeAt(outID, now)
 		if err != nil {
-			if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
-				s.fail(w, r, 404, "OUT_NOT_FOUND", "出口节点不存在。", "请先在节点页纳管该出口后重试。")
+			if strings.HasPrefix(err.Error(), codeNodeNotFound) {
+				s.fail(w, r, 404, codeOutNotFound, "出口节点不存在。", "请先在节点页纳管该出口后重试。")
 				return
 			}
-			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点。", "请检查数据库。")
+			s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点。", "请检查数据库。")
 			return
 		}
-		if node.Role != "out" && node.Role != "http" {
+		if node.Role != nodeRoleOut && node.Role != nodeRoleHTTP {
 			s.fail(w, r, 409, "OUT_ROLE_INVALID", "所选节点不是出口角色。", "请选择角色为 Out 或 HTTP 代理的节点。")
 			return
 		}
@@ -144,7 +148,7 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 	}
 	s.event(r, "OUT_DELETED")
 	notice := "出口已彻底删除：节点行、出口地址与 link key 均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
-	if role == "http" {
+	if role == nodeRoleHTTP {
 		notice = "HTTP 代理节点已彻底删除：节点行与存储的 URL/凭据均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
@@ -187,14 +191,14 @@ func outTransportFailure(err error) (status int, code, message, next string) {
 		return 409, "OUT_PORT_MISMATCH", "出口端口与节点 VLESS 端口不一致。", "请确认 Out 节点的 VLESS 端口后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_TRANSPORT_FAILED"):
 		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请凭操作编号检查服务日志后重试。"
-	case strings.HasPrefix(err.Error(), "OUT_NOT_FOUND"):
-		return 404, "OUT_NOT_FOUND", "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
-	case strings.HasPrefix(err.Error(), "OUT_ROLE_INVALID"):
-		return 409, "OUT_ROLE_INVALID", "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
-	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
-		return 400, "OUT_BINDING_INVALID", "节点标识不正确。", "请检查所选 Out 后重试。"
-	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
-		return 503, "DATABASE_UNAVAILABLE", "无法读写 Out 传输参数。", "请检查数据库与服务日志后重试。"
+	case strings.HasPrefix(err.Error(), codeOutNotFound):
+		return 404, codeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
+	case strings.HasPrefix(err.Error(), codeOutRoleInvalid):
+		return 409, codeOutRoleInvalid, "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
+	case strings.HasPrefix(err.Error(), codeOutBindingInvalid):
+		return 400, codeOutBindingInvalid, "节点标识不正确。", "请检查所选 Out 后重试。"
+	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
+		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 传输参数。", "请检查数据库与服务日志后重试。"
 	default:
 		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请凭操作编号检查服务日志后重试。"
 	}

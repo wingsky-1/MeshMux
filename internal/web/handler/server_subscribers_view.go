@@ -20,7 +20,7 @@ import (
 func (app *Server) renderSubscribers(w http.ResponseWriter, r *http.Request, sess session, disclosure *tokenDisclosure) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	if disclosure != nil {
@@ -46,7 +46,7 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 		return page, err
 	}
 	for _, node := range nodes {
-		if node.Role == "edge" {
+		if node.Role == nodeRoleEdge {
 			page.EdgeNodes = append(page.EdgeNodes, node)
 		}
 	}

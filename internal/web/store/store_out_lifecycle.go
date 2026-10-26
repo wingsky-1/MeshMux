@@ -48,22 +48,22 @@ import (
 func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return errOutIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("OUT_NOT_FOUND: unknown out node")
+		return errOutNotFound
 	}
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "out" && role != "http" {
+	if role != string(nodeRoleOut) && role != string(nodeRoleHTTP) {
 		return errors.New("OUT_ROLE_INVALID: only out and http egress nodes can be deleted")
 	}
 	// A subscription that selects this Out is a live reference: the client document
@@ -113,10 +113,10 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	// skips the cascade (schema 15), so history of a deleted node is removed with it
 	// instead of blocking the delete.
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE id=?`, outID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	// The Out is gone, so any policy that still names it must be re-derived for every
 	// Line: the policy resolver refuses an Out reference the Hub cannot justify, so the Line's

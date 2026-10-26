@@ -14,18 +14,22 @@ package install
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
-	hubDispatchServicePath = "/etc/systemd/system/meshmux-hub-dispatch.service"
-	hubDispatchPathPath    = "/etc/systemd/system/meshmux-hub-dispatch.path"
-	hubTmpfilesPath        = "/etc/tmpfiles.d/meshmux.conf"
+	hubDispatchServiceUnit = "meshmux-hub-dispatch.service"
+	hubDispatchPathUnit    = "meshmux-hub-dispatch.path"
 
-	hubDispatchPathUnit = "meshmux-hub-dispatch.path"
+	hubDispatchServicePath = "/etc/systemd/system/" + hubDispatchServiceUnit
+	hubDispatchPathPath    = "/etc/systemd/system/" + hubDispatchPathUnit
+	hubTmpfilesPath        = "/etc/tmpfiles.d/meshmux.conf"
 )
 
 // hubDispatchService is a fixed oneshot. It has no [Install] section on purpose:
@@ -38,38 +42,38 @@ const (
 // that ExecStart is a constant dispatcher which can only exec a root-manifest-
 // pinned digest from a root-only copy; no unit attribute or argv comes from the
 // Web.
-const hubDispatchService = `[Unit]
+var hubDispatchService = fmt.Sprintf(`[Unit]
 Description=MeshMux Hub upgrade dispatcher
 After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/meshmuxd __internal-hub-dispatch --request-dir /run/meshmux-hub/requests
+ExecStart=%s __internal-hub-dispatch --request-dir %s/requests
 User=root
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/run/meshmux-hub /usr/local/libexec /var/lib/meshmux /var/lib/meshmux-installer /etc/meshmux /etc/systemd/system
+ReadWritePaths=%s /usr/local/libexec /var/lib/meshmux %s /etc/meshmux /etc/systemd/system
 PrivateTmp=yes
 ProtectHome=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE
 StandardOutput=journal
 StandardError=journal
-`
+`, versions.RuntimeBinaryPath, versions.HubRunDir, versions.HubRunDir, versions.InstallerRoot)
 
 // hubDispatchPath must run after systemd-tmpfiles-setup has created the watched
 // directory; otherwise the path unit is never armed on boot.
-const hubDispatchPath = `[Unit]
+var hubDispatchPath = fmt.Sprintf(`[Unit]
 Description=Watch MeshMux Hub upgrade requests
 After=systemd-tmpfiles-setup.service
 
 [Path]
-DirectoryNotEmpty=/run/meshmux-hub/requests
-Unit=meshmux-hub-dispatch.service
+DirectoryNotEmpty=%s/requests
+Unit=%s
 
 [Install]
 WantedBy=paths.target
-`
+`, versions.HubRunDir, hubDispatchServiceUnit)
 
 // hubTmpfiles creates the runtime request tree and the installer-side result
 // tree. /var/lib/meshmux-installer is 0711 so the Web can traverse to the root
@@ -79,18 +83,18 @@ WantedBy=paths.target
 // staging/ is the unwatched sibling the Web completes a request in; it must be
 // declared here (and in the web unit's ReadWritePaths) or the publish fails
 // EROFS under ProtectSystem=strict.
-const hubTmpfiles = `# MeshMux Hub upgrade runtime and dispatcher state (#11d).
+var hubTmpfiles = fmt.Sprintf(`# MeshMux Hub upgrade runtime and dispatcher state (#11d).
 # The installer tree is traversable (0711) but not listable; ledgers stay 0600 root.
-d /run/meshmux-hub 0730 root meshmux
-d /run/meshmux-hub/requests 0730 root meshmux
-d /run/meshmux-hub/staging 0730 root meshmux
-d /run/meshmux-hub/boot 0730 root meshmux
-d /run/meshmux-hub/requests.done 0700 root root
-d /var/lib/meshmux-installer 0711 root root
-d /var/lib/meshmux-installer/hub-upgrade 0755 root root
-d /var/lib/meshmux-installer/hub-upgrade/results 0750 root meshmux
-d /var/lib/meshmux-installer/upgrade 0755 root root
-`
+d %[1]s 0730 root meshmux
+d %[1]s/requests 0730 root meshmux
+d %[1]s/staging 0730 root meshmux
+d %[1]s/boot 0730 root meshmux
+d %[1]s/requests.done 0700 root root
+d %[2]s 0711 root root
+d %[2]s/hub-upgrade 0755 root root
+d %[3]s 0750 root meshmux
+d %[4]s 0755 root root
+`, versions.HubRunDir, versions.InstallerRoot, versions.HubUpgradeResultsDir, versions.InstallerUpgradeDir)
 
 // hubDispatchFiles are the three new managed files of the dispatch substrate.
 func hubDispatchFiles() map[string]string {
@@ -121,7 +125,7 @@ func hubDispatchFiles() map[string]string {
 // ReadWritePaths entry that does not exist makes systemd fail the unit with
 // status=226/NAMESPACE, and ProtectSystem=strict makes an undeclared one EROFS.
 func ensureHubUpgradeLayout(root string) error {
-	installerDir := rooted(root, "/var/lib/meshmux-installer")
+	installerDir := rooted(root, versions.InstallerRoot)
 	if err := ensureDirectory(installerDir, 0711); err != nil {
 		return err
 	}
@@ -137,7 +141,7 @@ func ensureHubUpgradeLayout(root string) error {
 	if err := ensureDirectory(manifestDir, 0755); err != nil {
 		return err
 	}
-	runtimeDir := rooted(root, "/run/meshmux-hub")
+	runtimeDir := rooted(root, versions.HubRunDir)
 	if err := ensureDirectory(runtimeDir, 0730); err != nil {
 		return err
 	}
@@ -159,7 +163,7 @@ func ensureHubUpgradeOwnership(root string) error {
 	if root != "" && root != "/" {
 		return nil
 	}
-	installerDir := rooted(root, "/var/lib/meshmux-installer")
+	installerDir := rooted(root, versions.InstallerRoot)
 	hubDir := filepath.Join(installerDir, "hub-upgrade")
 	resultsDir := filepath.Join(hubDir, "results")
 	manifestDir := filepath.Join(installerDir, "upgrade")
@@ -180,7 +184,7 @@ func ensureHubUpgradeOwnership(root string) error {
 	if err := os.Chown(resultsDir, 0, gid); err != nil {
 		return errors.New("HUB_UPGRADE_STATE_LAYOUT_FAILED")
 	}
-	runtimeDir := rooted(root, "/run/meshmux-hub")
+	runtimeDir := rooted(root, versions.HubRunDir)
 	for _, dir := range []string{runtimeDir, filepath.Join(runtimeDir, "requests"), filepath.Join(runtimeDir, "staging"), filepath.Join(runtimeDir, "boot")} {
 		if err := os.Chown(dir, 0, gid); err != nil {
 			return errors.New("HUB_UPGRADE_STATE_LAYOUT_FAILED")

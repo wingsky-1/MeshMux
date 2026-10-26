@@ -6,12 +6,9 @@ package policy
 
 import (
 	"errors"
-	"net/netip"
-	"regexp"
-	"strings"
-	"unicode"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // Stable policy refusals; only the code leaves the package.
@@ -22,13 +19,17 @@ const (
 	CodeRulesetUnpinned   = "RULESET_UNPINNED"
 )
 
-// CompilerAction is the format-independent egress of one rule.
+// CompilerAction is the format-independent egress of one rule. It is a wider
+// vocabulary than the library's three actions: the server layer adds the Out
+// hop and the client layer adds the mesh endpoint. The two shared spellings are
+// taken from the library action so the two layers cannot disagree about
+// "direct" and "proxy".
 type CompilerAction string
 
 const (
-	CompilerActionDirect    CompilerAction = "direct"
-	CompilerActionProxy     CompilerAction = "proxy"
-	CompilerActionOut       CompilerAction = "out"
+	CompilerActionDirect    CompilerAction = CompilerAction(ir.ActionDirect)
+	CompilerActionProxy     CompilerAction = CompilerAction(ir.ActionProxy)
+	CompilerActionOut       CompilerAction = CompilerAction(protocol.OutboundOutTag)
 	CompilerActionTailscale CompilerAction = "tailscale"
 )
 
@@ -56,21 +57,9 @@ func resolverFor(action CompilerAction) DNSResolver {
 	return DNSEncrypted
 }
 
-var (
-	domainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
-	tagPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	ssidPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._+-]{0,30}[a-z0-9])?$`)
-)
-
-// NormalizeSSID lowercases a Wi-Fi name and removes whitespace.
-func NormalizeSSID(raw string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return -1
-		}
-		return unicode.ToLower(r)
-	}, raw)
-}
+// NormalizeSSID lowercases a Wi-Fi name and removes whitespace. The predicate
+// itself lives in the subscription IR so both layers normalize identically.
+func NormalizeSSID(raw string) string { return ir.NormalizeSSID(raw) }
 
 // Match is one matcher kind; Geo and remote identifiers need a pin. DNS is an
 // annotation, not a matcher kind: it names the resolver the rule's egress uses.
@@ -98,22 +87,22 @@ func (m Match) Validate() error {
 		return errors.New(CodePolicyInvalid + ": each rule must use exactly one matcher kind")
 	}
 	for _, domain := range append(append([]string{}, m.Domains...), m.DomainSuffixes...) {
-		if !domainPattern.MatchString(domain) {
+		if !ir.ValidDomain(domain) {
 			return errors.New(CodePolicyInvalid + ": a domain must be a canonical lowercase DNS name")
 		}
 	}
 	for _, raw := range m.IPCIDRs {
-		if prefix, err := netip.ParsePrefix(raw); err != nil || prefix.Masked() != prefix {
+		if _, err := ir.CanonicalPrefix(raw); err != nil {
 			return errors.New(CodePolicyInvalid + ": every IP matcher must be a canonical CIDR network")
 		}
 	}
 	for _, tag := range append(append(append([]string{}, m.GeoSite...), m.GeoIP...), m.RuleSets...) {
-		if !tagPattern.MatchString(tag) {
+		if !ir.ValidTag(tag) {
 			return errors.New(CodePolicyInvalid + ": geo and ruleset identifiers must be lowercase")
 		}
 	}
 	for _, raw := range m.SSIDs {
-		if raw != NormalizeSSID(raw) || !ssidPattern.MatchString(raw) {
+		if raw != NormalizeSSID(raw) || !ir.ValidSSID(raw) {
 			return errors.New(CodePolicyInvalid + ": an SSID must be lowercase, without whitespace, and use letters, digits, dot, underscore, plus or hyphen")
 		}
 	}
@@ -132,11 +121,13 @@ type CompilerRule struct {
 }
 
 // ClientPolicy is client intent plus the read-only non-secret mesh view; it
-// carries no credential or Token.
+// carries no credential or Token. The view is the subscription IR shape, not
+// the subscription package, so the merged compiler does not depend upward on
+// the composer.
 type ClientPolicy struct {
 	Default CompilerAction
 	Rules   []CompilerRule
-	Mesh    subscription.MeshConfigModel
+	Mesh    ir.MeshView
 }
 
 // Validate checks the intent and refuses overlaps the save path must not merge.
@@ -154,7 +145,13 @@ func (p ClientPolicy) Validate() error {
 // everything else through the proxy selector. The caller must name a Line label
 // present in the model; an absent label is refused, never guessed. The model is
 // copied and only read.
-func MeshClientPolicy(model subscription.MeshConfigModel, proxyLine string) (ClientPolicy, error) {
+func MeshClientPolicy(model ir.MeshView, proxyLine string) (ClientPolicy, error) {
+	// Anti-corruption: the mesh view arrives from another module, so its shape
+	// is checked here instead of being trusted. A malformed prefix, label or
+	// identity is refused before it can reach a rule.
+	if err := model.Validate(); err != nil {
+		return ClientPolicy{}, errors.New(CodePolicyInvalid + ": the mesh view is not a canonical projection")
+	}
 	known := false
 	for _, label := range model.LineLabels {
 		if label == proxyLine {
@@ -176,7 +173,9 @@ func MeshClientPolicy(model subscription.MeshConfigModel, proxyLine string) (Cli
 	return policy, policy.Validate()
 }
 
-func cloneModel(model subscription.MeshConfigModel) subscription.MeshConfigModel {
+// cloneModel copies the two slices so a caller cannot mutate the read-only
+// view through the policy value it received.
+func cloneModel(model ir.MeshView) ir.MeshView {
 	model.TailnetPrefixes = append([]string(nil), model.TailnetPrefixes...)
 	model.LineLabels = append([]string(nil), model.LineLabels...)
 	return model

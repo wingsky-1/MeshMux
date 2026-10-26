@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,19 +24,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
-	installerStatePath = "/var/lib/meshmux-installer/state.json"
+	installerStatePath = versions.InstallerStatePath
 	// localLineStatePath is the ledger of a Line that shares the host with
 	// the Hub. The path is fixed and selected internally from the recorded
 	// Hub state; no caller, user or remote request may choose a path.
-	localLineStatePath  = "/var/lib/meshmux-installer/local-line/state.json"
-	runtimeBinaryPath   = "/usr/local/libexec/meshmuxd"
+	localLineStatePath  = versions.LocalLineStatePath
+	runtimeBinaryPath   = versions.RuntimeBinaryPath
 	caddyBinaryPath     = "/usr/local/libexec/meshmux-caddy"
 	headscaleBinaryPath = "/usr/local/libexec/meshmux-headscale"
-	maxInstallerFile    = 128 << 20
+	// maxInstallerFile is the one package/artifact byte bound shared by the
+	// tar extractor, the self-copy and the artifact verifier.
+	maxInstallerFile = buildinfo.MaxExecutableBytes
 )
 
 // SharedBinary records a Hub-owned runtime binary that a co-located Line
@@ -139,7 +143,7 @@ type fileSnapshot struct {
 	GID     int
 }
 
-var operationIDPattern = regexp.MustCompile("^[a-f0-9]{32}$")
+var operationIDPattern = backup.OperationIDPattern
 
 func ReadState(root string) (InstallState, bool, error) {
 	return readStateAt(root, installerStatePath)
@@ -156,14 +160,14 @@ func readStateAt(root, logicalPath string) (InstallState, bool, error) {
 		return state, false, nil
 	}
 	if err != nil {
-		return state, false, errors.New("INSTALL_STATE_UNAVAILABLE")
+		return state, false, errors.New(CodeInstallStateUnavailable)
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
 		return state, false, errors.New("INSTALL_STATE_UNSAFE")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || decodeStrictJSON(data, &state) != nil || state.Schema != 1 || state.OperationID == "" || state.Status == "" {
-		return state, false, errors.New("INSTALL_STATE_INVALID")
+		return state, false, errors.New(CodeInstallStateInvalid)
 	}
 	return state, true, nil
 }
@@ -186,6 +190,22 @@ func decodeStrictJSON(data []byte, destination any) error {
 	return nil
 }
 
+// Contract:
+//
+//	input     one validated Config (three domains + Caddy trust mode), the
+//	          operation id, the repair flag and the rooted ApplyOptions;
+//	validate  Config.Validate + operationIDPattern + root/ownership checks,
+//	          then the host preflight (OS, arch, ports, disk, systemd);
+//	assemble  the staged artifact set and the rendered candidate files, with no
+//	          host-visible write until the whole candidate validates;
+//	effects   snapshot -> replace only MeshMux-owned files -> write the ledger
+//	          after each file -> start/verify units -> terminal ledger;
+//	return    one InstallResult carrying the stage, the stable error_code and
+//	          the recovery action; a failure never claims the Hub is applied.
+//
+// It is the only Hub host-mutation entry the CLI calls. A helper below either
+// transforms values or returns a coded diagnostic; it never re-enters this
+// function's effects or reaches into the web layer.
 func InstallHub(ctx context.Context, c Config, operationID string, repair bool, opts ApplyOptions) (InstallResult, error) {
 	result := InstallResult{OperationID: operationID, Stage: "preflight", Status: "failed"}
 	fail := func(stage, code, recovery string) (InstallResult, error) {
@@ -193,7 +213,7 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return result, &InstallError{Stage: stage, Code: code, Recovery: recovery}
 	}
 	if !operationIDPattern.MatchString(operationID) {
-		return fail("preflight", "OPERATION_ID_INVALID", "Generate a new operation ID and retry.")
+		return fail("preflight", CodeOperationIDInvalid, "Generate a new operation ID and retry.")
 	}
 	if err := c.Validate(); err != nil {
 		return fail("preflight", "DOMAIN_INVALID", "Supply three distinct lowercase public DNS names.")
@@ -230,10 +250,10 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 
 	state, hasState, err := ReadState(opts.Root)
 	if err != nil {
-		return fail("preflight", "INSTALL_STATE_INVALID", "Inspect the recorded installer state; do not delete application data or Headscale keys.")
+		return fail("preflight", CodeInstallStateInvalid, "Inspect the recorded installer state; do not delete application data or Headscale keys.")
 	}
 	if repair && !hasState {
-		return fail("preflight", "REPAIR_STATE_MISSING", "Repair requires a state record created by MeshMux.")
+		return fail("preflight", CodeRepairStateMissing, "Repair requires a state record created by MeshMux.")
 	}
 	if opts.NonInteractive && !repair {
 		// A Web-driven handoff reuses the recorded installation; without
@@ -241,7 +261,7 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return fail("preflight", "UPDATE_INTERACTIVE_REFUSED", "A non-interactive handoff must pass repair and reuse the recorded installation.")
 	}
 	if hasState && !SameConfig(state.Config, c) {
-		return fail("preflight", "CONFIG_CONFLICT", "Repair only supports the recorded domains and proxy trust mode; domain migration is not part of this operation.")
+		return fail("preflight", CodeConfigConflict, "Repair only supports the recorded domains and proxy trust mode; domain migration is not part of this operation.")
 	}
 	if hasState && state.Status == "installed" && !repair {
 		if err := opts.Verify(ctx, c, opts.Runner, opts.TLSProbe); err != nil {
@@ -256,7 +276,7 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 		return fail("preflight", "INSTALL_PARTIAL_REPAIR_REQUIRED", "A previous operation is incomplete. Review its journal and run --repair with the same domains.")
 	}
 	if hasState && state.Status != "installed" && state.Status != "partial" && state.Status != "installing" {
-		return fail("preflight", "INSTALL_STATE_INVALID", "Inspect installer state before retrying.")
+		return fail("preflight", CodeInstallStateInvalid, "Inspect installer state before retrying.")
 	}
 
 	checks, sshPorts := opts.Preflight(ctx, c, hasState)
@@ -333,9 +353,9 @@ func InstallHub(ctx context.Context, c Config, operationID string, repair bool, 
 	// able to list the tree. Both ledgers below it stay 0600 root and local-line
 	// stays 0700 (spec §5.9, plan ruling 1).
 	if err := ensureHubUpgradeLayout(opts.Root); err != nil {
-		return fail("stage", "INSTALL_STATE_UNAVAILABLE", "Create a root-owned traversable installer state directory and retry.")
+		return fail("stage", CodeInstallStateUnavailable, "Create a root-owned traversable installer state directory and retry.")
 	}
-	operationDir := rooted(opts.Root, "/var/lib/meshmux-installer/operations/"+operationID)
+	operationDir := rooted(opts.Root, versions.InstallerRoot+"/operations/"+operationID)
 	if err := ensureDirectory(operationDir, 0700); err != nil {
 		return fail("stage", "OPERATION_LOG_FAILED", "Check private installer state directory permissions.")
 	}
@@ -551,14 +571,14 @@ func verifyServices(ctx context.Context, c Config, runner CommandRunner, tlsProb
 		}
 	}
 	if err := waitForWebHealth(ctx, c.ManagementDomain); err != nil {
-		return &InstallError{Stage: "verify", Code: "WEB_HEALTH_FAILED", Recovery: "Check meshmux-web.service, loopback port 9080, and the private SQLite directory."}
+		return &InstallError{Stage: "verify", Code: "WEB_HEALTH_FAILED", Recovery: "Check meshmux-web.service, the loopback Web port, and the private SQLite directory."}
 	}
-	if _, err := runner.Run(ctx, headscaleBinaryPath, "--config", "/etc/meshmux/headscale.yaml", "nodes", "list"); err != nil {
+	if _, err := runner.Run(ctx, headscaleBinaryPath, "--config", headscaleConfigPath, "nodes", "list"); err != nil {
 		return &InstallError{Stage: "verify", Code: "HEADSCALE_HEALTH_FAILED", Recovery: "Check the Headscale Unix socket, SQLite database, and journalctl -u meshmux-headscale.service."}
 	}
 	listeners, err := runner.Run(ctx, "ss", "-H", "-lntup")
 	if err != nil || !hasListenerPort(string(listeners), HeadscalePort) || !hasListenerPort(string(listeners), STUNPort) {
-		return &InstallError{Stage: "verify", Code: "HEADSCALE_LISTENER_FAILED", Recovery: "Verify TCP 8080 and UDP 3478 are bound by the embedded Headscale service."}
+		return &InstallError{Stage: "verify", Code: "HEADSCALE_LISTENER_FAILED", Recovery: "Verify the Headscale TCP and embedded DERP STUN ports are bound by the embedded Headscale service."}
 	}
 	if _, err := runner.Run(ctx, "fail2ban-client", "status", "meshmux-sshd"); err != nil {
 		return &InstallError{Stage: "verify", Code: "SSH_FAIL2BAN_JAIL_UNAVAILABLE", Recovery: "Verify the actual SSH listener port and MeshMux SSH jail."}
@@ -573,7 +593,7 @@ func waitForWebHealth(ctx context.Context, domain string) error {
 	deadline := time.Now().Add(30 * time.Second)
 	client := &http.Client{Timeout: 3 * time.Second}
 	for time.Now().Before(deadline) {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:9080/healthz", nil)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+versions.WebListenAddress()+"/healthz", nil)
 		req.Host = domain
 		resp, err := client.Do(req)
 		if err == nil {
@@ -685,15 +705,14 @@ func activateUnit(ctx context.Context, runner CommandRunner, unit string, repair
 	return err
 }
 
+// architectureForRuntime selects this build's Debian architecture from the one
+// supported matrix. Adding an architecture is a versions change plus a data
+// entry, never a new branch here.
 func architectureForRuntime() string {
-	switch runtime.GOARCH {
-	case "amd64":
-		return "amd64"
-	case "arm64":
-		return "arm64"
-	default:
-		return ""
+	if versions.IsSupportedArchitecture(runtime.GOARCH) {
+		return runtime.GOARCH
 	}
+	return ""
 }
 
 func findArtifact(artifacts []Artifact, name string) Artifact {
@@ -1123,9 +1142,9 @@ func snapshotTargets(root string, targets []string, state InstallState, hasState
 
 func filePolicy(path string) (os.FileMode, string) {
 	switch path {
-	case "/etc/meshmux/Caddyfile":
+	case caddyConfigPath:
 		return 0640, "root:meshmux-caddy"
-	case "/etc/meshmux/headscale.yaml":
+	case headscaleConfigPath:
 		return 0640, "root:meshmux-headscale"
 	case runtimeBinaryPath, caddyBinaryPath, headscaleBinaryPath:
 		return 0755, "root:root"

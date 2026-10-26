@@ -52,9 +52,10 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
-const runningExecutablePath = "/proc/self/exe"
+const runningExecutablePath = buildinfo.ExecutablePath
 
 // BackupConfig is one Hub backup request. The callbacks are the Web process's
 // SQLite boundary; a fixture supplies fakes and never needs a driver.
@@ -109,6 +110,17 @@ type BackupReceipt struct {
 // CreateBackup performs the ordered producer. A successful receipt names an
 // operation Task 5 may hand off; every failure leaves the previous generation
 // byte-identical and cleans this operation's scratch copy.
+// Contract:
+//
+//	input     one BackupConfig: the approved target/digests, the data directory,
+//	          the owner seams and the Web-supplied VACUUM/integrity/schema hooks;
+//	validate  every argv field shape, the owner of the ledger and record, the
+//	          free space, and the single-flight journal state;
+//	assemble  this operation's per-op directory and its payload.part copy;
+//	effects   VACUUM + integrity_check on the copy, publish record.json, journal
+//	          backed_up, refresh the existence pointer;
+//	return    a receipt that names the rollback record; it never claims the
+//	          target was installed, and a pointer failure never hides the record.
 func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) {
 	if err := validateBackupConfig(cfg); err != nil {
 		return BackupReceipt{}, err
@@ -123,7 +135,7 @@ func CreateBackup(ctx context.Context, cfg BackupConfig) (BackupReceipt, error) 
 	fromVersion := buildinfo.Version
 	fromDigest, err := buildinfo.Digest()
 	if err != nil || !digestRE.MatchString(fromDigest) {
-		return BackupReceipt{}, fail("HUB_BACKUP_IDENTITY_MISSING", "the running binary digest is unavailable")
+		return BackupReceipt{}, fail(CodeBackupIdentityMissing, "the running binary digest is unavailable")
 	}
 	manifestDir := cfg.ManifestDir
 	if manifestDir == "" {
@@ -299,7 +311,7 @@ func validateBackupConfig(cfg BackupConfig) error {
 		return fail("HUB_BACKUP_FAILED", "the Hub data directory is not absolute")
 	}
 	if !targetRE.MatchString(cfg.Target) {
-		return fail("MANIFEST_UNAVAILABLE", "the requested target is not a SemVer release")
+		return fail(versions.CodeManifestUnavailable, "the requested target is not a SemVer release")
 	}
 	if cfg.Vacuum == nil || cfg.Integrity == nil || cfg.Schema == nil || cfg.Space == nil {
 		return fail("HUB_BACKUP_FAILED", "the database callbacks are incomplete")
@@ -386,14 +398,14 @@ func stageRunningBinary(dataDir, version, digest string) (string, error) {
 	if err != nil {
 		return "", fail("HUB_BACKUP_BINARY_STAGE_FAILED", "the old package could not be written")
 	}
-	written, copyErr := io.Copy(out, io.LimitReader(source, 128<<20+1))
+	written, copyErr := io.Copy(out, io.LimitReader(source, buildinfo.MaxExecutableBytes+1))
 	if copyErr == nil {
 		copyErr = out.Sync()
 	}
 	if closeErr := out.Close(); copyErr == nil {
 		copyErr = closeErr
 	}
-	if copyErr != nil || written <= 0 || written > 128<<20 {
+	if copyErr != nil || written <= 0 || written > buildinfo.MaxExecutableBytes {
 		_ = os.Remove(part)
 		return "", fail("HUB_BACKUP_BINARY_STAGE_FAILED", "the old package could not be copied within its bound")
 	}
@@ -508,7 +520,7 @@ func hashPath(path string) (string, error) {
 	}
 	defer file.Close()
 	sum := sha256.New()
-	if _, err := io.Copy(sum, io.LimitReader(file, 128<<20+1)); err != nil {
+	if _, err := io.Copy(sum, io.LimitReader(file, buildinfo.MaxExecutableBytes+1)); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(sum.Sum(nil)), nil

@@ -1,18 +1,29 @@
 package handler
 
-// /policies read-only helpers for issue #10: the explain query and the conflict
-// dry run. Neither stores a policy, creates a revision nor publishes to a
-// Line/Out; that pipeline is 10d.
+// /policies read-only helpers: the explain query and the conflict dry run.
+// Neither stores a policy, creates a revision nor publishes to a Line/Out.
+//
+// Explain (GET /policies/explain): parse the target → guard its shape →
+// resolve against the same snapshot the page renders → render the page with
+// the hit chain. An empty target renders the plain page; an unresolvable
+// snapshot renders the plain page too (the page never fakes a hit).
+//
+// Validate (POST /policies/validate): parse one strict-JSON policy →
+// validate through the policy domain → answer the stable code or OK. It writes
+// no row and publishes nothing; it is the dry run behind the save button.
 
 import (
 	"encoding/json"
-	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
+
+// policyExplainTargetMax is the explain form's length guard: longer input is
+// neither a domain nor an IP, so it is refused before any evaluation.
+const policyExplainTargetMax = 253
 
 type policyValidationResponse struct {
 	OK          bool   `json:"ok"`
@@ -31,7 +42,7 @@ func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess 
 		app.renderPolicies(w, r, sess, page)
 		return
 	}
-	if len(target) > 253 {
+	if len(target) > policyExplainTargetMax {
 		app.fail(w, r, http.StatusBadRequest, policy.CodePolicyInvalid, "目标长度超出域名或 IP 的合理范围。", "请缩短后重试。")
 		return
 	}
@@ -45,31 +56,8 @@ func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess 
 		app.fail(w, r, http.StatusConflict, code, "无法计算命中说明。", "请检查策略后重试。")
 		return
 	}
-	page.Hits = []view.PolicyHitView{policyHitResult(hit, target)}
+	page.Hits = []view.PolicyHitView{view.PolicyHitResult(hit, target)}
 	app.renderPolicies(w, r, sess, page)
-}
-
-func policyHitResult(hit policy.HitExplanation, target string) view.PolicyHitView {
-	rule := fmt.Sprintf("优先级 %d · %s", hit.Priority, hit.Matcher)
-	title := "命中说明：" + target
-	if hit.Priority == 0 {
-		rule = "未命中任何显式规则，使用兜底"
-		title = "兜底路径：" + target
-	}
-	dns := "境内 DNS，解析出口与访问出口一致"
-	if hit.DNS == policy.DNSEncrypted {
-		dns = "加密 DNS，解析出口与访问出口一致"
-	}
-	return view.PolicyHitView{
-		Title: title,
-		Note:  "仅对域名、域名后缀与 CIDR 规则求值；geo 与远端 ruleset 需要锁定数据，本结果不猜测其匹配。",
-		Steps: []view.PolicyHitStep{
-			{Stage: "规则", Value: rule},
-			{Stage: "动作", Value: policyActionLabel(hit.Action)},
-			{Stage: "实际出口", Value: hit.Egress},
-			{Stage: "DNS", Value: dns},
-		},
-	}
 }
 
 // policiesValidate is the conflict dry run: the CSRF-protected form carries one
@@ -81,11 +69,8 @@ func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ se
 		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "缺少 rules 字段（JSON）"})
 		return
 	}
-	var input struct {
-		Default policy.CompilerAction `json:"default"`
-		Rules   []policy.CompilerRule `json:"rules"`
-	}
-	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+	input, ok := readPolicyValidationInput(raw)
+	if !ok {
 		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "rules 不是合法的策略 JSON"})
 		return
 	}
@@ -101,6 +86,25 @@ func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ se
 	}
 	app.event(r, "POLICY_VALIDATED")
 	app.writePolicyValidation(w, r, http.StatusOK, policyValidationResponse{OK: true, Rules: len(input.Rules)})
+}
+
+// readPolicyValidationInput parses the dry-run policy with strict decoding.
+// Unknown fields are refused so a retired key (exceptions/ssids) cannot slip
+// through the dry run while the write path rejects it.
+func readPolicyValidationInput(raw string) (struct {
+	Default policy.CompilerAction `json:"default"`
+	Rules   []policy.CompilerRule `json:"rules"`
+}, bool) {
+	var input struct {
+		Default policy.CompilerAction `json:"default"`
+		Rules   []policy.CompilerRule `json:"rules"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return input, false
+	}
+	return input, true
 }
 
 func (app *Server) writePolicyValidation(w http.ResponseWriter, r *http.Request, status int, body policyValidationResponse) {

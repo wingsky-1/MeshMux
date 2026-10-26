@@ -57,15 +57,10 @@ const (
 	defaultRequestTimeout = 20 * time.Second
 )
 
-var (
-	stableErrorCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
-	responseKey     = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,63}$`)
-	hex32Pattern    = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	// stageTargetVersionPattern mirrors the SemVer shape the Agent already
-	// enforces on a stamped target; a target that does not match is refused
-	// rather than handed to a subprocess.
-	stageTargetVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
-)
+// responseKey is the only local pattern here; identity, digest, token, error
+// code and release-version spellings come from protocol, the wire contract both
+// sides of the Agent boundary validate against.
+var responseKey = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,63}$`)
 
 // ClientError is returned for validation, transport, protocol and Hub errors.
 // Error deliberately includes only the stable code; callers may inspect
@@ -151,7 +146,7 @@ func (c *Client) Pair(ctx context.Context, pairingCode string) (Identity, error)
 	if err := c.config.Validate(); err != nil {
 		return Identity{}, &ClientError{Code: "CONFIG_INVALID"}
 	}
-	if !tokenPattern.MatchString(pairingCode) {
+	if !protocol.ValidToken43(pairingCode) {
 		return Identity{}, &ClientError{Code: "PAIRING_CODE_INVALID"}
 	}
 	if !validVersionString(c.config.AgentVersion) {
@@ -253,7 +248,7 @@ func (c *Client) Manifest(ctx context.Context) (ManifestBytes, error) {
 // The path is fixed and the operation id must be 32 lowercase hex, so no caller
 // can turn this into a general Hub read.
 func (c *Client) StageTarget(ctx context.Context, operationID string) (StageTarget, bool, error) {
-	if !hex32Pattern.MatchString(operationID) {
+	if !protocol.ValidID(operationID) {
 		return StageTarget{}, false, &ClientError{Code: "OPERATION_ID_INVALID"}
 	}
 	identity, err := c.authenticatedIdentity()
@@ -274,8 +269,8 @@ func (c *Client) StageTarget(ctx context.Context, operationID string) (StageTarg
 		ManifestSHA256 string `json:"manifest_sha256"`
 	}
 	if err := decodeResponseObject(response.body, &body, "target_version", "manifest_sha256"); err != nil ||
-		!stageTargetVersionPattern.MatchString(body.TargetVersion) ||
-		!sha256Pattern.MatchString(body.ManifestSHA256) {
+		!protocol.ValidSemVer(body.TargetVersion) ||
+		!protocol.ValidSHA256(body.ManifestSHA256) {
 		return StageTarget{}, false, &ClientError{Code: "STAGE_TARGET_INVALID", StatusCode: response.status}
 	}
 	return StageTarget{Version: body.TargetVersion, ManifestSHA256: body.ManifestSHA256}, true, nil
@@ -301,7 +296,7 @@ func (c *Client) Candidate(ctx context.Context, revision int64) (CandidateDocume
 	claimed := strings.ToLower(strings.TrimSpace(response.header.Get(configSHA256Header)))
 	sum := sha256.Sum256(response.body)
 	actual := hex.EncodeToString(sum[:])
-	if !sha256Pattern.MatchString(claimed) || claimed != actual {
+	if !protocol.ValidSHA256(claimed) || claimed != actual {
 		return CandidateDocument{}, &ClientError{Code: "CANDIDATE_HASH_MISMATCH", StatusCode: response.status}
 	}
 	var candidate CandidateDocument
@@ -475,7 +470,7 @@ func (c *Client) doJSON(
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
-		if !tokenPattern.MatchString(token) {
+		if !protocol.ValidToken43(token) {
 			return jsonResponse{}, &ClientError{Code: "IDENTITY_INVALID"}
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -524,7 +519,7 @@ func (c *Client) statusError(ctx context.Context, response *http.Response) error
 		return &ClientError{Code: statusFallback(status), StatusCode: status}
 	}
 	code := extractErrorCode(body)
-	if !stableErrorCode.MatchString(code) {
+	if !protocol.ValidErrorCode(code) {
 		return &ClientError{Code: statusFallback(status), StatusCode: status}
 	}
 	return &ClientError{Code: code, StatusCode: status}
@@ -742,5 +737,5 @@ func validRevisionPath(path string) bool {
 // path this client may request, so the allowlist cannot be widened by a caller.
 func validOperationIDPath(path string) bool {
 	operationID, ok := strings.CutPrefix(path, agentUpgradeTargetPrefix)
-	return ok && hex32Pattern.MatchString(operationID)
+	return ok && protocol.ValidID(operationID)
 }

@@ -11,7 +11,6 @@ package handler
 // literal form value `irreversible_confirm=1` is refused and writes nothing.
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/web/store"
 	"net/http"
 	"strings"
 )
@@ -46,9 +45,13 @@ type databaseMigrationReceipt struct {
 // tasksDatabaseMigrationApprove stores the confirmation bit on the Hub database
 // backup record. The operator names the backup operation; the record must exist,
 // be private, staged and verified, and belong to exactly that operation.
+//
+// Flow: validate the backup operation id against the frozen grammar → require
+// the literal confirmation field value "1" → store the bit → answer one
+// receipt. There is deliberately no flag or environment switch.
 func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.Request, _ session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("backup_operation_id"))
-	if !store.DatabaseBackupOperationPattern.MatchString(operationID) {
+	if !isValidOperationID(operationID) {
 		app.writeDatabaseMigrationFailure(w, r, http.StatusBadRequest, "DB_BACKUP_OPERATION_INVALID",
 			"备份操作编号不正确。", "请从本页 Hub 自升级区块的备份回执复制 32 位十六进制 operation_id（即 backup_operation_id）后重试；未写入任何确认。")
 		return

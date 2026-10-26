@@ -3,14 +3,10 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strconv"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
-
-// maxLineCandidateUsers mirrors the node candidate user bound. It is repeated
-// here so a Line snapshot refuses an oversized user set before it reaches the
-// candidate document, independent of later validation.
-const maxLineCandidateUsers = 1024
 
 // buildLineCandidateTx builds the complete desired candidate of one node in
 // the caller's transaction.
@@ -38,10 +34,10 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 	var vlessPort int
 	err := tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, nodeID).Scan(&role, &vlessPort)
 	if errors.Is(err, sql.ErrNoRows) {
-		return node.Candidate{}, errors.New("NODE_NOT_FOUND: unknown node")
+		return node.Candidate{}, errNodeNotFoundDetail
 	}
 	if err != nil {
-		return node.Candidate{}, errors.New("DATABASE_UNAVAILABLE")
+		return node.Candidate{}, errors.New(CodeDatabaseUnavailable)
 	}
 	candidate := node.Candidate{
 		NodeID:        nodeID,
@@ -83,10 +79,10 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 		return node.Candidate{}, errLineSettingsCorrupt
 	}
 	if err != nil {
-		return node.Candidate{}, errors.New("DATABASE_UNAVAILABLE")
+		return node.Candidate{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if line.NodeID != nodeID {
-		return node.Candidate{}, errors.New("LINE_SETTINGS_CORRUPT: stored line settings are invalid")
+		return node.Candidate{}, errLineSettingsCorrupt
 	}
 	if line.Port != vlessPort {
 		return node.Candidate{}, errors.New("LINE_PORT_MISMATCH: the stored line port must match the vless port of the node")
@@ -121,22 +117,22 @@ func lineCandidateUsersTx(tx *sql.Tx, nodeID string) ([]node.VLESSUser, error) {
 	 WHERE c.node_id=? AND c.active=1 AND s.state='active'
 	 ORDER BY c.id ASC`, nodeID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	users := []node.VLESSUser{}
 	for rows.Next() {
 		var user node.VLESSUser
 		if err = rows.Scan(&user.CredentialID, &user.UUID); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		users = append(users, user)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	if len(users) > maxLineCandidateUsers {
-		return nil, errors.New("CANDIDATE_INVALID: at most 1024 users are allowed")
+		return nil, errors.New("CANDIDATE_INVALID: at most " + strconv.Itoa(maxLineCandidateUsers) + " users are allowed")
 	}
 	return users, nil
 }

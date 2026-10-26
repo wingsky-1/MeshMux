@@ -29,7 +29,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -39,6 +38,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
@@ -47,17 +47,17 @@ const (
 	codeUpdateState    = "HUB_UPDATE_STATE_INVALID"
 	codePrecheck       = "HUB_SHARED_BINARY_PRECHECK_FAILED"
 	codePreflight      = "HUB_UPDATE_PREFLIGHT_FAILED"
-	codeRepinFailed    = "HUB_SHARED_BINARY_REPIN_FAILED"
+	codeRepinFailed    = hubupgrade.CodeSharedBinaryRepinFailed
 	codeWebRestart     = "HUB_UPGRADE_RESTART_FAILED"
-	codeUpdateIdentity = "HUB_BACKUP_IDENTITY_MISSING"
+	codeUpdateIdentity = hubupgrade.CodeBackupIdentityMissing
 
-	lineUnit        = "meshmux-agent.service"
-	webUnit         = "meshmux-web.service"
-	maxBinaryBytes  = 128 << 20
+	lineUnit        = node.AgentUnit
+	webUnit         = versions.WebUnitName
+	maxBinaryBytes  = buildinfo.MaxExecutableBytes
 	maxPayloadBytes = 4 << 30
 )
 
-var updateVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
+var updateVersionRE = backup.ReleaseVersionPattern
 
 // UpdateConfig is one executor run. Root is the fixture seam for the fixed
 // /var/lib/meshmux-installer and /etc/meshmux paths; production leaves it "/".
@@ -98,6 +98,18 @@ type updateRun struct {
 // RunUpdate performs one staged target update. All configuration checks finish
 // before any write; a failure after the claim exists is rolled back or reported
 // partial.
+// Contract:
+//
+//	input     the frozen dispatch argv (target, expected digest, operation id,
+//	          data dir, from version) and the fixed command runner;
+//	validate  argv shapes, self digest, version binding, journal/record/manifest
+//	          agreement, the Line four-pin precheck and the database pre-flight;
+//	assemble  the new binary scratch plus the complete old pin set;
+//	effects   claim(swapping) -> result accepted/swapping -> rename -> re-pin ->
+//	          restart; any post-write failure rolls back from the old package;
+//	return    nil only when the new binary is running and its pins are written;
+//	          otherwise a stable HUB_* code with a partial receipt when a write
+//	          already happened.
 func RunUpdate(ctx context.Context, cfg UpdateConfig, runner node.CommandRunner) error {
 	if err := normalizeUpdateConfig(&cfg); err != nil {
 		return err

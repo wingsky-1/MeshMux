@@ -31,6 +31,41 @@ const (
 	PairingTTLSeconds = 15 * 60
 )
 
+// Wire-level egress tags and artifact formats shared by every document
+// producer. The owner is the node domain (its server candidate must declare
+// every tag a route names); the subscription composer and the policy
+// generators reference these constants downward instead of keeping their own
+// copies. Only the node domain may add a tag here, and adding one must not
+// change the bytes of an existing document.
+const (
+	// OutboundDirectTag is the explicit direct outbound.
+	OutboundDirectTag = "direct"
+	// OutboundOutTag is the single optional Out egress.
+	OutboundOutTag = "out"
+	// OutboundBlockTag is the explicit never-route egress.
+	OutboundBlockTag = "block"
+	// SelectorTag is the stable selector/group tag of a client document.
+	SelectorTag = "meshmux-selector"
+	// TailscaleEndpointTag is the stable Tailscale endpoint tag.
+	TailscaleEndpointTag = "meshmux-ts"
+	// RuleSetFormatBinary is the sing-box rule-set encoding used by pinned
+	// artifacts (.srs).
+	RuleSetFormatBinary = "binary"
+	// VLESSFlow is the only VLESS sub-protocol both the Line listener and the
+	// subscription client may name. sing-box rejects any other spelling.
+	VLESSFlow = "xtls-rprx-vision"
+	// MihomoGroupName is the single select group of a subscription document.
+	MihomoGroupName = "PROXY"
+	// MihomoDirect and MihomoReject are the Mihomo built-in egress names the
+	// subscription and the policy fragments share.
+	MihomoDirect = "DIRECT"
+	MihomoReject = "REJECT"
+)
+
+// OutEgressHTTP is the external HTTP-proxy egress kind. It is a wire value of
+// the node candidate and the subscription selection, not a node role.
+const OutEgressHTTP = "http"
+
 // Allowlisted task kinds. Anything else — including upgrade/rollback,
 // arbitrary shell, URL or path operations — must be rejected.
 const (
@@ -82,8 +117,31 @@ var (
 	paramKey   = regexp.MustCompile(`^[a-z_]{1,32}$`)
 	errorCode  = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 	token43    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	sha256RE   = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	semverRE   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
+	shortIDRE  = regexp.MustCompile(`^[a-f0-9]{16}$`)
+	uuidV4RE   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	nodeRoleOK = map[string]struct{}{"edge": {}, "out": {}}
 )
+
+// The wire grammar predicates below are the single source for the spellings
+// every producer of this protocol validates: identity, digest, bearer token,
+// stable error code and release version. A package that carries its own copy is
+// a defect, because two spellings that drift apart would accept a value on one
+// side of the Hub<->Agent boundary and refuse it on the other.
+func ValidID(value string) bool        { return hex32.MatchString(value) }
+func ValidSHA256(value string) bool    { return sha256RE.MatchString(value) }
+func ValidToken43(value string) bool   { return token43.MatchString(value) }
+func ValidErrorCode(value string) bool { return errorCode.MatchString(value) }
+func ValidSemVer(value string) bool    { return semverRE.MatchString(value) }
+func ValidParamKey(value string) bool  { return paramKey.MatchString(value) }
+
+// ValidShortID and ValidUUIDv4 are the REALITY short-id and VLESS credential
+// spellings. Both the node candidate reader and the subscription credential
+// validator accept exactly these, so a credential the Hub mints can never be
+// refused by the node that has to serve it.
+func ValidShortID(value string) bool { return shortIDRE.MatchString(value) }
+func ValidUUIDv4(value string) bool  { return uuidV4RE.MatchString(value) }
 
 // Task is the frozen envelope. Every field is mandatory so Issue #11 can
 // reuse operation_id/revision/idempotency without a protocol rewrite.

@@ -65,7 +65,7 @@ func meshReadError(err error) error {
 	if errors.Is(err, errMeshDeviceCorrupt) {
 		return MeshError(CodeMeshDeviceCorrupt, "the stored mesh device record is invalid")
 	}
-	return errors.New("DATABASE_UNAVAILABLE")
+	return errors.New(CodeDatabaseUnavailable)
 }
 
 func scanMeshDevice(row rowScanner) (MeshDeviceRecord, error) {
@@ -131,7 +131,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var subscriber any
@@ -142,7 +142,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 			return MeshDeviceRecord{}, MeshError(mesh.CodeSubscriberBindingInvalid, "the subscriber does not exist")
 		}
 		if err != nil {
-			return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		if state == string(subscription.StateDeleting) || state == string(subscription.StateDeleted) {
 			return MeshDeviceRecord{}, MeshError(mesh.CodeSubscriberBindingInvalid, "a deleting or deleted subscriber cannot own a mesh device")
@@ -157,7 +157,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 		if meshNodeNameConflict(err) {
 			return MeshDeviceRecord{}, MeshError(mesh.CodeNodeNameDuplicate, "the node name is already occupied for this headscale user")
 		}
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	// Pre-declared prefixes land with the device in one transaction. They are
 	// advertised intents only: approval stays an explicit, separately audited act.
@@ -170,7 +170,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 			if meshRoutePrefixConflict(err) {
 				return MeshDeviceRecord{}, meshRouteError(CodeMeshRouteConflict, "the prefix is already declared by another device")
 			}
-			return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		if err = recordMeshRouteEventTx(tx, device.ID, prefix, RouteEventDeclared,
 			"", string(mesh.RouteDesiredAdvertised), "", "", "", now); err != nil {
@@ -178,7 +178,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return s.GetMeshDevice(device.ID)
 }
@@ -193,7 +193,7 @@ func uniqueConstraint(err error) bool {
 // tombstone and keeps its last label.
 func (s *Store) RenameMeshDevice(deviceID, displayName string, now time.Time) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	name, err := subscription.NormalizeDisplayName(displayName)
 	if err != nil {
@@ -201,7 +201,7 @@ func (s *Store) RenameMeshDevice(deviceID, displayName string, now time.Time) (M
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	record, err := meshDeviceTx(tx, deviceID)
@@ -213,11 +213,11 @@ func (s *Store) RenameMeshDevice(deviceID, displayName string, now time.Time) (M
 	}
 	if record.DisplayName != name {
 		if _, err = tx.Exec(`UPDATE mesh_devices SET display_name=?, updated_at=? WHERE id=?`, name, now.Unix(), deviceID); err != nil {
-			return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	record.DisplayName = name
 	record.UpdatedAt = now.Unix()
@@ -240,7 +240,7 @@ func meshKeySingleActiveConflict(err error) bool {
 // getMeshDevice returns one stored device.
 func (s *Store) GetMeshDevice(deviceID string) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	record, err := scanMeshDevice(s.DB.QueryRow(meshDeviceSelect+` WHERE d.id=?`, deviceID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -257,7 +257,7 @@ func (s *Store) GetMeshDevice(deviceID string) (MeshDeviceRecord, error) {
 func (s *Store) ListMeshDevices() ([]MeshDeviceRecord, error) {
 	rows, err := s.DB.Query(meshDeviceSelect + ` ORDER BY d.created_at ASC, d.id ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []MeshDeviceRecord{}
@@ -269,7 +269,7 @@ func (s *Store) ListMeshDevices() ([]MeshDeviceRecord, error) {
 		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -283,7 +283,7 @@ func (s *Store) ListMeshDevices() ([]MeshDeviceRecord, error) {
 // receive a key at all.
 func (s *Store) IssueMeshEnrollmentKey(deviceID string, now time.Time) (mesh.EnrollmentKey, string, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeKeyDeviceIDInvalid, "need 32 lowercase hex characters")
+		return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeKeyDeviceIDInvalid, hex32Shape)
 	}
 	key, secret, err := mesh.NewEnrollmentKey(deviceID, now.UTC().Truncate(time.Second))
 	if err != nil {
@@ -291,7 +291,7 @@ func (s *Store) IssueMeshEnrollmentKey(deviceID string, now time.Time) (mesh.Enr
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return mesh.EnrollmentKey{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var status string
@@ -300,7 +300,7 @@ func (s *Store) IssueMeshEnrollmentKey(deviceID string, now time.Time) (mesh.Enr
 		return mesh.EnrollmentKey{}, "", MeshError(CodeMeshDeviceNotFound, "unknown mesh device")
 	}
 	if err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return mesh.EnrollmentKey{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	if mesh.Status(status) != mesh.StatusPending {
 		return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeStatusTransitionInvalid, "only a pending device can receive an enrollment key")
@@ -309,17 +309,17 @@ func (s *Store) IssueMeshEnrollmentKey(deviceID string, now time.Time) (mesh.Enr
 	// here keeps one unusable row from silently blocking a fresh key.
 	if _, err = tx.Exec(`UPDATE mesh_enrollment_keys SET state='expired'
  WHERE device_id=? AND state='issued' AND expires_at<=?`, deviceID, key.IssuedAt.Unix()); err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return mesh.EnrollmentKey{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
  VALUES(?,?,?,'issued',?,?,0)`, key.ID, key.DeviceID, key.Hash, key.IssuedAt.Unix(), key.ExpiresAt.Unix()); err != nil {
 		if meshKeySingleActiveConflict(err) {
 			return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeKeyAlreadyActive, "the device already holds an issued enrollment key")
 		}
-		return mesh.EnrollmentKey{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return mesh.EnrollmentKey{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return mesh.EnrollmentKey{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	return key, secret, nil
 }
@@ -353,7 +353,7 @@ type meshRekeyApply struct {
 // it would report an early withdrawal that never happened.
 func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time.Time) (meshRekeyApply, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return meshRekeyApply{}, MeshError(mesh.CodeKeyDeviceIDInvalid, "need 32 lowercase hex characters")
+		return meshRekeyApply{}, MeshError(mesh.CodeKeyDeviceIDInvalid, hex32Shape)
 	}
 	if key.DeviceID != deviceID {
 		return meshRekeyApply{}, MeshError(mesh.CodeKeyDeviceMismatch, "the staged key belongs to another device")
@@ -366,7 +366,7 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return meshRekeyApply{}, errors.New("DATABASE_UNAVAILABLE")
+		return meshRekeyApply{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	record, err := meshDeviceTx(tx, deviceID)
@@ -388,7 +388,7 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
 			if meshNodeNameConflict(err) {
 				return meshRekeyApply{}, MeshError(mesh.CodeNodeNameDuplicate, "the node name was taken while the device was expired")
 			}
-			return meshRekeyApply{}, errors.New("DATABASE_UNAVAILABLE")
+			return meshRekeyApply{}, errors.New(CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
 			return meshRekeyApply{}, MeshError(mesh.CodeStatusTransitionInvalid, "the mesh device is no longer expired")
@@ -400,12 +400,12 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
 	res, err := tx.Exec(`UPDATE mesh_enrollment_keys SET state='expired'
  WHERE device_id=? AND state='issued' AND expires_at<=?`, deviceID, key.IssuedAt.Unix())
 	if err != nil {
-		return meshRekeyApply{}, errors.New("DATABASE_UNAVAILABLE")
+		return meshRekeyApply{}, errors.New(CodeDatabaseUnavailable)
 	}
 	apply.Lapsed, _ = res.RowsAffected()
 	res, err = tx.Exec(`UPDATE mesh_enrollment_keys SET state='revoked' WHERE device_id=? AND state='issued'`, deviceID)
 	if err != nil {
-		return meshRekeyApply{}, errors.New("DATABASE_UNAVAILABLE")
+		return meshRekeyApply{}, errors.New(CodeDatabaseUnavailable)
 	}
 	apply.Withdrawn, _ = res.RowsAffected()
 	if _, err = tx.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
@@ -413,10 +413,10 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
 		if meshKeySingleActiveConflict(err) {
 			return meshRekeyApply{}, MeshError(mesh.CodeKeyAlreadyActive, "the device already holds an issued enrollment key")
 		}
-		return meshRekeyApply{}, errors.New("DATABASE_UNAVAILABLE")
+		return meshRekeyApply{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return meshRekeyApply{}, errors.New("DATABASE_UNAVAILABLE")
+		return meshRekeyApply{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return apply, nil
 }
@@ -446,7 +446,7 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 		return nil
 	}
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	key := mesh.EnrollmentKey{
 		ID:        keyID,
@@ -465,7 +465,7 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 		res, err := tx.Exec(`UPDATE mesh_enrollment_keys SET state='consumed', secret_hash=NULL, consumed_at=?
  WHERE id=? AND state='issued'`, consumed.ConsumedAt.Unix(), keyID)
 		if err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
 			return MeshError(mesh.CodeKeyTransitionInvalid, "the enrollment key was no longer issued")
@@ -475,7 +475,7 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 			return err
 		}
 		if _, err = tx.Exec(`UPDATE mesh_enrollment_keys SET state='expired' WHERE id=? AND state='issued'`, keyID); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 	}
 	return nil
@@ -496,11 +496,11 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 // older database keeps.
 func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, now time.Time) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	record, err := meshDeviceTx(tx, deviceID)
@@ -551,10 +551,10 @@ func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, n
 	}
 	if _, err = tx.Exec(`UPDATE mesh_devices SET status=?, headscale_node_id=?, observed_at=?, updated_at=? WHERE id=?`,
 		string(next.Status), next.HeadscaleNodeID, now.Unix(), now.Unix(), deviceID); err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshDeviceRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return s.GetMeshDevice(deviceID)
 }
@@ -567,11 +567,11 @@ func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, n
 // device must not disable the whole subscriber (ADR-0004).
 func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Time) (MeshDeviceRecord, mesh.RevokeOutcome, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, "", MeshError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshDeviceRecord{}, "", MeshError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshDeviceRecord{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	record, err := meshDeviceTx(tx, deviceID)
@@ -586,7 +586,7 @@ func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Ti
 		res, err := tx.Exec(`UPDATE mesh_devices SET status=?, revoke_reason=?, revoke_requested_at=?, updated_at=?
  WHERE id=? AND status=?`, string(next.Status), reason, now.Unix(), now.Unix(), deviceID, string(record.Status))
 		if err != nil {
-			return MeshDeviceRecord{}, "", errors.New("DATABASE_UNAVAILABLE")
+			return MeshDeviceRecord{}, "", errors.New(CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
 			return MeshDeviceRecord{}, "", MeshError(mesh.CodeStatusTransitionInvalid, "the mesh device status changed concurrently")
@@ -600,7 +600,7 @@ func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Ti
 		return MeshDeviceRecord{}, "", err
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshDeviceRecord{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return MeshDeviceRecord{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	stored, err := s.GetMeshDevice(deviceID)
 	if err != nil {
@@ -615,11 +615,11 @@ func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Ti
 // own and reporting it as revoked would misstate the audit trail.
 func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, error) {
 	if err := subscription.ValidateID(keyID); err != nil {
-		return MeshEnrollmentKeyRecord{}, MeshError(mesh.CodeKeyIDInvalid, "need 32 lowercase hex characters")
+		return MeshEnrollmentKeyRecord{}, MeshError(mesh.CodeKeyIDInvalid, hex32Shape)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshEnrollmentKeyRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshEnrollmentKeyRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	record, err := meshEnrollmentKeyTx(tx, keyID)
@@ -629,7 +629,7 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 	switch record.State {
 	case mesh.KeyRevoked:
 		if err = tx.Commit(); err != nil {
-			return MeshEnrollmentKeyRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshEnrollmentKeyRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		return record, nil
 	case mesh.KeyConsumed:
@@ -641,7 +641,7 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 	var issuedAt, expiresAt int64
 	if err = tx.QueryRow(`SELECT secret_hash, issued_at, expires_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
 		Scan(&hash, &issuedAt, &expiresAt); err != nil {
-		return MeshEnrollmentKeyRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshEnrollmentKeyRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	key := mesh.EnrollmentKey{
 		ID:        record.ID,
@@ -655,10 +655,10 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 		return MeshEnrollmentKeyRecord{}, err
 	}
 	if _, err = tx.Exec(`UPDATE mesh_enrollment_keys SET state='revoked' WHERE id=? AND state='issued'`, keyID); err != nil {
-		return MeshEnrollmentKeyRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshEnrollmentKeyRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshEnrollmentKeyRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshEnrollmentKeyRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	record.State = mesh.KeyRevoked
 	return record, nil
@@ -670,12 +670,12 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 // proves the enrollment, or an explicit revoke/expire.
 func (s *Store) ListMeshEnrollmentKeys(deviceID string) ([]MeshEnrollmentKeyRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return nil, MeshError(mesh.CodeKeyDeviceIDInvalid, "need 32 lowercase hex characters")
+		return nil, MeshError(mesh.CodeKeyDeviceIDInvalid, hex32Shape)
 	}
 	rows, err := s.DB.Query(`SELECT id, device_id, state, issued_at, expires_at, consumed_at
  FROM mesh_enrollment_keys WHERE device_id=? ORDER BY issued_at ASC, id ASC`, deviceID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []MeshEnrollmentKeyRecord{}
@@ -685,13 +685,13 @@ func (s *Store) ListMeshEnrollmentKeys(deviceID string) ([]MeshEnrollmentKeyReco
 			state  string
 		)
 		if err := rows.Scan(&record.ID, &record.DeviceID, &state, &record.IssuedAt, &record.ExpiresAt, &record.ConsumedAt); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		record.State = mesh.KeyState(state)
 		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -709,7 +709,7 @@ func meshEnrollmentKeyTx(tx *sql.Tx, keyID string) (MeshEnrollmentKeyRecord, err
 		return MeshEnrollmentKeyRecord{}, MeshError(CodeMeshEnrollmentKeyNotFound, "unknown enrollment key")
 	}
 	if err != nil {
-		return MeshEnrollmentKeyRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshEnrollmentKeyRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	record.State = mesh.KeyState(state)
 	if err := record.State.Validate(); err != nil {
@@ -845,7 +845,7 @@ func meshRouteReadError(err error) error {
 	if errors.Is(err, errMeshRouteCorrupt) {
 		return meshRouteError(CodeMeshRouteCorrupt, "the stored subnet route record is invalid")
 	}
-	return errors.New("DATABASE_UNAVAILABLE")
+	return errors.New(CodeDatabaseUnavailable)
 }
 
 func scanMeshRoute(row rowScanner) (MeshRouteRecord, error) {
@@ -911,7 +911,7 @@ func (s *Store) GetMeshRoute(deviceID, prefix string) (MeshRouteRecord, error) {
 // tombstone and cannot declare anything.
 func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSource, operationID string, now time.Time) (MeshRouteRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	prefix, err := mesh.NormalizeRoutePrefix(rawPrefix)
 	if err != nil {
@@ -922,7 +922,7 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if err = meshRouteDeviceWritableTx(tx, deviceID); err != nil {
@@ -941,7 +941,7 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 			if meshRoutePrefixConflict(err) {
 				return MeshRouteRecord{}, meshRouteError(CodeMeshRouteConflict, "the prefix is already declared by another device")
 			}
-			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		if err = recordMeshRouteEventTx(tx, deviceID, prefix, RouteEventDeclared,
 			"", string(mesh.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
@@ -966,7 +966,7 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 		res, execErr := tx.Exec(`UPDATE mesh_routes SET desired='advertised', operation_id=?, updated_at=?
  WHERE device_id=? AND prefix=? AND desired='revoked'`, operationID, now.Unix(), deviceID, prefix)
 		if execErr != nil {
-			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
 			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
@@ -975,12 +975,12 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 		// advertised or approved: the declaration already stands. The first
 		// declaration owns the provenance, so source is not rewritten.
 		if err = tx.Commit(); err != nil {
-			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		return existing, nil
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return s.GetMeshRoute(deviceID, prefix)
 }
@@ -995,7 +995,7 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 // here and by the database trigger, so no path can change intent unaudited.
 func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.RouteDesired, operationID string, now time.Time) (MeshRouteRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	prefix, err := mesh.NormalizeRoutePrefix(rawPrefix)
 	if err != nil {
@@ -1006,7 +1006,7 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	existing, err := meshRouteTx(tx, deviceID, prefix)
@@ -1019,7 +1019,7 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 	if existing.Desired == desired {
 		// Idempotent repeat: the first transition owns the audit event.
 		if err = tx.Commit(); err != nil {
-			return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+			return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 		}
 		return existing, nil
 	}
@@ -1036,7 +1036,7 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
  WHERE device_id=? AND prefix=? AND desired=?`,
 		string(desired), operationID, now.Unix(), deviceID, prefix, string(existing.Desired))
 	if err != nil {
-		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if affected, _ := res.RowsAffected(); affected != 1 {
 		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
@@ -1053,7 +1053,7 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 		return MeshRouteRecord{}, err
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshRouteRecord{}, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return s.GetMeshRoute(deviceID, prefix)
 }
@@ -1077,7 +1077,7 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 // approved in MeshMux's intent until an operator revokes it.
 func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed mesh.RouteObserved, operationID string, now time.Time) (MeshRouteRecord, bool, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshRouteRecord{}, false, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return MeshRouteRecord{}, false, meshRouteError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	parsed, err := mesh.ParseRoutePrefix(rawPrefix)
 	if err != nil {
@@ -1089,7 +1089,7 @@ func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed 
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if err = meshRouteDeviceExists(tx, deviceID); err != nil {
@@ -1101,7 +1101,7 @@ func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed 
 			return MeshRouteRecord{}, false, err
 		}
 		if err = tx.Commit(); err != nil {
-			return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+			return MeshRouteRecord{}, false, errors.New(CodeDatabaseUnavailable)
 		}
 		return MeshRouteRecord{}, false, nil
 	}
@@ -1112,20 +1112,20 @@ func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed 
 		// Nothing changed: a repeated read appends no event, so the audit trail
 		// stays a record of changes rather than of polls.
 		if err = tx.Commit(); err != nil {
-			return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+			return MeshRouteRecord{}, false, errors.New(CodeDatabaseUnavailable)
 		}
 		return existing, true, nil
 	}
 	if _, err = tx.Exec(`UPDATE mesh_routes SET observed=?, operation_id=?, updated_at=? WHERE device_id=? AND prefix=?`,
 		string(observed), operationID, now.Unix(), deviceID, prefix); err != nil {
-		return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	if err = recordMeshRouteEventTx(tx, deviceID, prefix, routeEventObserved,
 		string(existing.Desired), string(existing.Desired), string(existing.Observed), string(observed), operationID, now); err != nil {
 		return MeshRouteRecord{}, false, err
 	}
 	if err = tx.Commit(); err != nil {
-		return MeshRouteRecord{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return MeshRouteRecord{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	record, err := s.GetMeshRoute(deviceID, prefix)
 	if err != nil {
@@ -1164,7 +1164,7 @@ type MeshRouteReconcileResult struct {
 func (s *Store) ReconcileMeshRoutes(deviceID string, observations []MeshRouteObservation, operationID string, now time.Time) (MeshRouteReconcileResult, error) {
 	var result MeshRouteReconcileResult
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return result, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return result, meshRouteError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	if err := meshRouteDeviceExists(s.DB, deviceID); err != nil {
 		return result, err
@@ -1199,11 +1199,11 @@ func (s *Store) ReconcileMeshRoutes(deviceID string, observations []MeshRouteObs
 // revoked ones included: a withdrawn prefix is history, not a deleted row.
 func (s *Store) ListMeshRoutes(deviceID string) ([]MeshRouteRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return nil, meshRouteError(mesh.CodeDeviceIDInvalid, "need 32 lowercase hex characters")
+		return nil, meshRouteError(mesh.CodeDeviceIDInvalid, hex32Shape)
 	}
 	rows, err := s.DB.Query(meshRouteSelect+` WHERE device_id=? ORDER BY prefix ASC`, deviceID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	return collectMeshRoutes(rows)
@@ -1215,7 +1215,7 @@ func (s *Store) ListMeshRoutes(deviceID string) ([]MeshRouteRecord, error) {
 func (s *Store) ListMeshRoutesPending() ([]MeshRouteRecord, error) {
 	rows, err := s.DB.Query(meshRouteSelect + ` WHERE desired='advertised' ORDER BY device_id ASC, prefix ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	return collectMeshRoutes(rows)
@@ -1231,7 +1231,7 @@ func collectMeshRoutes(rows *sql.Rows) ([]MeshRouteRecord, error) {
 		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -1250,7 +1250,7 @@ func meshRouteDeviceExists(q rowQueryer, deviceID string) error {
 		return meshRouteError(CodeMeshDeviceNotFound, "unknown mesh device")
 	}
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -1268,7 +1268,7 @@ func meshRouteDeviceWritableTx(tx *sql.Tx, deviceID string) error {
 		return meshRouteError(CodeMeshDeviceNotFound, "unknown mesh device")
 	}
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	switch mesh.Status(status) {
 	case mesh.StatusRevoking:
@@ -1292,7 +1292,7 @@ func meshRouteConflictTx(tx *sql.Tx, prefix, deviceID string) error {
 		return meshRouteError(CodeMeshRouteConflict, "the prefix is already declared by another device")
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -1318,7 +1318,7 @@ func recordUntrackedObservationTx(tx *sql.Tx, deviceID, prefix string, observed 
 		return nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return recordMeshRouteEventTx(tx, deviceID, prefix, routeEventUntracked,
 		"", "", "", string(observed), operationID, now)
@@ -1331,7 +1331,7 @@ func recordMeshRouteEventTx(tx *sql.Tx, deviceID, prefix, kind, fromDesired, toD
 	if _, err := tx.Exec(`INSERT INTO mesh_route_events(device_id, prefix, kind, from_desired, to_desired, from_observed, to_observed, operation_id, created_at)
  VALUES(?,?,?,?,?,?,?,?,?)`,
 		deviceID, prefix, kind, fromDesired, toDesired, fromObserved, toObserved, operationID, now.Unix()); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -1348,7 +1348,7 @@ func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Tim
 	rows, err := tx.Query(`SELECT prefix, desired FROM mesh_routes
  WHERE device_id=? AND desired<>'revoked' ORDER BY prefix`, deviceID)
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	type liveRoute struct {
 		prefix  string
@@ -1359,15 +1359,15 @@ func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Tim
 		var route liveRoute
 		if err := rows.Scan(&route.prefix, &route.desired); err != nil {
 			rows.Close()
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 		live = append(live, route)
 	}
 	if err := rows.Close(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if len(live) == 0 {
 		return nil
@@ -1378,7 +1378,7 @@ func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Tim
 		// caller's log line by the handler's own operation id, not this one.
 		minted, err := protocol.NewID()
 		if err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 		operationID = minted
 	}
@@ -1386,7 +1386,7 @@ func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Tim
 		res, err := tx.Exec(`UPDATE mesh_routes SET desired='revoked', operation_id=?, updated_at=?
  WHERE device_id=? AND prefix=? AND desired=?`, operationID, now.Unix(), deviceID, route.prefix, route.desired)
 		if err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
 			return meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")

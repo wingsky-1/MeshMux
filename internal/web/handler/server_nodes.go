@@ -20,10 +20,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
-// agentAPI reports whether the path is an outbound-Agent endpoint. These
-// endpoints use Bearer identity instead of admin session + Origin, because
-// the Agent connects from a remote host over HTTPS without a browser.
-func agentAPI(path string) bool { return strings.HasPrefix(path, "/api/agent/") }
+// agentAPI lives in codes.go next to the shared constants.
 
 func (s *Server) agentFail(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
 	s.agentFailWithReason(w, r, status, code, code, message, next)
@@ -73,7 +70,7 @@ func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess session,
 func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
 	nodes, err := s.store.ListNodesAt(s.now())
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
 		return
 	}
 	if nodes == nil {
@@ -126,8 +123,8 @@ func httpProxyCreateFailure(err error) (status int, code, message, next string) 
 		return 400, "HTTP_PROXY_INVALID", "HTTP 代理 URL 不正确。", "请填写一个 http://主机:端口 的 URL，可带用户名与密码，不要带路径或查询参数。"
 	case strings.HasPrefix(err.Error(), "DISPLAY_NAME_INVALID"):
 		return 400, "DISPLAY_NAME_INVALID", "展示名不正确。", "请使用 1-64 个可打印字符。"
-	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
-		return 503, "DATABASE_UNAVAILABLE", "暂时无法创建节点。", "请检查数据库与服务日志后重试。"
+	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
+		return 503, store.CodeDatabaseUnavailable, "暂时无法创建节点。", "请检查数据库与服务日志后重试。"
 	default:
 		return 500, "NODE_CREATE_FAILED", "无法创建 HTTP 代理节点。", "请凭操作编号检查服务日志后重试。"
 	}
@@ -137,13 +134,13 @@ func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess ses
 	nodeID := nodeIDFromRequest(r)
 	candidate, tasks, err := s.store.ReconcileNode(nodeID, s.now())
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "TASKS_IN_PROGRESS") {
-			s.fail(w, r, 409, "TASKS_IN_PROGRESS", "当前复核任务尚未结束。", "完成或失败后再次提交固定复核。")
+		if strings.HasPrefix(err.Error(), codeTasksInProgress) {
+			s.fail(w, r, 409, codeTasksInProgress, "当前复核任务尚未结束。", "完成或失败后再次提交固定复核。")
 			return
 		}
 		code := "RECONCILE_FAILED"
-		if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
-			code = "NODE_NOT_FOUND"
+		if strings.HasPrefix(err.Error(), codeNodeNotFound) {
+			code = codeNodeNotFound
 		}
 		s.event(r, code)
 		s.fail(w, r, 409, code, "配置复核未发布。", "确认节点仍存在后重试。")
@@ -194,12 +191,12 @@ func lkgRollbackFailure(err error) lkgFailure {
 	}
 	code := "LKG_ROLLBACK_FAILED"
 	switch {
-	case strings.HasPrefix(err.Error(), "TASKS_IN_PROGRESS"):
-		code = "TASKS_IN_PROGRESS"
+	case strings.HasPrefix(err.Error(), codeTasksInProgress):
+		code = codeTasksInProgress
 	case strings.HasPrefix(err.Error(), "LKG_UNAVAILABLE"):
 		code = "LKG_UNAVAILABLE"
-	case strings.HasPrefix(err.Error(), "NODE_NOT_FOUND"):
-		code = "NODE_NOT_FOUND"
+	case strings.HasPrefix(err.Error(), codeNodeNotFound):
+		code = codeNodeNotFound
 	}
 	return lkgFailure{status: 409, code: code, message: "LKG 回退链未发布。",
 		action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
@@ -216,7 +213,7 @@ func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess sessi
 	existing, err := s.store.GetNodeAt(nodeID, s.now())
 	if err != nil {
 		s.event(r, "IDENTITY_REISSUE_READBACK_FAILED")
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "身份已重签，但页面读取失败。", "配对码不会再次显示；如未保存请重新签发。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "身份已重签，但页面读取失败。", "配对码不会再次显示；如未保存请重新签发。")
 		return
 	}
 	s.event(r, "IDENTITY_REISSUED")
@@ -227,8 +224,8 @@ func (s *Server) nodesRevoke(w http.ResponseWriter, r *http.Request, sess sessio
 	nodeID := nodeIDFromRequest(r)
 	if err := s.store.RevokeIdentity(nodeID, s.now()); err != nil {
 		code := "IDENTITY_REVOKE_FAILED"
-		if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
-			code = "NODE_NOT_FOUND"
+		if strings.HasPrefix(err.Error(), codeNodeNotFound) {
+			code = codeNodeNotFound
 		}
 		s.event(r, code)
 		s.fail(w, r, 409, code, "身份未吊销。", "确认节点存在后重试。")
@@ -255,12 +252,12 @@ func (s *Server) nodesPageWithCode(w http.ResponseWriter, r *http.Request, sess 
 func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, action, code string, data view.NodesData) {
 	nodes, err := s.store.ListNodesAt(s.now())
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取节点列表。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
 		return
 	}
 	pool, err := s.store.OutPool(s.now())
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取 Out 池。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Out 池。", "请检查数据库。")
 		return
 	}
 	data.Pool = pool
@@ -352,7 +349,7 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 //     because it is a fact about the caller's own configuration, not about a
 //     secret, and an operator needs it to fix a wrong-role install.
 func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, mutationFormMaxBytes)
 	var req protocol.PairingRequest
 	if err := decodeAgentJSON(r, &req); err != nil {
 		s.agentFail(w, r, 400, "PAIRING_INVALID", "配对请求不正确。", "请使用 Web 显示的一次性配对指令重试。")
@@ -376,21 +373,21 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 		code, status, reason := "PAIRING_INVALID", 401, "PAIRING_INVALID"
 		message, next := "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。"
 		switch {
-		case strings.HasPrefix(msg, "ROLE_MISMATCH"):
-			code, status, reason = "ROLE_MISMATCH", 403, "ROLE_MISMATCH"
-		case strings.HasPrefix(msg, "PAIRING_EXPIRED"):
-			reason = "PAIRING_EXPIRED"
-		case strings.HasPrefix(msg, "PAIRING_CONSUMED"):
-			reason = "PAIRING_CONSUMED"
-		case strings.HasPrefix(msg, "VERSION_INVALID"):
-			code, status, reason = "VERSION_INVALID", 400, "VERSION_INVALID"
-		case strings.HasPrefix(msg, "DATABASE_UNAVAILABLE"):
+		case strings.HasPrefix(msg, codeRoleMismatch):
+			code, status, reason = codeRoleMismatch, 403, codeRoleMismatch
+		case strings.HasPrefix(msg, codePairingExpired):
+			reason = codePairingExpired
+		case strings.HasPrefix(msg, codePairingConsumed):
+			reason = codePairingConsumed
+		case strings.HasPrefix(msg, codeVersionInvalid):
+			code, status, reason = codeVersionInvalid, 400, codeVersionInvalid
+		case strings.HasPrefix(msg, store.CodeDatabaseUnavailable):
 			// A database outage is not a rejected credential. Reporting it as one
 			// would send an operator to reissue a code that was never the problem.
-			code, status, reason = "DATABASE_UNAVAILABLE", 503, "DATABASE_UNAVAILABLE"
+			code, status, reason = store.CodeDatabaseUnavailable, 503, store.CodeDatabaseUnavailable
 			message, next = "暂时无法验证配对。", "请检查数据库与服务日志，稍后重试。"
-		case strings.HasPrefix(msg, "IDENTITY_ISSUE_FAILED"):
-			code, status, reason = "IDENTITY_ISSUE_FAILED", 500, "IDENTITY_ISSUE_FAILED"
+		case strings.HasPrefix(msg, codeIdentityIssueFailed):
+			code, status, reason = codeIdentityIssueFailed, 500, codeIdentityIssueFailed
 			message, next = "无法签发节点身份。", "请凭操作编号检查服务日志后重试；配对码未被消费。"
 		}
 		// Never echo node IDs, roles or secrets in the error body beyond the code.
@@ -417,7 +414,7 @@ func (s *Server) agentTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	tasks, err := s.store.PendingTasksAt(node.ID, 8, s.now())
 	if err != nil {
-		s.agentFail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取任务。", "请稍后重试。")
+		s.agentFail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取任务。", "请稍后重试。")
 		return
 	}
 	if tasks == nil {
@@ -432,7 +429,7 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2048)
+	r.Body = http.MaxBytesReader(w, r.Body, heartbeatBodyMaxBytes)
 	var body protocol.HeartbeatRequest
 	if err := decodeAgentJSON(r, &body); err != nil {
 		s.agentFail(w, r, 400, "HEARTBEAT_INVALID", "心跳格式不正确。", "请上报 agent 与内核版本。")
@@ -443,7 +440,7 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.Heartbeat(node.ID, body.AgentVersion, body.KernelVersion, s.now()); err != nil {
-		s.agentFail(w, r, 503, "DATABASE_UNAVAILABLE", "无法记录心跳。", "请稍后重试。")
+		s.agentFail(w, r, 503, store.CodeDatabaseUnavailable, "无法记录心跳。", "请稍后重试。")
 		return
 	}
 	// A heartbeat is also a readback event: the node is reachable, so the Hub
@@ -562,7 +559,7 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, mutationFormMaxBytes)
 	var res protocol.TaskResult
 	if err := decodeAgentJSON(r, &res); err != nil {
 		s.agentFail(w, r, 400, "RESULT_INVALID", "任务结果格式不正确。", "请按固定 task schema 上报。")
@@ -573,23 +570,23 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 		msg := err.Error()
 		code := "RESULT_REJECTED"
 		status := 400
-		if strings.HasPrefix(msg, "TASK_NOT_FOUND") {
-			code = "TASK_NOT_FOUND"
+		if strings.HasPrefix(msg, codeTaskNotFound) {
+			code = codeTaskNotFound
 			status = 404
-		} else if strings.HasPrefix(msg, "TASK_ALREADY_FINAL") {
-			code = "TASK_ALREADY_FINAL"
+		} else if strings.HasPrefix(msg, codeTaskAlreadyFinal) {
+			code = codeTaskAlreadyFinal
 			status = 409
-		} else if strings.HasPrefix(msg, "TASK_STATE_INVALID") {
-			code = "TASK_STATE_INVALID"
+		} else if strings.HasPrefix(msg, codeTaskStateInvalid) {
+			code = codeTaskStateInvalid
 			status = 409
 		} else if strings.HasPrefix(msg, "READBACK_") {
 			code = strings.SplitN(msg, ":", 2)[0]
 			status = 400
-		} else if strings.HasPrefix(msg, "TASK_PARAMS_INVALID") {
-			code = "TASK_PARAMS_INVALID"
+		} else if strings.HasPrefix(msg, codeTaskParamsInvalid) {
+			code = codeTaskParamsInvalid
 			status = 400
-		} else if strings.HasPrefix(msg, "DATABASE_UNAVAILABLE") {
-			code = "DATABASE_UNAVAILABLE"
+		} else if strings.HasPrefix(msg, store.CodeDatabaseUnavailable) {
+			code = store.CodeDatabaseUnavailable
 			status = 503
 		}
 		s.agentFail(w, r, status, code, "任务结果被拒绝。", "请确认 operation_id 与固定状态机。")
@@ -628,7 +625,7 @@ func (s *Server) logCoordinationReadback(r *http.Request, nodeID string) {
 	readback, err := s.store.NodeCoordinationReadback(nodeID, s.now())
 	if err != nil {
 		s.log.Warn("out_readback_unavailable", "request_operation_id", operation(r),
-			"stage", "web", "error_code", "DATABASE_UNAVAILABLE")
+			"stage", "web", "error_code", store.CodeDatabaseUnavailable)
 		return
 	}
 	s.log.Info("out_readback", "request_operation_id", operation(r), "stage", "web",

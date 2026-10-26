@@ -29,6 +29,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/update"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const manifestMaxBytes = 1 << 20
@@ -69,40 +70,40 @@ func ReadRootManifestFor(manifestDir, target string, expectedOwner int) (TargetM
 // B-level fixture can prove the owner rule without chowning to root.
 func readRootManifest(manifestDir, target string, expectedOwner int) (TargetManifest, error) {
 	if !targetRE.MatchString(target) {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the requested target is not a SemVer release")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the requested target is not a SemVer release")
 	}
 	if manifestDir == "" || !filepath.IsAbs(manifestDir) {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest directory is not absolute")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest directory is not absolute")
 	}
 	dirInfo, err := os.Lstat(manifestDir)
 	if err != nil {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest directory is unavailable")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest directory is unavailable")
 	}
 	if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() ||
 		dirInfo.Mode().Perm()&0022 != 0 || !ownedBy(expectedOwner, dirInfo) {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest directory is not a root-owned private-enough directory")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest directory is not a root-owned private-enough directory")
 	}
 	path := filepath.Join(manifestDir, "manifest-"+target+".json")
 	info, err := os.Lstat(path)
 	if err != nil {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "no root manifest exists for the requested target")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "no root manifest exists for the requested target")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
 		info.Mode().Perm() != 0644 || !ownedBy(expectedOwner, info) || info.Size() > manifestMaxBytes {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest is not a 0644 file owned by root")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest is not a 0644 file owned by root")
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest could not be read")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest could not be read")
 	}
 	var manifest upgrade.Manifest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&manifest); err != nil {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest is not a strict manifest document")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest is not a strict manifest document")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return TargetManifest{}, fail("MANIFEST_UNAVAILABLE", "the root manifest carries trailing data")
+		return TargetManifest{}, fail(versions.CodeManifestUnavailable, "the root manifest carries trailing data")
 	}
 	component, migration, err := validateHubTarget(manifest, target)
 	if err != nil {
@@ -123,18 +124,18 @@ func readRootManifest(manifestDir, target string, expectedOwner int) (TargetMani
 // normalized so a caller never treats an empty field as unknown.
 func validateHubTarget(manifest upgrade.Manifest, target string) (upgrade.Component, string, error) {
 	if manifest.Schema != upgrade.Schema {
-		return upgrade.Component{}, "", fail("MANIFEST_UNAVAILABLE", "the root manifest names another manifest schema")
+		return upgrade.Component{}, "", fail(versions.CodeManifestUnavailable, "the root manifest names another manifest schema")
 	}
 	component, err := update.ValidateTarget(manifest, target)
 	if err != nil {
-		return upgrade.Component{}, "", fail("MANIFEST_UNAVAILABLE", "the root manifest failed the target gate")
+		return upgrade.Component{}, "", fail(versions.CodeManifestUnavailable, "the root manifest failed the target gate")
 	}
 	if manifest.PolicySchema != upgrade.PolicySchema {
-		return upgrade.Component{}, "", fail("MANIFEST_UNAVAILABLE", "the root manifest names another route policy schema")
+		return upgrade.Component{}, "", fail(versions.CodeManifestUnavailable, "the root manifest names another route policy schema")
 	}
 	cmp, err := compareRelease(manifest.Version, buildinfo.Version)
 	if err != nil || cmp <= 0 {
-		return upgrade.Component{}, "", fail("MANIFEST_UNAVAILABLE", "the target is not newer than the running release")
+		return upgrade.Component{}, "", fail(versions.CodeManifestUnavailable, "the target is not newer than the running release")
 	}
 	switch manifest.DatabaseMigration {
 	case "", MigrationAdditive:
@@ -142,6 +143,6 @@ func validateHubTarget(manifest upgrade.Manifest, target string) (upgrade.Compon
 	case MigrationIrreversible:
 		return component, MigrationIrreversible, nil
 	default:
-		return upgrade.Component{}, "", fail("MANIFEST_UNAVAILABLE", "the root manifest names an unknown database_migration")
+		return upgrade.Component{}, "", fail(versions.CodeManifestUnavailable, "the root manifest names an unknown database_migration")
 	}
 }

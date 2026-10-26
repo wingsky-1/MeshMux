@@ -28,6 +28,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // Pins is the hubupgrade pin-set document this executor reads and writes.
@@ -36,7 +37,7 @@ type Pins = hubupgrade.Pins
 // lineLedgerFilePath mirrors internal/install's unexported constant; the Hub
 // ledger path is shared with ledger.go. The privileged executor may not import
 // a caller-selected path here.
-const lineLedgerFilePath = "/var/lib/meshmux-installer/local-line/state.json"
+const lineLedgerFilePath = versions.LocalLineStatePath
 
 // renamePinFile is the one rename point of the pin publisher. It exists as a
 // variable so a B-level test can inject a rename-time failure without relying

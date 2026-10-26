@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/web/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
@@ -72,7 +73,7 @@ func (app *Server) renderRulesLibrary(w http.ResponseWriter, r *http.Request, se
 func (app *Server) rulesLibraryPage(w http.ResponseWriter, r *http.Request, sess session) {
 	model, err := app.rulesLibraryModel("", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "规则库读取失败。", "请检查数据库与服务日志后重试。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库与服务日志后重试。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -106,7 +107,7 @@ func (app *Server) rulesLibraryCreate(w http.ResponseWriter, r *http.Request, se
 	app.event(r, "RULE_CREATED")
 	model, err := app.rulesLibraryModel("自定义规则已创建："+created.StableKey+" v1。预置规则不受影响。", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "规则已写入但列表读取失败。", "请刷新页面后确认。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已写入但列表读取失败。", "请刷新页面后确认。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -125,7 +126,7 @@ func (app *Server) rulesLibraryRevise(w http.ResponseWriter, r *http.Request, se
 	app.event(r, "RULE_REVISED")
 	model, err := app.rulesLibraryModel("已生成新版本 v"+strconv.Itoa(revised.Version)+"（"+revised.StableKey+"），旧版本订阅不受影响。", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "规则已写入但列表读取失败。", "请刷新页面后确认。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已写入但列表读取失败。", "请刷新页面后确认。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -157,7 +158,7 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 		}
 		used, err := app.rulesLib().RuleUsedBy(key, version)
 		if err != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "引用关系读取失败。", "请检查数据库后重试；未删除任何规则。")
+			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "引用关系读取失败。", "请检查数据库后重试；未删除任何规则。")
 			return
 		}
 		names := make([]string, 0, len(used))
@@ -167,7 +168,7 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 		app.event(r, "RULE_DELETE_PENDING")
 		model, err := app.rulesLibraryModel("", view.PendingRuleDelete{StableKey: rule.StableKey, Version: rule.Version, Name: rule.Name, UsedBy: names}, true)
 		if err != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "规则库读取失败。", "请检查数据库后重试；未删除任何规则。")
+			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库后重试；未删除任何规则。")
 			return
 		}
 		app.renderRulesLibrary(w, r, sess, model)
@@ -180,7 +181,7 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 	app.event(r, "RULE_DELETED")
 	model, err := app.rulesLibraryModel("规则已删除："+key+" v"+strconv.Itoa(version)+"。", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "规则已删除但列表读取失败。", "请刷新页面后确认。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已删除但列表读取失败。", "请刷新页面后确认。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -205,7 +206,7 @@ func rulesLibraryFailure(err error) (status int, code string) {
 		return http.StatusBadRequest, code
 	case policy.CodeConflict:
 		return http.StatusConflict, code
-	case "DATABASE_UNAVAILABLE", "RULE_CORRUPT", "RULE_SEED_FAILED":
+	case store.CodeDatabaseUnavailable, "RULE_CORRUPT", "RULE_SEED_FAILED":
 		return http.StatusServiceUnavailable, code
 	default:
 		return http.StatusInternalServerError, code

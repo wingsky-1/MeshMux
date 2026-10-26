@@ -1,0 +1,105 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "local"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 1080
+    }
+  ],
+  "endpoints": [
+    {
+      "type": "tailscale",
+      "tag": "meshmux-ts",
+      "auth_key": "tskey-auth-example",
+      "control_url": "https://headscale.example.invalid",
+      "hostname": "ipad-mesh",
+      "accept_routes": false,
+      "ephemeral": false
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "香港 01 [11111111111111111111111111111111]",
+      "server": "line.example.invalid",
+      "server_port": 8443,
+      "uuid": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "flow": "xtls-rprx-vision",
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.invalid",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "6lxPE-fyg1NgBSYXHy5NVJASmJ3E5OPwfEX2NNaUMXo",
+          "short_id": "0123456789abcdef"
+        }
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "东京 02 [44444444444444444444444444444444]",
+      "server": "line.example.invalid",
+      "server_port": 8443,
+      "uuid": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "flow": "xtls-rprx-vision",
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.invalid",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "6lxPE-fyg1NgBSYXHy5NVJASmJ3E5OPwfEX2NNaUMXo",
+          "short_id": "0123456789abcdef"
+        }
+      }
+    },
+    {
+      "type": "selector",
+      "tag": "meshmux-selector",
+      "outbounds": [
+        "香港 01 [11111111111111111111111111111111]",
+        "东京 02 [44444444444444444444444444444444]"
+      ],
+      "default": "香港 01 [11111111111111111111111111111111]"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "default_domain_resolver": "local",
+    "rules": [
+      {
+        "ip_cidr": [
+          "100.64.0.0/10",
+          "fd7a:115c:a1e0::/48"
+        ],
+        "outbound": "meshmux-ts"
+      }
+    ],
+    "final": "meshmux-selector"
+  }
+}

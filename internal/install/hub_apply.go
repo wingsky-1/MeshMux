@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // hubApplyErrors carries the exact Hub apply/verify failure templates. The Hub
@@ -143,9 +145,9 @@ func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *Instal
 		return failErr(true, snapshots, "apply", failures.journalFilesWrite)
 	}
 	units := []string{
-		rooted(opts.Root, "/etc/systemd/system/meshmux-web.service"),
-		rooted(opts.Root, "/etc/systemd/system/meshmux-headscale.service"),
-		rooted(opts.Root, "/etc/systemd/system/meshmux-caddy.service"),
+		rooted(opts.Root, versions.WebUnitPath),
+		rooted(opts.Root, headscaleUnitPath),
+		rooted(opts.Root, caddyUnitPath),
 	}
 	for _, path := range hubDispatchManagedTargets() {
 		units = append(units, rooted(opts.Root, path))
@@ -169,7 +171,7 @@ func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *Instal
 	if _, err := opts.Runner.Run(ctx, "systemctl", "enable", "--now", hubDispatchPathUnit); err != nil {
 		return fail(true, snapshots, "apply", "HUB_DISPATCH_ENABLE_FAILED", "Inspect meshmux-hub-dispatch.path and systemd state.")
 	}
-	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service"} {
+	for _, unit := range []string{headscaleUnitName, versions.WebUnitName} {
 		if err := activateUnit(ctx, opts.Runner, unit, repair); err != nil {
 			code := "WEB_START_FAILED"
 			if strings.Contains(unit, "headscale") {

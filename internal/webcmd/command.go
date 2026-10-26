@@ -1,6 +1,11 @@
 // Package webcmd hosts the internal Web entrypoint used by both the development
 // binary and the installed MeshMux runtime. The installer copies the already
 // running CLI binary and starts its private __internal-web subcommand.
+//
+// Layer: cli launcher. Run is the only exported entry: parse the fixed argv ->
+// validate the launcher's own shape -> hand a typed web.Config to the web layer
+// -> serve until shutdown. It performs no install/upgrade mutation, reads no
+// business table and owns no route, authorization or persistence rule.
 package webcmd
 
 import (
@@ -16,7 +21,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -26,40 +30,42 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 	"github.com/wingsky-1/MeshMux/internal/web"
 )
 
-// Run starts the unprivileged loopback Web service.
+// Run is the launcher's only entry point: it parses the fixed internal argv,
+// builds the logger and hands the typed configuration to launch. Every flag,
+// validation rule and exit code lives below this line; the function itself has
+// no business rule and touches no database.
 func Run(args []string) int {
 	c, err := parseConfig(args, os.Stderr)
 	if err != nil {
 		return 2
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+	return launch(c, newLogger())
+}
+
+// newLogger is the one log sink of the launcher: JSON on stdout with UTC
+// timestamps, so journald and the boot guard read the same fields.
+func newLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 		if a.Key == slog.TimeKey && len(groups) == 0 {
 			return slog.Time(slog.TimeKey, a.Value.Time().UTC())
 		}
 		return a
 	}}))
-	// The boot guard is the first persistent statement of a start: it records
-	// an attempt until this process proves it is healthy. A missing runtime
-	// directory (a development run outside systemd) disables only the guard,
-	// never the service.
-	if refuse, err := BootGuard(BootDir, time.Now(), buildinfo.Version); err != nil {
-		logger.Warn("boot_guard_unavailable", "stage", "startup", "error_code", "BOOT_GUARD_UNAVAILABLE")
-	} else if refuse {
-		logger.Error("startup_failed", "stage", "startup", "error_code", CodeBootCrashLoop)
-		return 1
+}
+
+// launch is the one-shot "start" flow: prepare -> assemble -> listen -> serve.
+// It returns only after the listener is closed; the process never installs,
+// upgrades or mutates a business table here.
+func launch(c web.Config, logger *slog.Logger) int {
+	if code := prepare(&c, logger); code != 0 {
+		return code
 	}
-	if err := subscriptionOrigin(c); err != nil {
-		logger.Error("startup_failed", "error_code", "SUBSCRIPTION_ORIGIN_INVALID")
-		return 1
-	}
-	if !c.DevHTTP {
-		if origin, err := url.Parse(c.Origin); err == nil && origin.Scheme == "https" {
-			c.InstallArtifact = discoverInstallArtifact()
-		}
-	}
+	// web.New is the boundary into the web layer: the launcher passes a fully
+	// validated configuration and receives an opaque application handle.
 	app, err := web.New(c, logger)
 	if err != nil {
 		// Keep the stable code instead of collapsing every refusal into
@@ -81,12 +87,49 @@ func Run(args []string) int {
 		logger.Error("listen_failed", "error_code", "LISTEN_FAILED")
 		return 1
 	}
-	server := &http.Server{
+	return serve(app, newHTTPServer(app, logger), listener, c.DevHTTP, logger)
+}
+
+// prepare runs every pre-listen refusal in a fixed order. A missing runtime
+// directory (a development run outside systemd) disables only the boot guard,
+// never the service.
+func prepare(c *web.Config, logger *slog.Logger) int {
+	// The boot guard is the first persistent statement of a start: it records
+	// an attempt until this process proves it is healthy.
+	if refuse, err := BootGuard(BootDir, time.Now(), buildinfo.Version); err != nil {
+		logger.Warn("boot_guard_unavailable", "stage", "startup", "error_code", "BOOT_GUARD_UNAVAILABLE")
+	} else if refuse {
+		logger.Error("startup_failed", "stage", "startup", "error_code", CodeBootCrashLoop)
+		return 1
+	}
+	if err := subscriptionOrigin(*c); err != nil {
+		logger.Error("startup_failed", "error_code", "SUBSCRIPTION_ORIGIN_INVALID")
+		return 1
+	}
+	if !c.DevHTTP {
+		if origin, err := url.Parse(c.Origin); err == nil && origin.Scheme == "https" {
+			c.InstallArtifact = discoverInstallArtifact()
+		}
+	}
+	return 0
+}
+
+// newHTTPServer fixes the one HTTP shape of the loopback service. The timeouts
+// and header bound are protocol hardening, not policy: the web layer owns every
+// route and authorization decision.
+func newHTTPServer(app *web.Server, logger *slog.Logger) *http.Server {
+	return &http.Server{
 		Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024,
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
+}
+
+// serve owns the process lifecycle after the listener exists: boot evidence,
+// signals, the watchdog and the graceful shutdown. It never logs a request or a
+// secret.
+func serve(app *web.Server, server *http.Server, listener net.Listener, devHTTP bool, logger *slog.Logger) int {
 	// Reaching a bound listener is this process's "healthy enough to serve"
 	// signal: a start that dies before it leaves its boot attempt behind.
 	if err := ClearBootAttempts(BootDir); err != nil {
@@ -113,8 +156,8 @@ func Run(args []string) int {
 		}
 		close(stopped)
 	}()
-	logger.Info("web_started", "stage", "startup", "error_code", "WEB_STARTED", "development_http", c.DevHTTP)
-	err = server.Serve(listener)
+	logger.Info("web_started", "stage", "startup", "error_code", "WEB_STARTED", "development_http", devHTTP)
+	err := server.Serve(listener)
 	stop()
 	<-stopped
 	if !errors.Is(err, http.ErrServerClosed) {
@@ -128,7 +171,7 @@ func Run(args []string) int {
 // startupCodePattern is the stable error-code shape returned by the layers below
 // webcmd: an uppercase code such as SCHEMA_TOO_NEW or DATA_DIR_REQUIRED,
 // optionally followed by ": detail".
-var startupCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+var startupCodePattern = versions.StableCodePattern
 
 // startupErrorCode keeps the stable code of one startup refusal. A message
 // without that shape is still STARTUP_FAILED, so the log never echoes arbitrary
@@ -163,7 +206,7 @@ func parseConfig(args []string, output io.Writer) (web.Config, error) {
 	var c web.Config
 	flags := flag.NewFlagSet("meshmux-web", flag.ContinueOnError)
 	flags.SetOutput(output)
-	flags.StringVar(&c.Listen, "listen", "127.0.0.1:9080", "literal loopback address")
+	flags.StringVar(&c.Listen, "listen", versions.WebListenAddress(), "literal loopback address")
 	flags.StringVar(&c.Origin, "origin", "", "exact public HTTPS origin")
 	flags.StringVar(&c.SubscriptionOrigin, "subscription-origin", "", "exact public HTTPS origin serving only the two fixed subscription download routes; empty keeps the management origin")
 	flags.StringVar(&c.HeadscaleOrigin, "headscale-origin", "", "exact HTTPS origin of the local Headscale control plane used by device Mesh configs; empty refuses Mesh config generation")
@@ -217,8 +260,8 @@ func discoverInstallArtifact() *web.InstallArtifact {
 	}
 	defer f.Close()
 	sum := sha256.New()
-	n, err := io.Copy(sum, io.LimitReader(f, 128<<20+1))
-	if err != nil || n > 128<<20 || n < 1 {
+	n, err := io.Copy(sum, io.LimitReader(f, buildinfo.MaxExecutableBytes+1))
+	if err != nil || n > buildinfo.MaxExecutableBytes || n < 1 {
 		return nil
 	}
 	if _, ok := node.KernelReleaseFor(runtime.GOARCH); !ok {

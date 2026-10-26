@@ -381,8 +381,8 @@ func TestHandoffPreconditions(t *testing.T) {
 		fx := newHandoffFixture(t, nil)
 		cfg := fx.config(fetch)
 		cfg.OperationID = strings.Repeat("b", 32)
-		if _, err := Handoff(context.Background(), cfg); codeOf(err) != codeHandoffInvalidState {
-			t.Fatalf("error = %v, want %s", err, codeHandoffInvalidState)
+		if _, err := Handoff(context.Background(), cfg); codeOf(err) != CodeHandoffInvalidState {
+			t.Fatalf("error = %v, want %s", err, CodeHandoffInvalidState)
 		}
 		fx.requireNoRequest(t)
 	})
@@ -395,8 +395,8 @@ func TestHandoffPreconditions(t *testing.T) {
 			ManifestSHA256: fx.manifest.SHA256, PackageSHA256: fx.manifest.Package.SHA256,
 			DBSchema: 10, BackupGeneration: 1, UpdatedAt: fx.now,
 		})
-		if _, err := Handoff(context.Background(), fx.config(fetch)); codeOf(err) != codeHandoffInvalidState {
-			t.Fatalf("error = %v, want %s", err, codeHandoffInvalidState)
+		if _, err := Handoff(context.Background(), fx.config(fetch)); codeOf(err) != CodeHandoffInvalidState {
+			t.Fatalf("error = %v, want %s", err, CodeHandoffInvalidState)
 		}
 		fx.requireNoRequest(t)
 	})
@@ -489,8 +489,8 @@ func TestHandoffDoesNotClobberAConcurrentFailure(t *testing.T) {
 		return filepath.Join(t.TempDir(), "staged"), nil
 	}
 	_, err := Handoff(context.Background(), fx.config(fetch))
-	if codeOf(err) != codeHandoffInvalidState {
-		t.Fatalf("error = %v, want %s", err, codeHandoffInvalidState)
+	if codeOf(err) != CodeHandoffInvalidState {
+		t.Fatalf("error = %v, want %s", err, CodeHandoffInvalidState)
 	}
 	fx.requireJournal(t, StateFailed, codeBackupOrphaned)
 	fx.requireNoRequest(t)

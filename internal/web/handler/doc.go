@@ -23,4 +23,11 @@
 // store). Rendering goes through view components and view page-models built
 // from store records. handler never imports web; nothing below handler
 // imports handler.
+//
+// codes.go is the single source of the error-code literals this package spells
+// in more than one file and of the grammar predicates (operation id, digest,
+// release version) aliased from internal/backup. A literal a second handler
+// needs belongs there, never in a per-file copy. Display wording (page rows,
+// labels, hit chains, verdicts) lives in the view package: the handler states
+// facts and codes, the view states the words.
 package handler

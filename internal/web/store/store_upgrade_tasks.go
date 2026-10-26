@@ -65,11 +65,11 @@ func StampUpgradeTargetTx(tx *sql.Tx, operationID string, target upgrade.Target,
  WHERE operation_id=? AND kind=? AND status='pending'`,
 		target.Version, target.ManifestSHA256, target.PolicySchema, target.CandidateRevision, now.Unix(), operationID, protocol.KindConfigStage)
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	changed, err := res.RowsAffected()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if changed != 1 {
 		return errors.New("STAGE_TASK_NOT_PENDING: only a pending config.stage task can take an upgrade target")
@@ -97,7 +97,7 @@ func (s *Store) ApprovedTargets() (map[string]ApprovedTarget, error) {
  policy_schema, target_revision, operation_id, status FROM agent_tasks
  WHERE target_version<>'' ORDER BY node_id ASC, revision DESC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := make(map[string]ApprovedTarget)
@@ -106,14 +106,14 @@ func (s *Store) ApprovedTargets() (map[string]ApprovedTarget, error) {
 		var target ApprovedTarget
 		if err := rows.Scan(&nodeID, &target.Version, &target.ManifestSHA256,
 			&target.PolicySchema, &target.Revision, &target.OperationID, &target.Status); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		if _, seen := out[nodeID]; !seen {
 			out[nodeID] = target
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -133,14 +133,14 @@ func (s *Store) StampedStageTarget(nodeID, operationID string) (upgrade.Target, 
 		return upgrade.Target{}, false, nil
 	}
 	if err != nil {
-		return upgrade.Target{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return upgrade.Target{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	if version == "" {
 		return upgrade.Target{}, false, nil
 	}
 	target.Version, target.ManifestSHA256, target.PolicySchema = version, manifest, int(policySchema)
 	if err := target.Validate(); err != nil {
-		return upgrade.Target{}, false, errors.New("UPGRADE_RECORD_CORRUPT: the persisted upgrade target is not actionable")
+		return upgrade.Target{}, false, errUpgradeRecordCorrupt
 	}
 	return target, true, nil
 }
@@ -157,14 +157,14 @@ type ApprovedUpgrade struct {
 func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifestSHA string, now time.Time) (ApprovedUpgrade, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return ApprovedUpgrade{}, errors.New("DATABASE_UNAVAILABLE")
+		return ApprovedUpgrade{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var observed string
 	if err = tx.QueryRow(`SELECT observed_agent_version FROM nodes WHERE id=?`, nodeID).Scan(&observed); errors.Is(err, sql.ErrNoRows) {
-		return ApprovedUpgrade{}, errors.New("NODE_NOT_FOUND")
+		return ApprovedUpgrade{}, errNodeNotFound
 	} else if err != nil {
-		return ApprovedUpgrade{}, errors.New("DATABASE_UNAVAILABLE")
+		return ApprovedUpgrade{}, errors.New(CodeDatabaseUnavailable)
 	}
 	// Without a read-back version the Hub cannot prove which candidate schema
 	// this node consumes, so it refuses instead of guessing. This is the same
@@ -177,7 +177,7 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 	var unfinished int
 	if err = tx.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status IN ('pending','applying','verifying')`,
 		nodeID).Scan(&unfinished); err != nil {
-		return ApprovedUpgrade{}, errors.New("DATABASE_UNAVAILABLE")
+		return ApprovedUpgrade{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if unfinished != 0 {
 		return ApprovedUpgrade{}, errors.New("TASKS_IN_PROGRESS: the node has an unfinished task chain")
@@ -260,7 +260,7 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 		return ApprovedUpgrade{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return ApprovedUpgrade{}, errors.New("DATABASE_UNAVAILABLE")
+		return ApprovedUpgrade{}, errors.New(CodeDatabaseUnavailable)
 	}
 	out := ApprovedUpgrade{Target: target, StageOperationID: stageOperation}
 	for _, task := range tasks {
@@ -290,21 +290,21 @@ func ApprovedReleaseChainTx(tx *sql.Tx, nodeID string) ([]string, error) {
 	rows, err := tx.Query(`SELECT target_version FROM agent_tasks
  WHERE node_id=? AND target_version<>'' ORDER BY revision ASC, updated_at ASC`, nodeID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	var history []string
 	for rows.Next() {
 		var version string
 		if err := rows.Scan(&version); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		if len(history) == 0 || history[len(history)-1] != version {
 			history = append(history, version)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return history, nil
 }

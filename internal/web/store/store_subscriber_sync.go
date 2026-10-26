@@ -19,13 +19,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // The subscriber-level synchronization summary.
@@ -37,7 +37,12 @@ const (
 
 // SyncErrorCodePattern bounds a sanitized status code. Anything else is
 // replaced by a generic code, so an internal message can never reach the UI.
-var SyncErrorCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+//
+// The expression is the cross-layer stable-code grammar of internal/versions
+// (the Web launcher, the root restore parser and the Node handoff read the same
+// one); exposing it under this name keeps the sync projection's contract
+// explicit without compiling a second copy.
+var SyncErrorCodePattern = versions.StableCodePattern
 
 // sanitizeSubscriberSyncCode keeps only the stable code part of an error.
 func SanitizeSubscriberSyncCode(raw string) string {
@@ -66,19 +71,19 @@ func subscriberHistoricalLineIDsTx(tx *sql.Tx, subscriberID string) ([]string, e
 	  SELECT node_id FROM proxy_credentials WHERE subscriber_id=?
 	) ORDER BY node_id`, subscriberID, subscriberID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return ids, nil
 }
@@ -90,12 +95,12 @@ func SubscriberLineNodeOfflineTx(tx *sql.Tx, nodeID string, now time.Time) (bool
 	var lastHeartbeat int64
 	err := tx.QueryRow(`SELECT status, last_heartbeat FROM nodes WHERE id=?`, nodeID).Scan(&status, &lastHeartbeat)
 	if errors.Is(err, sql.ErrNoRows) {
-		return true, errors.New("NODE_NOT_FOUND")
+		return true, errNodeNotFound
 	}
 	if err != nil {
-		return true, errors.New("DATABASE_UNAVAILABLE")
+		return true, errors.New(CodeDatabaseUnavailable)
 	}
-	if status == "pending" || lastHeartbeat == 0 {
+	if status == nodeStatusPending || lastHeartbeat == 0 {
 		return true, nil
 	}
 	return now.Sub(time.Unix(lastHeartbeat, 0)) > OfflineAfter, nil
@@ -135,7 +140,7 @@ func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64, now time.Tim
 func compiledCandidateHash(candidate node.Candidate) (string, error) {
 	compiled, err := node.CompileCandidate(candidate)
 	if err != nil {
-		return "", errors.New("CANDIDATE_RENDER_FAILED")
+		return "", errCandidateRenderFailed
 	}
 	sum := sha256.Sum256(compiled)
 	return hex.EncodeToString(sum[:]), nil
@@ -153,18 +158,18 @@ func LatestPublishedCandidateTx(tx *sql.Tx, nodeID string) (revision int64, dige
 		return 0, "", nil, false, nil
 	}
 	if scanErr != nil {
-		return 0, "", nil, false, errors.New("DATABASE_UNAVAILABLE")
+		return 0, "", nil, false, errors.New(CodeDatabaseUnavailable)
 	}
 	digest, err = CandidateSHA256(document)
 	if err != nil {
-		return 0, "", nil, false, errors.New("CANDIDATE_CORRUPT")
+		return 0, "", nil, false, errCandidateCorrupt
 	}
 	if digest != storedDigest {
-		return 0, "", nil, false, errors.New("CANDIDATE_CORRUPT")
+		return 0, "", nil, false, errCandidateCorrupt
 	}
 	var parsed node.CandidateDocument
 	if err := json.Unmarshal(document, &parsed); err != nil || parsed.Revision != revision {
-		return 0, "", nil, false, errors.New("CANDIDATE_CORRUPT")
+		return 0, "", nil, false, errCandidateCorrupt
 	}
 	return revision, digest, parsed.Users, true, nil
 }
@@ -195,7 +200,7 @@ func subscriberChainTasksTx(tx *sql.Tx, nodeID string, revision int64) (map[stri
  WHERE node_id=? AND kind IN (?,?,?,?) ORDER BY revision DESC`,
 		nodeID, protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply, protocol.KindConfigReadback)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := map[string]subscriberChainTask{}
@@ -203,7 +208,7 @@ func subscriberChainTasksTx(tx *sql.Tx, nodeID string, revision int64) (map[stri
 		var kind, status, code, raw string
 		var taskRevision int64
 		if err := rows.Scan(&kind, &taskRevision, &status, &code, &raw); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		if _, seen := out[kind]; seen {
 			continue
@@ -217,7 +222,7 @@ func subscriberChainTasksTx(tx *sql.Tx, nodeID string, revision int64) (map[stri
 		out[kind] = subscriberChainTask{Revision: taskRevision, Status: status, ErrorCode: code}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -237,7 +242,7 @@ func SubscriberLineChainHealthyTx(tx *sql.Tx, nodeID string, revision int64) (bo
 	}
 	for index, kind := range SubscriberChainKinds {
 		task, ok := tasks[kind]
-		if !ok || task.Status != "healthy" {
+		if !ok || task.Status != taskStatusHealthy {
 			return false, nil
 		}
 		if index > 0 {
@@ -262,7 +267,7 @@ func subscriberLineLatestChainTx(tx *sql.Tx, nodeID string) (map[string]subscrib
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, errors.New("DATABASE_UNAVAILABLE")
+		return nil, false, errors.New(CodeDatabaseUnavailable)
 	}
 	var params struct {
 		Revision int64 `json:"revision"`
@@ -290,7 +295,7 @@ func subscriberLineReadbackConfirmedTx(tx *sql.Tx, nodeID string, revision int64
 		return false, nil
 	}
 	if err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
 	if observedAt <= 0 || observedRevision != revision || observedDigest == "" || observedDigest != digest {
 		return false, nil
@@ -305,7 +310,7 @@ func subscriberLineUnfinishedTasksTx(tx *sql.Tx, nodeID string) (int, error) {
 	err := tx.QueryRow(`SELECT count(*) FROM agent_tasks
  WHERE node_id=? AND status IN ('pending','applying','verifying')`, nodeID).Scan(&unfinished)
 	if err != nil {
-		return 0, errors.New("DATABASE_UNAVAILABLE")
+		return 0, errors.New(CodeDatabaseUnavailable)
 	}
 	return unfinished, nil
 }
@@ -327,15 +332,15 @@ func SubscriberLineLatestTaskTx(tx *sql.Tx, nodeID string) (status, code string,
 				continue
 			}
 			switch task.Status {
-			case "healthy":
+			case taskStatusHealthy:
 				continue
-			case "partial", "failed", "rolled_back":
+			case taskStatusPartial, taskStatusFailed, taskStatusRolledBack:
 				return task.Status, SanitizeSubscriberSyncCode(task.ErrorCode), true, nil
 			default:
 				return task.Status, "", false, nil
 			}
 		}
-		return "healthy", "", false, nil
+		return SubscriberSyncHealthy, "", false, nil
 	}
 	scanErr := tx.QueryRow(`SELECT status, error_code FROM agent_tasks
  WHERE node_id=? ORDER BY revision DESC LIMIT 1`, nodeID).Scan(&status, &code)
@@ -343,10 +348,10 @@ func SubscriberLineLatestTaskTx(tx *sql.Tx, nodeID string) (status, code string,
 		return "", "", false, nil
 	}
 	if scanErr != nil {
-		return "", "", false, errors.New("DATABASE_UNAVAILABLE")
+		return "", "", false, errors.New(CodeDatabaseUnavailable)
 	}
 	switch status {
-	case "partial", "failed", "rolled_back":
+	case taskStatusPartial, taskStatusFailed, taskStatusRolledBack:
 		return status, SanitizeSubscriberSyncCode(code), true, nil
 	default:
 		return status, "", false, nil
@@ -363,14 +368,14 @@ func subscriberLineTrackedTx(tx *sql.Tx, nodeID string) (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
 	if role != string(node.RoleEdge) {
 		return false, nil
 	}
 	var settings int
 	if err := tx.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, nodeID).Scan(&settings); err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
 	return settings > 0, nil
 }
@@ -421,7 +426,7 @@ func DrainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 			return buildErr
 		}
 		if !sameUserSnapshot(candidate.Users, latestUsers) {
-			return errors.New("CANDIDATE_CORRUPT")
+			return errCandidateCorrupt
 		}
 		confirmed, err := subscriberLineReadbackConfirmedTx(tx, nodeID, latestRevision, latestDigest)
 		if err != nil {
@@ -481,7 +486,7 @@ func DrainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 
 	var nextRevision int64
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&nextRevision); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	candidate, err := lineSyncCandidateTx(tx, nodeID, nextRevision, now)
 	if err != nil {
@@ -492,7 +497,7 @@ func DrainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 		return err
 	}
 	if digest != desiredDigest {
-		return errors.New("CANDIDATE_RENDER_FAILED")
+		return errCandidateRenderFailed
 	}
 	if _, err := publishCandidateTx(tx, nodeID, candidate, now); err != nil {
 		return err
@@ -563,19 +568,19 @@ func subscriberLinesConvergedTx(tx *sql.Tx, subscriberID string, now time.Time) 
 func historicalCredentialUUIDsTx(tx *sql.Tx, subscriberID, nodeID string) (map[string]bool, error) {
 	rows, err := tx.Query(`SELECT uuid FROM proxy_credentials WHERE subscriber_id=? AND node_id=?`, subscriberID, nodeID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := map[string]bool{}
 	for rows.Next() {
 		var uuid string
 		if err := rows.Scan(&uuid); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out[uuid] = true
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -589,22 +594,22 @@ func FinalizeDeletingSubscribersTx(tx *sql.Tx, nodeID string, now time.Time) err
  JOIN proxy_credentials c ON c.subscriber_id=s.id
  WHERE s.state='deleting' AND c.node_id=?`, nodeID)
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Close(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	for _, id := range ids {
 		finalized, err := subscriberLinesConvergedTx(tx, id, now)
@@ -616,7 +621,7 @@ func FinalizeDeletingSubscribersTx(tx *sql.Tx, nodeID string, now time.Time) err
 		}
 		if _, err := tx.Exec(`UPDATE subscribers SET state=?, revision=revision+1, updated_at=?
  WHERE id=? AND state=?`, string(subscription.StateDeleted), now.Unix(), id, string(subscription.StateDeleting)); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		}
 	}
 	return nil
@@ -637,7 +642,7 @@ func (s *Store) RetrySubscriberSync(subscriberID string, now time.Time) error {
 
 func (s *Store) reconcileSubscriberSync(subscriberID string, now time.Time, allowRetry bool) error {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return errSubscriberIDInvalid()
 	}
 	// The Out direction is deliberately not drained here. A Line may only
 	// publish after the Out that serves it confirmed the authorization, so an
@@ -646,7 +651,7 @@ func (s *Store) reconcileSubscriberSync(subscriberID string, now time.Time, allo
 	// drop. The Out's own result event releases the Line (drainLinesForOut).
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
@@ -671,7 +676,7 @@ func (s *Store) reconcileSubscriberSync(subscriberID string, now time.Time, allo
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if firstErr != nil {
 		return firstErr
@@ -717,7 +722,7 @@ func SubscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string,
 	// false success.
 	egress, egressCode, err := LineOutEgressStatusTx(tx, nodeID, now)
 	if err != nil {
-		return SubscriberSyncPartial, "DATABASE_UNAVAILABLE", err
+		return SubscriberSyncPartial, CodeDatabaseUnavailable, err
 	}
 	switch egress {
 	case LineEgressDirect, LineEgressExternal, LineEgressHealthy:
@@ -735,11 +740,11 @@ func SubscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string,
 	}
 	confirmed, err := subscriberLineReadbackConfirmedTx(tx, nodeID, revision, digest)
 	if err != nil {
-		return SubscriberSyncPartial, "DATABASE_UNAVAILABLE", err
+		return SubscriberSyncPartial, CodeDatabaseUnavailable, err
 	}
 	unfinished, err := subscriberLineUnfinishedTasksTx(tx, nodeID)
 	if err != nil {
-		return SubscriberSyncPartial, "DATABASE_UNAVAILABLE", err
+		return SubscriberSyncPartial, CodeDatabaseUnavailable, err
 	}
 	if confirmed && unfinished == 0 {
 		return SubscriberSyncHealthy, "", nil
@@ -749,7 +754,7 @@ func SubscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string,
 	}
 	_, code, failed, err := SubscriberLineLatestTaskTx(tx, nodeID)
 	if err != nil {
-		return SubscriberSyncPartial, "DATABASE_UNAVAILABLE", err
+		return SubscriberSyncPartial, CodeDatabaseUnavailable, err
 	}
 	if failed {
 		return SubscriberSyncPartial, code, nil

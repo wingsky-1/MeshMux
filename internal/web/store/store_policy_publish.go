@@ -21,6 +21,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/web/store/clientdoc"
 )
 
 // PolicySchemaVersion is the schema of the stored policy tables. Every
@@ -33,8 +34,6 @@ const (
 	// CodePublishNoLines: no Line carries stored transport, so a server
 	// policy has no target.
 	CodePublishNoLines = "PUBLISH_NO_LINES"
-	// codePublishGate: the gate could not run at all.
-	codePublishGate = "PUBLISH_GATE_FAILED"
 	// CodePublishNoPolicy: the requested layer has no active revision.
 	CodePublishNoPolicy = "POLICY_NOT_FOUND"
 )
@@ -152,20 +151,20 @@ func ParsePolicyPublishRequest(raw json.RawMessage) (PolicyPublishRequest, error
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		return PolicyPublishRequest{}, errors.New("POLICY_PAYLOAD_INVALID: the publish body must be the documented JSON")
+		return PolicyPublishRequest{}, errors.New(codePolicyPayloadInvalid + ": the publish body must be the documented JSON")
 	}
 	if strings.TrimSpace(string(raw)) == "" {
-		return PolicyPublishRequest{}, errors.New("POLICY_PAYLOAD_INVALID: the publish body is empty")
+		return PolicyPublishRequest{}, errors.New(codePolicyPayloadInvalid + ": the publish body is empty")
 	}
 	request.Layer = strings.TrimSpace(request.Layer)
 	request.OperationID = strings.TrimSpace(request.OperationID)
 	if request.OperationID == "" || len(request.OperationID) > 128 {
-		return PolicyPublishRequest{}, errors.New("POLICY_OPERATION_REQUIRED: publication needs a non-empty operation id")
+		return PolicyPublishRequest{}, errors.New(codePolicyOperationRequired + ": publication needs a non-empty operation id")
 	}
 	switch request.Layer {
 	case "", string(PolicyLayerClient), string(PolicyLayerServer):
 	default:
-		return PolicyPublishRequest{}, errors.New("POLICY_LAYER_INVALID: layer must be client, server or empty for both")
+		return PolicyPublishRequest{}, errors.New(codePolicyLayerInvalid + ": layer must be client, server or empty for both")
 	}
 	return request, nil
 }
@@ -251,7 +250,7 @@ func (s *Store) publishClientDocuments() (int64, []byte, []byte, error) {
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
-	singBox, err := assembleSingBoxClient(singBoxFragment)
+	singBox, err := clientdoc.SingBox(singBoxFragment)
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
@@ -259,7 +258,7 @@ func (s *Store) publishClientDocuments() (int64, []byte, []byte, error) {
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
-	mihomo, err := assembleMihomoClient(mihomoFragment, pins, clientPolicy.Rules)
+	mihomo, err := clientdoc.Mihomo(mihomoFragment, pins, clientPolicy.Rules)
 	if err != nil {
 		return record.Revision, nil, nil, err
 	}
@@ -364,7 +363,7 @@ func (s *Store) publishServerRoute(fallbackToLine bool, operationID string, now 
 func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool, egressState, egressCode string) (PublishTarget, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return PublishTarget{}, errors.New("DATABASE_UNAVAILABLE")
+		return PublishTarget{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	revision, err := NextCandidateRevisionTx(tx, lineID)
@@ -398,21 +397,21 @@ func (s *Store) gatePolicyAssembly(ctx context.Context, verifier PublishVerifier
 		if err != nil {
 			return err
 		}
-		evidence = append(evidence, PolicyCheckEvidence{Stage: "line-candidate", Kernel: "sing-box", Status: "passed", Detail: detail})
+		evidence = append(evidence, PolicyCheckEvidence{Stage: "line-candidate", Kernel: kernelSingBox, Status: "passed", Detail: detail})
 	}
 	if len(assembly.ClientDocument) > 0 {
 		detail, err := verifier.CheckSingBox(ctx, assembly.ClientDocument)
 		if err != nil {
 			return err
 		}
-		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: "sing-box", Status: "passed", Detail: detail})
+		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: kernelSingBox, Status: "passed", Detail: detail})
 	}
 	if len(assembly.MihomoDocument) > 0 {
 		detail, err := verifier.CheckMihomo(ctx, assembly.MihomoDocument)
 		if err != nil {
 			return err
 		}
-		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: "mihomo", Status: "passed", Detail: detail})
+		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: kernelMihomo, Status: "passed", Detail: detail})
 	}
 	assembly.Checks = evidence
 	return nil
@@ -473,7 +472,7 @@ func decodePolicyPins(raw json.RawMessage) (policy.RuleSetPins, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&pins); err != nil {
-		return pins, errors.New("POLICY_PINS_INVALID: pins must be the documented RuleSetPins JSON")
+		return pins, errors.New(codePolicyPinsInvalid + ": pins must be the documented RuleSetPins JSON")
 	}
 	return pins, nil
 }
@@ -481,8 +480,8 @@ func decodePolicyPins(raw json.RawMessage) (policy.RuleSetPins, error) {
 // publishRefusalCodes are every stable code a publication can report. The list
 // is explicit so an unknown message never leaks and never becomes a 500.
 var publishRefusalCodes = []string{
-	"POLICY_OPERATION_REQUIRED", "POLICY_PAYLOAD_INVALID", "POLICY_LAYER_INVALID",
-	"POLICY_NOT_FOUND", "POLICY_PINS_INVALID", "POLICY_CORRUPT", "POLICY_SECRET_REFUSED",
+	codePolicyOperationRequired, codePolicyPayloadInvalid, codePolicyLayerInvalid,
+	CodePublishNoPolicy, codePolicyPinsInvalid, codePolicyCorrupt, codePolicySecretRefused,
 	CodePolicyLayerRetired, // defensive: publication never writes a policy layer
 	CodePolicyPayloadRetired,
 	policy.CodePolicyInvalid, policy.CodePolicyConflict, policy.CodeRulesetUnpinned,
@@ -516,9 +515,9 @@ func PolicyPublishFailure(err error) (int, string, string) {
 	}
 	status := 422
 	switch code {
-	case "POLICY_OPERATION_REQUIRED", "POLICY_PAYLOAD_INVALID", "POLICY_LAYER_INVALID", CodePolicyPayloadRetired:
+	case codePolicyOperationRequired, codePolicyPayloadInvalid, codePolicyLayerInvalid, CodePolicyPayloadRetired:
 		status = 400
-	case "POLICY_NOT_FOUND":
+	case CodePublishNoPolicy:
 		status = 404
 	case policy.CodePolicyConflict, policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited,
 		"OUT_BINDING_INVALID", CodeOutNotAuthorized, CodePublishTasksInProgress,

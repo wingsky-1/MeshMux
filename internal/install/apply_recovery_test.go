@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -197,6 +196,7 @@ func TestApplyRecoveryTextsPinned(t *testing.T) {
 // literals, skipping dynamic arguments that cannot be pinned statically.
 func failureRecoveryTexts(t *testing.T, function string) map[string][]string {
 	t.Helper()
+	constants := newConstantIndex(t)
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read package directory: %v", err)
@@ -231,7 +231,7 @@ func failureRecoveryTexts(t *testing.T, function string) map[string][]string {
 					if !ok || !strings.HasPrefix(callee.Name, "fail") {
 						return true
 					}
-					stage, code, recovery, ok := literalFailureArguments(n.Args)
+					stage, code, recovery, ok := literalFailureArguments(t, n.Args, constants)
 					if ok && isFailureStage(stage) {
 						add(code, recovery)
 					}
@@ -240,7 +240,7 @@ func failureRecoveryTexts(t *testing.T, function string) map[string][]string {
 					if !ok || ident.Name != "InstallError" {
 						return true
 					}
-					code, recovery := installErrorFields(t, n)
+					code, recovery := installErrorFields(t, n, constants)
 					if code != "" && recovery != "" {
 						add(code, recovery)
 					}
@@ -266,18 +266,15 @@ func failureRecoveryTexts(t *testing.T, function string) map[string][]string {
 
 // literalFailureArguments returns the stage, code and recovery of a fail*
 // helper call. Every failure helper keeps those three as its last arguments.
-func literalFailureArguments(args []ast.Expr) (stage, code, recovery string, ok bool) {
+func literalFailureArguments(t *testing.T, args []ast.Expr, constants *constantIndex) (stage, code, recovery string, ok bool) {
+	t.Helper()
 	if len(args) < 3 {
 		return "", "", "", false
 	}
 	values := make([]string, 3)
 	for i, expr := range args[len(args)-3:] {
-		lit, isString := expr.(*ast.BasicLit)
-		if !isString || lit.Kind != token.STRING {
-			return "", "", "", false
-		}
-		text, err := strconv.Unquote(lit.Value)
-		if err != nil {
+		text, resolved := constants.resolve(t, expr)
+		if !resolved {
 			return "", "", "", false
 		}
 		values[i] = text
@@ -293,7 +290,7 @@ func isFailureStage(stage string) bool {
 	return false
 }
 
-func installErrorFields(t *testing.T, lit *ast.CompositeLit) (code, recovery string) {
+func installErrorFields(t *testing.T, lit *ast.CompositeLit, constants *constantIndex) (code, recovery string) {
 	t.Helper()
 	for _, element := range lit.Elts {
 		kv, ok := element.(*ast.KeyValueExpr)
@@ -304,13 +301,9 @@ func installErrorFields(t *testing.T, lit *ast.CompositeLit) (code, recovery str
 		if !ok {
 			continue
 		}
-		value, ok := kv.Value.(*ast.BasicLit)
-		if !ok || value.Kind != token.STRING {
+		text, resolved := constants.resolve(t, kv.Value)
+		if !resolved {
 			continue
-		}
-		text, err := strconv.Unquote(value.Value)
-		if err != nil {
-			t.Fatalf("unquote InstallError field %s: %v", key.Name, err)
 		}
 		switch key.Name {
 		case "Code":

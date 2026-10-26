@@ -71,11 +71,11 @@ func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identit
 		node.IdentityPath: {
 			Path: node.IdentityPath, Body: string(identityBody), Mode: 0600, Owner: "root:root", Static: false,
 		},
-		"/etc/systemd/system/" + node.AgentUnit: {
-			Path: "/etc/systemd/system/" + node.AgentUnit, Body: nodeAgentUnit(), Mode: 0644, Owner: "root:root", Static: true,
+		unitPath(node.AgentUnit): {
+			Path: unitPath(node.AgentUnit), Body: nodeAgentUnit(), Mode: 0644, Owner: "root:root", Static: true,
 		},
-		"/etc/systemd/system/" + node.SingBoxUnit: {
-			Path: "/etc/systemd/system/" + node.SingBoxUnit, Body: nodeSingBoxUnitFor(cfg.Role == node.RoleOut), Mode: 0644, Owner: "root:root", Static: true,
+		unitPath(node.SingBoxUnit): {
+			Path: unitPath(node.SingBoxUnit), Body: nodeSingBoxUnitFor(cfg.Role == node.RoleOut), Mode: 0644, Owner: "root:root", Static: true,
 		},
 	}
 	if !layout.ReuseHubSSHJail {
@@ -91,8 +91,8 @@ func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identit
 		files[node.ACLPath] = nodeManagedFile{
 			Path: node.ACLPath, Mode: 0600, Owner: "root:root", Static: false,
 		}
-		files["/etc/systemd/system/"+node.ACLUnit] = nodeManagedFile{
-			Path: "/etc/systemd/system/" + node.ACLUnit, Body: nodeACLUnit(), Mode: 0644, Owner: "root:root", Static: true,
+		files[unitPath(node.ACLUnit)] = nodeManagedFile{
+			Path: unitPath(node.ACLUnit), Body: nodeACLUnit(), Mode: 0644, Owner: "root:root", Static: true,
 		}
 	}
 	return files, nil

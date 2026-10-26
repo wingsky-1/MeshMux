@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // CandidateFiles returns deterministic, UNAPPLIED configurations for Phase B.
@@ -44,14 +45,14 @@ func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, e
 	}
 	@health path /healthz
 	respond @health 404
-	reverse_proxy 127.0.0.1:9080 {
+	reverse_proxy %s {
 		header_up X-MeshMux-Client-IP {http.request.remote.host}
 	}
 }
 %s {
 %s	route {
 		@subscription path /subscription/*
-		reverse_proxy @subscription 127.0.0.1:9080 {
+		reverse_proxy @subscription %s {
 			header_up -X-MeshMux-Client-IP
 		}
 		respond 404
@@ -60,15 +61,16 @@ func candidateFiles(c Config, ssh []int, internalTLS bool) (map[string]string, e
 %s {
 %s	@private path /api/* /swagger* /metrics* /debug/*
 	respond @private 404
-	reverse_proxy 127.0.0.1:8080
+	reverse_proxy %s
 }
-`, c.ManagementDomain, tlsLine, c.SubscriptionDomain, tlsLine, c.HeadscaleDomain, tlsLine)
+`, c.ManagementDomain, tlsLine, versions.WebListenAddress(), c.SubscriptionDomain, tlsLine, versions.WebListenAddress(),
+		c.HeadscaleDomain, tlsLine, versions.WebHost+":"+strconv.Itoa(HeadscalePort))
 
 	headscale := fmt.Sprintf(`# Headscale %s, aligned to the tagged official config-example.yaml.
 server_url: https://%s
-listen_addr: 127.0.0.1:8080
+listen_addr: %s
 metrics_listen_addr: ""
-grpc_listen_addr: 127.0.0.1:50443
+grpc_listen_addr: %s
 grpc_allow_insecure: false
 trusted_proxies: []
 noise:
@@ -89,7 +91,7 @@ derp:
     region_code: meshmux
     region_name: MeshMux embedded DERP
     verify_clients: true
-    stun_listen_addr: "0.0.0.0:3478"
+    stun_listen_addr: "0.0.0.0:%d"
     private_key_path: /var/lib/meshmux-headscale/derp_server_private.key
     automatically_add_embedded_derp_region: true
   urls: []
@@ -117,7 +119,9 @@ logtail:
   enabled: false
 auto_update:
   enabled: false
-`, HeadscaleVersion, c.HeadscaleDomain, mesh.TailnetIPv4Prefix, mesh.TailnetIPv6Prefix, c.HeadscaleDomain)
+`, HeadscaleVersion, c.HeadscaleDomain, versions.WebHost+":"+strconv.Itoa(HeadscalePort),
+		versions.WebHost+":"+strconv.Itoa(HeadscaleGRPCPort), mesh.TailnetIPv4Prefix, mesh.TailnetIPv6Prefix,
+		STUNPort, c.HeadscaleDomain)
 
 	webUnit := fmt.Sprintf(`[Unit]
 Description=MeshMux Hub Web
@@ -145,14 +149,14 @@ NotifyAccess=main
 SupplementaryGroups=meshmux-headscale
 StateDirectory=meshmux
 StateDirectoryMode=0700
-ExecStart=/usr/local/libexec/meshmuxd __internal-web --listen 127.0.0.1:9080 --origin https://%s --subscription-origin https://%s --headscale-origin https://%s --data-dir /var/lib/meshmux%s
+ExecStart=%s __internal-web --listen %s --origin https://%s --subscription-origin https://%s --headscale-origin https://%s --data-dir /var/lib/meshmux%s
 Restart=on-failure
 RestartSec=5s
 UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/run/meshmux-hub/requests /run/meshmux-hub/staging
-ReadWritePaths=/run/meshmux-hub/boot
+ReadWritePaths=%s/requests %s/staging
+ReadWritePaths=%s/boot
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
@@ -167,9 +171,10 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, c.ManagementDomain, c.SubscriptionDomain, c.HeadscaleDomain, directCaddyArg(c))
+`, versions.RuntimeBinaryPath, versions.WebListenAddress(), c.ManagementDomain, c.SubscriptionDomain,
+		c.HeadscaleDomain, directCaddyArg(c), versions.HubRunDir, versions.HubRunDir, versions.HubRunDir)
 
-	headscaleUnit := `[Unit]
+	headscaleUnit := fmt.Sprintf(`[Unit]
 Description=MeshMux Headscale coordination and embedded DERP/STUN
 After=network-online.target
 Wants=network-online.target
@@ -182,7 +187,7 @@ StateDirectory=meshmux-headscale
 StateDirectoryMode=0700
 RuntimeDirectory=meshmux-headscale
 RuntimeDirectoryMode=0750
-ExecStart=/usr/local/libexec/meshmux-headscale --config /etc/meshmux/headscale.yaml serve
+ExecStart=%s --config /etc/meshmux/headscale.yaml serve
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -202,9 +207,9 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`
+`, headscaleBinaryPath)
 
-	caddyUnit := `[Unit]
+	caddyUnit := fmt.Sprintf(`[Unit]
 Description=MeshMux dedicated Caddy TLS proxy
 After=network-online.target
 Wants=network-online.target
@@ -216,7 +221,7 @@ Group=meshmux-caddy
 StateDirectory=meshmux-caddy
 StateDirectoryMode=0700
 Environment=XDG_DATA_HOME=/var/lib/meshmux-caddy
-ExecStart=/usr/local/libexec/meshmux-caddy run --config /etc/meshmux/Caddyfile --adapter caddyfile
+ExecStart=%s run --config /etc/meshmux/Caddyfile --adapter caddyfile
 Restart=on-failure
 RestartSec=5s
 UMask=0077
@@ -236,7 +241,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`
+`, caddyBinaryPath)
 	// SSH jail is for verified effective listeners; it does not alter sshd.
 	sshJail := fmt.Sprintf(`# MeshMux-owned SSH jail. It does not alter sshd or the host nftables ruleset.
 [meshmux-sshd]
@@ -265,27 +270,32 @@ findtime = 10m
 bantime = 10m
 usedns = no
 `, c.DirectCaddy)
-	webFilter := `[Definition]
-failregex = ^\{"time":"[^"]*","level":"WARN","msg":"authentication_failed","operation_id":"[A-Za-z0-9_-]{22}","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"<ADDR>"\}$
-ignoreregex =
-datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\.\d{1,9})?%%z
-journalmatch = _SYSTEMD_UNIT=meshmux-web.service
-`
+	// The filter body is a literal (it contains fail2ban's own % directives),
+	// so only the journal unit is interpolated.
+	webFilter := webFilterBody + "\njournalmatch = _SYSTEMD_UNIT=" + versions.WebUnitName + "\n"
 	files := map[string]string{
-		"/etc/meshmux/Caddyfile":                        caddy,
-		"/etc/meshmux/headscale.yaml":                   headscale,
-		"/etc/systemd/system/meshmux-web.service":       webUnit,
-		"/etc/systemd/system/meshmux-headscale.service": headscaleUnit,
-		"/etc/systemd/system/meshmux-caddy.service":     caddyUnit,
-		"/etc/fail2ban/jail.d/meshmux-ssh.local":        sshJail,
-		"/etc/fail2ban/jail.d/meshmux-web.local":        webJail,
-		"/etc/fail2ban/filter.d/meshmux-web.conf":       webFilter,
+		caddyConfigPath:                         caddy,
+		headscaleConfigPath:                     headscale,
+		versions.WebUnitPath:                    webUnit,
+		headscaleUnitPath:                       headscaleUnit,
+		caddyUnitPath:                           caddyUnit,
+		fail2banJailDir + "/" + sshJailFileName: sshJail,
+		fail2banJailDir + "/meshmux-web.local":  webJail,
+		fail2banFilterDir + "/" + webFilterName: webFilter,
 	}
 	for path, body := range hubDispatchFiles() {
 		files[path] = body
 	}
 	return files, nil
 }
+
+// webFilterBody is the fail2ban filter shared by the rendered file and the
+// deployed reference in deploy/fail2ban/meshmux-web.conf.
+const webFilterBody = `[Definition]
+failregex = ^\{"time":"[^"]*","level":"WARN","msg":"authentication_failed","operation_id":"[A-Za-z0-9_-]{22}","stage":"auth","error_code":"AUTH_FAILED","ban_candidate":true,"client_ip":"<ADDR>"\}$
+ignoreregex =
+datepattern = {UNB}(?<="time":")%%Y-%%m-%%dT%%H:%%M:%%S(?:\.\d{1,9})?%%z
+`
 
 func directCaddyArg(c Config) string {
 	if c.DirectCaddy {

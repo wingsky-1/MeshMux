@@ -8,6 +8,8 @@ package hubupgrade
 import (
 	"strconv"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 type releaseVersion struct {
@@ -43,11 +45,11 @@ func parseRelease(version string) (releaseVersion, bool) {
 func compareRelease(a, b string) (int, error) {
 	left, ok := parseRelease(a)
 	if !ok {
-		return 0, fail("MANIFEST_UNAVAILABLE", "the candidate version is not a SemVer release")
+		return 0, fail(versions.CodeManifestUnavailable, "the candidate version is not a SemVer release")
 	}
 	right, ok := parseRelease(b)
 	if !ok {
-		return 0, fail("MANIFEST_UNAVAILABLE", "the running version is not a SemVer release")
+		return 0, fail(versions.CodeManifestUnavailable, "the running version is not a SemVer release")
 	}
 	for i := 0; i < 3; i++ {
 		switch {

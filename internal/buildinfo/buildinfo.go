@@ -30,9 +30,16 @@ import (
 // and restore it.
 var Version = "1.0.0-dev"
 
-// maxExecutableBytes bounds the digest. It matches the artifact limit of the
-// Web CLI download and the installer: a running executable is never larger.
-const maxExecutableBytes = 128 << 20
+// MaxExecutableBytes bounds a running executable/package read. It is exported
+// because the installer, the Agent updater, the Hub producer and the Web
+// launcher all apply the same 128 MiB artifact bound; they must not grow four
+// private copies that drift into different limits.
+const MaxExecutableBytes = 128 << 20
+
+// ExecutablePath is the proc entry that names the inode actually executing.
+// It is shared with the Hub producer, which stages that inode as the restore
+// source, so both readers always name the same object.
+const ExecutablePath = "/proc/self/exe"
 
 // Digest returns the SHA-256 of the bytes of the running executable. It reads
 // /proc/self/exe instead of os.Executable(): the proc entry names the inode
@@ -41,7 +48,7 @@ const maxExecutableBytes = 128 << 20
 // HUB_DIGEST_UNAVAILABLE — the digest is never guessed, and a caller that
 // needs it (backup `from_agent_sha256`, upgrade confirmation) must refuse.
 func Digest() (string, error) {
-	return digestFile("/proc/self/exe")
+	return digestFile(ExecutablePath)
 }
 
 // digestFile is the testable half of Digest: the same bounded read over an
@@ -53,12 +60,12 @@ func digestFile(path string) (string, error) {
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > maxExecutableBytes {
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > MaxExecutableBytes {
 		return "", errors.New("HUB_DIGEST_UNAVAILABLE: the running executable is not a bounded regular file")
 	}
 	sum := sha256.New()
-	n, err := io.Copy(sum, io.LimitReader(f, maxExecutableBytes+1))
-	if err != nil || n > maxExecutableBytes {
+	n, err := io.Copy(sum, io.LimitReader(f, MaxExecutableBytes+1))
+	if err != nil || n > MaxExecutableBytes {
 		return "", errors.New("HUB_DIGEST_UNAVAILABLE: the running executable could not be read within the size bound")
 	}
 	return hex.EncodeToString(sum.Sum(nil)), nil

@@ -62,7 +62,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -144,10 +143,7 @@ const (
 	upgradeRevertManualAction = "inspect node and restore manually"
 )
 
-var (
-	errUpgradeHandoffCorrupt = errors.New(upgradeHandoffCorruptMessage)
-	handoffFailureCodeRE     = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
-)
+var errUpgradeHandoffCorrupt = errors.New(upgradeHandoffCorruptMessage)
 
 // upgradeHandoff is the persisted "an update is in flight" record. It names the
 // operation that approved it, the exact target, the phase the attempt reached
@@ -235,9 +231,9 @@ func readUpgradeHandoffFile(root string) (upgradeHandoff, bool, error) {
 
 func validUpgradeHandoff(handoff upgradeHandoff) bool {
 	if handoff.Schema != upgradeHandoffSchema ||
-		!nodeIDPattern.MatchString(handoff.OperationID) ||
-		!stageTargetVersion.MatchString(handoff.TargetVersion) ||
-		!sha256Pattern.MatchString(handoff.ManifestSHA256) ||
+		!protocol.ValidID(handoff.OperationID) ||
+		!protocol.ValidSemVer(handoff.TargetVersion) ||
+		!protocol.ValidSHA256(handoff.ManifestSHA256) ||
 		handoff.Revision < 1 || handoff.StartedAt < 1 || handoff.ChildPID < 0 {
 		return false
 	}
@@ -252,7 +248,7 @@ func validUpgradeHandoff(handoff upgradeHandoff) bool {
 		// none yet.
 		return handoff.ErrorCode == ""
 	}
-	return handoff.ErrorCode == "" || handoffFailureCodeRE.MatchString(handoff.ErrorCode)
+	return handoff.ErrorCode == "" || protocol.ValidErrorCode(handoff.ErrorCode)
 }
 
 // writeUpgradeHandoff persists the marker atomically in the private Agent
@@ -329,8 +325,8 @@ func readUpgradeClaimFile(root string) (HandoffClaim, bool, error) {
 	}
 	var claim HandoffClaim
 	if decodeStrictJSON(data, &claim) != nil ||
-		!sha256Pattern.MatchString(claim.NewSHA256) ||
-		!nodeIDPattern.MatchString(claim.OperationID) {
+		!protocol.ValidSHA256(claim.NewSHA256) ||
+		!protocol.ValidID(claim.OperationID) {
 		return HandoffClaim{}, false, errors.New("UPGRADE_CLAIM_INVALID")
 	}
 	return claim, true, nil
@@ -438,7 +434,7 @@ func adoptCrashWindowClaim(root string, cfg Config, selfHash string) (Config, er
 	mismatch := func(detail string) error {
 		return fmt.Errorf("%w: %s", stableError(handoffMismatchCode), detail)
 	}
-	if !sha256Pattern.MatchString(selfHash) {
+	if !protocol.ValidSHA256(selfHash) {
 		return cfg, mismatch("the running executable digest is not 64 lowercase hex")
 	}
 	claim, ok, err := readUpgradeClaimFile(root)
@@ -487,7 +483,7 @@ type handoffResult struct {
 }
 
 func readHandoffResultFile(root, operationID string) (handoffResult, bool, error) {
-	if !nodeIDPattern.MatchString(operationID) {
+	if !protocol.ValidID(operationID) {
 		return handoffResult{}, false, errors.New("OPERATION_ID_INVALID")
 	}
 	name := operationID + upgradeHandoffResultSuffix
@@ -501,8 +497,8 @@ func readHandoffResultFile(root, operationID string) (handoffResult, bool, error
 	}
 	var result handoffResult
 	if decodeStrictJSON(data, &result) != nil || result.OperationID != operationID ||
-		!stageTargetVersion.MatchString(result.Target) ||
-		!sha256Pattern.MatchString(result.Digest) ||
+		!protocol.ValidSemVer(result.Target) ||
+		!protocol.ValidSHA256(result.Digest) ||
 		result.ExitCode < 0 || result.ExitCode > 255 || result.Timestamp < 1 {
 		return handoffResult{}, false, errors.New("UPDATE_RESULT_INVALID")
 	}
@@ -574,7 +570,7 @@ func handoffUnitRunning(state handoffUnitState) bool {
 }
 
 func (r *Runtime) handoffUnitState(operationID string) (handoffUnitState, int, error) {
-	if !nodeIDPattern.MatchString(operationID) {
+	if !protocol.ValidID(operationID) {
 		return "", 0, errors.New("OPERATION_ID_INVALID")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1017,7 +1013,7 @@ func (r *Runtime) upgradeConfirmationCandidate(readback Readback) (handoffResult
 			continue
 		}
 		operationID := strings.TrimSuffix(name, upgradeHandoffResultSuffix)
-		if !nodeIDPattern.MatchString(operationID) {
+		if !protocol.ValidID(operationID) {
 			continue
 		}
 		if scanned++; scanned > upgradeResultScanMax {
@@ -1154,7 +1150,7 @@ type upgradeRevertResult struct {
 // rolled_back outcome carries no error code of its own (the attempt's failure
 // code is reported); a failed outcome must name its stable reason.
 func (r *Runtime) readUpgradeRevert(operationID string) (upgradeRevertResult, bool, error) {
-	if !nodeIDPattern.MatchString(operationID) {
+	if !protocol.ValidID(operationID) {
 		return upgradeRevertResult{}, false, errors.New("OPERATION_ID_INVALID")
 	}
 	path := rooted(r.root, filepath.Join(upgradeHandoffResultDir, operationID+upgradeRevertSuffix))
@@ -1168,8 +1164,8 @@ func (r *Runtime) readUpgradeRevert(operationID string) (upgradeRevertResult, bo
 	var result upgradeRevertResult
 	if decodeStrictJSON(data, &result) != nil ||
 		result.Schema != upgradeRevertSchema || result.OperationID != operationID ||
-		!stageTargetVersion.MatchString(result.TargetVersion) ||
-		!stageTargetVersion.MatchString(result.FromVersion) ||
+		!protocol.ValidSemVer(result.TargetVersion) ||
+		!protocol.ValidSemVer(result.FromVersion) ||
 		result.ExitCode < 0 || result.ExitCode > 255 || result.Timestamp < 1 {
 		return upgradeRevertResult{}, false, errors.New("UPDATE_REVERT_RESULT_INVALID")
 	}
@@ -1179,7 +1175,7 @@ func (r *Runtime) readUpgradeRevert(operationID string) (upgradeRevertResult, bo
 			return upgradeRevertResult{}, false, errors.New("UPDATE_REVERT_RESULT_INVALID")
 		}
 	case upgradeRevertFailed:
-		if !handoffFailureCodeRE.MatchString(result.ErrorCode) {
+		if !protocol.ValidErrorCode(result.ErrorCode) {
 			return upgradeRevertResult{}, false, errors.New("UPDATE_REVERT_RESULT_INVALID")
 		}
 	default:

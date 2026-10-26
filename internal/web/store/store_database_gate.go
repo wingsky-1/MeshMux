@@ -36,13 +36,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 )
 
 var errDatabasePayloadUnsafe = errors.New("the Hub database backup payload is not a private file tree")
@@ -65,18 +65,23 @@ const (
 	// The Hub database backup is independent of the node rollback store
 	// (spec §4.1 "Hub DB 记录独立"). Verified per-operation backups are kept next
 	// to the database, in the same private 0700 data directory, so a restore
-	// never needs a path outside the deployment boundary. The record and payload
-	// names come from the neutral record package, so the Hub slot and the Node
-	// store cannot drift apart. The flat <root>/record.json is an existence-only
-	// pointer for this file's schemaTooNew check; nothing here reads it.
-	DatabaseBackupDirName        = "database-backup"
+	// never needs a path outside the deployment boundary.
+	//
+	// The directory name is the upgrade producer's (internal/hubupgrade owns the
+	// data-directory layout), and the record and payload names are the neutral
+	// record package's, so the Hub slot, the root executor and the Node store
+	// cannot drift apart. These are re-exports for the page layer, not second
+	// definitions: never replace them with a literal.
+	DatabaseBackupDirName        = hubupgrade.DatabaseBackupDir
 	DatabaseBackupPayloadDirName = backup.PayloadDir
 	DatabaseBackupRecordName     = backup.RecordName
 )
 
 // DatabaseBackupOperationPattern is the fixed operation id shape of one Hub
-// upgrade. A form value never reaches a path or query before this check.
-var DatabaseBackupOperationPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+// upgrade. A form value never reaches a path or query before this check. The
+// expression is the frozen record grammar of internal/backup; there is no
+// second copy.
+var DatabaseBackupOperationPattern = backup.OperationIDPattern
 
 // DatabaseVersion is the last-known-good pair of the Hub database.
 type DatabaseVersion struct {
@@ -154,7 +159,7 @@ func LastGoodDatabaseVersionFrom(db *sql.DB) (DatabaseVersion, bool, error) {
 		return DatabaseVersion{}, false, nil
 	}
 	if err != nil {
-		return DatabaseVersion{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return DatabaseVersion{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	out.ConfirmedAt = time.Unix(confirmed, 0).UTC()
 	return out, true, nil

@@ -6,11 +6,11 @@ package subscription
 // produces byte-identical documents and one stable content id, so a download
 // can be re-derived and compared instead of being trusted from a cached copy.
 //
-// The composer owns its own small rule model instead of importing
-// internal/policy: policy already imports this package (the mesh model), so the
-// dependency would be a cycle. The two models share the same six matcher
-// kinds and the same canonical value rules; compose_drift_test.go compares both
-// so they cannot silently diverge.
+// The composer and the policy generators share one vocabulary from
+// internal/subscription/ir (six matcher kinds, three actions, the pin and CIDR
+// predicates). The IR package is the subscription layer's own definition, so the
+// composer imports downward only and policy imports it without a cycle: there is
+// no second copy left to drift.
 //
 // Composition never executes anything. A selected Out is recorded and rendered into
 // the Line route fragment (the double-hop egress the Line publishes); it is a routing
@@ -21,14 +21,13 @@ package subscription
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/netip"
-	"net/url"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // MaxOutsPerSubscription is the 1.0 single-Out constraint. The Out pool itself
@@ -65,32 +64,33 @@ const (
 
 // Action is the library egress of one selected rule. It mirrors the rule
 // library: direct, proxy or reject. There is no Out action here; the Out is
-// selected once per subscription, never per rule.
-type Action string
+// selected once per subscription, never per rule. The vocabulary lives in the
+// subscription IR so the library and the composer share one spelling.
+type Action = ir.Action
 
 const (
-	ActionDirect Action = "direct"
-	ActionProxy  Action = "proxy"
-	ActionReject Action = "reject"
+	ActionDirect = ir.ActionDirect
+	ActionProxy  = ir.ActionProxy
+	ActionReject = ir.ActionReject
 )
 
 // MatcherKind is the single matcher family of one rule. It mirrors the six
-// kinds the rule library stocks.
-type MatcherKind string
+// kinds the rule library stocks and is shared through the IR package.
+type MatcherKind = ir.MatcherKind
 
 const (
-	MatcherDomain       MatcherKind = "domain"
-	MatcherDomainSuffix MatcherKind = "domain_suffix"
-	MatcherIPCIDR       MatcherKind = "ipcidr"
-	MatcherGeoSite      MatcherKind = "geosite"
-	MatcherGeoIP        MatcherKind = "geoip"
-	MatcherRuleSet      MatcherKind = "ruleset"
+	MatcherDomain       = ir.MatcherDomain
+	MatcherDomainSuffix = ir.MatcherDomainSuffix
+	MatcherIPCIDR       = ir.MatcherIPCIDR
+	MatcherGeoSite      = ir.MatcherGeoSite
+	MatcherGeoIP        = ir.MatcherGeoIP
+	MatcherRuleSet      = ir.MatcherRuleSet
 )
 
-// RuleSetPin is the version lock of one external rule-set artifact. It mirrors
-// policy.RulesetPin (HTTPS source, immutable version, lowercase SHA-256); the
-// composer re-implements the check because it cannot import internal/policy
-// without a cycle. compose_drift_test.go keeps the two in step.
+// RuleSetPin is the version lock of one external rule-set artifact. The shape
+// and the shared predicates live in the subscription IR; policy's identically
+// shaped RulesetPin maps the same detail to its own stable code, so the two
+// gates cannot drift.
 type RuleSetPin struct {
 	Source  string
 	Version string
@@ -100,50 +100,11 @@ type RuleSetPin struct {
 // Validate rejects a mutable or malformed artifact pin before any document is
 // rendered, so a client configuration can never name an unpinned file.
 func (p RuleSetPin) Validate() error {
-	invalid := func(reason string) error {
-		return errors.New(CodeComposeRulesetUnpinned + ": " + reason)
-	}
-	if p.Source == "" || len(p.Source) > 512 || strings.TrimSpace(p.Source) != p.Source {
-		return invalid("the source must be one exact URL")
-	}
-	parsed, err := url.Parse(p.Source)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" ||
-		parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
-		parsed.Opaque != "" || strings.ContainsAny(p.Source, " \t\r\n") {
-		return invalid("the source must be one exact public HTTPS URL without credentials, query or fragment")
-	}
-	if addr, addrErr := netip.ParseAddr(parsed.Hostname()); addrErr == nil {
-		if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() ||
-			addr.IsUnspecified() || addr.IsMulticast() || addr.Is4In6() {
-			return invalid("the source must not be a loopback, private or unspecified literal address")
-		}
-	}
-	if host := parsed.Hostname(); host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return invalid("the source must be a public rule-set host")
-	}
-	if !composePinVersionPattern.MatchString(p.Version) || composeMutableVersions[strings.ToLower(p.Version)] {
-		return invalid("the version must be one immutable label")
-	}
-	if len(p.SHA256) != 64 {
-		return invalid("the digest must be 64 lowercase hex characters")
-	}
-	for index := 0; index < len(p.SHA256); index++ {
-		if !isLowerHex(p.SHA256[index]) {
-			return invalid("the digest must be 64 lowercase hex characters")
-		}
+	if detail := ir.PinDetail(p.Source, p.Version, p.SHA256); detail != "" {
+		return errors.New(CodeComposeRulesetUnpinned + ": " + detail)
 	}
 	return nil
 }
-
-var (
-	composePinVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
-	composeMutableVersions   = map[string]bool{
-		"latest": true, "head": true, "main": true, "master": true,
-		"stable": true, "dev": true, "nightly": true,
-	}
-	composeTagPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	composeDomainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
-)
 
 // Diagnostic is one composer finding. Detail never carries a credential, a
 // token, a URL with a query or a document byte.
@@ -164,8 +125,9 @@ type ComposeLine struct {
 // ComposeOutHTTP marks one egress slot entry whose endpoint is an external
 // HTTP proxy (Ruling R11) instead of a MeshMux Out node. The composer only
 // needs the fact: the proxy credentials never enter a client document, they
-// stay in the Line candidate's private egress.
-const ComposeOutHTTP = "http"
+// stay in the Line candidate's private egress. The value is the node wire
+// contract's; this is a re-export, not a second source.
+const ComposeOutHTTP = protocol.OutEgressHTTP
 
 // ComposeOut is one selected egress: an Out node or an external HTTP proxy.
 // The 1.0 slot always holds at most one entry; Kind distinguishes the two
@@ -220,133 +182,25 @@ type ComposeDocuments struct {
 
 // ComposeSubscription assembles one subscription from its recorded selection.
 //
-// The four inputs are the four wizard groups. A blocking diagnostic always
-// produces no document: the caller can never publish half an artifact.
+// Input: the four wizard groups (Lines with their credentials, at most one Out,
+// the pinned rule revisions, the recorded mesh devices).
+// Validation: every Line/credential pair, the single-Out bound, the rule pins
+// and overlaps, and the "an Out nobody routes to" case are checked before any
+// byte exists; each refusal is one blocking Diagnostic with a stable code.
+// Assembly: buildComposeSelection returns the ordered selection, then
+// composeDocuments runs the four stages and the makers.
+// Effect: none — this function writes nothing and reads nothing.
+// Return: the two client documents, the per-Line route fragments, the selection
+// identity and the ContentID that an approval is recorded against. A blocking
+// diagnostic always yields zero documents, so a caller can never publish half an
+// artifact.
 func ComposeSubscription(lines []ComposeLine, outs []ComposeOut, rules []ComposeRule, network []ComposeNetwork) (ComposeDocuments, []Diagnostic) {
-	diagnostics := make([]Diagnostic, 0, 8)
-	block := func(code, detail string) {
-		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticBlocking, Code: code, Detail: detail})
-	}
-	remind := func(code, detail string) {
-		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticReminder, Code: code, Detail: detail})
-	}
-	hasBlocking := func() bool {
-		for _, diagnostic := range diagnostics {
-			if diagnostic.Level == DiagnosticBlocking {
-				return true
-			}
-		}
-		return false
-	}
-
-	if len(lines) == 0 {
-		block(CodeComposeNoLines, "至少选择一条 Line")
+	selection, diagnostics := buildComposeSelection(lines, outs, rules, network)
+	if hasBlockingDiagnostics(diagnostics) {
 		return ComposeDocuments{}, diagnostics
 	}
-	selected := make([]ComposeLine, 0, len(lines))
-	seenLines := make(map[string]struct{}, len(lines))
-	for _, entry := range lines {
-		if err := validateExportLine(entry.Line); err != nil {
-			block(CodeComposeLineInvalid, "Line 传输参数不完整")
-			continue
-		}
-		if _, duplicate := seenLines[entry.Line.NodeID]; duplicate {
-			block(CodeComposeLineInvalid, "Line 被重复选择")
-			continue
-		}
-		if err := entry.Credential.Validate(); err != nil {
-			block(CodeComposeCredentialInvalid, "凭据不是规范记录")
-			continue
-		}
-		if entry.Credential.NodeID != entry.Line.NodeID {
-			block(CodeComposeCredentialInvalid, "凭据与 Line 不匹配")
-			continue
-		}
-		seenLines[entry.Line.NodeID] = struct{}{}
-		selected = append(selected, entry)
-	}
-	sort.SliceStable(selected, func(i, j int) bool {
-		left, right := selected[i].Line, selected[j].Line
-		if left.SortOrder != right.SortOrder {
-			return left.SortOrder < right.SortOrder
-		}
-		return left.NodeID < right.NodeID
-	})
-
-	if len(outs) > MaxOutsPerSubscription {
-		block(CodeComposeOutLimit, "1.0 每个订阅最多选择 1 个 Out")
-	}
-	var out *ComposeOut
-	if len(outs) == 1 {
-		candidate := outs[0]
-		if err := validateComposeOut(candidate); err != nil {
-			block(CodeComposeOutInvalid, err.Error())
-		} else {
-			out = &candidate
-		}
-	}
-
-	rendered, ruleDiagnostics := renderComposeRules(rules)
-	diagnostics = append(diagnostics, ruleDiagnostics...)
-	if out != nil && !hasBlocking() {
-		proxyRules := 0
-		for _, rule := range rendered {
-			if rule.action == ActionProxy {
-				proxyRules++
-			}
-		}
-		if proxyRules == 0 {
-			// An Out that no rule selects would render a Line route that never
-			// uses it: the operator asked for a double hop the document cannot
-			// express. Refuse instead of silently keeping the Line egress.
-			block(CodeComposeOutUnused, "已选择出口，但没有任何代理规则使用它；请为规则选择代理动作或取消出口")
-		}
-	}
-	if hasBlocking() {
-		return ComposeDocuments{}, diagnostics
-	}
-	if out != nil {
-		remind(CodeComposeOutRecorded, "出口选择已记录；Line 路由片段按所选出口渲染并通过内核门禁")
-	}
-	if len(network) > 0 {
-		remind(CodeComposeNetworkRecorded, "组网设备选择已记录；Mesh 子网路由执行待 1.1，本订阅不包含 Mesh 端点")
-	}
-
-	baseLines := make([]Line, 0, len(selected))
-	credentials := make([]Credential, 0, len(selected))
-	for _, entry := range selected {
-		baseLines = append(baseLines, entry.Line)
-		credentials = append(credentials, entry.Credential)
-	}
-	singBox, err := exportSingBoxWithRules(baseLines, credentials, rendered)
-	if err != nil {
-		block(CodeComposeLineInvalid, "sing-box 客户端文档无法组装")
-		return ComposeDocuments{}, diagnostics
-	}
-	mihomo, err := exportMihomoWithRules(baseLines, credentials, rendered)
-	if err != nil {
-		if strings.HasPrefix(err.Error(), CodeComposeMihomoUnsupported) {
-			block(CodeComposeMihomoUnsupported, "所选规则包含 Mihomo 无法表达的能力")
-		} else {
-			block(CodeComposeLineInvalid, "Mihomo 客户端文档无法组装")
-		}
-		return ComposeDocuments{}, diagnostics
-	}
-
-	documents := ComposeDocuments{SingBox: singBox, Mihomo: mihomo, LineRoutes: []LineRoute{}}
-	if out != nil {
-		fragment, err := renderLineRoute(rendered)
-		if err != nil {
-			block(CodeComposeRuleInvalid, "Line 路由片段无法渲染")
-			return ComposeDocuments{}, diagnostics
-		}
-		for _, entry := range selected {
-			documents.LineRoutes = append(documents.LineRoutes, LineRoute{NodeID: entry.Line.NodeID, Fragment: fragment})
-		}
-	}
-	documents.SelectionID = composeSelectionID(baseLines, out, rules, network)
-	documents.ContentID = composeContentID(documents)
-	return documents, diagnostics
+	documents, documentDiagnostics := composeDocuments(selection)
+	return documents, append(diagnostics, documentDiagnostics...)
 }
 
 // validateComposeOut checks the operator-visible half of one egress. The
@@ -358,7 +212,7 @@ func validateComposeOut(out ComposeOut) error {
 		return errors.New(CodeComposeOutInvalid + ": out_id must be 32 lowercase hex characters")
 	}
 	switch out.Kind {
-	case "", "out", ComposeOutHTTP:
+	case "", protocol.OutboundOutTag, ComposeOutHTTP:
 	default:
 		return errors.New(CodeComposeOutInvalid + ": the egress kind must be out or http")
 	}
@@ -432,7 +286,7 @@ func renderComposeRules(rules []ComposeRule) ([]composeRenderedRule, []Diagnosti
 // composeRuleTargets validates one matcher family and returns its canonical
 // values plus the rendered rule-set tags and their pinned sources.
 func composeRuleTargets(rule ComposeRule) ([]string, []string, []string, error) {
-	if len(rule.Values) == 0 || len(rule.Values) > 64 {
+	if len(rule.Values) == 0 || len(rule.Values) > ir.MaxRuleValues {
 		return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": a rule needs 1-64 matcher values")
 	}
 	values := make([]string, 0, len(rule.Values))
@@ -450,16 +304,15 @@ func composeRuleTargets(rule ComposeRule) ([]string, []string, []string, error) 
 		seen[value] = struct{}{}
 		switch rule.Kind {
 		case MatcherDomain, MatcherDomainSuffix:
-			if !composeDomainPattern.MatchString(value) {
+			if !ir.ValidDomain(value) {
 				return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": a domain must be a canonical lowercase DNS name")
 			}
 		case MatcherIPCIDR:
-			prefix, err := netip.ParsePrefix(value)
-			if err != nil || prefix.Masked() != prefix {
+			if _, err := ir.CanonicalPrefix(value); err != nil {
 				return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": every ip_cidr matcher must be a canonical network")
 			}
 		case MatcherGeoSite, MatcherGeoIP, MatcherRuleSet:
-			if !composeTagPattern.MatchString(value) {
+			if !ir.ValidTag(value) {
 				return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": geo and rule-set identifiers must be lowercase")
 			}
 			pin, ok := rule.Pins[value]
@@ -547,56 +400,6 @@ func composeMatches(rule composeRenderedRule, probe string) bool {
 		}
 	}
 	return false
-}
-
-// renderLineRoute renders the server route fragment one selected Line has to
-// publish. Direct rules stay on the Line, proxy rules take the Out tag and
-// reject rules take the explicit block tag. The final egress stays the Line, so
-// an Out never becomes the default path of a subscription that only selects it
-// for named rules.
-func renderLineRoute(rules []composeRenderedRule) ([]byte, error) {
-	rendered := make([]map[string]any, 0, len(rules))
-	declared := make(map[string]struct{}, len(rules))
-	sets := make([]singBoxClientRuleSet, 0, len(rules))
-	for _, rule := range rules {
-		outbound := exportSingBoxDirectTag
-		switch rule.action {
-		case ActionProxy:
-			outbound = singBoxOutTag
-		case ActionReject:
-			outbound = singBoxBlockTag
-		}
-		entry := map[string]any{"outbound": outbound}
-		switch rule.kind {
-		case MatcherDomain:
-			entry["domain"] = rule.values
-		case MatcherDomainSuffix:
-			entry["domain_suffix"] = rule.values
-		case MatcherIPCIDR:
-			entry["ip_cidr"] = rule.values
-		default:
-			entry["rule_set"] = append([]string(nil), rule.tags...)
-			for index, tag := range rule.tags {
-				if _, exists := declared[tag]; exists {
-					continue
-				}
-				declared[tag] = struct{}{}
-				sets = append(sets, singBoxClientRuleSet{
-					Type: "remote", Tag: tag, Format: "binary", URL: rule.sources[index],
-				})
-			}
-		}
-		rendered = append(rendered, entry)
-	}
-	body, err := json.MarshalIndent(struct {
-		Rules   []map[string]any       `json:"rules"`
-		RuleSet []singBoxClientRuleSet `json:"rule_set,omitempty"`
-		Final   string                 `json:"final"`
-	}{Rules: rendered, RuleSet: sets, Final: exportSingBoxDirectTag}, "", "  ")
-	if err != nil {
-		return nil, errors.New("COMPOSE_ROUTE_RENDER_FAILED")
-	}
-	return append(body, '\n'), nil
 }
 
 // composeSelectionID hashes only the selection: the ordered Line identities,

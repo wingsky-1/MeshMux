@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // The stable codes for subnet route declarations. They follow the same
@@ -35,13 +36,14 @@ const (
 )
 
 // TailnetIPv4Prefix and TailnetIPv6Prefix are the address ranges the managed
-// Headscale instance hands to mesh devices. The installer renders the same two
-// values into the Headscale `prefixes` block, so the domain and the rendered
-// control plane cannot drift. They are also the two ranges a subnet route must
-// never claim: routing them would send the tailnet through itself.
+// Headscale instance hands to mesh devices. The values are owned by the
+// subscription IR (the lower layer, which also renders device documents); this
+// domain re-exports them so route validation and the rendered control plane
+// cannot drift. They are also the two ranges a subnet route must never claim:
+// routing them would send the tailnet through itself.
 const (
-	TailnetIPv4Prefix = "100.64.0.0/10"
-	TailnetIPv6Prefix = "fd7a:115c:a1e0::/48"
+	TailnetIPv4Prefix = ir.TailnetIPv4Prefix
+	TailnetIPv6Prefix = ir.TailnetIPv6Prefix
 )
 
 // RouteDesired is what the Hub intends for one prefix. It is MeshMux's intent,
@@ -171,14 +173,21 @@ var nonRoutablePrefixes = []struct {
 // prefixes are refused for the same reason: they name an IPv4 network through a
 // second notation.
 func ParseRoutePrefix(raw string) (netip.Prefix, error) {
-	prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	// Anti-corruption: the caller may hand over a pasted request value, so the
+	// shape is checked before the shared canonical-prefix parser sees it.
+	if trimmed == "" || len(trimmed) > 64 {
+		return netip.Prefix{}, failure(CodeRoutePrefixInvalid, "need one CIDR prefix such as 192.168.1.0/24")
+	}
+	prefix, err := netip.ParsePrefix(trimmed)
 	if err != nil {
 		return netip.Prefix{}, failure(CodeRoutePrefixInvalid, "need one CIDR prefix such as 192.168.1.0/24")
 	}
 	if prefix.Addr().Is4In6() {
 		return netip.Prefix{}, failure(CodeRoutePrefixInvalid, "an IPv4-mapped IPv6 prefix is not accepted")
 	}
-	if prefix.Masked() != prefix {
+	if _, err := ir.CanonicalPrefix(trimmed); err != nil {
+		// CanonicalPrefix refuses host bits, so the two rules cannot drift.
 		return netip.Prefix{}, failure(CodeRoutePrefixInvalid, "host bits must be zero: declare the network prefix")
 	}
 	return prefix, nil

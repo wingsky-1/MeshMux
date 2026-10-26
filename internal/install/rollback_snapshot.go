@@ -36,13 +36,14 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// UpgradeSourceDir is the durable snapshot of the installed release. It is
 	// private (0700/0600, root-owned) and contains secrets (the LKG bytes and
 	// the active sing-box config), so it never leaves the host.
-	UpgradeSourceDir = "/var/lib/meshmux-agent/upgrade-source"
+	UpgradeSourceDir = versions.AgentRoot + "/upgrade-source"
 	// SnapshotManifestName is the self-description of one payload tree.
 	SnapshotManifestName = "snapshot.json"
 	// SnapshotSchema is the manifest schema. It is independent of the backup
@@ -119,15 +120,15 @@ func ReadUpgradeSource(root string) (string, error) {
 	dir := rooted(root, UpgradeSourceDir)
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
-		return "", &InstallError{Stage: "revert", Code: "ROLLBACK_SOURCE_MISSING",
+		return "", &InstallError{Stage: "revert", Code: CodeRollbackSourceMissing,
 			Recovery: "The host has no retained rollback snapshot. Run one interactive repair to record the installed release before upgrading."}
 	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return "", &InstallError{Stage: "revert", Code: "ROLLBACK_SOURCE_INVALID",
+		return "", &InstallError{Stage: "revert", Code: CodeRollbackSourceInvalid,
 			Recovery: "Inspect /var/lib/meshmux-agent/upgrade-source; a symlink or non-directory is never used."}
 	}
 	if info.Mode().Perm() != 0700 || !snapshotOwnedByEUID(info) {
-		return "", &InstallError{Stage: "revert", Code: "ROLLBACK_SOURCE_INVALID",
+		return "", &InstallError{Stage: "revert", Code: CodeRollbackSourceInvalid,
 			Recovery: "The retained rollback snapshot must be 0700 and owned by root."}
 	}
 	manifest, err := ReadSnapshotManifest(dir)
@@ -135,7 +136,7 @@ func ReadUpgradeSource(root string) (string, error) {
 		return "", err
 	}
 	if _, ok := snapshotAgentEntry(manifest); !ok {
-		return "", &InstallError{Stage: "revert", Code: "ROLLBACK_SOURCE_INVALID",
+		return "", &InstallError{Stage: "revert", Code: CodeRollbackSourceInvalid,
 			Recovery: "The retained rollback snapshot does not describe the Agent binary; run one interactive repair."}
 	}
 	return dir, nil
@@ -187,30 +188,30 @@ func ReadSnapshotManifest(dir string) (SnapshotManifest, error) {
 	info, err := os.Lstat(dir)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0700 ||
 		!snapshotOwnedByEUID(info) {
-		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot directory must be a private 0700 directory."}
 	}
 	path := filepath.Join(dir, SnapshotManifestName)
 	fileInfo, err := os.Lstat(path)
 	if err != nil || fileInfo.Mode()&os.ModeSymlink != 0 || !fileInfo.Mode().IsRegular() ||
 		fileInfo.Mode().Perm() != 0600 || !snapshotOwnedByEUID(fileInfo) || fileInfo.Size() > snapshotMaxBytes {
-		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot manifest must be a private 0600 regular file."}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot manifest could not be read."}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest SnapshotManifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot manifest is not valid JSON."}
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return SnapshotManifest{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot manifest carries trailing data."}
 	}
 	if err := validateSnapshotManifest(manifest); err != nil {
@@ -227,11 +228,11 @@ func WriteSnapshotManifest(dir string, manifest SnapshotManifest) error {
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot manifest could not be encoded."}
 	}
 	if err := writeBytesAtomic(filepath.Join(dir, SnapshotManifestName), append(data, '\n'), 0600); err != nil {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot manifest could not be written."}
 	}
 	return nil
@@ -244,7 +245,7 @@ func WriteSnapshotManifest(dir string, manifest SnapshotManifest) error {
 // nothing at all.
 func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir string, anchors RestoreAnchors) (RestoreReport, error) {
 	if opts.Runner == nil {
-		return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_RESTORE_FAILED",
+		return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackRestoreFailed,
 			Recovery: "The revert has no command runner; no file was restored."}
 	}
 	manifest, err := ReadSnapshotManifest(snapshotDir)
@@ -253,7 +254,7 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 	}
 	agent, ok := snapshotAgentEntry(manifest)
 	if !ok {
-		return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+		return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 			Recovery: "The rollback snapshot does not describe the Agent binary."}
 	}
 	type candidate struct {
@@ -265,7 +266,7 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 	for _, entry := range manifest.Files {
 		payloadPath := filepath.Join(snapshotDir, filepath.FromSlash(entry.Payload))
 		if !snapshotPayloadInside(snapshotDir, payloadPath) || ensureNoSymlinkAncestors(payloadPath) != nil {
-			return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+			return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 				Recovery: "The rollback snapshot names a payload outside its own directory."}
 		}
 		target := rooted(opts.Root, entry.Target)
@@ -278,12 +279,12 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 			if statErr == nil {
 				changed = true
 			} else if !os.IsNotExist(statErr) {
-				return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_RESTORE_FAILED",
+				return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackRestoreFailed,
 					Recovery: "A recorded target could not be inspected; no file was restored."}
 			}
 		case statErr != nil:
 			if !os.IsNotExist(statErr) {
-				return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_RESTORE_FAILED",
+				return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackRestoreFailed,
 					Recovery: "A recorded target could not be inspected; no file was restored."}
 			}
 			changed = true
@@ -292,7 +293,7 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 		default:
 			currentDigest, digestErr := sha256File(target)
 			if digestErr != nil {
-				return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_RESTORE_FAILED",
+				return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackRestoreFailed,
 					Recovery: "A recorded target could not be read; no file was restored."}
 			}
 			changed = currentDigest != entry.SHA256 || currentInfo.Mode().Perm() != os.FileMode(entry.Mode)
@@ -300,12 +301,12 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 		if entry.Exists {
 			payloadInfo, payloadErr := os.Lstat(payloadPath)
 			if payloadErr != nil || payloadInfo.Mode()&os.ModeSymlink != 0 || !payloadInfo.Mode().IsRegular() {
-				return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+				return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 					Recovery: "A rollback payload entry is missing, a symlink or not a regular file."}
 			}
 			digest, digestErr := sha256File(payloadPath)
 			if digestErr != nil || digest != entry.SHA256 {
-				return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID",
+				return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid,
 					Recovery: "A rollback payload entry does not match the manifest digest."}
 			}
 		}
@@ -316,11 +317,11 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 	// copy is ROLLBACK_SNAPSHOT_INVALID even when its manifest claims the right
 	// old-package digest.
 	if anchors.FromAgentSHA256 != agent.SHA256 {
-		return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_ANCHOR_MISMATCH",
+		return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackAnchorMismatch,
 			Recovery: "The rollback payload's Agent binary does not match from_agent_sha256; the old package is not trusted."}
 	}
 	if anchors.FromPackageSHA256 != "" && anchors.FromPackageSHA256 != anchors.FromAgentSHA256 {
-		return RestoreReport{}, &InstallError{Stage: "revert", Code: "ROLLBACK_ANCHOR_MISMATCH",
+		return RestoreReport{}, &InstallError{Stage: "revert", Code: CodeRollbackAnchorMismatch,
 			Recovery: "The rollback record names two different old packages; no revert is possible from this record."}
 	}
 	report := RestoreReport{KernelSHA256: snapshotKernelDigest(manifest)}
@@ -360,7 +361,7 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 		report.Restored = append(report.Restored, item.entry.Target)
 	}
 	if !rollbackNodeFiles(ctx, opts, snapshots, false) {
-		return report, &InstallError{Stage: "revert", Code: "ROLLBACK_RESTORE_FAILED",
+		return report, &InstallError{Stage: "revert", Code: CodeRollbackRestoreFailed,
 			Recovery: "The recorded files could not all be restored. Do not delete identity or kernel data; inspect the operation journal and restore only recorded MeshMux files."}
 	}
 	return report, nil
@@ -375,7 +376,7 @@ func RestoreNodeSnapshot(ctx context.Context, opts NodeApplyOptions, snapshotDir
 // not adopt the failed target.
 func AdoptRestoredRelease(root, operationID string) error {
 	if !operationIDPattern.MatchString(operationID) {
-		return &InstallError{Stage: "revert", Code: "OPERATION_ID_INVALID", Recovery: "Carry the failed upgrade chain's operation ID."}
+		return &InstallError{Stage: "revert", Code: CodeOperationIDInvalid, Recovery: "Carry the failed upgrade chain's operation ID."}
 	}
 	restored, err := readSnapshotNodeConfig(root)
 	if err != nil {
@@ -387,16 +388,16 @@ func AdoptRestoredRelease(root, operationID string) error {
 		if errors.As(err, &ie) {
 			return ie
 		}
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_LEDGER_INVALID",
+		return &InstallError{Stage: "revert", Code: CodeRollbackLedgerInvalid,
 			Recovery: "The recorded installer state could not be read; keep the restored files and repair state manually."}
 	}
 	state, exists, err := readNodeState(root, layout)
 	if err != nil || !exists || state.Node == nil {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_LEDGER_INVALID",
+		return &InstallError{Stage: "revert", Code: CodeRollbackLedgerInvalid,
 			Recovery: "The host records no Node ledger to reconcile; do not delete identity or data, repair state manually."}
 	}
 	if !SameNodeConfig(*state.Node, restored) {
-		return &InstallError{Stage: "revert", Code: "CONFIG_CONFLICT",
+		return &InstallError{Stage: "revert", Code: CodeConfigConflict,
 			Recovery: "The restored agent.json names another Hub, node, role or port set than the ledger. Inspect both and run one interactive repair."}
 	}
 	state.Node = cloneNodeConfig(&restored)
@@ -404,11 +405,11 @@ func AdoptRestoredRelease(root, operationID string) error {
 	state.OperationID, state.LastOperation = operationID, operationID
 	state.UpdatedAt = time.Now().UTC()
 	if err := writeNodeState(root, layout, state); err != nil {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_LEDGER_FAILED",
+		return &InstallError{Stage: "revert", Code: CodeRollbackLedgerFailed,
 			Recovery: "The restored files are in place but the ledger could not be updated; repair state before the Agent starts."}
 	}
 	if err := clearNodeUpgradeClaim(root); err != nil {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_CLAIM_CLEAR_FAILED",
+		return &InstallError{Stage: "revert", Code: CodeRollbackClaimClearFailed,
 			Recovery: "The crash-window claim could not be cleared; remove it manually before the restored Agent starts."}
 	}
 	return nil
@@ -422,7 +423,7 @@ func AdoptRestoredRelease(root, operationID string) error {
 // so restarting the Agent cannot kill it.
 func StartRestoredNode(ctx context.Context, runner CommandRunner, root string) error {
 	if runner == nil {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_START_FAILED",
+		return &InstallError{Stage: "revert", Code: CodeRollbackStartFailed,
 			Recovery: "The revert has no command runner; the restored services were not started."}
 	}
 	cfg, err := readSnapshotNodeConfig(root)
@@ -432,14 +433,14 @@ func StartRestoredNode(ctx context.Context, runner CommandRunner, root string) e
 	if cfg.Role == node.RoleOut {
 		if info, statErr := os.Lstat(rooted(root, node.ACLPath)); statErr == nil && info.Mode().IsRegular() {
 			if _, runErr := runner.Run(ctx, "systemctl", "restart", node.ACLUnit); runErr != nil {
-				return &InstallError{Stage: "revert", Code: "ROLLBACK_START_FAILED",
+				return &InstallError{Stage: "revert", Code: CodeRollbackStartFailed,
 					Recovery: "The restored Out ACL unit did not start; inspect only that unit."}
 			}
 		}
 	}
 	for _, unit := range []string{node.SingBoxUnit, node.AgentUnit} {
 		if _, runErr := runner.Run(ctx, "systemctl", "restart", unit); runErr != nil {
-			return &InstallError{Stage: "revert", Code: "ROLLBACK_START_FAILED",
+			return &InstallError{Stage: "revert", Code: CodeRollbackStartFailed,
 				Recovery: "A restored Node unit did not start; inspect the unit and the operation journal."}
 		}
 	}
@@ -460,7 +461,7 @@ func RefreshUpgradeSource(root string) error {
 	}
 	state, exists, err := readNodeState(root, layout)
 	if err != nil || !exists || state.Node == nil {
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_INVALID",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceInvalid,
 			Recovery: "The host records no Node ledger; the rollback snapshot cannot be refreshed."}
 	}
 	return writeUpgradeSnapshot(root, layout, state, state.Node.Role, true)
@@ -471,17 +472,17 @@ func RefreshUpgradeSource(root string) error {
 func writeUpgradeSnapshot(root string, layout nodeLayout, state InstallState, role node.Role, includeRuntimeState bool) error {
 	parent := rooted(root, filepath.Dir(UpgradeSourceDir))
 	if err := ensureDirectory(parent, 0700); err != nil {
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 			Recovery: "The private Agent directory could not hold the rollback snapshot; check disk space and permissions."}
 	}
 	part := rooted(root, UpgradeSourceDir+snapshotPartSuffix)
 	final := rooted(root, UpgradeSourceDir)
 	if err := os.RemoveAll(part); err != nil {
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 			Recovery: "The previous partial rollback snapshot could not be cleared."}
 	}
 	if err := os.MkdirAll(filepath.Join(part, snapshotPayloadDir), 0700); err != nil {
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 			Recovery: "The rollback snapshot directory could not be created; check disk space."}
 	}
 	targets := upgradeSnapshotTargets(state, layout, role, includeRuntimeState)
@@ -489,7 +490,7 @@ func writeUpgradeSnapshot(root string, layout nodeLayout, state InstallState, ro
 	for _, target := range targets {
 		if !snapshotAbsoluteTarget(target) {
 			_ = os.RemoveAll(part)
-			return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "The ledger names a target that is not a clean absolute path; inspect the installer state."}
 		}
 		path := rooted(root, target)
@@ -499,31 +500,31 @@ func writeUpgradeSnapshot(root string, layout nodeLayout, state InstallState, ro
 		}
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			_ = os.RemoveAll(part)
-			return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "A managed path is a symlink or a non-regular file; inspect it before retrying."}
 		}
 		st, ok := info.Sys().(*syscall.Stat_t)
 		if !ok {
 			_ = os.RemoveAll(part)
-			return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "A managed path has no owner information; inspect the filesystem."}
 		}
 		relative := strings.TrimPrefix(filepath.Clean(target), "/")
 		payload := filepath.Join(snapshotPayloadDir, relative)
 		if err := os.MkdirAll(filepath.Join(part, filepath.Dir(payload)), 0700); err != nil {
 			_ = os.RemoveAll(part)
-			return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "The rollback snapshot payload directory could not be created."}
 		}
 		if err := copyAtomic(path, filepath.Join(part, payload), 0600); err != nil {
 			_ = os.RemoveAll(part)
-			return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "A managed file could not be copied into the rollback snapshot."}
 		}
 		digest, err := sha256File(filepath.Join(part, payload))
 		if err != nil {
 			_ = os.RemoveAll(part)
-			return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "A copied rollback file could not be hashed."}
 		}
 		manifest.Files = append(manifest.Files, SnapshotEntry{
@@ -533,7 +534,7 @@ func writeUpgradeSnapshot(root string, layout nodeLayout, state InstallState, ro
 	}
 	if _, ok := snapshotAgentEntry(manifest); !ok {
 		_ = os.RemoveAll(part)
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 			Recovery: "The rollback snapshot does not contain the Agent binary; the next upgrade would have no verified rollback source."}
 	}
 	if err := WriteSnapshotManifest(part, manifest); err != nil {
@@ -550,12 +551,12 @@ func writeUpgradeSnapshot(root string, layout nodeLayout, state InstallState, ro
 	// read the source concurrently with this replacement.
 	if err := os.RemoveAll(final); err != nil {
 		_ = os.RemoveAll(part)
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 			Recovery: "The previous rollback snapshot could not be replaced."}
 	}
 	if err := os.Rename(part, final); err != nil {
 		_ = os.RemoveAll(part)
-		return &InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+		return &InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 			Recovery: "The rollback snapshot could not be published."}
 	}
 	return nil
@@ -619,7 +620,7 @@ func snapshotKernelDigest(manifest SnapshotManifest) string {
 
 func validateSnapshotManifest(manifest SnapshotManifest) error {
 	failInvalid := func(detail string) error {
-		return &InstallError{Stage: "revert", Code: "ROLLBACK_SNAPSHOT_INVALID", Recovery: detail}
+		return &InstallError{Stage: "revert", Code: CodeRollbackSnapshotInvalid, Recovery: detail}
 	}
 	if manifest.Schema != SnapshotSchema {
 		return failInvalid("The rollback snapshot manifest names an unknown schema.")
@@ -695,17 +696,17 @@ func readSnapshotNodeConfig(root string) (node.Config, error) {
 	path := rooted(root, node.AgentConfigPath)
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-		return node.Config{}, &InstallError{Stage: "revert", Code: "ROLLBACK_START_FAILED",
+		return node.Config{}, &InstallError{Stage: "revert", Code: CodeRollbackStartFailed,
 			Recovery: "The restored agent.json is missing or not a private 0600 regular file."}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return node.Config{}, &InstallError{Stage: "revert", Code: "ROLLBACK_START_FAILED",
+		return node.Config{}, &InstallError{Stage: "revert", Code: CodeRollbackStartFailed,
 			Recovery: "The restored agent.json could not be read."}
 	}
 	var cfg node.Config
 	if err := json.Unmarshal(data, &cfg); err != nil || cfg.Validate() != nil {
-		return node.Config{}, &InstallError{Stage: "revert", Code: "ROLLBACK_START_FAILED",
+		return node.Config{}, &InstallError{Stage: "revert", Code: CodeRollbackStartFailed,
 			Recovery: "The restored agent.json is not a valid Node configuration."}
 	}
 	return cfg, nil

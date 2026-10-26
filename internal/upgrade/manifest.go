@@ -10,16 +10,23 @@
 // installer. The set endpoint carries both architecture tables; a node selects
 // its own runtime.GOARCH projection locally. The target half performs no I/O: no
 // table, no queue, no process.
+//
+// Layer: core release domain (pure data and validation). It is the single
+// definition of what a release is: fixed version + SHA-256 per component, and
+// one entry per architecture in the versions leaf. Adding a release or an
+// architecture is a data change here, never a new execution path; the
+// installer/updater consume the same tables instead of keeping second copies.
 package upgrade
 
 import (
 	"encoding/json"
 	"errors"
-	"regexp"
 	"strings"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // Schema identifies the manifest document; another schema is another contract.
@@ -34,9 +41,10 @@ const SetSchema = "meshmux-release-set/v1"
 // another value cannot be applied by this binary.
 const PolicySchema = 8
 
-// supportedArchitectures is the fixed Debian architecture matrix of this build.
-// A set always carries every entry: a missing table is a partial release.
-var supportedArchitectures = []string{"amd64", "arm64"}
+// supportedArchitectures is the fixed Debian architecture matrix of this build,
+// owned by the versions leaf. A set always carries every entry: a missing table
+// is a partial release.
+var supportedArchitectures = versions.SupportedArchitectures()
 
 // Component is one fixed release asset. Architecture is explicit so an amd64
 // digest is never paired with an arm64 source. Dev marks a pre-release dev
@@ -64,10 +72,22 @@ type Manifest struct {
 
 // mihomo is the pinned subscription client of the publish gate. It is not a node
 // package, so its pins live here; scripts/ci-subscription-clients.sh verifies the
-// same release assets.
+// same release assets. The URL is derived from node.MihomoVersion so a version
+// bump cannot leave a stale literal in the source column; the digest remains
+// the trust anchor and is still copied from the upstream release metadata.
 var mihomo = map[string]Component{
-	"amd64": {"mihomo", node.MihomoVersion, "amd64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz", "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20", "gz", false},
-	"arm64": {"mihomo", node.MihomoVersion, "arm64", "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz", "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0", "gz", false},
+	versions.ArchitectureAMD64: mihomoComponent(versions.ArchitectureAMD64, "-compatible", "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20"),
+	versions.ArchitectureARM64: mihomoComponent(versions.ArchitectureARM64, "", "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0"),
+}
+
+func mihomoComponent(architecture, variant, sha256 string) Component {
+	version := node.MihomoVersion
+	return Component{
+		Name: "mihomo", Version: version, Architecture: architecture,
+		Source: "https://github.com/MetaCubeX/mihomo/releases/download/v" + version +
+			"/mihomo-linux-" + architecture + variant + "-v" + version + ".gz",
+		SHA256: sha256, Format: "gz",
+	}
 }
 
 // ManifestSet is the release description of one build across the supported
@@ -194,8 +214,10 @@ func pinnedComponents(architecture string) ([]Component, bool) {
 }
 
 var (
-	releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
-	digestSHA      = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// Aliases of the one record-grammar definition in internal/backup, the
+	// stdlib-only leaf shared by every upgrade producer and consumer.
+	releaseVersion = backup.ReleaseVersionPattern
+	digestSHA      = backup.DigestPattern
 )
 
 // Validate refuses any manifest this binary must not act on: a foreign schema,

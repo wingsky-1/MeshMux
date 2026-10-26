@@ -20,7 +20,7 @@ func TestDigestMatchesSelfExe(t *testing.T) {
 	}
 	defer f.Close()
 	sum := sha256.New()
-	if _, err := io.Copy(sum, io.LimitReader(f, maxExecutableBytes+1)); err != nil {
+	if _, err := io.Copy(sum, io.LimitReader(f, MaxExecutableBytes+1)); err != nil {
 		t.Fatal(err)
 	}
 	want := hex.EncodeToString(sum.Sum(nil))
@@ -59,8 +59,8 @@ func TestDigestUnavailable(t *testing.T) {
 }
 
 // TestDigestRejectsOversize pins the size bound: a regular file larger than
-// maxExecutableBytes is HUB_DIGEST_UNAVAILABLE before any byte is hashed. The
-// read bound (n > maxExecutableBytes) is the same refusal for a file that grows
+// MaxExecutableBytes is HUB_DIGEST_UNAVAILABLE before any byte is hashed. The
+// read bound (n > MaxExecutableBytes) is the same refusal for a file that grows
 // between the stat and the read; a stable regular file cannot reach it, so it
 // stays defence in depth rather than a reachable test fixture.
 func TestDigestRejectsOversize(t *testing.T) {
@@ -69,7 +69,7 @@ func TestDigestRejectsOversize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Truncate(maxExecutableBytes + 1); err != nil {
+	if err := f.Truncate(MaxExecutableBytes + 1); err != nil {
 		f.Close()
 		t.Fatal(err)
 	}

@@ -13,29 +13,30 @@ package rootexec
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/install"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// hubLedgerPath is the fixed root-owned installer ledger. It is not
 	// configurable and never derived from a request.
-	hubLedgerPath = "/var/lib/meshmux-installer/state.json"
+	hubLedgerPath = versions.InstallerStatePath
 	// hubRuntimeBinaryPath is the installed Hub/Agent runtime the ledger
 	// managed_files entry names.
-	hubRuntimeBinaryPath = "/usr/local/libexec/meshmuxd"
+	hubRuntimeBinaryPath = versions.RuntimeBinaryPath
 	// sharedAgentKey is the frozen key of install.SharedBinaries for the
 	// MeshMux runtime build a co-located Line reuses.
 	sharedAgentKey = "meshmuxd"
 
-	codeIdentityMissing  = "HUB_BACKUP_IDENTITY_MISSING"
+	codeIdentityMissing  = hubupgrade.CodeBackupIdentityMissing
 	codeIdentityMismatch = backup.CodeMismatch
 )
 
-var ledgerDigestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var ledgerDigestRE = backup.DigestPattern
 
 func readHubLedger() (install.InstallState, bool, error) {
 	return readLedgerAt("/", os.Geteuid())

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // The co-located Line layout is derived entirely from the host's own
@@ -23,9 +24,9 @@ const (
 	// nodeSSHJailName is the Fail2ban jail a standalone Line owns.
 	nodeSSHJailName = "meshmux-node-sshd"
 	// hubSSHJailPath is the Fail2ban jail file the Hub owns.
-	hubSSHJailPath = "/etc/fail2ban/jail.d/meshmux-ssh.local"
+	hubSSHJailPath = fail2banJailDir + "/" + sshJailFileName
 	// nodeSSHJailPath is the Fail2ban jail file a standalone Line owns.
-	nodeSSHJailPath = "/etc/fail2ban/jail.d/meshmux-node-ssh.local"
+	nodeSSHJailPath = fail2banJailDir + "/meshmux-node-ssh.local"
 )
 
 // nodeLayout describes where a Node operation keeps its ledger and which
@@ -59,7 +60,7 @@ type nodeLayout struct {
 func standaloneNodeLayout() nodeLayout {
 	return nodeLayout{
 		StatePath:    installerStatePath,
-		OperationDir: "/var/lib/meshmux-installer/operations",
+		OperationDir: versions.InstallerRoot + "/operations",
 		StageRoot:    "/var/cache/meshmux-installer",
 	}
 }
@@ -88,7 +89,7 @@ func hubOriginFor(state InstallState) string {
 func resolveNodeLayout(root string) (nodeLayout, error) {
 	hubState, hasHub, err := ReadState(root)
 	if err != nil {
-		return nodeLayout{}, &InstallError{Stage: "preflight", Code: "INSTALL_STATE_INVALID",
+		return nodeLayout{}, &InstallError{Stage: "preflight", Code: CodeInstallStateInvalid,
 			Recovery: "Inspect the recorded installer state; do not delete MeshMux data or Headscale keys."}
 	}
 	standalone := standaloneNodeLayout()
@@ -102,7 +103,7 @@ func resolveNodeLayout(root string) (nodeLayout, error) {
 	}
 	layout := nodeLayout{
 		StatePath:    localLineStatePath,
-		OperationDir: "/var/lib/meshmux-installer/local-line/operations",
+		OperationDir: versions.InstallerRoot + "/local-line/operations",
 		StageRoot:    "/var/cache/meshmux-installer/local-line",
 		HubHost:      true,
 		HubState:     hubState,
@@ -143,7 +144,7 @@ func effectiveNodeStateError(err error) error {
 	if errors.As(err, &ie) {
 		return ie
 	}
-	return &InstallError{Stage: "preflight", Code: "INSTALL_STATE_INVALID",
+	return &InstallError{Stage: "preflight", Code: CodeInstallStateInvalid,
 		Recovery: "Inspect the recorded installer state; do not delete MeshMux data."}
 }
 
@@ -189,7 +190,7 @@ func effectiveNodeState(root string, cfg node.Config) (nodeLayout, InstallState,
 	}
 	state, hasState, err := readNodeState(root, layout)
 	if err != nil {
-		return layout, InstallState{}, &InstallError{Stage: "preflight", Code: "INSTALL_STATE_INVALID",
+		return layout, InstallState{}, &InstallError{Stage: "preflight", Code: CodeInstallStateInvalid,
 			Recovery: "Inspect the effective Node ledger; do not delete MeshMux state."}
 	}
 	if !hasState || state.Node == nil {

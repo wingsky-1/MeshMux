@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // TestStableCodeOnlyAcceptsRegisteredCodes pins the closed set: a value that is
@@ -143,7 +145,7 @@ func TestRunningBinaryMismatchSurvivesWithoutALogger(t *testing.T) {
 // has the documented shape and matches what the protocol validates.
 func TestRuntimeCodesAreCodeShaped(t *testing.T) {
 	for code := range runtimeCodes {
-		if !stableErrorCode.MatchString(code) {
+		if !protocol.ValidErrorCode(code) {
 			t.Errorf("registered code %q does not match the protocol shape", code)
 		}
 		if got := stableCode(code); got != code {

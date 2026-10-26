@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 var processExecutableOf = func(pid string) (string, error) {
@@ -217,7 +218,7 @@ func BuildNodePlanForRoot(root, id string, cfg node.Config, architecture string,
 			"This host records a Hub layout that cannot host a co-located Line because the Hub does not publish a pinned reusable MeshMux runtime. Repair the Hub layout first; a Line never falls back to the Hub ledger.")
 	}
 	if err != nil {
-		code, recovery := "INSTALL_STATE_INVALID", "Inspect the recorded installer state; do not delete MeshMux data."
+		code, recovery := CodeInstallStateInvalid, "Inspect the recorded installer state; do not delete MeshMux data."
 		var ie *InstallError
 		if errors.As(err, &ie) {
 			code = ie.Code
@@ -273,7 +274,7 @@ func buildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 		Paths: []string{
 			node.SingBoxBinaryPath, node.AgentConfigPath,
 			"/var/lib/meshmux-agent/", "/var/lib/meshmux-singbox/",
-			"/etc/systemd/system/" + node.AgentUnit, "/etc/systemd/system/" + node.SingBoxUnit,
+			unitPath(node.AgentUnit), unitPath(node.SingBoxUnit),
 		},
 		ApplyAvailable: ready, NextAction: "Review the fixed Node layout, then run the install with the one-time code entered on stdin. Pairing is consumed only after local staging and checks pass.",
 		ExternalPending: pending, Kernel: release,
@@ -290,7 +291,7 @@ func buildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 	}
 	if cfg.Role == node.RoleOut {
 		plan.Units = append([]string{node.ACLUnit}, plan.Units...)
-		plan.Paths = append(plan.Paths, node.ACLPath, "/etc/systemd/system/"+node.ACLUnit)
+		plan.Paths = append(plan.Paths, node.ACLPath, unitPath(node.ACLUnit))
 		plan.ACLTable = node.ACLTable
 	}
 	return plan
@@ -307,7 +308,7 @@ func dpkgArchitecture(ctx context.Context, runner CommandRunner) (string, error)
 		return "", err
 	}
 	arch := strings.TrimSpace(string(out))
-	if arch != "amd64" && arch != "arm64" {
+	if !versions.IsSupportedArchitecture(arch) {
 		return "", errors.New("unsupported dpkg architecture")
 	}
 	return arch, nil
@@ -428,11 +429,11 @@ func nodePortPreflight(ctx context.Context, cfg node.Config, allowManaged bool, 
 	if allowManaged && cfg.KernelSHA256 == "" {
 		digest, err := effectiveNodeKernelDigest(root, cfg)
 		if err != nil {
-			code := "INSTALL_STATE_INVALID"
+			code := CodeInstallStateInvalid
 			recovery := "Inspect the effective Node ledger; do not delete MeshMux state."
 			var ie *InstallError
 			if errors.As(err, &ie) {
-				if ie.Code == nodeOwnershipUnverified || ie.Code == "INSTALL_STATE_INVALID" {
+				if ie.Code == nodeOwnershipUnverified || ie.Code == CodeInstallStateInvalid {
 					code = ie.Code
 				}
 				if ie.Recovery != "" {
@@ -638,10 +639,10 @@ func nodeTableOwnership(ctx context.Context, root string, runner CommandRunner, 
 	}
 	bound, err := nodeLedgerBindsConfig(root, cfg)
 	if err != nil {
-		code, recovery := "INSTALL_STATE_INVALID", "Inspect the effective Node ledger; do not delete MeshMux state."
+		code, recovery := CodeInstallStateInvalid, "Inspect the effective Node ledger; do not delete MeshMux state."
 		var ie *InstallError
 		if errors.As(err, &ie) {
-			if ie.Code == nodeOwnershipUnverified || ie.Code == "INSTALL_STATE_INVALID" {
+			if ie.Code == nodeOwnershipUnverified || ie.Code == CodeInstallStateInvalid {
 				code = ie.Code
 			}
 			if ie.Recovery != "" {
@@ -700,7 +701,7 @@ func sortedInts(values []int) []int {
 }
 
 func validateNodeArchitecture(arch string) error {
-	if arch != "amd64" && arch != "arm64" {
+	if !versions.IsSupportedArchitecture(arch) {
 		return fmt.Errorf("ARCH_UNSUPPORTED")
 	}
 	return nil

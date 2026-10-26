@@ -18,12 +18,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
 const (
-	systemdRunPath = "/usr/bin/systemd-run"
 	// transientUnitPrefix names the one-shot unit of one approved operation.
 	// The operation ID is 32 lowercase hex, so the unit name needs no encoding.
 	transientUnitPrefix = "meshmux-update-"
@@ -119,15 +119,15 @@ func BuildTransientArgv(op Config) ([]string, error) {
 func buildTransientArgv(op Config, arch string) ([]string, error) {
 	switch {
 	case !targetRE.MatchString(op.Target):
-		return nil, fail("UPDATE_TARGET_INVALID", "target is not a SemVer release")
+		return nil, fail(backup.CodeTargetInvalid, "target is not a SemVer release")
 	case !digestRE.MatchString(op.ManifestSHA256):
-		return nil, fail("UPDATE_DIGEST_INVALID", "manifest SHA-256 is not 64 lowercase hex")
+		return nil, fail(backup.CodeDigestInvalid, "manifest SHA-256 is not 64 lowercase hex")
 	case !digestRE.MatchString(op.PackageSHA256):
-		return nil, fail("UPDATE_DIGEST_INVALID", "package SHA-256 is not 64 lowercase hex")
+		return nil, fail(backup.CodeDigestInvalid, "package SHA-256 is not 64 lowercase hex")
 	case op.OperationID == "":
 		return nil, fail("OPERATION_REQUIRED", "an operation ID is required")
 	case !opIDRE.MatchString(op.OperationID):
-		return nil, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return nil, fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	}
 	dir, err := transientWorkDir(op.WorkDir)
 	if err != nil {
@@ -193,7 +193,7 @@ func UnitActiveState(ctx context.Context, runner node.CommandRunner, operationID
 		return "", 0, fail("OPERATION_REQUIRED", "an operation ID is required")
 	}
 	if !opIDRE.MatchString(operationID) {
-		return "", 0, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return "", 0, fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	}
 	out, err := runner.Run(ctx, systemctlPath, "show", "-p", "ActiveState", "-p", "ExecMainStatus",
 		transientUnitPrefix+operationID)

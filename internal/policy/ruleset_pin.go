@@ -29,11 +29,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/netip"
-	"net/url"
-	"regexp"
-	"strings"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // The stable codes this file reports. They are part of the diagnostic
@@ -58,7 +57,7 @@ const (
 const (
 	// AIEgressOut: the AI traffic egresses through the authorized Out and the
 	// pinned ruleset was verified.
-	AIEgressOut = "out"
+	AIEgressOut = protocol.OutboundOutTag
 	// AIEgressLine: no Out is configured, so the Line is the configured egress.
 	AIEgressLine = "line"
 	// AIEgressLineFallback: an administrator explicitly chose the Line because
@@ -66,31 +65,11 @@ const (
 	AIEgressLineFallback = "line-fallback"
 )
 
-// maxRulesetBytes bounds one downloaded artifact. The Out guard and the client
-// document both stay small; an unbounded body would be a memory lever on the
-// Hub.
-const maxRulesetBytes = 8 << 20
-
-// rulesetVersionPattern accepts one immutable version label. A path-style
-// channel such as "latest" is rejected by the denylist below even though it
-// matches the character set.
-var rulesetVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
-
-// mutableRulesetVersions are the labels that mean "whatever is newest", which
-// is exactly what a version lock may not accept.
-var mutableRulesetVersions = map[string]bool{
-	"latest":  true,
-	"head":    true,
-	"main":    true,
-	"master":  true,
-	"stable":  true,
-	"dev":     true,
-	"nightly": true,
-}
-
 // RulesetPin is the version lock of one AI ruleset artifact. Source must be an
 // exact public HTTPS URL, Version an immutable label and SHA256 the lowercase
-// hex digest of the bytes the renderer will embed.
+// hex digest of the bytes the renderer will embed. The shape and the shared
+// predicates live in the subscription IR; this layer maps a refusal to the
+// policy error code.
 type RulesetPin struct {
 	Source  string `json:"source"`
 	Version string `json:"version"`
@@ -101,49 +80,11 @@ type RulesetPin struct {
 // It never performs I/O, so a configuration defect is reported before any
 // network access.
 func (p RulesetPin) Validate() error {
-	invalid := func(reason string) error {
-		return errors.New(CodeRulesetPinInvalid + ": " + reason)
-	}
-	if p.Source == "" || len(p.Source) > 512 || strings.TrimSpace(p.Source) != p.Source {
-		return invalid("the source must be one exact URL")
-	}
-	parsed, err := url.Parse(p.Source)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" ||
-		parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
-		parsed.Opaque != "" || strings.ContainsAny(p.Source, " \t\r\n") {
-		return invalid("the source must be one exact public HTTPS URL without credentials, query or fragment")
-	}
-	// A literal network address is not a public ruleset host. This is not a
-	// full SSRF defence (the Hub never accepts the URL from a request), it
-	// keeps the deployment from pinning a loopback or private artifact by
-	// mistake, which would make the "public, reproducible" claim false.
-	if addr, addrErr := netip.ParseAddr(parsed.Hostname()); addrErr == nil {
-		if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() ||
-			addr.IsUnspecified() || addr.IsMulticast() || addr.Is4In6() {
-			return invalid("the source must not be a loopback, private or unspecified literal address")
-		}
-	}
-	if host := parsed.Hostname(); host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return invalid("the source must be a public ruleset host")
-	}
-	if !rulesetVersionPattern.MatchString(p.Version) || mutableRulesetVersions[strings.ToLower(p.Version)] {
-		return invalid("the version must be one immutable label, not a mutable channel")
-	}
-	// A path that names a mutable channel is the same defect spelled in the
-	// URL: the file behind it changes without the pin changing.
-	for _, segment := range strings.Split(parsed.Path, "/") {
-		if mutableRulesetVersions[strings.ToLower(segment)] {
-			return invalid("the source must name one immutable artifact, not a mutable channel")
-		}
-	}
-	if !artifactDigestPattern.MatchString(p.SHA256) {
-		return invalid("the digest must be 64 lowercase hex characters")
+	if detail := ir.PinDetail(p.Source, p.Version, p.SHA256); detail != "" {
+		return errors.New(CodeRulesetPinInvalid + ": " + detail)
 	}
 	return nil
 }
-
-// artifactDigestPattern is the one accepted digest spelling.
-var artifactDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // RulesetFetcher downloads exactly the artifact a pin names. It is a seam so a
 // test can prove the decision path without a network.
@@ -192,7 +133,7 @@ func fetchPinnedRuleset(ctx context.Context, source string, limit int64) ([]byte
 // productionRulesetFetcher is the bounded HTTPS fetch used by the retained
 // byte-verification entry point.
 func productionRulesetFetcher(ctx context.Context, source string) ([]byte, error) {
-	return fetchPinnedRuleset(ctx, source, maxRulesetBytes)
+	return fetchPinnedRuleset(ctx, source, MaxRulesetBytes)
 }
 
 // ResolveAIRuleset downloads the pinned artifact and returns its bytes only
@@ -206,7 +147,7 @@ func productionRulesetFetcher(ctx context.Context, source string) ([]byte, error
 // RULESET_PIN_INVALID) and carries no URL, body or transport text, so a log
 // line stays safe. The caller refuses publication on any error.
 func ResolveAIRuleset(pin RulesetPin) ([]byte, error) {
-	return resolveAIRuleset(context.Background(), productionRulesetFetcher, pin, maxRulesetBytes)
+	return resolveAIRuleset(context.Background(), productionRulesetFetcher, pin, MaxRulesetBytes)
 }
 
 // resolveAIRuleset is the testable form of ResolveAIRuleset.

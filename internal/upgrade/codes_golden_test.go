@@ -64,6 +64,18 @@ var errorCodeDomains = map[string]bool{
 // client, a log line or an operator sees is a visible diff here.
 var goldenErrorCodeValues = []string{
 	"DATABASE_UNAVAILABLE",
+	// The Hub self-upgrade shared codes moved into internal/hubupgrade/codes.go
+	// so the Web producer and the root executor name one value each; they are
+	// frozen here from this commit on.
+	"HUB_BACKUP_IDENTITY_MISSING",
+	"HUB_HANDOFF_BUSY",
+	"HUB_HANDOFF_INVALID_STATE",
+	"HUB_HANDOFF_REQUEST_INVALID",
+	"HUB_MANIFEST_PACKAGE_MISMATCH",
+	"HUB_RESTORE_BINARY_MISSING",
+	"HUB_RESTORE_DIGEST_MISMATCH",
+	"HUB_RESTORE_UNIT_SHAPE_INVALID",
+	"HUB_SHARED_BINARY_REPIN_FAILED",
 	"LINE_EGRESS_UNVERIFIED",
 	"LINE_NOT_AUTHORIZED",
 	"MESH_DEVICE_CORRUPT",

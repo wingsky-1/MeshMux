@@ -65,12 +65,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
-// maxOutAllowlistSources mirrors the frozen protocol and Agent bound. One Line is
-// served by at most one Out under the 1.0 same-Line rule, and one Out may be
-// selected by several subscriptions, so this is a defensive ceiling that keeps
-// the derived list inside the same bounded envelope the Agent accepts.
-const maxOutAllowlistSources = 256
-
 // The Out authorization states the Hub can prove.
 const (
 	// OutSyncHealthy: the published allowlist is the desired one and the Agent
@@ -247,17 +241,17 @@ func validNodeID(id string) bool {
 // instead of authorizing the wrong host.
 func lineEgressSourceTx(tx *sql.Tx, lineID string) (string, bool, error) {
 	if err := subscription.ValidateID(lineID); err != nil {
-		return "", false, errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
+		return "", false, errLineIDInvalid()
 	}
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, errors.New("LINE_NOT_FOUND: unknown line node")
+		return "", false, errLineNotFound
 	}
 	if err != nil {
-		return "", false, errors.New("DATABASE_UNAVAILABLE")
+		return "", false, errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "edge" {
+	if role != string(nodeRoleEdge) {
 		return "", false, errors.New("LINE_ROLE_INVALID: only edge nodes can be an out source")
 	}
 	var server string
@@ -266,11 +260,11 @@ func lineEgressSourceTx(tx *sql.Tx, lineID string) (string, bool, error) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, errors.New("DATABASE_UNAVAILABLE")
+		return "", false, errors.New(CodeDatabaseUnavailable)
 	}
 	var identities int
 	if err := tx.QueryRow(`SELECT count(*) FROM node_identities WHERE node_id=? AND revoked=0`, lineID).Scan(&identities); err != nil {
-		return "", false, errors.New("DATABASE_UNAVAILABLE")
+		return "", false, errors.New(CodeDatabaseUnavailable)
 	}
 	if identities != 1 {
 		return "", false, nil
@@ -309,19 +303,19 @@ func OutAuthorizedLineIDsTx(tx *sql.Tx, outID string) ([]string, error) {
 	 WHERE n.role='edge'
 	 ORDER BY n.id ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	ids := []string{}
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return ids, nil
 }
@@ -382,7 +376,7 @@ func outAuthorizationTx(tx *sql.Tx, outID string) ([]string, error) {
 func (s *Store) OutAuthorizedSubscribers(outID string) ([]string, error) {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return nil, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return nil, errOutIDInvalid()
 	}
 	return s.selectionUsedBy(`SELECT s.display_name FROM subscription_outs o
 	  JOIN subscribers s ON s.id=o.subscriber_id
@@ -398,11 +392,11 @@ func (s *Store) OutAuthorizedSubscribers(outID string) ([]string, error) {
 func (s *Store) OutMembershipLineIDs(outID string) ([]string, error) {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return nil, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return nil, errOutIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if err := requireOutRoleTx(tx, outID); err != nil {
@@ -423,23 +417,23 @@ func (s *Store) OutMembershipLineIDs(outID string) ([]string, error) {
 func (s *Store) DeriveOutAllowlist(outID string) ([]string, error) {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return nil, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return nil, errOutIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errors.New("OUT_NOT_FOUND: unknown out node")
+		return nil, errOutNotFound
 	}
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "out" {
-		return nil, errors.New("OUT_ROLE_INVALID: only out nodes carry a source authorization")
+	if role != string(nodeRoleOut) {
+		return nil, errOutRoleInvalidSource
 	}
 	return outAuthorizationTx(tx, outID)
 }
@@ -473,13 +467,13 @@ func OutReadbackAllowlistTx(tx *sql.Tx, outID string, revision int64) ([]string,
  WHERE node_id=? AND kind IN (?,?,?,?) ORDER BY revision DESC`,
 		outID, protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply, protocol.KindConfigReadback)
 	if err != nil {
-		return nil, false, errors.New("DATABASE_UNAVAILABLE")
+		return nil, false, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
-			return nil, false, errors.New("DATABASE_UNAVAILABLE")
+			return nil, false, errors.New(CodeDatabaseUnavailable)
 		}
 		var params struct {
 			Revision       int64     `json:"revision"`
@@ -494,7 +488,7 @@ func OutReadbackAllowlistTx(tx *sql.Tx, outID string, revision int64) ([]string,
 		return append([]string{}, (*params.AllowedSources)...), true, nil
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, errors.New("DATABASE_UNAVAILABLE")
+		return nil, false, errors.New(CodeDatabaseUnavailable)
 	}
 	return nil, false, nil
 }
@@ -512,7 +506,7 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 	}
 	revision, digest, _, found, err := LatestPublishedCandidateTx(tx, outID)
 	if err != nil {
-		return OutSyncPartial, "DATABASE_UNAVAILABLE", err
+		return OutSyncPartial, CodeDatabaseUnavailable, err
 	}
 	if !found {
 		return OutSyncPending, CodeOutSyncPending, nil
@@ -523,11 +517,11 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 	}
 	published, present, err := OutReadbackAllowlistTx(tx, outID, revision)
 	if err != nil {
-		return OutSyncPartial, "DATABASE_UNAVAILABLE", err
+		return OutSyncPartial, CodeDatabaseUnavailable, err
 	}
 	unfinished, err := subscriberLineUnfinishedTasksTx(tx, outID)
 	if err != nil {
-		return OutSyncPartial, "DATABASE_UNAVAILABLE", err
+		return OutSyncPartial, CodeDatabaseUnavailable, err
 	}
 	if digest != desiredDigest || !present || !node.SameACLSourceSet(published, desired) {
 		if unfinished != 0 {
@@ -537,7 +531,7 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 	}
 	confirmed, err := subscriberLineReadbackConfirmedTx(tx, outID, revision, digest)
 	if err != nil {
-		return OutSyncPartial, "DATABASE_UNAVAILABLE", err
+		return OutSyncPartial, CodeDatabaseUnavailable, err
 	}
 	if confirmed && unfinished == 0 {
 		return OutSyncHealthy, "", nil
@@ -547,7 +541,7 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 	}
 	_, code, failed, err := SubscriberLineLatestTaskTx(tx, outID)
 	if err != nil {
-		return OutSyncPartial, "DATABASE_UNAVAILABLE", err
+		return OutSyncPartial, CodeDatabaseUnavailable, err
 	}
 	if failed {
 		if code == OutAclSourceMismatchCode {
@@ -570,12 +564,12 @@ func scanIDRows(rows *sql.Rows) ([]string, error) {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out = append(out, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -584,7 +578,7 @@ func scanIDRows(rows *sql.Rows) ([]string, error) {
 func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 	rows, err := tx.Query(query, args...)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return scanIDRows(rows)
 }
@@ -634,10 +628,10 @@ func nodeRoleTx(tx *sql.Tx, nodeID string) (string, error) {
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errors.New("NODE_NOT_FOUND: unknown node")
+		return "", errNodeNotFoundDetail
 	}
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	return role, nil
 }
@@ -648,12 +642,12 @@ func requireOutRoleTx(tx *sql.Tx, outID string) error {
 	role, err := nodeRoleTx(tx, outID)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "NODE_NOT_FOUND") {
-			return errors.New("OUT_NOT_FOUND: unknown out node")
+			return errOutNotFound
 		}
 		return err
 	}
-	if role != "out" {
-		return errors.New("OUT_ROLE_INVALID: only out nodes carry a source authorization")
+	if role != string(nodeRoleOut) {
+		return errOutRoleInvalidSource
 	}
 	return nil
 }
@@ -668,14 +662,14 @@ func requireOutRoleTx(tx *sql.Tx, outID string) error {
 func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
 	selected, err := selectedEgressIDsForLineTx(tx, lineID)
 	if err != nil {
-		return LineEgressPartial, "DATABASE_UNAVAILABLE", err
+		return LineEgressPartial, CodeDatabaseUnavailable, err
 	}
 	if len(selected) == 0 {
 		return LineEgressDirect, "", nil
 	}
 	outs, err := enabledOutIDsForLineTx(tx, lineID)
 	if err != nil {
-		return LineEgressPartial, "DATABASE_UNAVAILABLE", err
+		return LineEgressPartial, CodeDatabaseUnavailable, err
 	}
 	if len(outs) == 0 {
 		// The slot names an external HTTP proxy: there is no Out ACL and no
@@ -693,7 +687,7 @@ func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, st
 	for _, outID := range outs {
 		outState, outCode, err := outSyncStatusTx(tx, outID, now)
 		if err != nil {
-			return LineEgressPartial, "DATABASE_UNAVAILABLE", err
+			return LineEgressPartial, CodeDatabaseUnavailable, err
 		}
 		switch outState {
 		case OutSyncHealthy:
@@ -763,7 +757,7 @@ func outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressRea
 	// what proves its inbound listener, user set and REALITY transport.
 	inbound, inboundCode, inboundErr := SubscriberLineSyncViewTx(tx, lineID, now)
 	if inboundErr != nil {
-		return OutEgressReadback{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutEgressReadback{}, errors.New(CodeDatabaseUnavailable)
 	}
 	readback.Inbound, readback.InboundCode = inbound, inboundCode
 	// REALITY is reported as its own fact because an operator must be able to
@@ -868,9 +862,9 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 		return outDrainNoop, nil
 	}
 	if err != nil {
-		return outDrainNoop, errors.New("DATABASE_UNAVAILABLE")
+		return outDrainNoop, errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "out" {
+	if role != string(nodeRoleOut) {
 		return outDrainNoop, nil
 	}
 	latestRevision, latestDigest, _, hasCandidate, err := LatestPublishedCandidateTx(tx, outID)
@@ -952,7 +946,7 @@ func outPublishedAuthorizationTx(tx *sql.Tx, outID string, revision int64, diges
 func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 	var revision int64
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		return 0, errors.New("DATABASE_UNAVAILABLE")
+		return 0, errors.New(CodeDatabaseUnavailable)
 	}
 	return revision, nil
 }
@@ -964,11 +958,11 @@ func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 func (s *Store) RetryOutSync(outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return errOutIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	outcome, err := DrainOutNodeIntentTx(tx, outID, now, true)
@@ -976,7 +970,7 @@ func (s *Store) RetryOutSync(outID string, now time.Time) error {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if outcome == outDrainDeferred {
 		return errors.New(CodeOutSyncPending + ": the out authorization change is queued behind an in-flight or offline out")
@@ -1016,7 +1010,7 @@ func (s *Store) lineIDsForOut(outID string) ([]string, error) {
 func storeIDs(db *sql.DB, query string, args ...any) ([]string, error) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return scanIDRows(rows)
 }
@@ -1064,7 +1058,7 @@ func (s *Store) drainNodeCoordination(nodeID string, now time.Time) {
 		s.drainSubscriberNode(nodeID, now)
 		return
 	}
-	if role == "out" {
+	if role == string(nodeRoleOut) {
 		s.drainOutNode(nodeID, now)
 		s.drainLinesForOut(nodeID, now)
 		return
@@ -1129,17 +1123,17 @@ func (s *Store) RepublishLineAuthorizations(now time.Time) {
 func (s *Store) NodeCoordinationReadback(nodeID string, now time.Time) (OutEgressReadback, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return OutEgressReadback{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutEgressReadback{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	if err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role); err != nil {
-		return OutEgressReadback{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutEgressReadback{}, errors.New(CodeDatabaseUnavailable)
 	}
-	if role == "out" {
+	if role == string(nodeRoleOut) {
 		state, code, err := outSyncStatusTx(tx, nodeID, now)
 		if err != nil {
-			return OutEgressReadback{}, errors.New("DATABASE_UNAVAILABLE")
+			return OutEgressReadback{}, errors.New(CodeDatabaseUnavailable)
 		}
 		return OutEgressReadback{
 			OutID:         nodeID,

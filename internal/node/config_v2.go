@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"regexp"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // The v1 candidate document is a frozen, non-secret, six-field shape. The v2
@@ -26,12 +27,6 @@ const (
 
 	// maxCandidateUsers bounds the per-Line user set of one candidate.
 	maxCandidateUsers = 1024
-)
-
-var (
-	credentialIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	shortIDPattern      = regexp.MustCompile(`^[a-f0-9]{16}$`)
-	uuidV4Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 // VLESSUser is one per-Line VLESS credential carried by a v2 candidate.
@@ -56,10 +51,10 @@ type RealityConfig struct {
 // Validate checks the shape of one VLESS user. Uniqueness across the whole
 // candidate is checked by the candidate validation, not here.
 func (u VLESSUser) Validate() error {
-	if !credentialIDPattern.MatchString(u.CredentialID) {
+	if !protocol.ValidID(u.CredentialID) {
 		return errors.New("CREDENTIAL_ID_INVALID: need 32 lowercase hex characters")
 	}
-	if !uuidV4Pattern.MatchString(u.UUID) {
+	if !protocol.ValidUUIDv4(u.UUID) {
 		return errors.New("CREDENTIAL_UUID_INVALID: need a canonical lowercase UUIDv4")
 	}
 	return nil
@@ -82,7 +77,7 @@ func (r RealityConfig) Validate() error {
 	if err := validateRealityPrivateKey(r.PrivateKey); err != nil {
 		return err
 	}
-	if !shortIDPattern.MatchString(r.ShortID) {
+	if !protocol.ValidShortID(r.ShortID) {
 		return errors.New("REALITY_SHORT_ID_INVALID: need 16 lowercase hex characters")
 	}
 	return nil

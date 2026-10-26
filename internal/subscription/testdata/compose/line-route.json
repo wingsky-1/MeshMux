@@ -1,0 +1,56 @@
+{
+  "rules": [
+    {
+      "outbound": "direct",
+      "rule_set": [
+        "geosite-cn@20261026"
+      ]
+    },
+    {
+      "outbound": "out",
+      "rule_set": [
+        "ai@20261026"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "ads.example.invalid",
+        "tracker.example.invalid"
+      ],
+      "outbound": "block"
+    },
+    {
+      "domain": [
+        "dl.example.invalid"
+      ],
+      "outbound": "direct"
+    },
+    {
+      "outbound": "direct",
+      "rule_set": [
+        "geoip-jp@20261026"
+      ]
+    }
+  ],
+  "rule_set": [
+    {
+      "type": "remote",
+      "tag": "geosite-cn@20261026",
+      "format": "binary",
+      "url": "https://rulesets.example.invalid/2026-10-26.srs"
+    },
+    {
+      "type": "remote",
+      "tag": "ai@20261026",
+      "format": "binary",
+      "url": "https://rulesets.example.invalid/2026-10-26.srs"
+    },
+    {
+      "type": "remote",
+      "tag": "geoip-jp@20261026",
+      "format": "binary",
+      "url": "https://rulesets.example.invalid/2026-10-26.srs"
+    }
+  ],
+  "final": "direct"
+}

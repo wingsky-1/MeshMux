@@ -26,6 +26,11 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/node"
 )
 
+// gateDirName is the private scratch subdirectory the gate writes into. It is
+// relative to the Hub data directory, so the documents never leave the private
+// boundary.
+const gateDirName = "publish-gate"
+
 // PublishVerifier checks assembled documents with the pinned kernels. It is an
 // interface so tests can inject a fixture verifier without a real binary; the
 // production value is execPublishVerifier.
@@ -61,7 +66,7 @@ func NewPublishVerifier(cfg PublishGateConfig, dir string) (PublishVerifier, err
 		cfg.Runner = node.ExecRunner{}
 	}
 	if dir == "" || !filepath.IsAbs(dir) {
-		return nil, errors.New("PUBLISH_GATE_FAILED: the gate needs an absolute scratch directory")
+		return nil, errors.New(codePublishGate + ": the gate needs an absolute scratch directory")
 	}
 	return &execPublishVerifier{cfg: cfg, dir: dir, name: randomGateName}, nil
 }
@@ -87,13 +92,13 @@ func randomGateName() (string, error) {
 	// crypto/rand.Read crashes the process on a broken entropy source in Go
 	// 1.27; io.ReadFull lets this gate report the failure instead.
 	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
-		return "", errors.New("PUBLISH_GATE_FAILED: the gate scratch name could not be generated")
+		return "", errors.New(codePublishGate + ": the gate scratch name could not be generated")
 	}
 	return hex.EncodeToString(b[:]), nil
 }
 
 func (v *execPublishVerifier) CheckSingBox(ctx context.Context, document []byte) (string, error) {
-	path, cleanup, err := v.write("sing-box", document)
+	path, cleanup, err := v.write(kernelSingBox, document)
 	if err != nil {
 		return "", err
 	}
@@ -101,7 +106,7 @@ func (v *execPublishVerifier) CheckSingBox(ctx context.Context, document []byte)
 	if err := node.CheckSingBoxDocument(ctx, v.cfg.Runner, v.cfg.SingBoxPath, path); err != nil {
 		return "", err
 	}
-	return "sing-box " + node.SingBoxPublishVersion + " accepted the assembled document", nil
+	return kernelSingBox + " " + node.SingBoxPublishVersion + " accepted the assembled document", nil
 }
 
 func (v *execPublishVerifier) CheckMihomo(ctx context.Context, document []byte) (string, error) {
@@ -110,7 +115,7 @@ func (v *execPublishVerifier) CheckMihomo(ctx context.Context, document []byte) 
 	if err := executablePresent(v.cfg.MihomoPath); err != nil {
 		return "", errors.New(node.CodePublishMihomoMissing + ": the pinned mihomo binary is missing at the configured path")
 	}
-	path, cleanup, err := v.write("mihomo", document)
+	path, cleanup, err := v.write(kernelMihomo, document)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +124,7 @@ func (v *execPublishVerifier) CheckMihomo(ctx context.Context, document []byte) 
 	if err != nil {
 		return detail, err
 	}
-	return "mihomo " + node.MihomoVersion + " accepted the assembled document", nil
+	return kernelMihomo + " " + node.MihomoVersion + " accepted the assembled document", nil
 }
 
 // write stores one document in a 0600 scratch file inside the private gate
@@ -127,14 +132,14 @@ func (v *execPublishVerifier) CheckMihomo(ctx context.Context, document []byte) 
 // a path, and the directory is created 0700.
 func (v *execPublishVerifier) write(kernel string, document []byte) (string, func(), error) {
 	if len(document) == 0 || len(document) > 4<<20 {
-		return "", func() {}, errors.New("PUBLISH_GATE_FAILED: the document is empty or too large")
+		return "", func() {}, errors.New(codePublishGate + ": the document is empty or too large")
 	}
-	dir := filepath.Join(v.dir, "publish-gate")
+	dir := filepath.Join(v.dir, gateDirName)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", func() {}, errors.New("PUBLISH_GATE_FAILED: the gate scratch directory is unavailable")
+		return "", func() {}, errors.New(codePublishGate + ": the gate scratch directory is unavailable")
 	}
 	ext := ".json"
-	if kernel == "mihomo" {
+	if kernel == kernelMihomo {
 		ext = ".yaml"
 	}
 	name, err := v.name()
@@ -144,7 +149,7 @@ func (v *execPublishVerifier) write(kernel string, document []byte) (string, fun
 	path := filepath.Join(dir, kernel+"-"+name+ext)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return "", func() {}, errors.New("PUBLISH_GATE_FAILED: the gate scratch file was not created")
+		return "", func() {}, errors.New(codePublishGate + ": the gate scratch file was not created")
 	}
 	cleanup := func() { _ = os.Remove(path) }
 	if _, err = f.Write(document); err == nil {
@@ -155,7 +160,7 @@ func (v *execPublishVerifier) write(kernel string, document []byte) (string, fun
 	}
 	if err != nil {
 		cleanup()
-		return "", func() {}, errors.New("PUBLISH_GATE_FAILED: the gate scratch file was not written")
+		return "", func() {}, errors.New(codePublishGate + ": the gate scratch file was not written")
 	}
 	return path, cleanup, nil
 }

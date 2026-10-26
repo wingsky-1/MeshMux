@@ -19,7 +19,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
@@ -30,7 +32,7 @@ const (
 	// convergeRWPaths is the complete write set: agent.json and the private
 	// Agent directory that holds the claim record (read only, but keeping the
 	// directory visible keeps the unit's view identical to the installer's).
-	convergeRWPaths = "/etc/meshmux /var/lib/meshmux-agent"
+	convergeRWPaths = "/etc/meshmux " + versions.AgentRoot
 	// convergeHiddenCommand is the unit's only subcommand.
 	convergeHiddenCommand = "__internal-update-converge"
 )
@@ -46,9 +48,9 @@ func BuildConvergeArgv(operationID, expectedSHA256 string) ([]string, error) {
 	case operationID == "":
 		return nil, fail("OPERATION_REQUIRED", "an operation ID is required")
 	case !opIDRE.MatchString(operationID):
-		return nil, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return nil, fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	case !digestRE.MatchString(expectedSHA256):
-		return nil, fail("UPDATE_DIGEST_INVALID", "the claimed digest is not 64 lowercase hex")
+		return nil, fail(backup.CodeDigestInvalid, "the claimed digest is not 64 lowercase hex")
 	}
 	return []string{
 		systemdRunPath,

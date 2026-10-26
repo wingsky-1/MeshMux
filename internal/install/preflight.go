@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 func check(name, code, action string, err error) Check {
@@ -239,7 +241,7 @@ func PreflightWithMode(ctx context.Context, c Config, allowManagedListeners bool
 	}
 	checks = append(checks, check("os", "OS_UNSUPPORTED", "Use a clean Debian 13 host.", err))
 	var archErr error
-	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" || runtime.GOOS != "linux" {
+	if !versions.IsSupportedArchitecture(runtime.GOARCH) || runtime.GOOS != "linux" {
 		archErr = errors.New("unsupported architecture")
 	}
 	checks = append(checks, check("architecture", "ARCH_UNSUPPORTED", "Use Linux amd64 or arm64.", archErr))
@@ -419,9 +421,9 @@ func meshMuxUnitForPort(port int) string {
 	case 80, 443:
 		return "meshmux-caddy.service"
 	case 3478, HeadscalePort, 50443:
-		return "meshmux-headscale.service"
+		return headscaleUnitName
 	case WebPort:
-		return "meshmux-web.service"
+		return versions.WebUnitName
 	}
 	return ""
 }

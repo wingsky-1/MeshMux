@@ -12,15 +12,17 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // CodeRenderUnsupported marks a policy the target format cannot express.
 const CodeRenderUnsupported = "RENDER_UNSUPPORTED"
 
 const (
-	singBoxDirectTag    = "direct"
-	singBoxProxyTag     = "meshmux-selector"
-	singBoxTailscaleTag = "meshmux-ts"
+	singBoxDirectTag    = protocol.OutboundDirectTag
+	singBoxProxyTag     = protocol.SelectorTag
+	singBoxTailscaleTag = protocol.TailscaleEndpointTag
 )
 
 var singBoxTags = map[CompilerAction]string{
@@ -30,9 +32,11 @@ var singBoxTags = map[CompilerAction]string{
 }
 
 var mihomoTags = map[CompilerAction]string{
-	CompilerActionDirect: "DIRECT",
-	CompilerActionProxy:  "PROXY",
-	CompilerActionOut:    "OUT",
+	CompilerActionDirect: protocol.MihomoDirect,
+	CompilerActionProxy:  protocol.MihomoGroupName,
+	// "OUT" is the policy fragment's own group name; it is not a document tag
+	// the node or the subscriber exporter renders, so it stays here.
+	CompilerActionOut: "OUT",
 }
 
 // RenderSingBox renders the client policy as a sing-box 1.14.3 route fragment.

@@ -113,7 +113,7 @@ func (r *Runtime) status(ctx context.Context) (protocol.TaskResult, error) {
 // unreadable, unsafe or malformed is an error: it is never downgraded to "no
 // allowlist".
 func AppliedAllowedSources(root, nodeID string, role Role) ([]string, bool, error) {
-	if !nodeIDPattern.MatchString(nodeID) || !role.valid() {
+	if !protocol.ValidID(nodeID) || !role.valid() {
 		return nil, false, errors.New("RUNTIME_STATE_QUERY_INVALID")
 	}
 	absRoot, err := trustedRoot(root)

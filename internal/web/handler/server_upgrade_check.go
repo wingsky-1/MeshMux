@@ -35,7 +35,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io"
 	"net/http"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -44,12 +43,13 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
 )
 
-// Stable approval refusals of this task.
+// Stable approval refusals of this task. The literals live in codes.go so a
+// second handler never re-spells them.
 const (
 	// codeUpgradeManifestUnavailable: no pinned manifest describes the
 	// requested release, so the operator's tag is still only a suggestion. The
 	// Hub never falls back to a cached or newer release.
-	codeUpgradeManifestUnavailable = "MANIFEST_UNAVAILABLE"
+	codeUpgradeManifestUnavailable = codeManifestUnavailable
 	// codeUpgradeTargetInvalid: the requested version is not a SemVer release.
 	codeUpgradeTargetInvalid = "UPGRADE_TARGET_INVALID"
 	// codeUpgradeSchemaIncompatible: the target names another stored policy
@@ -65,19 +65,6 @@ const githubReleasesLatest = "https://api.github.com/repos/wingsky-1/MeshMux/rel
 // releaseClient bounds the operator-triggered check. A slow upstream is shown as
 // unknown instead of holding the page.
 var releaseClient = &http.Client{Timeout: 10 * time.Second}
-
-// upgradeVersionPattern mirrors the SemVer shape jobs/upgrade/update enforce.
-// Those packages do not export their regexp; all of them must change together.
-var upgradeVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
-
-// upgradeNodeIDPattern is the fixed node id shape, repeated here so a form field
-// never reaches a query before its shape is checked.
-var upgradeNodeIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-
-// agentOperationIDPattern is the fixed operation id shape of the agent read. It
-// is repeated here for the same reason: a path segment is validated before any
-// query runs.
-var agentOperationIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 // upgradeApproveReceipt is the typed approval result. It reports queued work and
 // the pinned release, never that the target is installed.
@@ -153,7 +140,7 @@ func githubLatestRelease(ctx context.Context) (string, error) {
 		return "", errors.New("RELEASE_QUERY_FAILED")
 	}
 	tag := strings.TrimPrefix(strings.TrimSpace(body.TagName), "v")
-	if !upgradeVersionPattern.MatchString(tag) {
+	if !isValidReleaseVersion(tag) {
 		return "", errors.New("RELEASE_QUERY_FAILED")
 	}
 	return tag, nil
@@ -165,12 +152,12 @@ func githubLatestRelease(ctx context.Context) (string, error) {
 func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ session) {
 	nodeID := strings.TrimSpace(r.PostForm.Get("node_id"))
 	version := strings.TrimPrefix(strings.TrimSpace(r.PostForm.Get("version")), "v")
-	if !upgradeNodeIDPattern.MatchString(nodeID) {
+	if !isValidNodeID(nodeID) {
 		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
 			"节点标识不正确。", "请从任务页面的节点行重新提交批准。")
 		return
 	}
-	if !upgradeVersionPattern.MatchString(version) {
+	if !isValidReleaseVersion(version) {
 		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
 			"目标版本不是 SemVer 发行版。", "请重新检查新版本后再批准。")
 		return
@@ -265,44 +252,43 @@ func (app *Server) writeUpgradeFailure(w http.ResponseWriter, r *http.Request, s
 // Every branch returns: the writer must never emit two JSON bodies for one
 // request.
 func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, err error) {
-	code := err.Error()
+	code := store.ErrorCodeOf(err)
 	switch {
-	case strings.HasPrefix(code, "TASKS_IN_PROGRESS"):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, "TASKS_IN_PROGRESS",
+	case code == codeTasksInProgress:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, codeTasksInProgress,
 			"该节点仍有未结束的任务链。", "等待当前链结束或失败后再批准；已应用修订保持不变。")
-	case strings.HasPrefix(code, store.CodeUpgradeNotAdjacent):
+	case code == store.CodeUpgradeNotAdjacent:
 		app.writeUpgradeFailure(w, r, http.StatusConflict, store.CodeUpgradeNotAdjacent,
 			"目标版本不是当前已批准版本的下一个发行版。", "请按发行顺序逐版批准；未写入任何升级记录。")
-	case strings.HasPrefix(code, store.CodeUpgradeAgentIncompatible):
+	case code == store.CodeUpgradeAgentIncompatible:
 		app.writeUpgradeFailure(w, r, http.StatusConflict, store.CodeUpgradeAgentIncompatible,
 			"节点回读的 Agent 版本无法消费该候选。", "请先升级该节点到理解该候选的版本；未下发任何内容。")
-	case strings.HasPrefix(code, "NODE_NOT_FOUND"):
-		app.writeUpgradeFailure(w, r, http.StatusNotFound, "NODE_NOT_FOUND",
+	case code == codeNodeNotFound:
+		app.writeUpgradeFailure(w, r, http.StatusNotFound, codeNodeNotFound,
 			"节点不存在。", "请刷新任务页面后重试。")
-	case strings.HasPrefix(code, "UPGRADE_ALREADY_CURRENT"):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_ALREADY_CURRENT",
+	case code == codeUpgradeAlreadyCurrent:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeAlreadyCurrent,
 			"该节点已运行该发行版本。", "无需重复升级；如需重装，请走重新复核流程。")
-	case strings.HasPrefix(code, "UPGRADE_AGENT_UNOBSERVED"):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_AGENT_UNOBSERVED",
+	case code == codeUpgradeAgentUnobserved:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeAgentUnobserved,
 			"该节点尚未回读 Agent 版本。", "请先完成一次成功的配置回读，再批准升级。")
-	case strings.HasPrefix(code, "UPGRADE_CHAIN_INVALID"), strings.HasPrefix(code, "CANDIDATE_INVALID"),
-		strings.HasPrefix(code, "CANDIDATE_MISMATCH"):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_CHAIN_INVALID",
+	case code == codeUpgradeChainInvalid, code == codeCandidateInvalid, code == codeCandidateMismatch:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeChainInvalid,
 			"当前快照无法生成合法的升级链。", "请先复核该节点配置；未写入任何升级记录。")
 	// The approval re-derives the Line route from the live policy, so it can
 	// meet the same Out contract a publication does. The refusal is reported
 	// with the policy package's own stable code and the operator's next step (fix the
 	// Out, or publish a direct server policy) instead of a generic retry hint.
-	case strings.HasPrefix(code, "OUT_BINDING_INVALID"):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, "OUT_BINDING_INVALID",
+	case code == codeOutBindingInvalid:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, codeOutBindingInvalid,
 			"当前服务端策略指向一个该线路没有的 Out。", "请先绑定 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
-	case strings.HasPrefix(code, policy.CodeOutOfflineFailClosed):
+	case code == policy.CodeOutOfflineFailClosed:
 		app.writeUpgradeFailure(w, r, http.StatusConflict, policy.CodeOutOfflineFailClosed,
 			"当前服务端策略指向的 Out 不可用。", "请恢复 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
-	case strings.HasPrefix(code, "POLICY_CORRUPT"), strings.HasPrefix(code, "POLICY_PINS_INVALID"),
-		strings.HasPrefix(code, policy.CodePolicyInvalid), strings.HasPrefix(code, policy.CodePolicyConflict),
-		strings.HasPrefix(code, policy.CodeRulesetUnpinned):
-		app.writeUpgradeFailure(w, r, http.StatusConflict, "UPGRADE_CHAIN_INVALID",
+	case code == codePolicyCorrupt, code == codePolicyPinsInvalid,
+		code == policy.CodePolicyInvalid, code == policy.CodePolicyConflict,
+		code == policy.CodeRulesetUnpinned:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeChainInvalid,
 			"当前 active 服务端策略无法解析出线路路由。", "请先修复并重新发布服务端策略；未写入任何升级记录。")
 	default:
 		app.writeUpgradeFailure(w, r, http.StatusServiceUnavailable, "UPGRADE_APPROVAL_FAILED",

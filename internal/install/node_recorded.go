@@ -43,15 +43,15 @@ func recordedNodeConfig(root string, role node.Role) (node.Config, *InstallError
 		if errors.As(err, &ie) && ie.Code != "" {
 			return node.Config{}, ie
 		}
-		return node.Config{}, &InstallError{Stage: "preflight", Code: "INSTALL_STATE_INVALID",
+		return node.Config{}, &InstallError{Stage: "preflight", Code: CodeInstallStateInvalid,
 			Recovery: "Inspect the recorded installer state; do not delete Agent identity or kernel data."}
 	}
 	if !exists || state.Node == nil {
-		return node.Config{}, &InstallError{Stage: "preflight", Code: "REPAIR_STATE_MISSING",
+		return node.Config{}, &InstallError{Stage: "preflight", Code: CodeRepairStateMissing,
 			Recovery: "A recorded-state handoff needs a Node ledger created by MeshMux; enroll the node first."}
 	}
 	if state.Node.Role != role {
-		return node.Config{}, &InstallError{Stage: "preflight", Code: "CONFIG_CONFLICT",
+		return node.Config{}, &InstallError{Stage: "preflight", Code: CodeConfigConflict,
 			Recovery: "The recorded node role differs from this handoff; a recorded-state repair never changes the role."}
 	}
 	recorded := *state.Node
@@ -60,7 +60,7 @@ func recordedNodeConfig(root string, role node.Role) (node.Config, *InstallError
 		// applied; without it the I8 comparison has no left side, which is a
 		// broken ledger rather than an unattended upgrade.
 		if !validDigest.MatchString(recorded.AgentSHA256) || recorded.AgentVersion == "" {
-			return node.Config{}, &InstallError{Stage: "preflight", Code: "CONFIG_CONFLICT",
+			return node.Config{}, &InstallError{Stage: "preflight", Code: CodeConfigConflict,
 				Recovery: "The ledger records no verified Agent release identity; run one interactive repair to re-record it."}
 		}
 		if conflict := checkRecordedAgentConfig(root, recorded); conflict != nil {
@@ -77,7 +77,7 @@ func recordedNodeConfig(root string, role node.Role) (node.Config, *InstallError
 // which build is running, and guessing is exactly what an unattended upgrade
 // must never do.
 func checkRecordedAgentConfig(root string, recorded node.Config) *InstallError {
-	conflict := &InstallError{Stage: "preflight", Code: "CONFIG_CONFLICT",
+	conflict := &InstallError{Stage: "preflight", Code: CodeConfigConflict,
 		Recovery: "The Node ledger and /etc/meshmux/agent.json disagree about the installed build. Inspect both and run one interactive repair before retrying the handoff."}
 	path := rooted(root, node.AgentConfigPath)
 	info, err := os.Lstat(path)

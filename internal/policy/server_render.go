@@ -12,11 +12,13 @@ package policy
 import (
 	"encoding/json"
 	"errors"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 const (
-	singBoxServerOutTag = "out"
-	singBoxServerFormat = "binary" // pinned artifacts are .srs rule sets
+	singBoxServerOutTag = protocol.OutboundOutTag
+	singBoxServerFormat = protocol.RuleSetFormatBinary // pinned artifacts are .srs rule sets
 )
 
 var serverSingBoxTags = map[CompilerAction]string{

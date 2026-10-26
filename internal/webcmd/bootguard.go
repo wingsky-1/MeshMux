@@ -24,12 +24,14 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// BootDir is the fixed runtime directory the installer creates 0730
 	// root:meshmux and the Web declares writable.
-	BootDir = "/run/meshmux-hub/boot"
+	BootDir = versions.HubRunDir + "/boot"
 	// BootAttemptsName is the one attempt document.
 	BootAttemptsName = "boot-attempts.json"
 	// BootWindow is the observation window of a crash loop.

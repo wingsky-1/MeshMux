@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	agentDataDir    = "/var/lib/meshmux-agent"
-	stagedDir       = "/var/lib/meshmux-agent/staged"
-	activeConfigDir = "/var/lib/meshmux-singbox"
+	// The Agent's private host layout. These derive from the exported layout in
+	// config.go so the whole host layout is one edit, not two.
+	agentDataDir    = AgentDataDir
+	stagedDir       = AgentDataDir + "/staged"
+	activeConfigDir = ActiveConfigDir
 	// maxRuntimeFileSize bounds the small runtime files: the agent config,
 	// the identity record, the active candidate, the staged revisions and the
 	// active kernel config. A candidate carries at most 1024 users and the

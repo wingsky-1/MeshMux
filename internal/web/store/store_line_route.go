@@ -50,17 +50,17 @@ func LineServerRouteTx(tx *sql.Tx, nodeID string, now time.Time) (json.RawMessag
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errors.New("NODE_NOT_FOUND: unknown node")
+		return nil, errNodeNotFoundDetail
 	}
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	if node.Role(role) != node.RoleEdge {
 		return nil, nil
 	}
 	var settings int
 	if err := tx.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, nodeID).Scan(&settings); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	if settings == 0 {
 		return nil, nil
@@ -134,7 +134,7 @@ func decodeActivePolicyIntent(record RoutePolicy) (RoutePolicyPayload, error) {
 	decoder := json.NewDecoder(bytes.NewReader(record.Payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&intent); err != nil {
-		return RoutePolicyPayload{}, errors.New("POLICY_CORRUPT: the active payload is not valid intent JSON")
+		return RoutePolicyPayload{}, errors.New(codePolicyCorrupt + ": the active payload is not valid intent JSON")
 	}
 	return intent, nil
 }
@@ -147,10 +147,10 @@ func outEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return OutEgressFacts{}, errors.New("LINE_NOT_FOUND: unknown line node")
+		return OutEgressFacts{}, errLineNotFound
 	}
 	if err != nil {
-		return OutEgressFacts{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutEgressFacts{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if role != string(node.RoleEdge) {
 		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an ai egress")

@@ -464,7 +464,7 @@ func (s *Server) authenticated(next func(http.ResponseWriter, *http.Request, ses
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess, err := s.current(r)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "暂时无法验证登录状态。", "请检查数据库和服务日志。")
+			s.fail(w, r, 503, store.CodeDatabaseUnavailable, "暂时无法验证登录状态。", "请检查数据库和服务日志。")
 			return
 		}
 		if err != nil || !sess.Auth {
@@ -482,7 +482,7 @@ func (s *Server) authenticated(next func(http.ResponseWriter, *http.Request, ses
 func (s *Server) authPage(w http.ResponseWriter, r *http.Request, setup bool) {
 	hash, err := s.store.AdminHash()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取管理员状态。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取管理员状态。", "请检查数据库。")
 		return
 	}
 	if setup && hash != "" {
@@ -499,7 +499,7 @@ func (s *Server) authPage(w http.ResponseWriter, r *http.Request, setup bool) {
 		return
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取会话。", "请检查数据库。")
 		return
 	}
 	// The unauthenticated form needs a CSRF value, never a stored session. The
@@ -519,7 +519,7 @@ func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session)
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess, err := s.current(r)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取会话。", "请检查数据库。")
+			s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取会话。", "请检查数据库。")
 			return
 		}
 		if !auth {
@@ -546,7 +546,7 @@ func (s *Server) mutation(next func(http.ResponseWriter, *http.Request, session)
 			s.fail(w, r, 415, "FORM_REQUIRED", "请求格式不正确。", "请使用页面表单。")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		r.Body = http.MaxBytesReader(w, r.Body, mutationFormMaxBytes)
 		if err = r.ParseForm(); err != nil {
 			s.fail(w, r, 400, "FORM_INVALID", "表单过大或格式不正确。", "请重新填写表单。")
 			return
@@ -599,7 +599,7 @@ func (s *Server) kdfGuard(next func(http.ResponseWriter, *http.Request, session)
 func (s *Server) budget(w http.ResponseWriter, r *http.Request) bool {
 	ok, retry, err := s.store.Attempt(s.now())
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法验证登录频率。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法验证登录频率。", "请检查数据库。")
 		return false
 	}
 	if !ok {
@@ -649,7 +649,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	hash, err := s.store.AdminHash()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取管理员状态。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取管理员状态。", "请检查数据库。")
 		return
 	}
 	if hash != "" {
@@ -659,7 +659,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 	var valid int
 	err = s.store.DB.QueryRow("SELECT count(*) FROM bootstrap WHERE id=1 AND token_hash=? AND expires>?", store.TokenHash(r.PostForm.Get("bootstrap")), s.now().Unix()).Scan(&valid)
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取初始化状态。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取初始化状态。", "请检查数据库。")
 		return
 	}
 	if valid != 1 {
@@ -677,7 +677,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	tx, err := s.store.DB.Begin()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法开始初始化。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法开始初始化。", "请检查数据库。")
 		return
 	}
 	defer tx.Rollback()
@@ -694,7 +694,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, sess session) {
 		err = tx.Commit()
 	}
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "初始化未完成。", "请重新打开登录页面确认状态。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "初始化未完成。", "请重新打开登录页面确认状态。")
 		return
 	}
 	if err = os.Remove(filepath.Join(s.store.Dir, "bootstrap.token")); err != nil && !os.IsNotExist(err) {
@@ -712,7 +712,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	hash, err := s.store.AdminHash()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法验证密码。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法验证密码。", "请检查数据库。")
 		return
 	}
 	if hash == "" || !store.VerifyPassword(hash, r.PostForm.Get("password")) {
@@ -726,7 +726,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 	expires := s.now().Add(store.SessionLifetime).Unix()
 	tx, err := s.store.DB.Begin()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法建立会话。", "请重试。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法建立会话。", "请重试。")
 		return
 	}
 	defer tx.Rollback()
@@ -747,7 +747,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 		err = tx.Commit()
 	}
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法建立会话。", "请重试。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法建立会话。", "请重试。")
 		return
 	}
 	s.cookie(w, token, expires)
@@ -761,7 +761,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, sess session) {
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, sess session) {
 	if _, err := s.store.DB.Exec("DELETE FROM sessions WHERE token_hash=?", sess.Hash); err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "注销未完成。", "请重试，尚未确认会话撤销。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "注销未完成。", "请重试，尚未确认会话撤销。")
 		return
 	}
 	s.cookie(w, "", 0)
@@ -776,7 +776,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 	}
 	hash, err := s.store.AdminHash()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法验证密码。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法验证密码。", "请检查数据库。")
 		return
 	}
 	if !store.VerifyPassword(hash, r.PostForm.Get("current_password")) {
@@ -795,7 +795,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 	}
 	tx, err := s.store.DB.Begin()
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法修改密码。", "请重试。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法修改密码。", "请重试。")
 		return
 	}
 	defer tx.Rollback()
@@ -813,7 +813,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request, sess session) 
 		err = tx.Commit()
 	}
 	if err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "密码修改未完成。", "请检查数据库。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "密码修改未完成。", "请检查数据库。")
 		return
 	}
 	s.cookie(w, "", 0)
@@ -837,7 +837,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var one int
 	if err := s.store.DB.QueryRowContext(ctx, "SELECT 1").Scan(&one); err != nil {
-		s.fail(w, r, 503, "DATABASE_UNAVAILABLE", "数据库不可用。", "请检查服务日志。")
+		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "数据库不可用。", "请检查服务日志。")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

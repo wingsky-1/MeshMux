@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // NewID returns a random 32-character lowercase hexadecimal identifier.
@@ -16,15 +18,12 @@ func NewID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-// ValidateID accepts exactly 32 lowercase hexadecimal characters.
+// ValidateID accepts exactly 32 lowercase hexadecimal characters. The spelling
+// is the wire grammar's (protocol.ValidID): a credential id the Hub mints must
+// be exactly what the node's candidate reader accepts.
 func ValidateID(value string) error {
-	if len(value) != 32 {
+	if !protocol.ValidID(value) {
 		return errors.New("ID_INVALID: need 32 lowercase hex characters")
-	}
-	for i := 0; i < len(value); i++ {
-		if !isLowerHex(value[i]) {
-			return errors.New("ID_INVALID: need 32 lowercase hex characters")
-		}
 	}
 	return nil
 }
@@ -42,35 +41,12 @@ func NewUUID() (string, error) {
 }
 
 // ValidateUUID accepts only a canonical lowercase UUIDv4, including the
-// RFC 4122 version and variant bits.
+// RFC 4122 version and variant bits. The spelling is the wire grammar's
+// (protocol.ValidUUIDv4), so the Hub never mints a credential the Line's
+// candidate reader would refuse.
 func ValidateUUID(value string) error {
-	const invalid = "UUID_INVALID: need a canonical lowercase UUIDv4"
-	if len(value) != 36 {
-		return errors.New(invalid)
+	if !protocol.ValidUUIDv4(value) {
+		return errors.New("UUID_INVALID: need a canonical lowercase UUIDv4")
 	}
-	for i := 0; i < len(value); i++ {
-		switch i {
-		case 8, 13, 18, 23:
-			if value[i] != '-' {
-				return errors.New(invalid)
-			}
-		default:
-			if !isLowerHex(value[i]) {
-				return errors.New(invalid)
-			}
-		}
-	}
-	if value[14] != '4' {
-		return errors.New(invalid)
-	}
-	switch value[19] {
-	case '8', '9', 'a', 'b':
-		return nil
-	default:
-		return errors.New(invalid)
-	}
-}
-
-func isLowerHex(value byte) bool {
-	return value >= '0' && value <= '9' || value >= 'a' && value <= 'f'
+	return nil
 }

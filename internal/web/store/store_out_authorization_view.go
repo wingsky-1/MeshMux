@@ -93,18 +93,18 @@ func (s *Store) PreviewOutAuthorizationAt(outID, lineID string, now time.Time) (
 		return s.previewOutPool()
 	}
 	if !validNodeID(outID) {
-		return OutAuthorizationPreview{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return OutAuthorizationPreview{}, errOutIDInvalid()
 	}
 	var role string
 	err := s.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return OutAuthorizationPreview{}, errors.New("OUT_NOT_FOUND: unknown out node")
+		return OutAuthorizationPreview{}, errOutNotFound
 	}
 	if err != nil {
-		return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "out" {
-		return OutAuthorizationPreview{}, errors.New("OUT_ROLE_INVALID: only out nodes carry a source authorization")
+	if role != string(nodeRoleOut) {
+		return OutAuthorizationPreview{}, errOutRoleInvalidSource
 	}
 	if lineID != "" {
 		if !validNodeID(lineID) {
@@ -113,10 +113,10 @@ func (s *Store) PreviewOutAuthorizationAt(outID, lineID string, now time.Time) (
 		var lineRole string
 		err = s.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&lineRole)
 		if errors.Is(err, sql.ErrNoRows) {
-			return OutAuthorizationPreview{}, errors.New("LINE_NOT_FOUND: unknown line node")
+			return OutAuthorizationPreview{}, errLineNotFound
 		}
 		if err != nil {
-			return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+			return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 		}
 		if lineRole != "edge" {
 			return OutAuthorizationPreview{}, errors.New("LINE_ROLE_INVALID: only edge nodes can be selected with an out")
@@ -128,7 +128,7 @@ func (s *Store) PreviewOutAuthorizationAt(outID, lineID string, now time.Time) (
 	// a DB-level query issued while a transaction is open would wait on itself.
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	// Under the membership model (Ruling R10) the authorized Lines are the enrolled
@@ -162,7 +162,7 @@ func (s *Store) PreviewOutAuthorizationAt(outID, lineID string, now time.Time) (
 	}
 	state, code, err := outSyncStatusTx(tx, outID, now)
 	if err != nil {
-		return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 	}
 	preview.SyncState, preview.SyncCode = state, code
 	if lineID == "" {
@@ -197,7 +197,7 @@ func (s *Store) PreviewOutAuthorizationAt(outID, lineID string, now time.Time) (
 		  JOIN subscribers s ON s.id=c.subscriber_id AND s.state='active'
 		 WHERE c.active=1 AND c.node_id IN (SELECT id FROM nodes WHERE role='edge')`).
 			Scan(&preview.AffectedPolicies, &preview.AffectedSubscribers); err != nil {
-			return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+			return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 		}
 	}
 	return preview, nil
@@ -228,7 +228,7 @@ func (s *Store) previewOutPool() (OutAuthorizationPreview, error) {
 	}
 	var outs int
 	if err := s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE role='out'`).Scan(&outs); err != nil {
-		return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if outs == 0 {
 		return preview, nil
@@ -243,7 +243,7 @@ func (s *Store) previewOutPool() (OutAuthorizationPreview, error) {
 	     JOIN subscribers sub ON sub.id=c.subscriber_id AND sub.state='active'
 	    WHERE c.active=1)`).
 		Scan(&preview.AffectedLines, &preview.AffectedPolicies, &preview.AffectedSubscribers); err != nil {
-		return OutAuthorizationPreview{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutAuthorizationPreview{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return preview, nil
 }

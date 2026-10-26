@@ -185,7 +185,7 @@ func lineConvergedTx(tx *sql.Tx, line subscription.Line, credential subscription
 	if err != nil {
 		return ErrSubscriptionStoreUnavailable
 	}
-	if role != "edge" {
+	if role != string(nodeRoleEdge) {
 		return ErrSubscriptionRejected
 	}
 	// The Line must still hold a valid identity. A revoked identity means the

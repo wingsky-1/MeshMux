@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // The exporter targets exactly one client transport profile: VLESS over
@@ -35,26 +36,27 @@ const (
 	// clients that import this subscription.
 	exportClientPort = 1080
 	// exportSingBoxSelectorTag is the stable tag of the sing-box selector
-	// outbound. It never changes with a rename or a reorder.
-	exportSingBoxSelectorTag = "meshmux-selector"
+	// outbound. It never changes with a rename or a reorder. The value is owned
+	// by the node wire contract (internal/node/protocol).
+	exportSingBoxSelectorTag = protocol.SelectorTag
 	// exportSingBoxDirectTag is the explicit direct outbound tag. It exists
 	// so the configuration never depends on an implicit default and never
 	// references an Out node.
-	exportSingBoxDirectTag = "direct"
+	exportSingBoxDirectTag = protocol.OutboundDirectTag
 	// singBoxOutTag and singBoxBlockTag are the Line-route egress tags the
-	// composer renders. They match the node renderer's server tags, so a route
+	// composer renders. They are the node renderer's server tags, so a route
 	// fragment produced here is publishable as a Line candidate unchanged.
-	singBoxOutTag   = "out"
-	singBoxBlockTag = "block"
+	singBoxOutTag   = protocol.OutboundOutTag
+	singBoxBlockTag = protocol.OutboundBlockTag
 	// exportSingBoxInboundTag is the tag of the loopback mixed inbound.
 	exportSingBoxInboundTag = "mixed-in"
 	// exportSingBoxDNSTag is the tag of the local DNS transport used to
 	// resolve Line host names.
 	exportSingBoxDNSTag = "local"
 	// exportMihomoGroupName is the stable name of the Mihomo select group.
-	exportMihomoGroupName = "PROXY"
+	exportMihomoGroupName = protocol.MihomoGroupName
 	// exportVLESSFlow is the only VLESS sub-protocol exported.
-	exportVLESSFlow = "xtls-rprx-vision"
+	exportVLESSFlow = protocol.VLESSFlow
 	// exportUTFingerprint is the only uTLS fingerprint exported.
 	exportUTFingerprint = "chrome"
 	// exportNetwork is the only transport network exported. The Vision flow
@@ -89,93 +91,15 @@ type exportPlan struct {
 // a published subscription. All credentials must belong to one Subscriber, so
 // one document can never mix two subscriber identities.
 func ExportSingBox(lines []Line, credentials []Credential) ([]byte, error) {
-	return exportSingBoxWithRules(lines, credentials, nil)
-}
-
-// exportSingBoxWithRules is ExportSingBox plus the subscription's rule
-// selection. A nil rule set renders exactly the historical bytes: no route
-// rules and no rule_set block, so a subscription without rules is unchanged.
-func exportSingBoxWithRules(lines []Line, credentials []Credential, rules []composeRenderedRule) ([]byte, error) {
 	plan, err := buildExportPlan(lines, credentials)
 	if err != nil {
 		return nil, err
 	}
-	config := singBoxClientConfig{
-		Log: singBoxClientLog{Level: "info", Timestamp: true},
-		DNS: singBoxClientDNS{Servers: []singBoxClientDNSServer{{
-			Type: "local",
-			Tag:  exportSingBoxDNSTag,
-		}}},
-		Inbounds: []singBoxClientInbound{{
-			Type:       "mixed",
-			Tag:        exportSingBoxInboundTag,
-			Listen:     exportListenAddress,
-			ListenPort: exportClientPort,
-		}},
-		Route: singBoxClientRoute{
-			DefaultDomainResolver: exportSingBoxDNSTag,
-			Final:                 exportSingBoxSelectorTag,
-		},
-	}
-	config.Outbounds = clientProxyOutbounds(plan)
-	if len(rules) > 0 {
-		rendered, sets := clientRuleSelection(rules)
-		config.Route.Rules = rendered
-		config.Route.RuleSet = sets
-	}
-	encoded, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, errors.New("EXPORT_RENDER_FAILED")
-	}
-	return append(encoded, '\n'), nil
-}
-
-// clientProxyOutbounds renders the proxy outbounds shared by every sing-box
-// client document: one VLESS/REALITY outbound per selected Line, the selector
-// that holds exactly those outbounds, and the explicit direct outbound.
-//
-// The selector default is the first selected Line. The selector keeps the
-// chosen Lines only, so a client can never fall back to an unknown or
-// unauthorized node. The document shape is platform independent: a desktop
-// client, iOS and Android differ only in how they import this same document,
-// never in the outbound model, so the Mesh endpoint is added by the caller and
-// never by this helper.
-func clientProxyOutbounds(plan *exportPlan) []singBoxClientOutbound {
-	outbounds := make([]singBoxClientOutbound, 0, len(plan.Nodes)+2)
-	selector := singBoxClientOutbound{
-		Type: "selector",
-		Tag:  exportSingBoxSelectorTag,
-	}
-	for _, node := range plan.Nodes {
-		outbounds = append(outbounds, singBoxClientOutbound{
-			Type:       "vless",
-			Tag:        node.Label,
-			Server:     node.Line.Server,
-			ServerPort: node.Line.Port,
-			UUID:       node.UUID,
-			Flow:       exportVLESSFlow,
-			Network:    exportNetwork,
-			TLS: &singBoxClientTLS{
-				Enabled:    true,
-				ServerName: node.Line.ServerName,
-				UTLS: &singBoxClientUTLS{
-					Enabled:     true,
-					Fingerprint: exportUTFingerprint,
-				},
-				Reality: &singBoxClientReality{
-					Enabled:   true,
-					PublicKey: node.Line.PublicKey,
-					ShortID:   node.Line.ShortID,
-				},
-			},
-		})
-		selector.Outbounds = append(selector.Outbounds, node.Label)
-	}
-	selector.Default = plan.Nodes[0].Label
-	outbounds = append(outbounds, selector)
-	return append(outbounds, singBoxClientOutbound{
-		Type: "direct",
-		Tag:  exportSingBoxDirectTag,
+	block := buildLineBlock(plan.Nodes)
+	return makeStandardSingBoxDocument(composeRouterPlan{
+		Lines:    block.Outbounds,
+		Selector: block.Selector,
+		Route:    composeRoutePlan{Final: composeEgressProxy},
 	})
 }
 
@@ -189,200 +113,16 @@ func clientProxyOutbounds(plan *exportPlan) []singBoxClientOutbound {
 // a published subscription. All credentials must belong to one Subscriber, so
 // one document can never mix two subscriber identities.
 func ExportMihomo(lines []Line, credentials []Credential) ([]byte, error) {
-	return exportMihomoWithRules(lines, credentials, nil)
-}
-
-// exportMihomoWithRules is ExportMihomo plus the subscription's rule
-// selection. A nil rule set renders exactly the historical bytes.
-//
-// A rule the Mihomo client cannot express (an SSID matcher, a Tailscale
-// endpoint action) is refused with CodeComposeMihomoUnsupported instead of
-// emitting a document that silently drops it.
-func exportMihomoWithRules(lines []Line, credentials []Credential, rules []composeRenderedRule) ([]byte, error) {
 	plan, err := buildExportPlan(lines, credentials)
 	if err != nil {
 		return nil, err
 	}
-	document := &yamlBuilder{}
-	document.integer(0, "mixed-port", exportClientPort)
-	document.boolean(0, "allow-lan", false)
-	document.scalar(0, "bind-address", exportListenAddress)
-	document.scalar(0, "mode", "rule")
-	document.scalar(0, "log-level", "info")
-	document.key(0, "proxies")
-	for _, node := range plan.Nodes {
-		document.beginItem(1)
-		document.itemScalar(1, "name", node.Label)
-		document.itemScalar(1, "type", "vless")
-		document.itemScalar(1, "server", node.Line.Server)
-		document.itemInteger(1, "port", node.Line.Port)
-		document.itemScalar(1, "uuid", node.UUID)
-		document.itemScalar(1, "flow", exportVLESSFlow)
-		document.itemBoolean(1, "tls", true)
-		document.itemScalar(1, "servername", node.Line.ServerName)
-		document.itemScalar(1, "client-fingerprint", exportUTFingerprint)
-		document.itemKey(1, "reality-opts")
-		document.itemScalar(2, "public-key", node.Line.PublicKey)
-		document.itemScalar(2, "short-id", node.Line.ShortID)
-		document.itemScalar(1, "network", exportNetwork)
-		document.itemBoolean(1, "udp", exportUDP)
-	}
-	document.key(0, "proxy-groups")
-	document.beginItem(1)
-	document.itemScalar(1, "name", exportMihomoGroupName)
-	document.itemScalar(1, "type", "select")
-	document.itemKey(1, "proxies")
-	for _, node := range plan.Nodes {
-		document.listItem(2, node.Label)
-	}
-	providers, err := mihomoClientRuleProviders(rules)
-	if err != nil {
-		return nil, err
-	}
-	if providers != "" {
-		document.buf.WriteString(providers)
-	}
-	document.key(0, "rules")
-	lines_, err := mihomoClientRuleLines(rules)
-	if err != nil {
-		return nil, err
-	}
-	for _, line := range lines_ {
-		document.listItem(1, line)
-	}
-	document.listItem(1, "MATCH,"+exportMihomoGroupName)
-	return document.bytes(), nil
-}
-
-// clientRuleSelection renders the shared rule order for the sing-box client
-// document: the same matcher-to-key mapping and the same rule_set tags the Line
-// route uses, so client and server can never disagree about a rule.
-func clientRuleSelection(rules []composeRenderedRule) ([]map[string]any, []singBoxClientRuleSet) {
-	rendered := make([]map[string]any, 0, len(rules))
-	declared := make(map[string]struct{}, len(rules))
-	sets := make([]singBoxClientRuleSet, 0, len(rules))
-	for _, rule := range rules {
-		entry := map[string]any{}
-		switch rule.action {
-		case ActionReject:
-			// sing-box 1.14.3 expresses a refusal as a rule action, not as a
-			// block outbound, so the reject rule carries "action": "reject" and
-			// no outbound at all.
-			entry["action"] = "reject"
-		case ActionProxy:
-			entry["outbound"] = exportSingBoxSelectorTag
-		default:
-			entry["outbound"] = exportSingBoxDirectTag
-		}
-		attachClientMatcher(entry, rule)
-		rendered = append(rendered, entry)
-		// Every referenced rule set must be declared, including one a reject
-		// rule names: an undeclared tag makes the kernel refuse the document.
-		for index, tag := range rule.tags {
-			if _, exists := declared[tag]; exists {
-				continue
-			}
-			declared[tag] = struct{}{}
-			sets = append(sets, singBoxClientRuleSet{Type: "remote", Tag: tag, Format: "binary", URL: rule.sources[index]})
-		}
-	}
-	return rendered, sets
-}
-
-// attachClientMatcher writes the matcher keys of one rule into a route entry.
-func attachClientMatcher(entry map[string]any, rule composeRenderedRule) {
-	switch rule.kind {
-	case MatcherDomain:
-		entry["domain"] = rule.values
-	case MatcherDomainSuffix:
-		entry["domain_suffix"] = rule.values
-	case MatcherIPCIDR:
-		entry["ip_cidr"] = rule.values
-	default:
-		entry["rule_set"] = append([]string(nil), rule.tags...)
-	}
-}
-
-// mihomoClientRuleProviders declares every remote artifact the rules reference.
-// The tag carries the pinned version, so a client never fetches a mutable
-// channel.
-func mihomoClientRuleProviders(rules []composeRenderedRule) (string, error) {
-	type provider struct {
-		tag  string
-		url  string
-		kind string
-	}
-	ordered := make([]provider, 0, len(rules))
-	seen := make(map[string]struct{}, len(rules))
-	for _, rule := range rules {
-		for index, tag := range rule.tags {
-			if _, exists := seen[tag]; exists {
-				continue
-			}
-			seen[tag] = struct{}{}
-			kind := "domain"
-			if strings.HasPrefix(tag, "geoip-") {
-				kind = "ipcidr"
-			}
-			ordered = append(ordered, provider{tag: tag, url: rule.sources[index], kind: kind})
-		}
-	}
-	if len(ordered) == 0 {
-		return "", nil
-	}
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].tag < ordered[j].tag })
-	var out strings.Builder
-	out.WriteString("rule-providers:\n")
-	for _, entry := range ordered {
-		out.WriteString("  " + entry.tag + ":\n")
-		out.WriteString("    type: http\n")
-		out.WriteString("    behavior: " + entry.kind + "\n")
-		out.WriteString("    url: " + yamlQuote(entry.url) + "\n")
-		out.WriteString("    path: ./ruleset/" + entry.tag + ".yaml\n")
-		out.WriteString("    interval: 86400\n")
-	}
-	return out.String(), nil
-}
-
-// mihomoClientRuleLines renders the rule order as Mihomo rule lines. The action
-// mapping is the fixed DIRECT/PROXY/REJECT trio; an Out action is not part of
-// the library, so it never reaches this function.
-func mihomoClientRuleLines(rules []composeRenderedRule) ([]string, error) {
-	lines := make([]string, 0, len(rules)+1)
-	for _, rule := range rules {
-		action := "DIRECT"
-		switch rule.action {
-		case ActionProxy:
-			action = exportMihomoGroupName
-		case ActionReject:
-			action = "REJECT"
-		}
-		switch rule.kind {
-		case MatcherDomain:
-			for _, value := range rule.values {
-				lines = append(lines, "DOMAIN,"+value+","+action)
-			}
-		case MatcherDomainSuffix:
-			for _, value := range rule.values {
-				lines = append(lines, "DOMAIN-SUFFIX,"+value+","+action)
-			}
-		case MatcherIPCIDR:
-			for _, value := range rule.values {
-				kind := "IP-CIDR"
-				if prefix, err := netip.ParsePrefix(value); err == nil && prefix.Addr().Is6() {
-					kind = "IP-CIDR6"
-				}
-				lines = append(lines, kind+","+value+","+action+",no-resolve")
-			}
-		case MatcherGeoSite, MatcherGeoIP, MatcherRuleSet:
-			for _, tag := range rule.tags {
-				lines = append(lines, "RULE-SET,"+tag+","+action)
-			}
-		default:
-			return nil, errors.New(CodeComposeMihomoUnsupported + ": the Mihomo client cannot express this matcher")
-		}
-	}
-	return lines, nil
+	block := buildLineBlock(plan.Nodes)
+	return makeMihomoDocument(composeRouterPlan{
+		Lines:    block.Outbounds,
+		Selector: block.Selector,
+		Route:    composeRoutePlan{Final: composeEgressProxy},
+	})
 }
 
 // buildExportPlan validates the public Line fields, pairs every Line with

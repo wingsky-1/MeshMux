@@ -35,12 +35,14 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// ClaimDir is the fixed root-owned upgrade directory: the same tree the
 	// dispatcher uses for exec copies and the root pre-places manifests in.
-	ClaimDir = "/var/lib/meshmux-installer/upgrade"
+	ClaimDir = versions.InstallerUpgradeDir
 	// claimName is the fixed claim file inside ClaimDir.
 	claimName = "upgrade-claim.json"
 	// ClaimSchema is the frozen claim document schema.

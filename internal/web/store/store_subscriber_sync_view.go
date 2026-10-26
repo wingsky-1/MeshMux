@@ -54,7 +54,7 @@ func (s *Store) SubscriberSyncView(subscriberID string, now time.Time) (Subscrib
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return snapshot, errors.New("DATABASE_UNAVAILABLE")
+		return snapshot, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
@@ -65,7 +65,7 @@ func (s *Store) SubscriberSyncView(subscriberID string, now time.Time) (Subscrib
 	lineIDs, err := subscriberHistoricalLineIDsTx(tx, subscriberID)
 	if err != nil {
 		snapshot.Status = SubscriberSyncPending
-		snapshot.Code = "DATABASE_UNAVAILABLE"
+		snapshot.Code = CodeDatabaseUnavailable
 		return snapshot, err
 	}
 	snapshot.Status = SubscriberSyncHealthy
@@ -73,7 +73,7 @@ func (s *Store) SubscriberSyncView(subscriberID string, now time.Time) (Subscrib
 		lineStatus, lineCode, err := SubscriberLineSyncViewTx(tx, nodeID, now)
 		if err != nil {
 			snapshot.Status = SubscriberSyncPending
-			snapshot.Code = "DATABASE_UNAVAILABLE"
+			snapshot.Code = CodeDatabaseUnavailable
 			return snapshot, err
 		}
 		snapshot.Lines = append(snapshot.Lines, SubscriberLineSyncSnapshot{

@@ -110,7 +110,7 @@ func writablePolicyLayer(layer PolicyLayer) error {
 func policyTextGuard(label, value string) error {
 	for _, marker := range []string{"key", "secret", "token", "uuid", "private", "password"} {
 		if strings.Contains(strings.ToLower(value), marker) {
-			return errors.New("POLICY_SECRET_REFUSED: the " + label + " must not describe credentials or keys")
+			return errors.New(codePolicySecretRefused + ": the " + label + " must not describe credentials or keys")
 		}
 	}
 	return nil
@@ -118,26 +118,26 @@ func policyTextGuard(label, value string) error {
 
 func policyOperationID(value string) (string, error) {
 	if value = strings.TrimSpace(value); value == "" || len(value) > 128 {
-		return "", errors.New("POLICY_OPERATION_REQUIRED: every policy write needs a non-empty operation id")
+		return "", errors.New(codePolicyOperationRequired + ": every policy write needs a non-empty operation id")
 	}
 	return value, nil
 }
 
 func validatePolicy(layer PolicyLayer, name string, payload, pins []byte) error {
 	if layer != PolicyLayerClient && layer != PolicyLayerServer {
-		return errors.New("POLICY_LAYER_INVALID: layer must be client or server")
+		return errors.New(codePolicyLayerInvalid + ": layer must be client or server")
 	}
 	if err := writablePolicyLayer(layer); err != nil {
 		return err
 	}
 	if name == "" || len([]rune(name)) > 80 {
-		return errors.New("POLICY_NAME_INVALID: use 1-80 characters")
+		return errors.New(codePolicyNameInvalid + ": use 1-80 characters")
 	}
 	if err := policyTextGuard("name", name); err != nil {
 		return err
 	}
 	if len(payload) == 0 || len(payload) > policyMaxBytes || len(pins) > policyMaxBytes {
-		return errors.New("POLICY_PAYLOAD_INVALID: the intent or pins JSON is missing or too large")
+		return errors.New(codePolicyPayloadInvalid + ": the intent or pins JSON is missing or too large")
 	}
 	if err := rejectRetiredPolicyFields(payload); err != nil {
 		return err
@@ -146,7 +146,7 @@ func validatePolicy(layer PolicyLayer, name string, payload, pins []byte) error 
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&intent); err != nil {
-		return errors.New("POLICY_PAYLOAD_INVALID: the payload must be the documented intent JSON")
+		return errors.New(codePolicyPayloadInvalid + ": the payload must be the documented intent JSON")
 	}
 	if err := policyTextGuard("note", intent.Note); err != nil {
 		return err
@@ -162,7 +162,7 @@ func validatePolicy(layer PolicyLayer, name string, payload, pins []byte) error 
 	decoder = json.NewDecoder(bytes.NewReader(pins))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&pinSet) != nil {
-		return errors.New("POLICY_PINS_INVALID: pins must be the documented RuleSetPins JSON")
+		return errors.New(codePolicyPinsInvalid + ": pins must be the documented RuleSetPins JSON")
 	}
 	return pinSet.Validate(intent.Rules)
 }
@@ -172,9 +172,9 @@ func insertRoutePolicyTx(tx *sql.Tx, p RoutePolicy) error {
  VALUES(?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Revision, p.Layer, p.Name, string(p.Payload), string(p.Pins), p.Status, p.OperationID, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		if uniqueConstraint(err) {
-			return errors.New("POLICY_CONFLICT: the revision or the layer's active slot is already taken")
+			return errors.New(policy.CodePolicyConflict + ": the revision or the layer's active slot is already taken")
 		}
-		return errors.New("POLICY_WRITE_FAILED: the policy revision was not stored")
+		return errors.New(codePolicyWriteFailed + ": the policy revision was not stored")
 	}
 	return nil
 }
@@ -182,7 +182,7 @@ func insertRoutePolicyTx(tx *sql.Tx, p RoutePolicy) error {
 func recordRoutePolicyEventTx(tx *sql.Tx, p RoutePolicy, kind string, from, to PolicyStatus) error {
 	if _, err := tx.Exec(`INSERT INTO route_policy_events(policy_id, revision, kind, from_status, to_status, operation_id, created_at)
  VALUES(?,?,?,?,?,?,?)`, p.ID, p.Revision, kind, from, to, p.OperationID, p.UpdatedAt); err != nil {
-		return errors.New("POLICY_WRITE_FAILED: the audit event was not stored")
+		return errors.New(codePolicyWriteFailed + ": the audit event was not stored")
 	}
 	return nil
 }
@@ -201,12 +201,12 @@ func (s *Store) CreateRoutePolicy(layer PolicyLayer, name string, payload, pins 
 	}
 	id, err := protocol.NewID()
 	if err != nil {
-		return RoutePolicy{}, errors.New("POLICY_WRITE_FAILED: the policy identity was not issued")
+		return RoutePolicy{}, errors.New(codePolicyWriteFailed + ": the policy identity was not issued")
 	}
 	p := RoutePolicy{ID: id, Layer: layer, Name: name, Payload: append(json.RawMessage(nil), payload...), Pins: append(json.RawMessage(nil), pins...), Revision: 1, Status: PolicyDraft, OperationID: operationID, CreatedAt: now.Unix(), UpdatedAt: now.Unix()}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return RoutePolicy{}, errors.New("DATABASE_UNAVAILABLE")
+		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if err = insertRoutePolicyTx(tx, p); err == nil {
@@ -226,7 +226,7 @@ func (s *Store) CreateRoutePolicy(layer PolicyLayer, name string, payload, pins 
 // until activate. Revoked and superseded chains are history and cannot revive.
 func (s *Store) ReviseRoutePolicy(id string, payload, pins json.RawMessage, operationID string, now time.Time) (RoutePolicy, error) {
 	if err := subscription.ValidateID(id); err != nil {
-		return RoutePolicy{}, errors.New("POLICY_NOT_FOUND: unknown policy")
+		return RoutePolicy{}, errors.New(CodePublishNoPolicy + ": unknown policy")
 	}
 	operationID, err := policyOperationID(operationID)
 	if err != nil {
@@ -234,7 +234,7 @@ func (s *Store) ReviseRoutePolicy(id string, payload, pins json.RawMessage, oper
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return RoutePolicy{}, errors.New("DATABASE_UNAVAILABLE")
+		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	latest, err := latestRoutePolicy(tx, id)
@@ -245,7 +245,7 @@ func (s *Store) ReviseRoutePolicy(id string, payload, pins json.RawMessage, oper
 		return RoutePolicy{}, err
 	}
 	if latest.Status != PolicyDraft && latest.Status != PolicyActive {
-		return RoutePolicy{}, errors.New("POLICY_STATE_INVALID: only a draft or active policy can be revised")
+		return RoutePolicy{}, errors.New(codePolicyStateInvalid + ": only a draft or active policy can be revised")
 	}
 	if len(pins) == 0 {
 		pins = json.RawMessage("{}")
@@ -276,7 +276,7 @@ func (s *Store) ReviseRoutePolicy(id string, payload, pins json.RawMessage, oper
 // or active revision. Activation supersedes the layer's previous active policy.
 func (s *Store) transitionRoutePolicy(id string, revision int64, target PolicyStatus, operationID string, now time.Time) (RoutePolicy, error) {
 	if err := subscription.ValidateID(id); err != nil || revision < 1 {
-		return RoutePolicy{}, errors.New("POLICY_NOT_FOUND: unknown policy revision")
+		return RoutePolicy{}, errors.New(CodePublishNoPolicy + ": unknown policy revision")
 	}
 	operationID, err := policyOperationID(operationID)
 	if err != nil {
@@ -284,7 +284,7 @@ func (s *Store) transitionRoutePolicy(id string, revision int64, target PolicySt
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return RoutePolicy{}, errors.New("DATABASE_UNAVAILABLE")
+		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	latest, err := latestRoutePolicy(tx, id)
@@ -296,7 +296,7 @@ func (s *Store) transitionRoutePolicy(id string, revision int64, target PolicySt
 	}
 	if latest.Revision != revision || (target == PolicyActive && latest.Status != PolicyDraft) ||
 		(target == PolicyRevoked && latest.Status != PolicyDraft && latest.Status != PolicyActive) {
-		return RoutePolicy{}, errors.New("POLICY_STATE_INVALID: the transition needs the latest draft or active revision")
+		return RoutePolicy{}, errors.New(codePolicyStateInvalid + ": the transition needs the latest draft or active revision")
 	}
 	kind, from := "revoke", latest.Status
 	if target == PolicyActive {
@@ -335,14 +335,14 @@ func scanRoutePolicy(row interface{ Scan(...any) error }) (RoutePolicy, error) {
 	var payload, pins []byte
 	err := row.Scan(&p.ID, &p.Revision, &layer, &p.Name, &payload, &pins, &status, &p.OperationID, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return RoutePolicy{}, errors.New("POLICY_NOT_FOUND: unknown policy revision")
+		return RoutePolicy{}, errors.New(CodePublishNoPolicy + ": unknown policy revision")
 	}
 	if err != nil {
-		return RoutePolicy{}, errors.New("DATABASE_UNAVAILABLE")
+		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
 	}
 	p.Layer, p.Status, p.Payload, p.Pins = PolicyLayer(layer), PolicyStatus(status), payload, pins
 	if !json.Valid(p.Payload) || !json.Valid(p.Pins) {
-		return RoutePolicy{}, errors.New("POLICY_CORRUPT: stored policy JSON is invalid")
+		return RoutePolicy{}, errors.New(codePolicyCorrupt + ": stored policy JSON is invalid")
 	}
 	return p, nil
 }
@@ -353,7 +353,7 @@ func latestRoutePolicy(q rowQueryer, id string) (RoutePolicy, error) {
 
 func (s *Store) GetRoutePolicy(id string, revision int64) (RoutePolicy, error) {
 	if err := subscription.ValidateID(id); err != nil {
-		return RoutePolicy{}, errors.New("POLICY_NOT_FOUND: unknown policy")
+		return RoutePolicy{}, errors.New(CodePublishNoPolicy + ": unknown policy")
 	}
 	if revision > 0 {
 		return scanRoutePolicy(s.DB.QueryRow(routePolicySelect+` WHERE p.id=? AND p.revision=?`, id, revision))
@@ -363,7 +363,7 @@ func (s *Store) GetRoutePolicy(id string, revision int64) (RoutePolicy, error) {
 
 func (s *Store) ActiveRoutePolicy(layer PolicyLayer) (RoutePolicy, error) {
 	if layer != PolicyLayerClient && layer != PolicyLayerServer {
-		return RoutePolicy{}, errors.New("POLICY_LAYER_INVALID: layer must be client or server")
+		return RoutePolicy{}, errors.New(codePolicyLayerInvalid + ": layer must be client or server")
 	}
 	return scanRoutePolicy(s.DB.QueryRow(routePolicySelect+` WHERE p.layer=? AND p.status=?`, layer, PolicyActive))
 }

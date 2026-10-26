@@ -10,8 +10,12 @@ import "strings"
 // Nothing here validates a code: a caller either compares it to a constant or
 // checks it against a registered set (see mesh_codes.go).
 
-// codeDatabaseUnavailable marks an unusable database. It is the one store
+// CodeDatabaseUnavailable marks an unusable database. It is the one store
 // failure the pages report separately from an ordinary refusal.
+//
+// Single source: every store file refers to this constant instead of spelling
+// the literal, so a page mapping or a test cannot drift from the value. The
+// literal appears exactly once in this package, here.
 const CodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
 
 // errorCodeOf returns the code segment of err: the text before the first colon,

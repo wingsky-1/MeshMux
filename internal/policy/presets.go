@@ -1,5 +1,7 @@
 package policy
 
+import "github.com/wingsky-1/MeshMux/internal/subscription/ir"
+
 // The versioned preset seed bundle. Version 1 stocks one preset per matcher
 // kind so every library path (render, validate, compose) has a real row to
 // exercise. A future bundle ships as new rows under the same stable_keys with
@@ -25,7 +27,10 @@ var Presets = []Preset{
 		Name:      "直连 · 内网与 Tailnet 网段",
 		Action:    ActionDirect,
 		Kind:      MatcherIPCIDR,
-		Values:    []string{"100.64.0.0/10", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
+		// The first entry is the tailnet range the mesh domain and the device
+		// exporter also read: one source, so a preset can never disagree with
+		// the routes the Hub itself allocates.
+		Values: []string{ir.TailnetIPv4Prefix, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"},
 	},
 	{
 		StableKey: "preset-direct-cn",

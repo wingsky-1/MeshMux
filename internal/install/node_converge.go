@@ -34,7 +34,7 @@ import (
 // claim on its next readback.
 func ConvergeHandoffConfig(root, operationID, expectedSHA256 string) error {
 	if !operationIDPattern.MatchString(operationID) {
-		return errors.New("OPERATION_ID_INVALID")
+		return errors.New(CodeOperationIDInvalid)
 	}
 	if !validDigest.MatchString(expectedSHA256) {
 		return errors.New("HANDOFF_CONVERGE_INVALID")
@@ -109,15 +109,15 @@ func readAgentConfig(root string) (node.Config, error) {
 	path := rooted(root, node.AgentConfigPath)
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
-		return node.Config{}, errors.New("AGENT_CONFIG_UNAVAILABLE")
+		return node.Config{}, errors.New(CodeAgentConfigUnavailable)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return node.Config{}, errors.New("AGENT_CONFIG_UNAVAILABLE")
+		return node.Config{}, errors.New(CodeAgentConfigUnavailable)
 	}
 	var cfg node.Config
 	if json.Unmarshal(data, &cfg) != nil {
-		return node.Config{}, errors.New("AGENT_CONFIG_UNAVAILABLE")
+		return node.Config{}, errors.New(CodeAgentConfigUnavailable)
 	}
 	return cfg, nil
 }

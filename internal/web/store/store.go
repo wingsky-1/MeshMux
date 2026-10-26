@@ -13,15 +13,20 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SessionLifetime = 8 * time.Hour
-const idleLifetime = 30 * time.Minute
+// The private data-directory layout of one Hub. Every name appears here once:
+// the permission pre-check, the lock, the database open and the bootstrap token
+// all read these constants, so a rename cannot leave one path unguarded.
+const (
+	databaseFileName = "meshmux.db"
+	databaseWALName  = "meshmux.db-wal"
+	databaseSHMName  = "meshmux.db-shm"
+	lockFileName     = ".lock"
+	bootstrapName    = "bootstrap.token"
+)
 
-// The durable global authentication budget: ten attempts per rolling ten
-// minutes, shared by setup, login and password change. The window opens at its
-// first attempt and is measured from that instant, so spending a slot never
-// extends the lockout, and restarting the service does not clear it.
-const authWindow = 10 * time.Minute
-const authBudget = 10
+// The durable global authentication budget (ten attempts per rolling ten
+// minutes) is shared by setup, login and password change. Its window and budget
+// live in store_transport.go with the other fixed lifetimes.
 
 type Store struct {
 	DB   *sql.DB
@@ -67,12 +72,12 @@ func OpenStore(dir string) (*Store, error) {
 	if err = privatePath(abs, true); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"meshmux.db", "meshmux.db-wal", "meshmux.db-shm", ".lock", "bootstrap.token"} {
+	for _, name := range []string{databaseFileName, databaseWALName, databaseSHMName, lockFileName, bootstrapName} {
 		if e := privatePath(filepath.Join(abs, name), false); e != nil && !os.IsNotExist(e) {
 			return nil, e
 		}
 	}
-	lock, err := os.OpenFile(filepath.Join(abs, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := os.OpenFile(filepath.Join(abs, lockFileName), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -81,14 +86,14 @@ func OpenStore(dir string) (*Store, error) {
 		return nil, errors.New("DATA_LOCKED: another Web process uses this directory")
 	}
 	s := &Store{lock: lock, Dir: abs}
-	f, err := os.OpenFile(filepath.Join(abs, "meshmux.db"), os.O_CREATE|os.O_RDWR, 0600)
+	f, err := os.OpenFile(filepath.Join(abs, databaseFileName), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		s.Close()
 		return nil, err
 	}
 	f.Close()
-	u := url.URL{Scheme: "file", Path: filepath.Join(abs, "meshmux.db")}
-	s.DB, err = sql.Open("sqlite", u.String()+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)")
+	u := url.URL{Scheme: "file", Path: filepath.Join(abs, databaseFileName)}
+	s.DB, err = sql.Open("sqlite", u.String()+sqliteDSNPragmas())
 	if err != nil {
 		s.Close()
 		return nil, err
@@ -98,7 +103,7 @@ func OpenStore(dir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	for _, name := range []string{"meshmux.db", "meshmux.db-wal", "meshmux.db-shm"} {
+	for _, name := range []string{databaseFileName, databaseWALName, databaseSHMName} {
 		if e := privatePath(filepath.Join(abs, name), false); e != nil && !os.IsNotExist(e) {
 			s.Close()
 			return nil, e
@@ -119,7 +124,7 @@ func OpenStore(dir string) (*Store, error) {
 // writes its check documents there, so they never leave the private boundary.
 func (s *Store) ScratchDir() (string, error) {
 	if s.Dir == "" || !filepath.IsAbs(s.Dir) {
-		return "", errors.New("PUBLISH_GATE_FAILED: the hub data directory is unavailable")
+		return "", errors.New(codePublishGate + ": the hub data directory is unavailable")
 	}
 	return s.Dir, nil
 }
@@ -359,7 +364,7 @@ func (s *Store) PrepareBootstrap(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.Dir, "bootstrap.token")
+	path := filepath.Join(s.Dir, bootstrapName)
 	if hash != "" {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err

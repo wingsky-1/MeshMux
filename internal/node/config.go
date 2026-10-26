@@ -1,18 +1,3 @@
-// Package node defines the fixed host layout and data contracts shared by the
-// Hub, the node installer and the node runtime, and it also owns the runtime
-// half that acts on them. The contract side lives in config.go (fixed paths
-// such as AgentBinaryPath and the unit names) and in render.go and release.go
-// (CompileCandidate, KernelReleaseFor).
-//
-// The package does perform host I/O. runtime.go creates and inspects the
-// layout directories with os.Lstat and os.Mkdir, files.go writes managed files
-// through writeAtomic (os.Rename), command.go runs subprocesses through
-// exec.CommandContext and holds the shared runtime flock (AcquireRuntimeLock),
-// and ReadbackLocal in runtime_readback.go reads the live data plane back.
-//
-// The dependency direction is one way: node imports internal/protocol and the
-// standard-library-only internal/buildinfo. internal/web and internal/install
-// import node; node never imports either.
 package node
 
 import (
@@ -27,20 +12,28 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 const (
+	// AgentDataDir and ActiveConfigDir are the two host directories of the
+	// Agent layout. Every path below and every runtime helper derives from them,
+	// so the layout has one definition; the install side renders the same two
+	// directories into its unit files.
+	AgentDataDir    = "/var/lib/meshmux-agent"
+	ActiveConfigDir = "/var/lib/meshmux-singbox"
+
 	AgentBinaryPath     = "/usr/local/libexec/meshmuxd"
 	SingBoxBinaryPath   = "/usr/local/libexec/meshmux-sing-box"
 	AgentConfigPath     = "/etc/meshmux/agent.json"
-	IdentityPath        = "/var/lib/meshmux-agent/identity.json"
-	RuntimeStatePath    = "/var/lib/meshmux-agent/state.json"
-	ActiveCandidatePath = "/var/lib/meshmux-agent/active-candidate.json"
-	ActiveConfigPath    = "/var/lib/meshmux-singbox/config.json"
+	IdentityPath        = AgentDataDir + "/identity.json"
+	RuntimeStatePath    = AgentDataDir + "/state.json"
+	ActiveCandidatePath = AgentDataDir + "/active-candidate.json"
+	ActiveConfigPath    = ActiveConfigDir + "/config.json"
 	// ACLPath is the managed Out VLESS guard script: the exact table
 	// replacement including the Hub-authorized source accept rules. It is
 	// applied as one nft -f transaction and read back through nft -j.
-	ACLPath = "/var/lib/meshmux-agent/out.nft"
+	ACLPath = AgentDataDir + "/out.nft"
 
 	AgentUnit   = "meshmux-agent.service"
 	SingBoxUnit = "meshmux-sing-box.service"
@@ -379,19 +372,17 @@ type Readback struct {
 	OutDefaultDeny bool   `json:"out_default_deny"`
 }
 
-var (
-	nodeIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	sha256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	tokenPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
-	dnsLabel      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-)
+// dnsLabel is the only local pattern here: a single-label shape no other
+// package owns. Identity, digest and token spellings come from protocol, the
+// wire contract both sides of the Agent boundary share.
+var dnsLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Validate checks the enrollment data required before pairing.
 func (c Config) Validate() error {
 	if err := validateHubURL(c.HubURL); err != nil {
 		return err
 	}
-	if !nodeIDPattern.MatchString(c.NodeID) {
+	if !protocol.ValidID(c.NodeID) {
 		return errors.New("NODE_ID_INVALID: need 32 lowercase hex characters")
 	}
 	if !c.Role.valid() {
@@ -413,10 +404,10 @@ func (c Config) ValidateInstalled() error {
 	if c.AgentVersion != CurrentAgentVersion() {
 		return errors.New("AGENT_VERSION_INVALID: installed Agent version is not the pinned build")
 	}
-	if !sha256Pattern.MatchString(c.AgentSHA256) {
+	if !protocol.ValidSHA256(c.AgentSHA256) {
 		return errors.New("AGENT_SHA256_INVALID: need 64 lowercase hex characters")
 	}
-	if !sha256Pattern.MatchString(c.KernelSHA256) {
+	if !protocol.ValidSHA256(c.KernelSHA256) {
 		return errors.New("KERNEL_SHA256_INVALID: need 64 lowercase hex characters")
 	}
 	return nil
@@ -489,10 +480,10 @@ func validateHubURL(raw string) error {
 
 // Validate checks that a private identity has the frozen field shapes.
 func (i Identity) Validate() error {
-	if !nodeIDPattern.MatchString(i.NodeID) {
+	if !protocol.ValidID(i.NodeID) {
 		return errors.New("IDENTITY_INVALID: node identity does not match")
 	}
-	if !tokenPattern.MatchString(i.IdentityToken) {
+	if !protocol.ValidToken43(i.IdentityToken) {
 		return errors.New("IDENTITY_INVALID: node identity does not match")
 	}
 	return nil
@@ -514,7 +505,7 @@ func (i Identity) ValidateFor(c Config) error {
 
 // Validate checks the enrollment metadata without probing the host.
 func (m Metadata) Validate() error {
-	if !nodeIDPattern.MatchString(m.NodeID) {
+	if !protocol.ValidID(m.NodeID) {
 		return errors.New("METADATA_INVALID: node metadata does not match")
 	}
 	if !m.Role.valid() {
@@ -543,7 +534,7 @@ func (m Metadata) ValidateFor(c Config) error {
 // Validate checks the frozen candidate fields and, when present, the optional
 // v2 users and reality blocks.
 func (c Candidate) Validate() error {
-	if !nodeIDPattern.MatchString(c.NodeID) {
+	if !protocol.ValidID(c.NodeID) {
 		return errors.New("CANDIDATE_INVALID: node identity does not match")
 	}
 	if !c.Role.valid() {
@@ -832,8 +823,8 @@ func (r Readback) Validate() error {
 	if r.AgentVersion != CurrentAgentVersion() {
 		return errors.New("READBACK_INVALID: installed Agent version is not pinned")
 	}
-	if !sha256Pattern.MatchString(r.AgentSHA256) || !sha256Pattern.MatchString(r.KernelSHA256) ||
-		!sha256Pattern.MatchString(r.ConfigSHA256) {
+	if !protocol.ValidSHA256(r.AgentSHA256) || !protocol.ValidSHA256(r.KernelSHA256) ||
+		!protocol.ValidSHA256(r.ConfigSHA256) {
 		return errors.New("READBACK_INVALID: digests must be 64 lowercase hex characters")
 	}
 	if r.KernelVersion != KernelVersion {

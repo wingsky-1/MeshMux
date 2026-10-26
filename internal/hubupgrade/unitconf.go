@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-const codeUnitShape = "HUB_RESTORE_UNIT_SHAPE_INVALID"
+const codeUnitShape = CodeRestoreUnitShapeInvalid
 
 // safeExecArg reports whether an argv element needs no systemd quoting.
 // Anything else is rendered inside double quotes with the escapes systemd

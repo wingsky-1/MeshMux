@@ -463,7 +463,7 @@ func TestMihomoAbsentDegradesWithoutBlocking(t *testing.T) {
 	if !preview.Approved || !preview.MihomoSkipped {
 		t.Fatalf("preview = %+v, want approved with the mihomo gate skipped", preview)
 	}
-	if len(preview.Gates) != 1 || preview.Gates[0] != "sing-box" {
+	if len(preview.Gates) != 1 || preview.Gates[0] != kernelSingBox {
 		t.Fatalf("gates = %q, want [sing-box]", preview.Gates)
 	}
 	var reminder bool

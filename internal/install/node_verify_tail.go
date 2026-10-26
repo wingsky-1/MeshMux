@@ -151,7 +151,7 @@ func nodeVerifyTail(ctx context.Context, result *InstallResult, state *InstallSt
 			if errors.As(err, &ie) {
 				return fail(ie)
 			}
-			return fail(&InstallError{Stage: "verify", Code: "ROLLBACK_SOURCE_FAILED",
+			return fail(&InstallError{Stage: "verify", Code: CodeRollbackSourceFailed,
 				Recovery: "The verified release could not be recorded as the next upgrade's rollback source; check disk space and permissions."})
 		}
 	}

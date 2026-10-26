@@ -36,23 +36,25 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// RequestDir is the fixed, tmpfs-backed request directory the Web writes
 	// and the path unit watches. It is deliberately outside the data
 	// directory: a restore flips --data-dir but cannot move this unit.
-	RequestDir = "/run/meshmux-hub/requests"
+	RequestDir = versions.HubRunDir + "/requests"
 	// RequestStagingDir is the unwatched sibling where a request is completed
 	// before it becomes visible. It must be declared in the web unit's
 	// ReadWritePaths and created by the tmpfiles drop-in *before* the unit
 	// starts: ProtectSystem=strict makes an undeclared write EROFS, and a
 	// declared-but-absent path fails the unit with status=226/NAMESPACE. The
 	// MkdirAll below is only a same-uid convenience for fixtures and repairs.
-	RequestStagingDir = "/run/meshmux-hub/staging"
+	RequestStagingDir = versions.HubRunDir + "/staging"
 	// RequestDoneDir holds consumed requests. It is root:root 0700; the Web
 	// can neither read nor replace a dispatched intent.
-	RequestDoneDir = "/run/meshmux-hub/requests.done"
+	RequestDoneDir = versions.HubRunDir + "/requests.done"
 	// RequestSchema is the frozen request document schema.
 	RequestSchema = 1
 	// RequestMaxBytes bounds the one document a reader parses.
@@ -65,8 +67,7 @@ const (
 	// doneDirMode is the dispatcher's private done directory.
 	doneDirMode = 0700
 
-	codeRequestInvalid = "HUB_HANDOFF_REQUEST_INVALID"
-	codeRequestWrite   = "HUB_HANDOFF_WRITE_FAILED"
+	codeRequestWrite = "HUB_HANDOFF_WRITE_FAILED"
 )
 
 // Request is one dispatch intent: a kind, the operation whose frozen record and
@@ -93,7 +94,7 @@ func WriteRequest(dir string, r Request) (string, error) {
 	// parser fails here instead of producing a request no dispatcher accepts.
 	name := r.OperationID + ".json"
 	if parsed, ok := requestNameOperationID(name); !ok || parsed != r.OperationID {
-		return "", fail(codeRequestInvalid, "the request file name does not name the operation")
+		return "", fail(CodeHandoffRequestInvalid, "the request file name does not name the operation")
 	}
 	if err := os.MkdirAll(dir, requestDirMode); err != nil {
 		return "", fail(codeRequestWrite, "the request directory is unavailable")
@@ -114,7 +115,7 @@ func WriteRequest(dir string, r Request) (string, error) {
 	}
 	body, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
-		return "", fail(codeRequestInvalid, "the request could not be encoded")
+		return "", fail(CodeHandoffRequestInvalid, "the request could not be encoded")
 	}
 	// A crashed writer can leave one scratch document behind; tmpfs clears it on
 	// boot, and the same operation's leftovers are never reused.
@@ -178,20 +179,20 @@ func stagingDirFor(requestDir string) string {
 func ReadRequest(path string, expectedOwner int) (Request, error) {
 	name := filepath.Base(path)
 	if _, ok := requestNameOperationID(name); !ok {
-		return Request{}, fail(codeRequestInvalid, "the request file name is not <op32hex>.json")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request file name is not <op32hex>.json")
 	}
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return Request{}, fail(codeRequestInvalid, "the request is not a regular file")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request is not a regular file")
 	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return Request{}, fail(codeRequestInvalid, "the request could not be opened without following a link")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request could not be opened without following a link")
 	}
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return Request{}, fail(codeRequestInvalid, "the request changed while it was being opened")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request changed while it was being opened")
 	}
 	return readRequestDocument(file, name, opened, expectedOwner)
 }
@@ -201,17 +202,17 @@ func ReadRequest(path string, expectedOwner int) (Request, error) {
 // watched path away and substituting a symlink cannot redirect the read.
 func ReadRequestAt(dirFD int, name string, expectedOwner int) (Request, error) {
 	if _, ok := requestNameOperationID(name); !ok {
-		return Request{}, fail(codeRequestInvalid, "the request file name is not <op32hex>.json")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request file name is not <op32hex>.json")
 	}
 	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return Request{}, fail(codeRequestInvalid, "the request could not be opened without following a link")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request could not be opened without following a link")
 	}
 	file := os.NewFile(uintptr(fd), name)
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return Request{}, fail(codeRequestInvalid, "the request could not be inspected")
+		return Request{}, fail(CodeHandoffRequestInvalid, "the request could not be inspected")
 	}
 	return readRequestDocument(file, name, info, expectedOwner)
 }
@@ -219,27 +220,27 @@ func ReadRequestAt(dirFD int, name string, expectedOwner int) (Request, error) {
 func readRequestDocument(file *os.File, name string, info os.FileInfo, expectedOwner int) (Request, error) {
 	var request Request
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return request, fail(codeRequestInvalid, "the request is not a regular file")
+		return request, fail(CodeHandoffRequestInvalid, "the request is not a regular file")
 	}
 	if info.Mode().Perm() != 0600 || !ownedBy(expectedOwner, info) {
-		return request, fail(codeRequestInvalid, "the request is not a private file of the expected account")
+		return request, fail(CodeHandoffRequestInvalid, "the request is not a private file of the expected account")
 	}
 	if info.Size() < 1 || info.Size() > RequestMaxBytes {
-		return request, fail(codeRequestInvalid, "the request is outside its size bound")
+		return request, fail(CodeHandoffRequestInvalid, "the request is outside its size bound")
 	}
 	body, err := io.ReadAll(io.LimitReader(file, RequestMaxBytes+1))
 	if err != nil || len(body) > RequestMaxBytes {
-		return request, fail(codeRequestInvalid, "the request could not be read within its bound")
+		return request, fail(CodeHandoffRequestInvalid, "the request could not be read within its bound")
 	}
 	if err := decodeStrictDocument(body, &request); err != nil {
-		return request, fail(codeRequestInvalid, "the request is not valid strict JSON")
+		return request, fail(CodeHandoffRequestInvalid, "the request is not valid strict JSON")
 	}
 	if err := validateRequest(request); err != nil {
 		return request, err
 	}
 	operationID, _ := requestNameOperationID(name)
 	if request.OperationID != operationID {
-		return request, fail(codeRequestInvalid, "the request document and its file name name different operations")
+		return request, fail(CodeHandoffRequestInvalid, "the request document and its file name name different operations")
 	}
 	return request, nil
 }
@@ -250,7 +251,7 @@ func readRequestDocument(file *os.File, name string, info os.FileInfo, expectedO
 // renamed relative to it, so replacing the path with another directory or a
 // symlink cannot redirect a read or a drain.
 func OpenRequestDir(dir string, expectedOwner int) (*os.File, error) {
-	return openDispatchDir(dir, expectedOwner, requestDirMode, codeRequestInvalid)
+	return openDispatchDir(dir, expectedOwner, requestDirMode, CodeHandoffRequestInvalid)
 }
 
 // OpenRequestDoneDir is the same proof for the dispatcher's private done
@@ -320,10 +321,10 @@ func DrainAt(requestDir, doneDir *os.File, names []string, rejected bool, now ti
 // drained it, or it was never written.
 func RemoveRequest(dir, operationID string) error {
 	if !opIDRE.MatchString(operationID) {
-		return fail(codeRequestInvalid, "the operation id is not 32 lowercase hex")
+		return fail(CodeHandoffRequestInvalid, "the operation id is not 32 lowercase hex")
 	}
 	if dir == "" || !filepath.IsAbs(dir) {
-		return fail(codeRequestInvalid, "the request directory is not absolute")
+		return fail(CodeHandoffRequestInvalid, "the request directory is not absolute")
 	}
 	path := filepath.Join(dir, operationID+".json")
 	info, err := os.Lstat(path)
@@ -331,13 +332,13 @@ func RemoveRequest(dir, operationID string) error {
 		return nil
 	}
 	if err != nil {
-		return fail(codeRequestInvalid, "the request could not be inspected")
+		return fail(CodeHandoffRequestInvalid, "the request could not be inspected")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fail(codeRequestInvalid, "the request is not a regular file")
+		return fail(CodeHandoffRequestInvalid, "the request is not a regular file")
 	}
 	if !ownedBy(os.Geteuid(), info) {
-		return fail(codeRequestInvalid, "the request does not belong to this account")
+		return fail(CodeHandoffRequestInvalid, "the request does not belong to this account")
 	}
 	if err := os.Remove(path); err != nil {
 		return fail(codeRequestWrite, "the request could not be removed")
@@ -348,13 +349,13 @@ func RemoveRequest(dir, operationID string) error {
 func validateRequest(request Request) error {
 	switch {
 	case request.Schema != RequestSchema:
-		return fail(codeRequestInvalid, "the request does not carry this schema")
+		return fail(CodeHandoffRequestInvalid, "the request does not carry this schema")
 	case request.Kind != KindUpdate && request.Kind != KindRestore:
-		return fail(codeRequestInvalid, "the request kind is not update or restore")
+		return fail(CodeHandoffRequestInvalid, "the request kind is not update or restore")
 	case !opIDRE.MatchString(request.OperationID):
-		return fail(codeRequestInvalid, "the request operation id is not 32 lowercase hex")
+		return fail(CodeHandoffRequestInvalid, "the request operation id is not 32 lowercase hex")
 	case !cleanAbsolutePath(request.DataDir):
-		return fail(codeRequestInvalid, "the request data directory is not a clean absolute path")
+		return fail(CodeHandoffRequestInvalid, "the request data directory is not a clean absolute path")
 	}
 	return nil
 }

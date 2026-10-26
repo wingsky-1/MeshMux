@@ -25,13 +25,14 @@ import (
 	"path/filepath"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// DefaultBackupRoot is the fixed rollback store of a Node (spec §6). The
 	// installer snapshot is promoted from its operation directory to here so
 	// it survives the installer's own cleanup and a restart.
-	DefaultBackupRoot = "/var/lib/meshmux-agent/upgrade-backups"
+	DefaultBackupRoot = versions.AgentUpgradeBackupsDir
 
 	// BackupRecordSchema is the on-disk schema of one rollback record.
 	BackupRecordSchema = backup.RecordSchema

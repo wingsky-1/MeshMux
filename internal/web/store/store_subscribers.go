@@ -3,14 +3,12 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
-
-// maxSubscriberLines bounds one subscriber's Line selection so a single
-// request cannot create an unbounded credential fan-out.
-const maxSubscriberLines = 32
 
 // normalizeLineSelection validates the requested Line identifiers and removes
 // duplicates while keeping the caller's order.
@@ -20,9 +18,10 @@ func normalizeLineSelection(lineIDs []string) ([]string, error) {
 	}
 	seen := make(map[string]struct{}, len(lineIDs))
 	out := make([]string, 0, len(lineIDs))
-	for _, id := range lineIDs {
+	for _, raw := range lineIDs {
+		id := strings.TrimSpace(raw)
 		if err := subscription.ValidateID(id); err != nil {
-			return nil, errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
+			return nil, errLineIDInvalid()
 		}
 		if _, duplicate := seen[id]; duplicate {
 			continue
@@ -31,7 +30,7 @@ func normalizeLineSelection(lineIDs []string) ([]string, error) {
 		out = append(out, id)
 	}
 	if len(out) > maxSubscriberLines {
-		return nil, errors.New("LINES_TOO_MANY: select at most 32 lines")
+		return nil, errors.New("LINES_TOO_MANY: select at most " + strconv.Itoa(maxSubscriberLines) + " lines")
 	}
 	return out, nil
 }
@@ -45,14 +44,14 @@ func validateLineTx(tx *sql.Tx, nodeID string) error {
 		return errors.New("LINE_NOT_FOUND: select an existing line node")
 	}
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "edge" {
-		return errors.New("LINE_ROLE_INVALID: only edge nodes can serve proxy lines")
+	if role != string(nodeRoleEdge) {
+		return errLineRoleInvalid
 	}
 	var count int
 	if err = tx.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, nodeID).Scan(&count); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if count == 0 {
 		return errors.New("LINE_NOT_CONFIGURED: configure the line transport before selecting it")
@@ -87,10 +86,10 @@ func scanSubscriber(row rowScanner) (subscription.Subscriber, error) {
 func getSubscriberTx(tx *sql.Tx, id string) (subscription.Subscriber, error) {
 	sub, err := scanSubscriber(tx.QueryRow(`SELECT id, display_name, state FROM subscribers WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_NOT_FOUND: unknown subscription user")
+		return subscription.Subscriber{}, errSubscriberNotFound
 	}
 	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err := sub.Validate(); err != nil {
 		return subscription.Subscriber{}, errors.New("SUBSCRIBER_CORRUPT: stored subscriber record is invalid")
@@ -115,7 +114,7 @@ func (s *Store) CreateSubscriber(displayName string, lineIDs []string, now time.
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Subscriber{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	for _, nodeID := range selected {
@@ -125,7 +124,7 @@ func (s *Store) CreateSubscriber(displayName string, lineIDs []string, now time.
 	}
 	if _, err = tx.Exec(`INSERT INTO subscribers(id, display_name, state, revision, created_at, updated_at) VALUES(?,?,?,1,?,?)`,
 		sub.ID, sub.DisplayName, string(sub.State), now.Unix(), now.Unix()); err != nil {
-		return subscription.Subscriber{}, "", errors.New("SUBSCRIBER_CREATE_FAILED")
+		return subscription.Subscriber{}, "", errSubscriberCreateFailed
 	}
 	// The edge table is the reference source the wizard, the used-by graph and
 	// the implicit recompute read. The credential stays the materialized
@@ -140,23 +139,23 @@ func (s *Store) CreateSubscriber(displayName string, lineIDs []string, now time.
 	for _, nodeID := range selected {
 		credential, cErr := subscription.NewCredential(sub.ID, nodeID)
 		if cErr != nil {
-			return subscription.Subscriber{}, "", errors.New("CREDENTIAL_CREATE_FAILED")
+			return subscription.Subscriber{}, "", errCredentialCreateFailed
 		}
 		if _, err = tx.Exec(`INSERT INTO proxy_credentials(id, subscriber_id, node_id, uuid, active, created_at, updated_at) VALUES(?,?,?,?,1,?,?)`,
 			credential.ID, credential.SubscriberID, credential.NodeID, credential.UUID, now.Unix(), now.Unix()); err != nil {
-			return subscription.Subscriber{}, "", errors.New("CREDENTIAL_CREATE_FAILED")
+			return subscription.Subscriber{}, "", errCredentialCreateFailed
 		}
 	}
 	record, bearer, tErr := subscription.NewSubscriptionToken(sub.ID)
 	if tErr != nil {
-		return subscription.Subscriber{}, "", errors.New("TOKEN_CREATE_FAILED")
+		return subscription.Subscriber{}, "", errTokenCreateFailed
 	}
 	if _, err = tx.Exec(`INSERT INTO subscription_tokens(id, subscriber_id, token_hash, revoked, created_at, revoked_at) VALUES(?,?,?,0,?,0)`,
 		record.ID, record.SubscriberID, record.Hash, now.Unix()); err != nil {
-		return subscription.Subscriber{}, "", errors.New("TOKEN_CREATE_FAILED")
+		return subscription.Subscriber{}, "", errTokenCreateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return subscription.Subscriber{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	return sub, bearer, nil
 }
@@ -169,11 +168,11 @@ func (s *Store) CreateSubscriber(displayName string, lineIDs []string, now time.
 // frozen. A paused subscriber may still be renamed.
 func (s *Store) RenameSubscriber(id, displayName string, now time.Time) (subscription.Subscriber, error) {
 	if err := subscription.ValidateID(id); err != nil {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return subscription.Subscriber{}, errSubscriberIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	sub, err := getSubscriberTx(tx, id)
@@ -193,10 +192,10 @@ func (s *Store) RenameSubscriber(id, displayName string, now time.Time) (subscri
 	}
 	if _, err = tx.Exec(`UPDATE subscribers SET display_name=?, revision=revision+1, updated_at=? WHERE id=?`,
 		renamed.DisplayName, now.Unix(), id); err != nil {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_UPDATE_FAILED")
+		return subscription.Subscriber{}, errSubscriberUpdateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return renamed, nil
 }
@@ -223,11 +222,11 @@ func (s *Store) SetSubscriberState(id string, state subscription.State, now time
 		return subscription.Subscriber{}, err
 	}
 	if err := subscription.ValidateID(id); err != nil {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return subscription.Subscriber{}, errSubscriberIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	sub, err := getSubscriberTx(tx, id)
@@ -237,7 +236,7 @@ func (s *Store) SetSubscriberState(id string, state subscription.State, now time
 	if sub.State == state {
 		// Idempotent retry of an already applied state change.
 		if err = tx.Commit(); err != nil {
-			return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+			return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 		}
 		return sub, nil
 	}
@@ -247,15 +246,15 @@ func (s *Store) SetSubscriberState(id string, state subscription.State, now time
 	if state != subscription.StateActive {
 		if _, err = tx.Exec(`UPDATE subscription_tokens SET revoked=1, revoked_at=? WHERE subscriber_id=? AND revoked=0`,
 			now.Unix(), id); err != nil {
-			return subscription.Subscriber{}, errors.New("TOKEN_REVOKE_FAILED")
+			return subscription.Subscriber{}, errTokenRevokeFailed
 		}
 	}
 	if _, err = tx.Exec(`UPDATE subscribers SET state=?, revision=revision+1, updated_at=? WHERE id=?`,
 		string(state), now.Unix(), id); err != nil {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_UPDATE_FAILED")
+		return subscription.Subscriber{}, errSubscriberUpdateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 	}
 	sub.State = state
 	// A subscriber state change is NOT an ACL event (Ruling R10): the data plane
@@ -285,7 +284,7 @@ func (s *Store) SetSubscriberState(id string, state subscription.State, now time
 // release it explicitly.
 func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time) ([]subscription.Credential, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return nil, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return nil, errSubscriberIDInvalid()
 	}
 	selected, err := normalizeLineSelection(lineIDs)
 	if err != nil {
@@ -293,7 +292,7 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	sub, err := getSubscriberTx(tx, subscriberID)
@@ -320,20 +319,20 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 		if errors.Is(err, sql.ErrNoRows) {
 			credential, err = subscription.NewCredential(subscriberID, nodeID)
 			if err != nil {
-				return nil, errors.New("CREDENTIAL_CREATE_FAILED")
+				return nil, errCredentialCreateFailed
 			}
 			if _, err = tx.Exec(`INSERT INTO proxy_credentials(id, subscriber_id, node_id, uuid, active, created_at, updated_at) VALUES(?,?,?,?,1,?,?)`,
 				credential.ID, credential.SubscriberID, credential.NodeID, credential.UUID, now.Unix(), now.Unix()); err != nil {
-				return nil, errors.New("CREDENTIAL_CREATE_FAILED")
+				return nil, errCredentialCreateFailed
 			}
 			changed = true
 		} else if err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		} else if active != 1 {
 			// A previously dropped line is selected again: the historical UUID
 			// is reused and the credential becomes active again.
 			if _, err = tx.Exec(`UPDATE proxy_credentials SET active=1, updated_at=? WHERE id=?`, now.Unix(), credential.ID); err != nil {
-				return nil, errors.New("CREDENTIAL_UPDATE_FAILED")
+				return nil, errCredentialUpdateFailed
 			}
 			changed = true
 		}
@@ -351,11 +350,11 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 	}
 	if changed || dropped > 0 {
 		if _, err = tx.Exec(`UPDATE subscribers SET revision=revision+1, updated_at=? WHERE id=?`, now.Unix(), subscriberID); err != nil {
-			return nil, errors.New("SUBSCRIBER_UPDATE_FAILED")
+			return nil, errSubscriberUpdateFailed
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	// The Line set of a subscription does not change the ACL (Ruling R10): a Line is
 	// authorized at every Out by membership, so dropping or adding it here only
@@ -369,7 +368,7 @@ func (s *Store) SelectLines(subscriberID string, lineIDs []string, now time.Time
 // the legacy Line-only form, not the wizard.
 func rewriteLineEdgesTx(tx *sql.Tx, subscriberID string, lineIDs []string, now int64) error {
 	if _, err := tx.Exec(`DELETE FROM subscription_lines WHERE subscriber_id=?`, subscriberID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	for position, nodeID := range lineIDs {
 		if _, err := tx.Exec(`INSERT INTO subscription_lines(subscriber_id, node_id, position, line_revision, created_at) VALUES(?,?,?,0,?)`,
@@ -381,7 +380,7 @@ func rewriteLineEdgesTx(tx *sql.Tx, subscriberID string, lineIDs []string, now i
 	// the Line change clears the approval: the download refuses it until the
 	// wizard saves the new selection.
 	if _, err := tx.Exec(`UPDATE subscription_snapshots SET artifact_id='', artifact_approved=0, artifact_at=0, updated_at=? WHERE subscriber_id=?`, now, subscriberID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -392,7 +391,7 @@ func rewriteLineEdgesTx(tx *sql.Tx, subscriberID string, lineIDs []string, now i
 func deactivateDroppedCredentials(tx *sql.Tx, subscriberID string, keep map[string]struct{}, now int64) (int, error) {
 	rows, err := tx.Query(`SELECT id, node_id FROM proxy_credentials WHERE subscriber_id=? AND active=1`, subscriberID)
 	if err != nil {
-		return 0, errors.New("DATABASE_UNAVAILABLE")
+		return 0, errors.New(CodeDatabaseUnavailable)
 	}
 	type dropped struct {
 		id     string
@@ -403,21 +402,21 @@ func deactivateDroppedCredentials(tx *sql.Tx, subscriberID string, keep map[stri
 		var d dropped
 		if err = rows.Scan(&d.id, &d.nodeID); err != nil {
 			rows.Close()
-			return 0, errors.New("DATABASE_UNAVAILABLE")
+			return 0, errors.New(CodeDatabaseUnavailable)
 		}
 		if _, selected := keep[d.nodeID]; !selected {
 			inactive = append(inactive, d)
 		}
 	}
 	if err = rows.Close(); err != nil {
-		return 0, errors.New("DATABASE_UNAVAILABLE")
+		return 0, errors.New(CodeDatabaseUnavailable)
 	}
 	if err = rows.Err(); err != nil {
-		return 0, errors.New("DATABASE_UNAVAILABLE")
+		return 0, errors.New(CodeDatabaseUnavailable)
 	}
 	for _, d := range inactive {
 		if _, err = tx.Exec(`UPDATE proxy_credentials SET active=0, updated_at=? WHERE id=?`, now, d.id); err != nil {
-			return 0, errors.New("CREDENTIAL_UPDATE_FAILED")
+			return 0, errCredentialUpdateFailed
 		}
 	}
 	return len(inactive), nil
@@ -428,11 +427,11 @@ func deactivateDroppedCredentials(tx *sql.Tx, subscriberID string, keep map[stri
 // every VLESS UUID and of the revoked token.
 func (s *Store) RotateToken(subscriberID string, now time.Time) (string, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return "", errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return "", errSubscriberIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	sub, err := getSubscriberTx(tx, subscriberID)
@@ -444,18 +443,18 @@ func (s *Store) RotateToken(subscriberID string, now time.Time) (string, error) 
 	}
 	record, bearer, tErr := subscription.NewSubscriptionToken(subscriberID)
 	if tErr != nil {
-		return "", errors.New("TOKEN_CREATE_FAILED")
+		return "", errTokenCreateFailed
 	}
 	if _, err = tx.Exec(`UPDATE subscription_tokens SET revoked=1, revoked_at=? WHERE subscriber_id=? AND revoked=0`,
 		now.Unix(), subscriberID); err != nil {
-		return "", errors.New("TOKEN_REVOKE_FAILED")
+		return "", errTokenRevokeFailed
 	}
 	if _, err = tx.Exec(`INSERT INTO subscription_tokens(id, subscriber_id, token_hash, revoked, created_at, revoked_at) VALUES(?,?,?,0,?,0)`,
 		record.ID, record.SubscriberID, record.Hash, now.Unix()); err != nil {
-		return "", errors.New("TOKEN_CREATE_FAILED")
+		return "", errTokenCreateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	return bearer, nil
 }
@@ -467,11 +466,11 @@ func (s *Store) RotateToken(subscriberID string, now time.Time) (string, error) 
 // identifier is never reported as a successful revocation.
 func (s *Store) RevokeTokens(subscriberID string, now time.Time) error {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return errSubscriberIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err = getSubscriberTx(tx, subscriberID); err != nil {
@@ -479,24 +478,24 @@ func (s *Store) RevokeTokens(subscriberID string, now time.Time) error {
 	}
 	if _, err = tx.Exec(`UPDATE subscription_tokens SET revoked=1, revoked_at=? WHERE subscriber_id=? AND revoked=0`,
 		now.Unix(), subscriberID); err != nil {
-		return errors.New("TOKEN_REVOKE_FAILED")
+		return errTokenRevokeFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
 
 func (s *Store) GetSubscriber(id string) (subscription.Subscriber, error) {
 	if err := subscription.ValidateID(id); err != nil {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return subscription.Subscriber{}, errSubscriberIDInvalid()
 	}
 	sub, err := scanSubscriber(s.DB.QueryRow(`SELECT id, display_name, state FROM subscribers WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Subscriber{}, errors.New("SUBSCRIBER_NOT_FOUND: unknown subscription user")
+		return subscription.Subscriber{}, errSubscriberNotFound
 	}
 	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Subscriber{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err := sub.Validate(); err != nil {
 		return subscription.Subscriber{}, errors.New("SUBSCRIBER_CORRUPT: stored subscriber record is invalid")
@@ -509,19 +508,19 @@ func (s *Store) GetSubscriber(id string) (subscription.Subscriber, error) {
 func (s *Store) ListSubscribers() ([]subscription.Subscriber, error) {
 	rows, err := s.DB.Query(`SELECT id, display_name, state FROM subscribers WHERE state<>'deleted' ORDER BY created_at ASC, id ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []subscription.Subscriber{}
 	for rows.Next() {
 		sub, err := scanSubscriber(rows)
 		if err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out = append(out, sub)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -530,11 +529,11 @@ func (s *Store) ListSubscribers() ([]subscription.Subscriber, error) {
 // the deactivated ones. The historical UUID stays visible for auditing.
 func (s *Store) ListSubscriberCredentials(subscriberID string) ([]subscription.Credential, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return nil, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return nil, errSubscriberIDInvalid()
 	}
 	rows, err := s.DB.Query(`SELECT id, subscriber_id, node_id, uuid, active FROM proxy_credentials WHERE subscriber_id=? ORDER BY created_at ASC, id ASC`, subscriberID)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []subscription.Credential{}
@@ -542,12 +541,12 @@ func (s *Store) ListSubscriberCredentials(subscriberID string) ([]subscription.C
 		var credential subscription.Credential
 		var active int
 		if err = rows.Scan(&credential.ID, &credential.SubscriberID, &credential.NodeID, &credential.UUID, &active); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out = append(out, credential)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }

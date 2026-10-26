@@ -390,7 +390,7 @@ func candidateFromStaged(data []byte) *Candidate {
 // transaction: its schema, operation, revision and config digest must agree. A
 // journal that fails this check is corruption, never a guessable record.
 func (j *applyJournal) validTransaction() bool {
-	return j != nil && j.Schema == journalTXNSchema && nodeIDPattern.MatchString(j.OperationID) &&
+	return j != nil && j.Schema == journalTXNSchema && protocol.ValidID(j.OperationID) &&
 		j.Revision >= 1 && len(j.Config) > 0 && sha256Hex(j.Config) == j.Digest
 }
 
@@ -399,8 +399,8 @@ func (j *applyJournal) validTransaction() bool {
 // the transaction digest does not. A corrupt envelope is not guessed at; the
 // Hub row then ends through its own redelivery instead of a fabricated receipt.
 func (j *applyJournal) receiptable() bool {
-	return j != nil && nodeIDPattern.MatchString(j.OperationID) && j.TaskRevision >= 1 &&
-		j.Idempotency != "" && sha256Pattern.MatchString(j.Payload)
+	return j != nil && protocol.ValidID(j.OperationID) && j.TaskRevision >= 1 &&
+		j.Idempotency != "" && protocol.ValidSHA256(j.Payload)
 }
 
 // journalRecoveryRetryable reports whether a failed LKG restore may still
@@ -429,7 +429,7 @@ func journalRecoveryRetryable(err error) bool {
 // redelivery; the outbox entry exists only for an operation the Hub already saw
 // as "applying" and is replayed by the next drain.
 func (r *Runtime) recordJournalFailure(state *runtimeState, journal *applyJournal, code string) {
-	if journal == nil || !nodeIDPattern.MatchString(journal.OperationID) {
+	if journal == nil || !protocol.ValidID(journal.OperationID) {
 		return
 	}
 	result := protocol.TaskResult{OperationID: journal.OperationID, Status: "partial", ErrorCode: stableCode(code)}

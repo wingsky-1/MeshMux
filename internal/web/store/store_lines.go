@@ -22,24 +22,24 @@ import (
 // serve.
 func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Line, error) {
 	if err := subscription.ValidateID(line.NodeID); err != nil {
-		return subscription.Line{}, errors.New("LINE_NODE_ID_INVALID: need 32 lowercase hex characters")
+		return subscription.Line{}, errLineNodeIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	var vlessPort int
 	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, line.NodeID).Scan(&role, &vlessPort)
 	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Line{}, errors.New("LINE_NOT_FOUND: unknown line node")
+		return subscription.Line{}, errLineNotFound
 	}
 	if err != nil {
-		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "edge" {
-		return subscription.Line{}, errors.New("LINE_ROLE_INVALID: only edge nodes can serve proxy lines")
+	if role != string(nodeRoleEdge) {
+		return subscription.Line{}, errLineRoleInvalid
 	}
 	if line.Port != vlessPort {
 		return subscription.Line{}, errors.New("LINE_PORT_MISMATCH: the line port must match the vless port of the node")
@@ -56,7 +56,7 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 		line.ShortID = storedShort
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
 	}
 	// The client-facing address is canonicalized to lower case, so one Line is
 	// never published under two spellings of the same host. An IPv6 address
@@ -88,21 +88,21 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	result, err := tx.Exec(`UPDATE line_settings SET display_name=?, server=?, port=?, sort_order=?, server_name=?, handshake_server=?, handshake_port=?, local=?, updated_at=? WHERE node_id=?`,
 		line.DisplayName, line.Server, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort, local, now.Unix(), line.NodeID)
 	if err != nil {
-		return subscription.Line{}, errors.New("LINE_SETTINGS_FAILED")
+		return subscription.Line{}, errLineSettingsFailed
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return subscription.Line{}, errors.New("LINE_SETTINGS_FAILED")
+		return subscription.Line{}, errLineSettingsFailed
 	}
 	if affected == 0 {
 		if _, err = tx.Exec(`INSERT INTO line_settings(node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			line.NodeID, line.DisplayName, line.Server, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort,
 			line.PrivateKey, line.PublicKey, line.ShortID, local, now.Unix(), now.Unix()); err != nil {
-			return subscription.Line{}, errors.New("LINE_SETTINGS_FAILED")
+			return subscription.Line{}, errLineSettingsFailed
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return subscription.Line{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
 	}
 	// The stored address IS the authorized source (Ruling R10: membership authorizes a
 	// Line, and its transport address is what the Out observes). A changed address is
@@ -117,7 +117,7 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 func (s *Store) ListLines() ([]subscription.Line, error) {
 	rows, err := s.DB.Query(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []subscription.Line{}
@@ -127,12 +127,12 @@ func (s *Store) ListLines() ([]subscription.Line, error) {
 			return nil, err
 		}
 		if err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out = append(out, line)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -163,7 +163,6 @@ func scanLine(row rowScanner) (subscription.Line, error) {
 // errLineSettingsCorrupt marks a stored Line that does not satisfy the
 // domain contract. The message carries the stable error code only and never
 // the stored values.
-var errLineSettingsCorrupt = errors.New("LINE_SETTINGS_CORRUPT: stored line settings are invalid")
 
 // validateStoredLine checks the persisted Line against the domain contract and
 // against the node-side REALITY contract of setLine.

@@ -40,7 +40,7 @@ func (s *Store) StagedReadbacks() (map[string]StagedReadback, error) {
 WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FROM agent_tasks x
  WHERE x.node_id=t.node_id AND x.kind=? AND x.status='healthy')`, protocol.KindConfigStage, protocol.KindConfigStage)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	type pending struct {
 		nodeID string
@@ -54,7 +54,7 @@ WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FRO
 		if err := rows.Scan(&row.nodeID, &row.staged.OperationID, &params, &targetVersion,
 			&manifest, &policySchema, &targetRevision); err != nil {
 			rows.Close()
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		var revision struct {
 			Revision int64 `json:"revision"`
@@ -76,7 +76,7 @@ WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FRO
 				PolicySchema: int(policySchema), CandidateRevision: targetRevision}
 			if err := target.Validate(); err != nil || targetRevision != revision.Revision {
 				rows.Close()
-				return nil, errors.New("UPGRADE_RECORD_CORRUPT: the persisted upgrade target is not actionable")
+				return nil, errUpgradeRecordCorrupt
 			}
 			row.staged.TargetVersion = targetVersion
 			row.staged.ManifestSHA256 = manifest
@@ -86,12 +86,12 @@ WHERE t.kind=? AND t.status='healthy' AND t.revision=(SELECT MAX(x.revision) FRO
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	// The store holds one connection: the candidate digest is read only after
 	// the task rows are drained and closed.
 	if err := rows.Close(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	out := make(map[string]StagedReadback, len(found))
 	for _, row := range found {

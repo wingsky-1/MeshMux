@@ -1212,7 +1212,7 @@ func meshNodeSlug(displayName string) string {
 func (app *Server) renderMesh(w http.ResponseWriter, r *http.Request, sess session, disclosure *view.MeshKeyDisclosure, notice, noticeClass string) {
 	page, err := app.meshViewModel(r)
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取 Mesh 设备。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Mesh 设备。", "请检查数据库和服务日志。")
 		return
 	}
 	page.Disclosure = disclosure

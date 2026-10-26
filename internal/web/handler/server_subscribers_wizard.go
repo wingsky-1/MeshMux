@@ -423,7 +423,7 @@ func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Requ
 	app.event(r, "SUBSCRIPTION_PREVIEWED")
 	model, err := app.subscriptionWizardModelWith(subscriberID, &spec)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "预览已生成但页面数据读取失败。", "请刷新页面后重试。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "预览已生成但页面数据读取失败。", "请刷新页面后重试。")
 		return
 	}
 	model.Diagnostics = preview.Diagnostics
@@ -468,7 +468,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		app.event(r, preview.Code())
 		model, modelErr := app.subscriptionWizardModelWith(pageSubscriberID, &spec)
 		if modelErr != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "保存被拒绝但页面数据读取失败。", "请刷新页面后重试。")
+			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "保存被拒绝但页面数据读取失败。", "请刷新页面后重试。")
 			return
 		}
 		model.Diagnostics = preview.Diagnostics
@@ -487,7 +487,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 	}
 	model, err := app.subscriptionWizardModel(subscriberID)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "选择已保存但页面数据读取失败。", "请刷新页面后重试。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "选择已保存但页面数据读取失败。", "请刷新页面后重试。")
 		return
 	}
 	model.Diagnostics = preview.Diagnostics
@@ -515,7 +515,7 @@ func (app *Server) subscriptionWizardFail(w http.ResponseWriter, r *http.Request
 	code, _, _ := strings.Cut(err.Error(), ": ")
 	status := http.StatusConflict
 	switch code {
-	case "DATABASE_UNAVAILABLE":
+	case store.CodeDatabaseUnavailable:
 		status = http.StatusServiceUnavailable
 	case "SUBSCRIBER_NOT_FOUND", "OUT_NOT_FOUND", "LINE_NOT_FOUND", "RULE_NOT_FOUND", "MESH_DEVICE_NOT_FOUND":
 		status = http.StatusNotFound

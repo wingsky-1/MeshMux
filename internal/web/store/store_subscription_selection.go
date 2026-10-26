@@ -1,7 +1,6 @@
 package store
 
-// Subscription selection persistence for the aggregation rebuild (Task 4,
-// ADR-0008 §1–§3).
+// Subscription selection persistence (ADR-0008 §1–§3).
 //
 // The four edge tables are the subscription's side of every reference:
 //
@@ -24,13 +23,16 @@ package store
 // (subscriber, Line). The edge table decides *which* Lines a subscription
 // selects; the credential row is the credential that serves the selected Line.
 // Both are written in one transaction so they cannot disagree.
+//
+// This file is persistence only. Shape validation is SelectionSpec.Normalize
+// (store_subscription_spec.go), reference validation is
+// store_subscription_refs.go, and draft/approval orchestration is
+// store_subscription_compose.go.
 
 import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,21 +56,6 @@ const (
 	// is no approved artifact to download.
 	CodeArtifactNotApproved = "SUBSCRIPTION_ARTIFACT_NOT_APPROVED"
 )
-
-// RuleRevision is one pinned rule-library identity: rule_revision_id is exactly
-// (StableKey, Version), the contract Task 3 froze.
-type RuleRevision struct {
-	StableKey string
-	Version   int
-}
-
-// SelectionSpec is one submitted selection: the four wizard groups.
-type SelectionSpec struct {
-	LineIDs    []string
-	OutID      string
-	Rules      []RuleRevision
-	NetworkIDs []string
-}
 
 // migrateSchema13 adds the subscription edge tables and the selection snapshot.
 //
@@ -139,25 +126,19 @@ PRAGMA user_version=13;
 }
 
 // SaveSubscriptionSelection replaces the four-group selection of one active
-// subscriber in a single transaction: edges, credentials and the snapshot row.
+// subscriber in a single transaction: edges (and their credentials for a new
+// Line), then the snapshot with an empty artifact digest.
 //
-// The save is strict (layer 2 of the preview contract): every identity must be
-// canonical and exist, the Out must be a configured Out node, the rules must be
-// stored revisions, the devices must be mesh devices, and the 1.0 single-Out
-// plus same-Line-Out rules are enforced here, not only in the UI.
-//
-// A Line that stays selected keeps its credential; a newly selected Line gets a
-// fresh one; a dropped Line is only deactivated (its UUID stays auditable). The
-// credential write is the same rule SelectLines follows, so a save can never
-// mint a second UUID for one Line.
+// Flow: Normalize (shape) -> draft builder inside one transaction (references,
+// same-Line Out agreement, credentials) -> one write transaction. It is the
+// direct edge save; the wizard uses the explicit Draft/Preview/Approve/Save
+// steps instead, and both share the same builder and writer so they cannot
+// drift.
 func (s *Store) SaveSubscriptionSelection(subscriberID string, spec SelectionSpec, now time.Time) (subscription.Selection, error) {
-	if err := subscription.ValidateID(subscriberID); err != nil {
-		return subscription.Selection{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+	spec, err := spec.Normalize()
+	if err != nil {
+		return subscription.Selection{}, err
 	}
-	// One writer: the same draft builder the wizard uses, saved without an
-	// approved artifact. A direct edge save therefore keeps every strict check
-	// (identity shape, reference existence, the single-Out rule and the
-	// same-Line Out agreement) and cannot drift from the wizard path.
 	draft, err := s.DraftSubscriptionSelection(subscriberID, "", spec)
 	if err != nil {
 		return subscription.Selection{}, err
@@ -168,205 +149,36 @@ func (s *Store) SaveSubscriptionSelection(subscriberID string, spec SelectionSpe
 	return draft.Selection, nil
 }
 
-// normalizeRuleSelection validates the identity shape and removes duplicates
-// while keeping the caller's order, then assigns dense positions.
-func normalizeRuleSelection(revisions []RuleRevision) ([]RuleRevision, error) {
-	if len(revisions) > 64 {
-		return nil, errors.New(CodeSelectionInvalid + ": select at most 64 rules")
-	}
-	seen := make(map[string]struct{}, len(revisions))
-	out := make([]RuleRevision, 0, len(revisions))
-	for _, revision := range revisions {
-		key := strings.TrimSpace(revision.StableKey)
-		if key == "" || len(key) > 64 || revision.Version < 1 {
-			return nil, errors.New(CodeSelectionInvalid + ": a rule needs a stable key and a positive version")
-		}
-		identity := key + "@" + strconv.Itoa(revision.Version)
-		if _, duplicate := seen[identity]; duplicate {
-			continue
-		}
-		seen[identity] = struct{}{}
-		out = append(out, RuleRevision{StableKey: key, Version: revision.Version})
-	}
-	return out, nil
-}
-
-// normalizeDeviceSelection validates the identity shape and removes duplicates
-// while keeping the caller's order.
-func normalizeDeviceSelection(deviceIDs []string) ([]string, error) {
-	if len(deviceIDs) > 64 {
-		return nil, errors.New(CodeSelectionInvalid + ": select at most 64 mesh devices")
-	}
-	seen := make(map[string]struct{}, len(deviceIDs))
-	out := make([]string, 0, len(deviceIDs))
-	for _, raw := range deviceIDs {
-		deviceID := strings.TrimSpace(raw)
-		if err := subscription.ValidateID(deviceID); err != nil {
-			return nil, errors.New("MESH_DEVICE_ID_INVALID: need 32 lowercase hex characters")
-		}
-		if _, duplicate := seen[deviceID]; duplicate {
-			continue
-		}
-		seen[deviceID] = struct{}{}
-		out = append(out, deviceID)
-	}
-	return out, nil
-}
-
-// validateSelectionOutTx checks that a selected egress is a usable endpoint:
-// a managed Out with configured transport, or an external HTTP proxy
-// (Ruling R11) with a stored proxy row. The proxy is not an Agent node, so the
-// out_settings requirement applies to role "out" only. An egress without a
-// dial body would render a route that names an egress nobody can reach.
-func validateSelectionOutTx(tx *sql.Tx, outID string) error {
-	if outID == "" {
-		return nil
-	}
-	var role string
-	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("OUT_NOT_FOUND: unknown out node")
-	}
-	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	switch role {
-	case "out":
-		var configured int
-		if err := tx.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, outID).Scan(&configured); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
-		if configured == 0 {
-			return errors.New("OUT_NOT_CONFIGURED: configure the out transport before selecting it")
-		}
-	case "http":
-		var configured int
-		if err := tx.QueryRow(`SELECT count(*) FROM node_http_proxy WHERE node_id=?`, outID).Scan(&configured); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
-		if configured == 0 {
-			return errors.New("OUT_NOT_CONFIGURED: configure the http proxy before selecting it")
-		}
-	default:
-		return errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected as an egress")
-	}
-	return nil
-}
-
-// validateRuleRevisionTx checks that a selected rule revision exists. The row
-// is immutable, so a pinned revision never changes under a subscription.
-func validateRuleRevisionTx(tx *sql.Tx, revision RuleRevision) error {
-	var count int
-	if err := tx.QueryRow(`SELECT count(*) FROM policy_rules WHERE stable_key=? AND version=?`,
-		revision.StableKey, revision.Version).Scan(&count); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	if count == 0 {
-		return errors.New("RULE_NOT_FOUND: the selected rule revision does not exist")
-	}
-	return nil
-}
-
-// validateSelectionDeviceTx checks that a selected device is a live mesh
-// device. A revoked device is history and cannot be newly selected.
-func validateSelectionDeviceTx(tx *sql.Tx, deviceID string) error {
-	var status string
-	err := tx.QueryRow(`SELECT status FROM mesh_devices WHERE id=?`, deviceID).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("MESH_DEVICE_NOT_FOUND: unknown mesh device")
-	}
-	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
-	}
-	switch status {
-	case "revoked", "revoking", "expired", "failed":
-		return errors.New("MESH_DEVICE_STATUS_INVALID: the device is no longer selectable")
-	}
-	return nil
-}
-
-// enforceSameLineOutTx refuses a selection that disagrees with an existing
-// subscription on the same Line. The Line publishes one server route, so two
-// subscriptions cannot ask for different egresses; the refusal names the
-// conflicting subscriptions and the Line.
-func enforceSameLineOutTx(tx *sql.Tx, subscriberID string, lineIDs []string, outID string) error {
-	for _, nodeID := range lineIDs {
-		rows, err := tx.Query(`SELECT DISTINCT s.display_name, COALESCE(o.out_id,'')
-		  FROM subscription_lines l
-		  JOIN subscribers s ON s.id=l.subscriber_id
-		  LEFT JOIN subscription_outs o ON o.subscriber_id=l.subscriber_id
-		  WHERE l.node_id=? AND l.subscriber_id<>? ORDER BY s.display_name, s.id`, nodeID, subscriberID)
-		if err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
-		conflicts := []string{}
-		for rows.Next() {
-			var name, selected string
-			if err := rows.Scan(&name, &selected); err != nil {
-				rows.Close()
-				return errors.New("DATABASE_UNAVAILABLE")
-			}
-			if selected != outID {
-				conflicts = append(conflicts, name)
-			}
-		}
-		if err := rows.Close(); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
-		if err := rows.Err(); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
-		if len(conflicts) > 0 {
-			sort.Strings(conflicts)
-			return errors.New(CodeOutSelectionConflict + ": line " + nodeID +
-				" is already served with another out choice by " + strings.Join(conflicts, "、") +
-				"; all subscriptions on one line must select the same out")
-		}
-	}
-	return nil
-}
-
 // writeSelectionEdgesTx replaces every edge group of one subscriber. The
 // groups are rewritten as a whole so a dropped Line, rule or device cannot
 // survive a save.
-func writeSelectionEdgesTx(tx *sql.Tx, subscriberID string, lineIDs []string, outID string, rules []RuleRevision, devices []string, now time.Time) error {
+func writeSelectionEdgesTx(tx *sql.Tx, selection subscription.Selection, now time.Time) error {
 	for _, table := range []string{"subscription_lines", "subscription_outs", "subscription_rules", "subscription_networks"} {
-		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE subscriber_id=?`, subscriberID); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE subscriber_id=?`, selection.SubscriberID); err != nil {
+			return errors.New(CodeDatabaseUnavailable)
 		}
 	}
-	for position, nodeID := range lineIDs {
-		var lineRevision int64
-		// The candidate revision is informational only: a Line's transport is
-		// not versioned by the subscription. A Line with no candidate yet keeps
-		// zero, which the snapshot records honestly.
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&lineRevision); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
+	for _, line := range selection.Lines {
 		if _, err := tx.Exec(`INSERT INTO subscription_lines(subscriber_id, node_id, position, line_revision, created_at) VALUES(?,?,?,?,?)`,
-			subscriberID, nodeID, position, lineRevision, now.Unix()); err != nil {
+			selection.SubscriberID, line.NodeID, line.Position, line.LineRevision, now.Unix()); err != nil {
 			return errors.New(CodeSelectionInvalid + ": the line selection was not stored")
 		}
 	}
-	if outID != "" {
-		var outRevision int64
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0) FROM node_candidates WHERE node_id=?`, outID).Scan(&outRevision); err != nil {
-			return errors.New("DATABASE_UNAVAILABLE")
-		}
-		if _, err := tx.Exec(`INSERT INTO subscription_outs(subscriber_id, out_id, position, out_revision, created_at) VALUES(?,?,0,?,?)`,
-			subscriberID, outID, outRevision, now.Unix()); err != nil {
+	if selection.Out != nil {
+		if _, err := tx.Exec(`INSERT INTO subscription_outs(subscriber_id, out_id, position, out_revision, created_at) VALUES(?,?,?,?,?)`,
+			selection.SubscriberID, selection.Out.OutID, selection.Out.Position, selection.Out.OutRevision, now.Unix()); err != nil {
 			return errors.New(CodeSelectionInvalid + ": the out selection was not stored")
 		}
 	}
-	for position, revision := range rules {
+	for _, revision := range selection.Rules {
 		if _, err := tx.Exec(`INSERT INTO subscription_rules(subscriber_id, rule_stable_key, rule_version, position, created_at) VALUES(?,?,?,?,?)`,
-			subscriberID, revision.StableKey, revision.Version, position, now.Unix()); err != nil {
+			selection.SubscriberID, revision.StableKey, revision.Version, revision.Position, now.Unix()); err != nil {
 			return errors.New(CodeSelectionInvalid + ": the rule selection was not stored")
 		}
 	}
-	for position, deviceID := range devices {
+	for _, device := range selection.Networks {
 		if _, err := tx.Exec(`INSERT INTO subscription_networks(subscriber_id, device_id, position, created_at) VALUES(?,?,?,?)`,
-			subscriberID, deviceID, position, now.Unix()); err != nil {
+			selection.SubscriberID, device.DeviceID, device.Position, now.Unix()); err != nil {
 			return errors.New(CodeSelectionInvalid + ": the network selection was not stored")
 		}
 	}
@@ -402,39 +214,52 @@ func writeSnapshotTx(tx *sql.Tx, selection subscription.Selection, artifactID st
 	return nil
 }
 
-// readSelectionTx reads one subscriber's edges back into the snapshot model.
-// The version is the stored snapshot version, or zero when the subscriber never
-// saved a selection; the save path increments it so every save is a new
-// identity.
-func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, error) {
-	selection := subscription.Selection{SubscriberID: subscriberID}
+// storedSelectionVersionTx reads the snapshot version of one subscriber, or zero
+// when it never saved a selection. The save path increments it so every save is a
+// new identity.
+func storedSelectionVersionTx(tx *sql.Tx, subscriberID string) (int64, error) {
 	var stored int64
 	err := tx.QueryRow(`SELECT version FROM subscription_snapshots WHERE subscriber_id=?`, subscriberID).Scan(&stored)
 	switch {
 	case err == nil:
-		selection.Version = stored
+		return stored, nil
 	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
 	default:
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return 0, errors.New(CodeDatabaseUnavailable)
 	}
+}
+
+// readSelectionTx reads one subscriber's edges back into the snapshot model.
+// The version is the stored snapshot version, or zero when the subscriber never
+// saved a selection.
+func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, error) {
+	selection := subscription.Selection{SubscriberID: subscriberID}
+	stored, err := storedSelectionVersionTx(tx, subscriberID)
+	if err != nil {
+		return subscription.Selection{}, err
+	}
+	selection.Version = stored
+
 	rows, err := tx.Query(`SELECT node_id, position, line_revision FROM subscription_lines WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	for rows.Next() {
 		var line subscription.SelectionLine
 		if err := rows.Scan(&line.NodeID, &line.Position, &line.LineRevision); err != nil {
 			rows.Close()
-			return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+			return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 		}
 		selection.Lines = append(selection.Lines, line)
 	}
 	if err := rows.Close(); err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
+
 	var out subscription.SelectionOut
 	err = tx.QueryRow(`SELECT out_id, position, out_revision FROM subscription_outs WHERE subscriber_id=?`, subscriberID).
 		Scan(&out.OutID, &out.Position, &out.OutRevision)
@@ -443,43 +268,45 @@ func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, e
 		selection.Out = &out
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
+
 	rows, err = tx.Query(`SELECT rule_stable_key, rule_version, position FROM subscription_rules WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	for rows.Next() {
 		var rule subscription.SelectionRule
 		if err := rows.Scan(&rule.StableKey, &rule.Version, &rule.Position); err != nil {
 			rows.Close()
-			return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+			return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 		}
 		selection.Rules = append(selection.Rules, rule)
 	}
 	if err := rows.Close(); err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
+
 	rows, err = tx.Query(`SELECT device_id, position FROM subscription_networks WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	for rows.Next() {
 		var device subscription.SelectionNetwork
 		if err := rows.Scan(&device.DeviceID, &device.Position); err != nil {
 			rows.Close()
-			return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+			return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 		}
 		selection.Networks = append(selection.Networks, device)
 	}
 	if err := rows.Close(); err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return subscription.Selection{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return selection, nil
 }
@@ -489,11 +316,11 @@ func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, e
 // "no selection yet" from "an empty selection".
 func (s *Store) SubscriptionSelection(subscriberID string) (subscription.Selection, bool, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return subscription.Selection{}, false, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return subscription.Selection{}, false, errSubscriberIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Selection{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Selection{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
@@ -547,21 +374,9 @@ func selectionUsedByTx(tx *sql.Tx, query, id string) ([]string, error) {
 		if strings.Contains(err.Error(), "no such table") {
 			return []string{}, nil
 		}
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
-		}
-		out = append(out, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
-	}
-	return out, nil
+	return scanNameRows(rows)
 }
 
 // selectionUsedBy runs one used-by query. A missing edge table is honest
@@ -573,19 +388,26 @@ func (s *Store) selectionUsedBy(query, id string) ([]string, error) {
 		if strings.Contains(err.Error(), "no such table") {
 			return []string{}, nil
 		}
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
+	return scanNameRows(rows)
+}
+
+// scanNameRows drains one display-name result set. It is the single reader of
+// the used-by shape, so the three used-by projections cannot disagree about
+// error mapping.
+func scanNameRows(rows *sql.Rows) ([]string, error) {
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out = append(out, name)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	return out, nil
 }

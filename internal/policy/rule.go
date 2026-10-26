@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // Stable rule-library refusal codes. Only the code (before ": ") is stable;
@@ -18,28 +20,30 @@ const (
 
 // Action is the library egress of one rule. The library carries only these
 // three: direct access, proxied access, or an explicit reject. There is no
-// Out or Tailscale action here; those are chosen by the subscription composer
-// (Task 4), never stored on a library row.
-type Action string
+// Out or Tailscale action here; those are chosen by the subscription composer,
+// never stored on a library row. The vocabulary is owned by the subscription
+// IR (the lower layer) and re-exported so the library and the composer cannot
+// spell a different value.
+type Action = ir.Action
 
 const (
-	ActionDirect Action = "direct"
-	ActionProxy  Action = "proxy"
-	ActionReject Action = "reject"
+	ActionDirect = ir.ActionDirect
+	ActionProxy  = ir.ActionProxy
+	ActionReject = ir.ActionReject
 )
 
 // MatcherKind is the single matcher family of one rule. Exactly six are
-// stocked; Match.SSIDs stays usable for other layers but is never a
-// library kind (ADR-0008 §5).
-type MatcherKind string
+// stocked; Match.SSIDs stays usable for other layers but is never a library
+// kind (ADR-0008 §5). The vocabulary is shared with the composer.
+type MatcherKind = ir.MatcherKind
 
 const (
-	MatcherDomain       MatcherKind = "domain"
-	MatcherDomainSuffix MatcherKind = "domain_suffix"
-	MatcherIPCIDR       MatcherKind = "ipcidr"
-	MatcherGeoSite      MatcherKind = "geosite"
-	MatcherGeoIP        MatcherKind = "geoip"
-	MatcherRuleSet      MatcherKind = "ruleset"
+	MatcherDomain       = ir.MatcherDomain
+	MatcherDomainSuffix = ir.MatcherDomainSuffix
+	MatcherIPCIDR       = ir.MatcherIPCIDR
+	MatcherGeoSite      = ir.MatcherGeoSite
+	MatcherGeoIP        = ir.MatcherGeoIP
+	MatcherRuleSet      = ir.MatcherRuleSet
 )
 
 // Origin marks whether a row came from the versioned preset bundle or from an
@@ -104,7 +108,7 @@ func (r Rule) Validate() error {
 	default:
 		return errors.New(CodeInvalid + ": matcher kind must be one of domain, domain_suffix, ipcidr, geosite, geoip, ruleset")
 	}
-	if len(r.Values) == 0 || len(r.Values) > 64 {
+	if len(r.Values) == 0 || len(r.Values) > ir.MaxRuleValues {
 		return errors.New(CodeInvalid + ": a rule needs 1-64 matcher values")
 	}
 	seen := map[string]bool{}

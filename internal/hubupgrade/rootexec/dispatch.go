@@ -34,7 +34,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -42,25 +41,27 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/install"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// DefaultExecRoot is the fixed root-owned directory of the verified exec
 	// copy. The staged package lives in the Web-writable data directory; this
 	// one does not.
-	DefaultExecRoot = "/var/lib/meshmux-installer/upgrade"
+	DefaultExecRoot = versions.InstallerUpgradeDir
 	// DefaultWebUnit is the unit whose effective --data-dir bounds the request.
-	DefaultWebUnit = "/etc/systemd/system/meshmux-web.service"
+	DefaultWebUnit = versions.WebUnitPath
 
-	stagedPackageMax = 128 << 20
+	stagedPackageMax = buildinfo.MaxExecutableBytes
 	unitMaxBytes     = 1 << 20
 	execCopyPrefix   = "exec-"
 
 	codeDispatchFailed   = "HUB_HANDOFF_FAILED"
-	codeBusy             = "HUB_HANDOFF_BUSY"
-	codeRequestInvalid   = "HUB_HANDOFF_REQUEST_INVALID"
+	codeBusy             = hubupgrade.CodeHandoffBusy
+	codeRequestInvalid   = hubupgrade.CodeHandoffRequestInvalid
 	codeDataDirMismatch  = "HUB_HANDOFF_DATA_DIR_MISMATCH"
 	codeStateInvalid     = "HUB_HANDOFF_STATE_INVALID"
 	codeDrainFailed      = "HUB_HANDOFF_DRAIN_FAILED"
@@ -69,15 +70,15 @@ const (
 	codeStagedMissing    = "HUB_UPDATE_STAGED_PACKAGE_MISSING"
 	codeCopyFailed       = "HUB_UPDATE_EXEC_COPY_FAILED"
 	codeExecFailed       = "HUB_UPDATE_EXEC_FAILED"
-	codeManifestMismatch = "HUB_MANIFEST_PACKAGE_MISMATCH"
+	codeManifestMismatch = hubupgrade.CodeManifestPackageMismatch
 
-	codeRestoreDigestMismatch = "HUB_RESTORE_DIGEST_MISMATCH"
-	codeRestoreMissing        = "HUB_RESTORE_BINARY_MISSING"
+	codeRestoreDigestMismatch = hubupgrade.CodeRestoreDigestMismatch
+	codeRestoreMissing        = hubupgrade.CodeRestoreBinaryMissing
 	codeRestoreCopyFailed     = "HUB_RESTORE_EXEC_COPY_FAILED"
 	codeRestoreExecFailed     = "HUB_RESTORE_EXEC_FAILED"
 )
 
-var dispatchOpIDRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var dispatchOpIDRE = backup.OperationIDPattern
 
 // DispatchConfig is one dispatch run. Empty directories fall back to the fixed
 // production paths. Owner, RecordOwner, ManifestOwner and RootOwner are explicit
@@ -112,6 +113,17 @@ type DispatchConfig struct {
 // Web (it must publish there), so a path-based pass could be redirected by
 // renaming the directory away and substituting a symlink or another directory
 // between the check and the use.
+// Contract:
+//
+//	input     one DispatchConfig: the fixed request/done/exec/result directories,
+//	          the manifest directory, the web unit and the account seams;
+//	validate  the watched directory handle, one queued request, the web unit's
+//	          effective --data-dir, the journal and the per-op record;
+//	assemble  the root-only exec copy of the verified staged package;
+//	effects   exactly one exec of that copy, or one failed result; never a
+//	          caller-named executable or argv;
+//	return    nil for a no-op pass or after the exec; every refusal is a result
+//	          file with a stable HUB_* code.
 func RunDispatch(ctx context.Context, cfg DispatchConfig) error {
 	if err := normalizeDispatchConfig(&cfg); err != nil {
 		return err
@@ -524,12 +536,12 @@ func webExecArgv(unitPath string, expectedOwner int) ([]string, error) {
 		return argv, nil
 	}
 	if err != nil {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in directory could not be read")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web drop-in directory could not be read")
 	}
 	dirInfo, err := os.Lstat(dropDir)
 	if err != nil || dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() ||
 		dirInfo.Mode().Perm()&0022 != 0 || !statOwnedBy(dirInfo, expectedOwner) {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web drop-in directory is not root-owned and private")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web drop-in directory is not root-owned and private")
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".conf") {
@@ -546,7 +558,7 @@ func webExecArgv(unitPath string, expectedOwner int) ([]string, error) {
 		}
 	}
 	if len(argv) == 0 {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit has no effective ExecStart")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web unit has no effective ExecStart")
 	}
 	return argv, nil
 }
@@ -556,20 +568,20 @@ func readUnitFile(path string, expectedOwner int) ([]byte, error) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
 		info.Mode().Perm()&0022 != 0 || !statOwnedBy(info, expectedOwner) ||
 		info.Size() < 1 || info.Size() > unitMaxBytes {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit is not a private root-owned file")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web unit is not a private root-owned file")
 	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit could not be opened without following a link")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web unit could not be opened without following a link")
 	}
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit changed while it was being opened")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web unit changed while it was being opened")
 	}
 	body, err := io.ReadAll(io.LimitReader(file, unitMaxBytes+1))
 	if err != nil || len(body) > unitMaxBytes {
-		return nil, fail("HUB_RESTORE_UNIT_SHAPE_INVALID", "the web unit could not be read within its bound")
+		return nil, fail(hubupgrade.CodeRestoreUnitShapeInvalid, "the web unit could not be read within its bound")
 	}
 	return body, nil
 }

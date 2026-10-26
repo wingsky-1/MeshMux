@@ -25,10 +25,18 @@ import (
 )
 
 // policiesPublishHandle is the authenticated management endpoint.
+//
+// Flow: parse the strict publish intent → build the kernel verifier → ask the
+// store for a gated assembly (validate → resolve → pin → render → kernel
+// check) → store the assembly in one transaction → write the receipt. The
+// handler never renders a document itself, never touches SQL and never executes
+// a shell: the two kernels are reached through the fixed verifier wrapper. A
+// gate refusal stores nothing and returns the stable code, so a failed
+// publication leaves the previous revision live.
 func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ session) {
 	raw := strings.TrimSpace(r.PostForm.Get("publish"))
 	if raw == "" {
-		app.writePublishFailure(w, r, http.StatusBadRequest, "POLICY_PAYLOAD_INVALID", "缺少 publish 字段（JSON）。", "请提交 layer、operation_id 与可选 fallback_to_line。", operation(r))
+		app.writePublishFailure(w, r, http.StatusBadRequest, codePolicyPayloadInvalid, "缺少 publish 字段（JSON）。", "请提交 layer、operation_id 与可选 fallback_to_line。", operation(r))
 		return
 	}
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(raw))

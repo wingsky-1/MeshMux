@@ -13,8 +13,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
-const OfflineAfter = 2 * time.Minute
-
 // Node is the Hub-visible record for a Line/Out host. The ID and role are
 // immutable after creation; pairing binds them to one host identity.
 type Node struct {
@@ -138,15 +136,15 @@ func (s *Store) CreateNode(role, displayName string, vlessPort, sshPort int, now
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return Node{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return Node{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
-	node := Node{ID: id, Role: role, DisplayName: strings.TrimSpace(displayName), VlessPort: vlessPort, SSHPort: sshPort, Status: "pending", CreatedAt: now.Unix(), UpdatedAt: now.Unix()}
+	node := Node{ID: id, Role: role, DisplayName: strings.TrimSpace(displayName), VlessPort: vlessPort, SSHPort: sshPort, Status: nodeStatusPending, CreatedAt: now.Unix(), UpdatedAt: now.Unix()}
 	if _, err = tx.Exec(`INSERT INTO nodes(id, role, display_name, vless_port, ssh_port, status, agent_version, kernel_version, last_heartbeat, last_success, created_at, updated_at) VALUES(?,?,?,?,?,'pending','','',0,'',?,?)`, node.ID, node.Role, node.DisplayName, node.VlessPort, node.SSHPort, node.CreatedAt, node.UpdatedAt); err != nil {
-		return Node{}, "", errors.New("NODE_CREATE_FAILED")
+		return Node{}, "", errNodeCreateFailed
 	}
 	if _, err = tx.Exec(`INSERT INTO node_pairing(node_id, code_hash, expires, consumed) VALUES(?,?,?,0)`, node.ID, TokenHash(code), now.Add(15*time.Minute).Unix()); err != nil {
-		return Node{}, "", errors.New("NODE_CREATE_FAILED")
+		return Node{}, "", errNodeCreateFailed
 	}
 	candidate := nodedomain.Candidate{
 		NodeID:        node.ID,
@@ -156,10 +154,10 @@ func (s *Store) CreateNode(role, displayName string, vlessPort, sshPort int, now
 		KernelVersion: nodedomain.KernelVersion,
 	}
 	if err = InsertCandidateTx(tx, candidate, now.Unix()); err != nil {
-		return Node{}, "", errors.New("NODE_CREATE_FAILED")
+		return Node{}, "", errNodeCreateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return Node{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return Node{}, "", errors.New(CodeDatabaseUnavailable)
 	}
 	return node, code, nil
 }
@@ -230,7 +228,7 @@ func scanNodeAt(row rowScanner, now time.Time) (Node, error) {
 		n.LocalVerified = false
 		return n, nil
 	}
-	n.Offline = n.Status == "pending" || n.LastHeartbeat == 0 || now.Sub(time.Unix(n.LastHeartbeat, 0)) > OfflineAfter
+	n.Offline = n.Status == nodeStatusPending || n.LastHeartbeat == 0 || now.Sub(time.Unix(n.LastHeartbeat, 0)) > OfflineAfter
 	n.LocalVerified = n.ObservedAt > 0
 	n.NativeReady = nativeReady(n)
 	return n, nil
@@ -241,14 +239,14 @@ func scanNodeAt(row rowScanner, now time.Time) (Node, error) {
 func (s *Store) ListNodesAt(now time.Time) ([]Node, error) {
 	rows, err := s.DB.Query(nodeSelect + ` ORDER BY n.created_at ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	var out []Node
 	for rows.Next() {
 		n, err := scanNodeAt(rows, now)
 		if err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		out = append(out, n)
 	}
@@ -258,7 +256,7 @@ func (s *Store) ListNodesAt(now time.Time) ([]Node, error) {
 func (s *Store) GetNodeAt(id string, now time.Time) (Node, error) {
 	n, err := scanNodeAt(s.DB.QueryRow(nodeSelect+` WHERE n.id=?`, id), now)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Node{}, errors.New("NODE_NOT_FOUND")
+		return Node{}, errNodeNotFound
 	}
 	return n, err
 }
@@ -273,10 +271,10 @@ func (s *Store) ObservedArchitecture(id string) (string, error) {
 	var architecture string
 	err := s.DB.QueryRow(`SELECT observed_architecture FROM nodes WHERE id=?`, id).Scan(&architecture)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errors.New("NODE_NOT_FOUND")
+		return "", errNodeNotFound
 	}
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	return architecture, nil
 }
@@ -293,16 +291,16 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var storedRole string
 	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&storedRole)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errors.New("PAIRING_INVALID: pairing code rejected")
+		return "", errPairingInvalid
 	}
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	if storedRole != role {
 		return "", errors.New("ROLE_MISMATCH: node role does not match pairing record")
@@ -311,7 +309,7 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 	// token persistence failure cannot strand the one-time pairing code.
 	res, err := tx.Exec(`UPDATE node_pairing SET consumed=1 WHERE node_id=? AND code_hash=? AND consumed=0 AND expires>?`, nodeID, TokenHash(code), now.Unix())
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 1 {
@@ -323,13 +321,13 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 			return "", errors.New("IDENTITY_ISSUE_FAILED")
 		}
 		if _, err = tx.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID); err != nil {
-			return "", errors.New("DATABASE_UNAVAILABLE")
+			return "", errors.New(CodeDatabaseUnavailable)
 		}
 		if err = SeedInitialTasksTx(tx, nodeID, now); err != nil {
 			return "", err
 		}
 		if err = tx.Commit(); err != nil {
-			return "", errors.New("DATABASE_UNAVAILABLE")
+			return "", errors.New(CodeDatabaseUnavailable)
 		}
 		// Enrollment is the ACL event (Ruling R10): this node just became a member.
 		// A Line joining a Hub is added to every Out's allowlist, and an Out joining
@@ -346,12 +344,12 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 	var expires, consumed int64
 	err = tx.QueryRow(`SELECT expires, consumed FROM node_pairing WHERE node_id=?`, nodeID).Scan(&expires, &consumed)
 	if err != nil {
-		return "", errors.New("PAIRING_INVALID: pairing code rejected")
+		return "", errPairingInvalid
 	}
 	var hash []byte
 	_ = tx.QueryRow(`SELECT code_hash FROM node_pairing WHERE node_id=?`, nodeID).Scan(&hash)
 	if subtle.ConstantTimeCompare(hash, TokenHash(code)) != 1 {
-		return "", errors.New("PAIRING_INVALID: pairing code rejected")
+		return "", errPairingInvalid
 	}
 	if consumed != 0 {
 		return "", errors.New("PAIRING_CONSUMED: pairing code already used")
@@ -359,7 +357,7 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 	if expires <= now.Unix() {
 		return "", errors.New("PAIRING_EXPIRED: pairing code expired; create a fresh pending node or reissue")
 	}
-	return "", errors.New("PAIRING_INVALID: pairing code rejected")
+	return "", errPairingInvalid
 }
 
 // authenticateAgentAt maps a Bearer identity to its node. Revoked or unknown
@@ -380,10 +378,10 @@ func (s *Store) AuthenticateAgentAt(token string, now time.Time) (Node, error) {
 func (s *Store) Heartbeat(nodeID, agentVersion, kernelVersion string, now time.Time) error {
 	res, err := s.DB.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID)
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return errors.New("NODE_NOT_FOUND")
+		return errNodeNotFound
 	}
 	// A reconnecting Line picks up the persisted subscriber intent even if
 	// the Hub crashed before the tasks of a change were enqueued. The
@@ -405,23 +403,23 @@ func (s *Store) ReissuePairing(nodeID string, now time.Time) (string, error) {
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var exists int
 	var role string
 	if err = tx.QueryRow(`SELECT 1, role FROM nodes WHERE id=?`, nodeID).Scan(&exists, &role); errors.Is(err, sql.ErrNoRows) {
-		return "", errors.New("NODE_NOT_FOUND")
+		return "", errNodeNotFound
 	} else if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
-	if role == "http" {
+	if role == string(nodeRoleHTTP) {
 		// An external HTTP proxy has no Agent identity to reissue. Deleting and
 		// recreating the proxy is the only rotation it supports.
 		return "", errors.New("NODE_ROLE_INVALID: an external http proxy has no agent identity")
 	}
 	if _, err = tx.Exec(`UPDATE node_identities SET revoked=1 WHERE node_id=?`, nodeID); err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`INSERT OR REPLACE INTO node_pairing(node_id, code_hash, expires, consumed) VALUES(?,?,?,0)`,
 		nodeID, TokenHash(code), now.Add(15*time.Minute).Unix()); err != nil {
@@ -429,13 +427,13 @@ func (s *Store) ReissuePairing(nodeID string, now time.Time) (string, error) {
 	}
 	if _, err = tx.Exec(`UPDATE agent_tasks SET status='failed', error_code='IDENTITY_REPLACED', updated_at=?
  WHERE node_id=? AND status IN ('pending','applying','verifying')`, now.Unix(), nodeID); err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`UPDATE nodes SET status='pending', last_heartbeat=0, updated_at=? WHERE id=?`, now.Unix(), nodeID); err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	// A reissued identity is deliberately not a retirement: the Line is coming
 	// back, and the derivation already excludes a non-current identity from
@@ -452,34 +450,34 @@ func (s *Store) ReissuePairing(nodeID string, now time.Time) (string, error) {
 func (s *Store) RevokeIdentity(nodeID string, now time.Time) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var exists int
 	var role string
 	if err = tx.QueryRow(`SELECT 1, role FROM nodes WHERE id=?`, nodeID).Scan(&exists, &role); errors.Is(err, sql.ErrNoRows) {
-		return errors.New("NODE_NOT_FOUND")
+		return errNodeNotFound
 	} else if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
-	if role == "http" {
+	if role == string(nodeRoleHTTP) {
 		return errors.New("NODE_ROLE_INVALID: an external http proxy has no agent identity")
 	}
 	if _, err = tx.Exec(`UPDATE node_identities SET revoked=1 WHERE node_id=?`, nodeID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`UPDATE node_pairing SET consumed=1 WHERE node_id=?`, nodeID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`UPDATE agent_tasks SET status='failed', error_code='IDENTITY_REVOKED', updated_at=?
  WHERE node_id=? AND status IN ('pending','applying','verifying')`, now.Unix(), nodeID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`UPDATE nodes SET status='revoked', last_heartbeat=0, updated_at=? WHERE id=?`, now.Unix(), nodeID); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	// Revoking an identity removes a member from the ACL (Ruling R10): the Hub can no
 	// longer vouch for the Line's source address, so every Out has to republish the
@@ -514,14 +512,14 @@ func normalizeParams(raw json.RawMessage) string {
 func (s *Store) EnqueueTaskAt(task protocol.Task, now time.Time) error {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if err = enqueueTaskTx(tx, task, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -558,14 +556,14 @@ func enqueueTaskTx(tx *sql.Tx, task protocol.Task, now time.Time) error {
 	}
 	var maxRev sql.NullInt64
 	if err = tx.QueryRow(`SELECT MAX(revision) FROM agent_tasks WHERE node_id=?`, task.NodeID).Scan(&maxRev); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if maxRev.Valid && task.Revision <= maxRev.Int64 {
 		return errors.New("REVISION_STALE: revision must increase monotonically")
 	}
 	stamp := now.Unix()
 	if _, err = tx.Exec(`INSERT INTO agent_tasks(operation_id, node_id, kind, revision, idempotency_key, status, params, created_at, updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, task.OperationID, task.NodeID, task.Kind, task.Revision, task.IdempotencyKey, params, stamp, stamp); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -591,7 +589,7 @@ func lookupTask(tx *sql.Tx, where string, arg any, task protocol.Task, params st
 		return taskLookupNone, nil
 	}
 	if err != nil {
-		return taskLookupNone, errors.New("DATABASE_UNAVAILABLE")
+		return taskLookupNone, errors.New(CodeDatabaseUnavailable)
 	}
 	if opID == task.OperationID && nodeID == task.NodeID && kind == task.Kind && revision == task.Revision && idem == task.IdempotencyKey && storedParams == params {
 		return taskLookupExact, nil
@@ -617,7 +615,7 @@ func (s *Store) PendingTasksAt(nodeID string, limit int, now time.Time) ([]proto
  WHERE t.node_id=? AND n.last_heartbeat>=? AND t.status IN ('pending','applying','verifying')
  ORDER BY t.revision ASC LIMIT ?`, nodeID, now.Add(-OfflineAfter).Unix(), limit)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	var out []protocol.Task
@@ -628,7 +626,7 @@ func (s *Store) PendingTasksAt(nodeID string, limit int, now time.Time) ([]proto
 		var kind string
 		var params string
 		if err := rows.Scan(&t.OperationID, &t.Revision, &t.IdempotencyKey, &kind, &params); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		t.Kind = kind
 		if params == "" {
@@ -653,7 +651,7 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var current, taskNodeID, taskKind, storedCode, storedDetail string
@@ -665,14 +663,14 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 		return false, errors.New("TASK_NOT_FOUND")
 	}
 	if err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
 	if taskNodeID != nodeID {
 		return false, errors.New("TASK_NOT_FOUND")
 	}
 	detailToStore := res.Detail
 	var readback nodedomain.Readback
-	if res.Status == "healthy" && (taskKind == protocol.KindConfigApply || taskKind == protocol.KindConfigReadback) {
+	if res.Status == taskStatusHealthy && (taskKind == protocol.KindConfigApply || taskKind == protocol.KindConfigReadback) {
 		var configParams struct {
 			Revision *int64 `json:"revision"`
 		}
@@ -688,7 +686,7 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 			return false, err
 		}
 	}
-	if terminalTaskStatus(current) {
+	if taskStatusTerminal(current) {
 		if res.Status == current && res.ErrorCode == storedCode && detailToStore == storedDetail {
 			return false, nil
 		}
@@ -706,12 +704,12 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 	stamp := now.Unix()
 	if _, err = tx.Exec(`UPDATE agent_tasks SET status=?, error_code=?, detail=?, updated_at=? WHERE operation_id=? AND node_id=?`,
 		res.Status, res.ErrorCode, detailToStore, stamp, res.OperationID, nodeID); err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
-	if res.Status == "healthy" {
+	if res.Status == taskStatusHealthy {
 		lastSuccess := now.UTC().Format(time.RFC3339)
 		if _, err = tx.Exec(`UPDATE nodes SET last_success=?, last_success_at=?, updated_at=? WHERE id=?`, lastSuccess, stamp, stamp, nodeID); err != nil {
-			return false, errors.New("DATABASE_UNAVAILABLE")
+			return false, errors.New(CodeDatabaseUnavailable)
 		}
 		if taskKind == protocol.KindConfigReadback {
 			if _, err = tx.Exec(`UPDATE nodes SET observed_revision=?, observed_config_sha256=?,
@@ -723,7 +721,7 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 				readback.AgentVersion, readback.AgentSHA256, readback.KernelVersion,
 				readback.KernelSHA256, readback.OutDefaultDeny, stamp, taskRevision, res.OperationID,
 				nodeID, taskRevision, readback.ActiveRevision); err != nil {
-				return false, errors.New("DATABASE_UNAVAILABLE")
+				return false, errors.New(CodeDatabaseUnavailable)
 			}
 			// A deleting subscriber becomes deleted only once the Line proved
 			// the exact desired snapshot without its historical UUIDs. The
@@ -735,7 +733,7 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return false, errors.New("DATABASE_UNAVAILABLE")
+		return false, errors.New(CodeDatabaseUnavailable)
 	}
 	// A finished chain may make the persisted subscriber intent publishable
 	// (removal of a deleted subscriber, follow-up after a changed snapshot).
@@ -753,7 +751,7 @@ func validateReadbackTx(tx *sql.Tx, nodeID string, configRevision int64, readbac
 	// compared with the Hub's pinned architecture manifest. No Agent binary
 	// manifest is fabricated here.
 	if err := readback.Validate(); err != nil {
-		return errors.New("READBACK_INVALID")
+		return errReadbackInvalid
 	}
 	if !readback.LocalActive || readback.ActiveRevision != configRevision {
 		return errors.New("READBACK_MISMATCH")
@@ -771,7 +769,7 @@ func validateReadbackTx(tx *sql.Tx, nodeID string, configRevision int64, readbac
 		return errors.New("READBACK_CANDIDATE_NOT_FOUND")
 	}
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(CodeDatabaseUnavailable)
 	}
 	if readback.ConfigSHA256 != candidateHash {
 		return errors.New("READBACK_CONFIG_MISMATCH")
@@ -794,39 +792,39 @@ func validateReadbackTx(tx *sql.Tx, nodeID string, configRevision int64, readbac
 // and other loose JSON from being treated as valid local evidence.
 func decodeReadbackDetail(detail string) (nodedomain.Readback, string, error) {
 	if len(detail) == 0 || len(detail) >= 512 {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	dec := json.NewDecoder(strings.NewReader(detail))
 	dec.UseNumber()
 	token, err := dec.Token()
 	if err != nil || token != json.Delim('{') {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	fields := map[string]json.RawMessage{}
 	for dec.More() {
 		keyToken, err := dec.Token()
 		if err != nil {
-			return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+			return nodedomain.Readback{}, "", errReadbackInvalid
 		}
 		key, ok := keyToken.(string)
 		if !ok {
-			return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+			return nodedomain.Readback{}, "", errReadbackInvalid
 		}
 		if _, duplicate := fields[key]; duplicate {
-			return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+			return nodedomain.Readback{}, "", errReadbackInvalid
 		}
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil || len(raw) == 0 || string(raw) == "null" {
-			return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+			return nodedomain.Readback{}, "", errReadbackInvalid
 		}
 		fields[key] = raw
 	}
 	if token, err = dec.Token(); err != nil || token != json.Delim('}') {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	var trailing any
 	if err := dec.Decode(&trailing); err != io.EOF {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	required := []string{
 		"active_revision", "agent_sha256", "agent_version", "architecture",
@@ -834,11 +832,11 @@ func decodeReadbackDetail(detail string) (nodedomain.Readback, string, error) {
 		"out_default_deny",
 	}
 	if len(fields) != len(required) {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	for _, key := range required {
 		if _, ok := fields[key]; !ok {
-			return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+			return nodedomain.Readback{}, "", errReadbackInvalid
 		}
 	}
 	var readback nodedomain.Readback
@@ -851,11 +849,11 @@ func decodeReadbackDetail(detail string) (nodedomain.Readback, string, error) {
 		json.Unmarshal(fields["config_sha256"], &readback.ConfigSHA256) != nil ||
 		json.Unmarshal(fields["local_active"], &readback.LocalActive) != nil ||
 		json.Unmarshal(fields["out_default_deny"], &readback.OutDefaultDeny) != nil {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	canonical, err := json.Marshal(readback)
 	if err != nil || len(canonical) >= 512 {
-		return nodedomain.Readback{}, "", errors.New("READBACK_INVALID")
+		return nodedomain.Readback{}, "", errReadbackInvalid
 	}
 	return readback, string(canonical), nil
 }
@@ -865,27 +863,18 @@ func decodeReadbackDetail(detail string) (nodedomain.Readback, string, error) {
 // verifying may only move forward. rollback requires an applied task.
 func allowedTransition(current, next string) bool {
 	switch current {
-	case "pending":
+	case taskStatusPending:
 		switch next {
-		case "applying", "verifying", "healthy", "partial", "failed":
+		case taskStatusApplying, taskStatusVerifying, taskStatusHealthy, taskStatusPartial, taskStatusFailed:
 			return true
 		}
-	case "applying":
+	case taskStatusApplying:
 		switch next {
-		case "applying", "verifying", "healthy", "partial", "failed", "rolled_back":
+		case taskStatusApplying, taskStatusVerifying, taskStatusHealthy, taskStatusPartial, taskStatusFailed, taskStatusRolledBack:
 			return true
 		}
-	case "verifying":
-		return next == "verifying" || terminalTaskStatus(next)
+	case taskStatusVerifying:
+		return next == taskStatusVerifying || taskStatusTerminal(next)
 	}
 	return false
-}
-
-func terminalTaskStatus(status string) bool {
-	switch status {
-	case "healthy", "partial", "failed", "rolled_back":
-		return true
-	default:
-		return false
-	}
 }

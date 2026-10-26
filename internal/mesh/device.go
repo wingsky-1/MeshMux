@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // The stable codes this package reports. They are part of the diagnostic
@@ -80,16 +81,19 @@ const DefaultHeadscaleUser = "meshmux"
 // the client platform.
 type Purpose string
 
+// The stored purpose spellings are owned by the subscription IR, the lower
+// layer both this domain and the device exporter read; the lifecycle meaning
+// stays here.
 const (
 	// PurposeProxyMesh: the device also consumes the proxy subscription, so it
 	// must be bound to a Subscriber.
-	PurposeProxyMesh Purpose = "proxy_mesh"
+	PurposeProxyMesh Purpose = ir.MeshPurposeProxyMesh
 	// PurposeMeshOnly: a stock Tailscale client with no proxy subscription and
 	// no subscriber; binding one would misstate the model.
-	PurposeMeshOnly Purpose = "mesh_only"
+	PurposeMeshOnly Purpose = ir.MeshPurposeMeshOnly
 	// PurposeSubnetRouter: a Tailscale client or NAS that advertises LAN
 	// prefixes. It may be bound to a Subscriber but does not need one.
-	PurposeSubnetRouter Purpose = "subnet_router"
+	PurposeSubnetRouter Purpose = ir.MeshPurposeSubnetRouter
 )
 
 // Validate accepts only the three defined purposes.

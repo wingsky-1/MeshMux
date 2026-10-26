@@ -40,7 +40,6 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -52,23 +51,24 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	codeRestoreArgv          = "HUB_RESTORE_ARGV_INVALID"
-	codeRestoreDigest        = "HUB_RESTORE_DIGEST_MISMATCH"
+	codeRestoreDigest        = hubupgrade.CodeRestoreDigestMismatch
 	codeRestorePayload       = "HUB_RESTORE_PAYLOAD_MISMATCH"
-	codeRestoreBinMissing    = "HUB_RESTORE_BINARY_MISSING"
+	codeRestoreBinMissing    = hubupgrade.CodeRestoreBinaryMissing
 	codeRestoreCarried       = "HUB_RESTORE_CARRIED_SOURCE"
 	codeRestoreDropIn        = "HUB_RESTORE_DROPIN_FAILED"
 	codeRestoreHealth        = "HUB_RESTORE_HEALTH_FAILED"
 	codeRestoreIdentity      = "HUB_RESTORE_IDENTITY_MISMATCH"
 	codeRestoreStop          = "HUB_RESTORE_STOP_FAILED"
 	codeRestoreStart         = "HUB_RESTORE_START_FAILED"
-	codeRestoreConfig        = "CONFIG_CONFLICT"
-	codeRestorePin           = "HUB_SHARED_BINARY_REPIN_FAILED"
-	codeRestoreState         = "HUB_HANDOFF_INVALID_STATE"
-	codeRestoreBusy          = "HUB_HANDOFF_BUSY"
+	codeRestoreConfig        = versions.CodeConfigConflict
+	codeRestorePin           = hubupgrade.CodeSharedBinaryRepinFailed
+	codeRestoreState         = hubupgrade.CodeHandoffInvalidState
+	codeRestoreBusy          = hubupgrade.CodeHandoffBusy
 	restoreDataDirDropInName = "10-data-dir.conf"
 
 	defaultProbeTimeout  = 60 * time.Second
@@ -76,7 +76,7 @@ const (
 	restoreDirPrefix     = "restore-"
 )
 
-var restoreVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
+var restoreVersionRE = backup.ReleaseVersionPattern
 
 // RestoreConfig is one restore run. Root is the fixture seam for the fixed
 // installer paths; production leaves it "/". Owner is the Web account that owns
@@ -111,6 +111,20 @@ type restoreRun struct {
 
 // RunRestore performs one lossy restore from the operation's verified per-op
 // backup. It never selects another generation and never retries by itself.
+// Contract:
+//
+//	input     the frozen restore argv (operation id, expected digest, data dir,
+//	          restore dir) and the fixed command runner;
+//	validate  argv shapes, self digest, journal state, absence of a queued
+//	          request, the per-op record and payload digest, the old package
+//	          digest, the web unit shape and the drop-in body;
+//	assemble  the complete new data directory (payload + integrity + identity +
+//	          carried trees) before the Web stops;
+//	effects   stop web -> swap the old binary -> restore the four pins -> write
+//	          the --data-dir drop-in -> reload -> start -> health poll -> identity
+//	          readback; the original data directory is never modified;
+//	return    nil only when the restored release answers its own identity; a
+//	          failure after the stop is a terminal partial receipt with a code.
 func RunRestore(ctx context.Context, cfg RestoreConfig, runner node.CommandRunner) error {
 	if err := normalizeRestoreConfig(&cfg); err != nil {
 		return err
@@ -764,7 +778,7 @@ func probeWebHealth(argv []string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		address, err := flagValue(argv, "--listen")
 		if err != nil || address == "" {
-			address = "127.0.0.1:9080"
+			address = versions.WebListenAddress()
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/healthz", nil)
 		if err != nil {

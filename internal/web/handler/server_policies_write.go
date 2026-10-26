@@ -41,15 +41,20 @@ type policyWriteResponse struct {
 
 // readPolicyWrite parses one write. The mutation wrapper already enforced the
 // admin session, Origin, CSRF token and the 4 KiB form limit.
+//
+// Flow: strict-decode the JSON intent → require a non-empty operation_id →
+// return. The store re-validates everything; this guard exists so an anonymous
+// or malformed write never reaches a row.
 func (app *Server) readPolicyWrite(w http.ResponseWriter, r *http.Request) (policyWriteRequest, bool) {
 	var in policyWriteRequest
-	raw := strings.TrimSpace(r.PostForm.Get("policy"))
-	if raw == "" || json.Unmarshal([]byte(raw), &in) != nil {
-		app.fail(w, r, http.StatusBadRequest, "POLICY_PAYLOAD_INVALID", "策略 JSON 缺失或格式不正确。", "请检查 payload 后重试。")
+	decoder := json.NewDecoder(strings.NewReader(r.PostForm.Get("policy")))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&in); err != nil {
+		app.fail(w, r, http.StatusBadRequest, codePolicyPayloadInvalid, "策略 JSON 缺失或格式不正确。", "请检查 payload 后重试。")
 		return in, false
 	}
 	if strings.TrimSpace(in.OperationID) == "" {
-		app.fail(w, r, http.StatusBadRequest, "POLICY_OPERATION_REQUIRED", "策略写操作缺少 operation_id。", "请携带非空 operation_id 后重试。")
+		app.fail(w, r, http.StatusBadRequest, codePolicyOperationRequired, "策略写操作缺少 operation_id。", "请携带非空 operation_id 后重试。")
 		return in, false
 	}
 	return in, true
@@ -103,21 +108,20 @@ func (app *Server) policyTransition(w http.ResponseWriter, r *http.Request, tran
 }
 
 // policyWriteFailure maps a sanitized store error onto the HTTP contract.
+// The code segment is compared against the constants of codes.go; anything
+// unregistered is a 500 with the raw code, never a guessed status.
 func policyWriteFailure(err error) (int, string) {
-	code := err.Error()
-	if before, _, found := strings.Cut(code, ": "); found {
-		code = before
-	}
+	code := store.ErrorCodeOf(err)
 	switch code {
-	case "POLICY_OPERATION_REQUIRED", "POLICY_LAYER_INVALID", "POLICY_NAME_INVALID",
-		"POLICY_PAYLOAD_INVALID", "POLICY_PINS_INVALID", policy.CodePolicyInvalid,
+	case codePolicyOperationRequired, codePolicyLayerInvalid, "POLICY_NAME_INVALID",
+		codePolicyPayloadInvalid, codePolicyPinsInvalid, policy.CodePolicyInvalid,
 		store.CodePolicyPayloadRetired:
 		return http.StatusBadRequest, code
-	case "POLICY_NOT_FOUND":
+	case codePolicyNotFound:
 		return http.StatusNotFound, code
-	case "POLICY_CONFLICT", "POLICY_STATE_INVALID", store.CodePolicyLayerRetired:
+	case codePolicyConflict, codePolicyStateInvalid, store.CodePolicyLayerRetired:
 		return http.StatusConflict, code
-	case "DATABASE_UNAVAILABLE":
+	case store.CodeDatabaseUnavailable:
 		return http.StatusServiceUnavailable, code
 	default:
 		return http.StatusInternalServerError, code

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 // OutLinkMethod is the pinned Shadowsocks method of the Line→Out double-hop.
@@ -17,8 +19,10 @@ const OutLinkMethod = "2022-blake3-aes-128-gcm"
 
 // OutEgressHTTP marks an egress whose dial body is an external HTTP proxy
 // instead of a MeshMux Out node (Ruling R11). The type field is omitted on the
-// SS/link-key shape, so every stored document keeps its exact bytes.
-const OutEgressHTTP = "http"
+// SS/link-key shape, so every stored document keeps its exact bytes. The value
+// is owned by the wire contract so the subscription selection cannot copy a
+// second literal.
+const OutEgressHTTP = protocol.OutEgressHTTP
 
 // maxProxyCredentialBytes bounds one HTTP proxy username or password. Basic
 // credentials are short operator strings, never documents.
@@ -162,7 +166,7 @@ func (e OutEgress) Validate() error {
 		case e.Key != "":
 			return ValidateOutLinkKey(e.Key)
 		case e.UUID != "":
-			if !uuidV4Pattern.MatchString(e.UUID) {
+			if !protocol.ValidUUIDv4(e.UUID) {
 				return errors.New("OUT_EGRESS_INVALID: out credential must be a canonical lowercase UUIDv4")
 			}
 			return nil

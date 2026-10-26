@@ -22,10 +22,11 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
-	nodeAgentStateDir = "/var/lib/meshmux-agent"
+	nodeAgentStateDir = versions.AgentRoot
 	nodeKernelDataDir = "/var/lib/meshmux-singbox"
 )
 
@@ -40,6 +41,17 @@ func clientUnauthorized(err error) bool {
 	return false
 }
 
+// Contract:
+//
+//	input     the recorded-or-supplied node.Config, the operation id, the repair
+//	          flag, one pairing code (never persisted) and the rooted options;
+//	validate  cfg.Validate + the operation id shape + the pairing code shape,
+//	          then preflight, then the recorded-state cross-check;
+//	assemble  the artifact set, the rendered config/units and the candidate
+//	          revision; nothing is written before the candidate validates;
+//	effects   identity/pairing -> snapshot -> apply -> verify -> terminal ledger;
+//	return    one InstallResult with the stage, the stable error_code and the
+//	          recovery action. A failed verify never claims the node is online.
 func InstallNode(ctx context.Context, cfg node.Config, operationID string, repair bool, pairingCode string, opts NodeApplyOptions) (InstallResult, error) {
 	result := InstallResult{OperationID: operationID, Stage: "preflight", Status: "failed"}
 	fail := func(stage, code, recovery string) (InstallResult, error) {
@@ -47,7 +59,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		return result, &InstallError{Stage: stage, Code: code, Recovery: recovery}
 	}
 	if !operationIDPattern.MatchString(operationID) {
-		return fail("preflight", "OPERATION_ID_INVALID", "Generate a new operation ID and retry.")
+		return fail("preflight", CodeOperationIDInvalid, "Generate a new operation ID and retry.")
 	}
 	if err := cfg.Validate(); err != nil {
 		return fail("preflight", "CONFIG_INVALID", "Supply a valid HTTPS Hub URL, node identity, edge/out role and distinct SSH/VLESS ports.")
@@ -147,7 +159,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		if errors.As(err, &ie) {
 			return fail(ie.Stage, ie.Code, ie.Recovery)
 		}
-		return fail("preflight", "INSTALL_STATE_INVALID", "Inspect the recorded installer state before retrying.")
+		return fail("preflight", CodeInstallStateInvalid, "Inspect the recorded installer state before retrying.")
 	}
 	if layout.HubHost && !layout.CoLocated {
 		// A Hub host that cannot publish a pinned reusable runtime cannot
@@ -168,7 +180,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 
 	state, hasState, err := readNodeState(opts.Root, layout)
 	if err != nil {
-		return fail("preflight", "INSTALL_STATE_INVALID", "Inspect the recorded installer state; do not delete Agent identity or kernel data.")
+		return fail("preflight", CodeInstallStateInvalid, "Inspect the recorded installer state; do not delete Agent identity or kernel data.")
 	}
 	if hasState {
 		if state.Node != nil && (state.Config.ManagementDomain != "" || state.Config.SubscriptionDomain != "" || state.Config.HeadscaleDomain != "") {
@@ -178,11 +190,11 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 			return fail("preflight", "HOST_LAYOUT_CONFLICT", "This host already has a non-Node MeshMux layout; use a separate host.")
 		}
 		if !SameNodeConfig(*state.Node, cfg) {
-			return fail("preflight", "CONFIG_CONFLICT", "Repair only supports the recorded Hub URL, node, role and ports; create a new node enrollment for migration.")
+			return fail("preflight", CodeConfigConflict, "Repair only supports the recorded Hub URL, node, role and ports; create a new node enrollment for migration.")
 		}
 	}
 	if repair && !hasState {
-		return fail("preflight", "REPAIR_STATE_MISSING", "Repair requires a Node state record created by MeshMux.")
+		return fail("preflight", CodeRepairStateMissing, "Repair requires a Node state record created by MeshMux.")
 	}
 	if hasState && state.Status != "installed" && state.Status != "partial" && state.Status != "installing" && !repair {
 		return fail("preflight", "INSTALL_PARTIAL_REPAIR_REQUIRED", "Inspect the operation journal and run --repair with the same Node configuration.")
@@ -290,7 +302,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 	}
 	state.UpdatedAt = now
 	if err := writeNodeState(opts.Root, layout, state); err != nil {
-		return fail("stage", "INSTALL_STATE_WRITE_FAILED", "Check disk space and permissions under /var/lib/meshmux-installer.")
+		return fail("stage", CodeInstallStateWriteFailed, "Check disk space and permissions under /var/lib/meshmux-installer.")
 	}
 	operationDir := rooted(opts.Root, layout.OperationDir+"/"+operationID)
 	journalPath := filepath.Join(operationDir, "events.jsonl")
@@ -613,13 +625,13 @@ func stateOwnsNodeState(state InstallState) bool {
 func checkNodeTargets(root string, cfg node.Config, ssh []int, state InstallState, hasState bool, layout nodeLayout) error {
 	paths := []string{
 		node.AgentBinaryPath, node.SingBoxBinaryPath, node.AgentConfigPath,
-		"/etc/systemd/system/" + node.AgentUnit, "/etc/systemd/system/" + node.SingBoxUnit,
+		unitPath(node.AgentUnit), unitPath(node.SingBoxUnit),
 	}
 	if !layout.ReuseHubSSHJail {
 		paths = append(paths, nodeSSHJailPath)
 	}
 	if cfg.Role == node.RoleOut {
-		paths = append(paths, "/etc/systemd/system/"+node.ACLUnit)
+		paths = append(paths, unitPath(node.ACLUnit))
 	}
 	if layout.CoLocated {
 		// The Hub owns the shared runtime. The Line verifies the recorded
@@ -809,9 +821,9 @@ func nodeStaticTargets(files map[string]nodeManagedFile) []string {
 }
 
 func nodeUnitPaths(root string, cfg node.Config) []string {
-	units := []string{rooted(root, "/etc/systemd/system/"+node.AgentUnit), rooted(root, "/etc/systemd/system/"+node.SingBoxUnit)}
+	units := []string{rooted(root, unitPath(node.AgentUnit)), rooted(root, unitPath(node.SingBoxUnit))}
 	if cfg.Role == node.RoleOut {
-		units = append(units, rooted(root, "/etc/systemd/system/"+node.ACLUnit))
+		units = append(units, rooted(root, unitPath(node.ACLUnit)))
 	}
 	return units
 }

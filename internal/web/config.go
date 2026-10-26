@@ -24,15 +24,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
-var artifactSHA256 = regexp.MustCompile(`^[a-f0-9]{64}$`)
+// The install artifact digest must match the frozen SHA-256 grammar shared by
+// every producer and consumer (internal/backup/grammar.go); the check lives in
+// Validate below via backup.ValidDigest.
 
 // InstallArtifact is view.InstallArtifact: the type lives in the view package
 // so templates, handlers and assembly share one definition.
@@ -118,7 +120,7 @@ func (c Config) Validate(uid int) error {
 		if a.Path == "" || !filepath.IsAbs(a.Path) || filepath.Clean(a.Path) != a.Path {
 			return errors.New("INSTALL_ARTIFACT_INVALID: use one absolute executable path")
 		}
-		if a.Version != node.CurrentAgentVersion() || !artifactSHA256.MatchString(a.SHA256) {
+		if a.Version != node.CurrentAgentVersion() || !backup.ValidDigest(a.SHA256) {
 			return errors.New("INSTALL_ARTIFACT_INVALID: version or digest is not pinned")
 		}
 		if _, ok := node.KernelReleaseFor(a.Architecture); !ok {

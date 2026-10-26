@@ -12,9 +12,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
-const nodeUpgradeClaimPath = "/var/lib/meshmux-agent/upgrade-claim.json"
+const nodeUpgradeClaimPath = versions.AgentRoot + "/upgrade-claim.json"
 
 type nodeUpgradeClaim struct {
 	NewSHA256   string `json:"new_sha256"`

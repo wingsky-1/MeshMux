@@ -30,7 +30,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +37,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
@@ -118,9 +118,9 @@ func BuildRevertArgv(cfg Config) ([]string, error) {
 	case cfg.OperationID == "":
 		return nil, fail("OPERATION_REQUIRED", "an operation ID is required")
 	case !opIDRE.MatchString(cfg.OperationID):
-		return nil, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return nil, fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	case !digestRE.MatchString(cfg.FromAgentSHA256):
-		return nil, fail("UPDATE_DIGEST_INVALID", "the old Agent digest is not 64 lowercase hex")
+		return nil, fail(backup.CodeDigestInvalid, "the old Agent digest is not 64 lowercase hex")
 	}
 	dir, err := transientWorkDir(cfg.WorkDir)
 	if err != nil {
@@ -228,7 +228,7 @@ func validateRevertResult(path string, result RevertResult) error {
 	return nil
 }
 
-var handoffCodeRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+var handoffCodeRE = versions.StableCodePattern
 
 // RunRevert is the body of `__internal-update-revert`: the transient unit
 // restores the recorded change set, reconciles the ledger, starts the restored
@@ -302,9 +302,9 @@ func validateRevertConfig(cfg Config, runner node.CommandRunner) error {
 	case cfg.OperationID == "":
 		return fail("OPERATION_REQUIRED", "an operation ID is required")
 	case !opIDRE.MatchString(cfg.OperationID):
-		return fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	case !digestRE.MatchString(cfg.FromAgentSHA256):
-		return fail("UPDATE_DIGEST_INVALID", "the old Agent digest is not 64 lowercase hex")
+		return fail(backup.CodeDigestInvalid, "the old Agent digest is not 64 lowercase hex")
 	case runner == nil:
 		return fail("UPDATE_REVERT_UNAVAILABLE", "no command runner is configured")
 	}
@@ -333,7 +333,7 @@ func readRevertRecord(cfg Config) (BackupRecord, error) {
 		return BackupRecord{}, err
 	}
 	if record.FromVersion == "" || !targetRE.MatchString(record.TargetVersion) {
-		return BackupRecord{}, fail("UPDATE_BACKUP_CORRUPT", "the rollback record has no usable release identity")
+		return BackupRecord{}, fail(backup.CodeCorrupt, "the rollback record has no usable release identity")
 	}
 	return record, nil
 }
@@ -351,20 +351,20 @@ func revertCode(err error) string {
 	var ie *install.InstallError
 	if errors.As(err, &ie) {
 		switch ie.Code {
-		case "ROLLBACK_SNAPSHOT_INVALID":
-			return "UPDATE_BACKUP_CORRUPT"
-		case "ROLLBACK_ANCHOR_MISMATCH":
-			return "UPDATE_BACKUP_MISMATCH"
-		case "ROLLBACK_RESTORE_FAILED":
+		case install.CodeRollbackSnapshotInvalid:
+			return backup.CodeCorrupt
+		case install.CodeRollbackAnchorMismatch:
+			return backup.CodeMismatch
+		case install.CodeRollbackRestoreFailed:
 			return "UPDATE_REVERT_RESTORE_FAILED"
-		case "ROLLBACK_LEDGER_INVALID", "ROLLBACK_LEDGER_FAILED":
+		case install.CodeRollbackLedgerInvalid, install.CodeRollbackLedgerFailed:
 			return "UPDATE_REVERT_LEDGER_FAILED"
-		case "ROLLBACK_CLAIM_CLEAR_FAILED":
+		case install.CodeRollbackClaimClearFailed:
 			return "UPDATE_REVERT_CLAIM_CLEAR_FAILED"
-		case "ROLLBACK_START_FAILED":
+		case install.CodeRollbackStartFailed:
 			return "UPDATE_REVERT_START_FAILED"
-		case "CONFIG_CONFLICT":
-			return "CONFIG_CONFLICT"
+		case install.CodeConfigConflict:
+			return install.CodeConfigConflict
 		}
 	}
 	if code := handoffCodeRE.FindString(err.Error()); code != "" {
@@ -396,7 +396,7 @@ func NewReverter() *Reverter {
 // running: the caller must keep the receipt non-terminal and never cache it.
 func (r *Reverter) RevertOperation(ctx context.Context, operationID string) (bool, error) {
 	if !opIDRE.MatchString(operationID) {
-		return true, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return true, fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	}
 	if r == nil || r.Runner == nil {
 		return true, fail("UPDATE_REVERT_UNAVAILABLE", "no revert executor is configured")
@@ -423,8 +423,8 @@ func (r *Reverter) RevertOperation(ctx context.Context, operationID string) (boo
 	entry, ok := snapshotAgent(manifest)
 	if !ok || entry.SHA256 != record.FromAgentSHA256 ||
 		(record.FromPackageSHA256 != "" && record.FromPackageSHA256 != record.FromAgentSHA256) {
-		r.writeUnavailable(cfg, record, "UPDATE_BACKUP_MISMATCH")
-		return true, fail("UPDATE_BACKUP_MISMATCH", "the rollback payload's Agent binary does not match the record")
+		r.writeUnavailable(cfg, record, backup.CodeMismatch)
+		return true, fail(backup.CodeMismatch, "the rollback payload's Agent binary does not match the record")
 	}
 	if err := stageRevertExec(manifest, record, r.WorkDir); err != nil {
 		r.writeUnavailable(cfg, record, revertCode(err))
@@ -497,15 +497,15 @@ func revertUnitActive(ctx context.Context, runner node.CommandRunner, operationI
 func stageRevertExec(manifest install.SnapshotManifest, record BackupRecord, workDir string) error {
 	entry, ok := snapshotAgent(manifest)
 	if !ok || !entry.Exists {
-		return fail("UPDATE_BACKUP_CORRUPT", "the rollback payload does not hold the Agent binary")
+		return fail(backup.CodeCorrupt, "the rollback payload does not hold the Agent binary")
 	}
 	source := filepath.Join(record.PayloadPath, filepath.FromSlash(entry.Payload))
 	data, err := os.ReadFile(source)
 	if err != nil || len(data) == 0 {
-		return fail("UPDATE_BACKUP_CORRUPT", "the rollback payload's Agent binary could not be read")
+		return fail(backup.CodeCorrupt, "the rollback payload's Agent binary could not be read")
 	}
 	if hexDigest(data) != record.FromAgentSHA256 {
-		return fail("UPDATE_BACKUP_MISMATCH", "the rollback payload's Agent binary does not match from_agent_sha256")
+		return fail(backup.CodeMismatch, "the rollback payload's Agent binary does not match from_agent_sha256")
 	}
 	if err := os.MkdirAll(workDir, 0700); err != nil {
 		return fail("UPDATE_REVERT_STAGE_FAILED", "the private work directory could not be created")
@@ -566,17 +566,17 @@ func NewRollbackStore() *RollbackStore {
 // contract, not the record layer's.
 func (s *RollbackStore) ConfirmVersion(_ context.Context, operationID, targetVersion, agentSHA256 string) error {
 	if !opIDRE.MatchString(operationID) {
-		return fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	}
 	if !targetRE.MatchString(targetVersion) || !digestRE.MatchString(agentSHA256) {
-		return fail("UPDATE_BACKUP_MISMATCH", "the readback anchors are not a release and a digest")
+		return fail(backup.CodeMismatch, "the readback anchors are not a release and a digest")
 	}
 	if s == nil {
 		return fail("UPDATE_CONFIRM_UNAVAILABLE", "no rollback store is configured")
 	}
 	root := backupRootOf(s.BackupRoot)
 	if _, err := os.Lstat(RevertResultPath(s.WorkDir, operationID)); err == nil {
-		return fail("UPDATE_CONFIRM_REFUSED", "the operation was reverted; its rollback record is never confirmed")
+		return fail(backup.CodeConfirmRefused, "the operation was reverted; its rollback record is never confirmed")
 	}
 	// backup.Confirm re-reads the record, checks the anchors before the
 	// confirmed short-circuit, refuses a non-staged record, re-verifies the

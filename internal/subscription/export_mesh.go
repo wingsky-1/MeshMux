@@ -1,11 +1,13 @@
 package subscription
 
 import (
-	"encoding/json"
 	"errors"
 	"net/netip"
 	"net/url"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
 // Mesh export is the device-scoped companion of the standard subscription
@@ -41,17 +43,17 @@ import (
 
 const (
 	// MeshTailnetIPv4Prefix and MeshTailnetIPv6Prefix are the ranges the Hub
-	// Headscale control plane allocates. internal/mesh owns the same values for
-	// route validation; the subscription package cannot import it because
-	// internal/mesh imports this package. A web-level drift test compares both
-	// constants.
-	MeshTailnetIPv4Prefix = "100.64.0.0/10"
-	MeshTailnetIPv6Prefix = "fd7a:115c:a1e0::/48"
+	// Headscale control plane allocates. The values are owned by the
+	// subscription IR so the mesh route rules, the installer render and this
+	// exporter read one source; these identifiers keep the historical public
+	// names.
+	MeshTailnetIPv4Prefix = ir.TailnetIPv4Prefix
+	MeshTailnetIPv6Prefix = ir.TailnetIPv6Prefix
 
 	// exportMeshEndpointTag is the stable tag of the Tailscale endpoint. The
 	// route rule references exactly this tag, so the endpoint and the rule
-	// cannot drift apart.
-	exportMeshEndpointTag = "meshmux-ts"
+	// cannot drift apart. The value is owned by the node wire contract.
+	exportMeshEndpointTag = protocol.TailscaleEndpointTag
 )
 
 // Stable export refusals. They are the diagnostic contract shared with the Web
@@ -95,11 +97,11 @@ type MeshPurpose string
 
 const (
 	// MeshPurposeProxyMesh is the only renderable purpose.
-	MeshPurposeProxyMesh MeshPurpose = "proxy_mesh"
+	MeshPurposeProxyMesh MeshPurpose = ir.MeshPurposeProxyMesh
 	// MeshPurposeMeshOnly keeps the stock Tailscale client.
-	MeshPurposeMeshOnly MeshPurpose = "mesh_only"
+	MeshPurposeMeshOnly MeshPurpose = ir.MeshPurposeMeshOnly
 	// MeshPurposeSubnetRouter advertises LAN prefixes through the stock client.
-	MeshPurposeSubnetRouter MeshPurpose = "subnet_router"
+	MeshPurposeSubnetRouter MeshPurpose = ir.MeshPurposeSubnetRouter
 )
 
 // meshPurposeDocument is what one device purpose means for the rendered
@@ -192,15 +194,9 @@ func (input MeshDeviceInput) normalized() MeshDeviceInput {
 // is built before any key is minted ("view first") and carries no auth key,
 // enrollment secret, credential UUID, Line private key or subscription token.
 // A reflection test pins this property so a later field cannot silently turn
-// the page model into a secret carrier.
-type MeshConfigModel struct {
-	DeviceID        string
-	DisplayName     string
-	Hostname        string
-	ControlURL      string
-	TailnetPrefixes []string
-	LineLabels      []string
-}
+// the page model into a secret carrier. The shape is the subscription IR's
+// MeshView, so policy can consume it without importing this package.
+type MeshConfigModel = ir.MeshView
 
 // NewMeshConfigModel validates the non-secret half of a mesh export and
 // returns the view model. It performs no I/O and mints nothing; the Web layer
@@ -267,43 +263,17 @@ func ExportMeshDevice(input MeshDeviceInput, policies ...MeshPolicy) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-
-	config := meshClientConfig{
-		Log: singBoxClientLog{Level: "info", Timestamp: true},
-		DNS: singBoxClientDNS{Servers: []singBoxClientDNSServer{{
-			Type: "local",
-			Tag:  exportSingBoxDNSTag,
-		}}},
-		Inbounds: []singBoxClientInbound{{
-			Type:       "mixed",
-			Tag:        exportSingBoxInboundTag,
-			Listen:     exportListenAddress,
-			ListenPort: exportClientPort,
-		}},
-		Endpoints: []meshClientEndpoint{{
-			Type:         "tailscale",
-			Tag:          exportMeshEndpointTag,
-			AuthKey:      input.AuthKey,
-			ControlURL:   model.ControlURL,
-			Hostname:     model.Hostname,
-			AcceptRoutes: purpose.acceptRoutes,
-			Ephemeral:    false,
-		}},
-		Route: meshClientRoute{
-			DefaultDomainResolver: exportSingBoxDNSTag,
-			Rules: []meshClientRouteRule{{
-				IPCIDR:   model.TailnetPrefixes,
-				Outbound: exportMeshEndpointTag,
-			}},
-			Final: exportSingBoxSelectorTag,
+	block := buildLineBlock(plan.Nodes)
+	material := buildMeshMaterial(input, model, purpose)
+	return makeMeshSingBoxDocument(composeRouterPlan{
+		Endpoints: []composeEndpoint{material.Endpoint},
+		Lines:     block.Outbounds,
+		Selector:  block.Selector,
+		Route: composeRoutePlan{
+			Rules: material.Rules,
+			Final: composeEgressProxy,
 		},
-	}
-	config.Outbounds = clientProxyOutbounds(plan)
-	encoded, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, errors.New("EXPORT_RENDER_FAILED")
-	}
-	return append(encoded, '\n'), nil
+	})
 }
 
 // meshPolicyFor resolves the optional positional policy and the embedded one.
@@ -339,12 +309,10 @@ func meshPolicyPrefixes(policy MeshPolicy) ([]string, error) {
 	return []string{v4Prefix.String(), v6Prefix.String()}, nil
 }
 
+// canonicalMeshPrefix delegates to the shared IR parser so the mesh domain and
+// the device document refuse a host route the same way.
 func canonicalMeshPrefix(raw string) (netip.Prefix, error) {
-	prefix, err := netip.ParsePrefix(raw)
-	if err != nil || prefix.Masked() != prefix {
-		return netip.Prefix{}, errors.New("not a canonical CIDR network")
-	}
-	return prefix, nil
+	return ir.CanonicalPrefix(raw)
 }
 
 // validateMeshControlURL accepts one exact HTTPS origin. An empty value is

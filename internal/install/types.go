@@ -23,6 +23,12 @@
 // The package imports internal/node for the node domain contract and runtime
 // helpers (node.Config, node.CurrentAgentVersion, node.NewClient,
 // node.ReadbackLocal, node.AcquireRuntimeLock); node never imports install.
+//
+// Layer: core (the installer engine below the cli one-shot). The cli's install
+// command is the only caller that starts a host mutation; this package owns the
+// preflight -> stage -> apply -> verify pipeline, never imports internal/web,
+// and reads only its own installer ledger. Shared roots/ports/grammar come from
+// internal/versions and internal/backup, the two leaves both sides may import.
 package install
 
 import (
@@ -33,12 +39,27 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
-	WebPort       = 9080
-	HeadscalePort = 8080
-	STUNPort      = 3478
+	// Ports are re-exported from the versions leaf: the rendered Caddy/Web
+	// units, the launcher and the restore probe read the same constants.
+	WebPort           = versions.WebPort
+	HeadscalePort     = versions.HeadscalePort
+	HeadscaleGRPCPort = versions.HeadscaleGRPCPort
+	STUNPort          = versions.STUNPort
+)
+
+// Unit names/paths rendered and enabled by the Hub installer. They are named
+// once here because render.go, hub_apply.go and preflight.go all have to agree
+// on the exact systemd identity.
+const (
+	headscaleUnitName = "meshmux-headscale.service"
+	caddyUnitName     = "meshmux-caddy.service"
+	headscaleUnitPath = "/etc/systemd/system/" + headscaleUnitName
+	caddyUnitPath     = "/etc/systemd/system/" + caddyUnitName
 )
 
 type Config struct {
@@ -139,7 +160,7 @@ func Ports() []Port {
 		{"udp", STUNPort, "Headscale embedded STUN"},
 		{"tcp", WebPort, "MeshMux Web loopback"},
 		{"tcp", HeadscalePort, "Headscale loopback"},
-		{"tcp", 50443, "Headscale gRPC loopback"},
+		{"tcp", HeadscaleGRPCPort, "Headscale gRPC loopback"},
 	}
 }
 
@@ -158,10 +179,10 @@ func BuildPlan(id string, c Config, architecture string, checks []Check, ssh []i
 	return Plan{
 		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13", Architecture: architecture,
 		Config: c, Checks: checks, Artifacts: PinnedArtifacts(architecture),
-		Components: []Component{{"MeshMux Web", "same executable as the invoked CLI", "self-copy verified by SHA-256"}, {"Caddy", "2.11.7", "pinned upstream GitHub asset"}, {"Headscale", "0.29.5", "pinned upstream GitHub asset"}, {"sing-box", "1.14.3 (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
+		Components: []Component{{"MeshMux Web", "same executable as the invoked CLI", "self-copy verified by SHA-256"}, {"Caddy", CaddyVersion, "pinned upstream GitHub asset"}, {"Headscale", HeadscaleVersion, "pinned upstream GitHub asset"}, {"sing-box", KernelVersion + " (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
 		Ports:      Ports(), SSHPPorts: ssh,
-		Units:           []string{"meshmux-web.service", "meshmux-headscale.service", "meshmux-caddy.service", "fail2ban.service"},
-		Paths:           []string{"/etc/meshmux/", "/var/lib/meshmux/", "/var/lib/meshmux-headscale/", "/var/lib/meshmux-caddy/", "/var/lib/meshmux-installer/state.json", "/usr/local/libexec/meshmuxd", "/usr/local/libexec/meshmux-caddy", "/usr/local/libexec/meshmux-headscale", "/etc/fail2ban/jail.d/meshmux-ssh.local", "/etc/fail2ban/filter.d/meshmux-web.conf"},
+		Units:           []string{versions.WebUnitName, headscaleUnitName, caddyUnitName, "fail2ban.service"},
+		Paths:           []string{"/etc/meshmux/", "/var/lib/meshmux/", "/var/lib/meshmux-headscale/", "/var/lib/meshmux-caddy/", versions.InstallerStatePath, versions.RuntimeBinaryPath, caddyBinaryPath, headscaleBinaryPath, "/etc/fail2ban/jail.d/meshmux-ssh.local", "/etc/fail2ban/filter.d/meshmux-web.conf"},
 		FirewallChanges: []string{"none in preflight (do not replace the host nftables ruleset)"},
 		ApplyAvailable:  ready,
 		NextAction:      "After reviewing this plan, confirm with the exact prompt or pass --yes. Installation re-runs preflight, stages and validates pinned artifacts, applies only MeshMux-owned files, then verifies services and HTTPS. Public ingress and UDP reachability remain separately reported.",

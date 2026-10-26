@@ -10,6 +10,12 @@
 // privilege, no ledger read and no way to name an executable: it writes the
 // per-operation backup record, the journal and (Task 5) a request file under
 // /run.
+//
+// Layer: control (the Web-facing producer below internal/web; rootexec is the
+// privileged half of the same layer). It may import the core leaves
+// (backup/update/upgrade/buildinfo/versions) and must never import
+// internal/install or internal/web. The Web enqueues one typed request; it does
+// not perform the host mutation itself.
 package hubupgrade
 
 import (
@@ -18,6 +24,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"syscall"
+
+	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 // Data-directory-relative locations of the Hub upgrade. They are relative on
@@ -38,7 +47,7 @@ const (
 // RootManifestDir is where a root operator pre-places target manifests. The Web
 // process can read it (the installer makes the tree traversable) but never
 // writes it (spec §5.9).
-const RootManifestDir = "/var/lib/meshmux-installer/upgrade"
+const RootManifestDir = versions.InstallerUpgradeDir
 
 // Operation kinds and the journal's schema. A request and its journal entry
 // carry exactly these two kinds; anything else is refused.
@@ -54,16 +63,13 @@ const (
 )
 
 var (
-	// opIDRE is the one accepted operation id shape: 32 lowercase hex. It is
-	// also the file name inside the journal and the fixed name of a request.
-	opIDRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	// digestRE is a lowercase SHA-256 in hex.
-	digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// targetRE mirrors upgrade's release shape and internal/update's targetRE.
-	// Keep the three in step; a target that is not a SemVer release is never
-	// turned into a path or a journal field.
-	targetRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
-	// archRE bounds the architecture component of a package name.
+	// Aliases of the one frozen record grammar in internal/backup. Do not
+	// compile another copy here.
+	opIDRE   = backup.OperationIDPattern
+	digestRE = backup.DigestPattern
+	targetRE = backup.ReleaseVersionPattern
+	// archRE bounds the architecture component of a package name. It is local
+	// to this package: no other layer derives a package file name.
 	archRE = regexp.MustCompile(`^[a-z0-9]+$`)
 )
 

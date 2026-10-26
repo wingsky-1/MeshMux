@@ -136,7 +136,7 @@ type OutPoolEntry struct {
 // External reports whether the entry is an external HTTP proxy. An external
 // egress is always reachable as far as the Hub knows, so the UI labels it
 // "外部" instead of online/offline.
-func (e OutPoolEntry) External() bool { return e.Role == "http" }
+func (e OutPoolEntry) External() bool { return e.Role == string(nodeRoleHTTP) }
 
 // SetOutTransport stores the dial address of one Out node. The node must
 // exist with the immutable out role; the port must equal the Out's VLESS
@@ -148,24 +148,24 @@ func (e OutPoolEntry) External() bool { return e.Role == "http" }
 func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return OutTransport{}, errors.New("OUT_BINDING_INVALID: out_id must be 32 lowercase hex characters")
+		return OutTransport{}, errOutIDInvalid()
 	}
 	server = strings.ToLower(strings.TrimSpace(server))
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutTransport{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	var vlessPort int
 	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, outID).Scan(&role, &vlessPort)
 	if errors.Is(err, sql.ErrNoRows) {
-		return OutTransport{}, errors.New("OUT_NOT_FOUND: unknown out node")
+		return OutTransport{}, errOutNotFound
 	}
 	if err != nil {
-		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutTransport{}, errors.New(CodeDatabaseUnavailable)
 	}
-	if role != "out" {
+	if role != string(nodeRoleOut) {
 		return OutTransport{}, errors.New("OUT_ROLE_INVALID: only out nodes carry an out transport")
 	}
 	if port != vlessPort {
@@ -181,7 +181,7 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 			return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the link key could not be issued")
 		}
 	default:
-		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutTransport{}, errors.New(CodeDatabaseUnavailable)
 	}
 	// A migrated row carries link_key='' until the ensure step reissues it;
 	// a set on such a row mints the key now instead of storing a void one.
@@ -203,7 +203,7 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 		return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the out transport was not stored")
 	}
 	if err = tx.Commit(); err != nil {
-		return OutTransport{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutTransport{}, errors.New(CodeDatabaseUnavailable)
 	}
 	// A changed dial address invalidates every Line candidate that renders
 	// this Out: each bound Line republishes with the new endpoint. The drains
@@ -228,7 +228,7 @@ func outEgressTx(tx *sql.Tx, outID string) (nodedomain.OutEgress, bool, error) {
 		return nodedomain.OutEgress{}, false, nil
 	}
 	if err != nil {
-		return nodedomain.OutEgress{}, false, errors.New("DATABASE_UNAVAILABLE")
+		return nodedomain.OutEgress{}, false, errors.New(CodeDatabaseUnavailable)
 	}
 	if err := egress.Validate(); err != nil {
 		return nodedomain.OutEgress{}, false, errors.New("OUT_TRANSPORT_CORRUPT: the stored out transport is invalid")
@@ -261,7 +261,7 @@ LEFT JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
 WHERE n.role IN ('out','http')
 ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	byOut := map[string]*OutPoolEntry{}
@@ -282,7 +282,7 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 		)
 		if err := rows.Scan(&outID, &role, &name, &vless, &status, &lastBeat,
 			&server, &port, &proxyURL, &lineID, &state); err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
+			return nil, errors.New(CodeDatabaseUnavailable)
 		}
 		entry, seen := byOut[outID]
 		if !seen {
@@ -291,10 +291,10 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 				DisplayName: name,
 				Role:        role,
 				VlessPort:   vless,
-				Online:      status != "pending" && lastBeat != 0 && now.Sub(time.Unix(lastBeat, 0)) <= OfflineAfter,
+				Online:      status != nodeStatusPending && lastBeat != 0 && now.Sub(time.Unix(lastBeat, 0)) <= OfflineAfter,
 				LineIDs:     []string{},
 			}
-			if role == "http" {
+			if role == string(nodeRoleHTTP) {
 				// The external proxy has no heartbeat: its endpoint is the
 				// operator's URL and it is "reachable" only in the sense that
 				// the Hub holds a configured dial body. The UI labels it 外部.
@@ -322,7 +322,7 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(CodeDatabaseUnavailable)
 	}
 	out := make([]OutPoolEntry, 0, len(order))
 	for _, outID := range order {

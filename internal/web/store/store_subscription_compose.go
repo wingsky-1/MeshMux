@@ -1,35 +1,35 @@
 package store
 
-// Subscription composition for the aggregation rebuild (Task 4, ADR-0008 §7).
+// Subscription draft, preview, approval and artifact read-back (ADR-0008 §7).
 //
 // One subscription artifact is built in one order and one only:
 //
-//	draft (identities + credentials, read-only)
-//	-> ComposeSubscription (pure) -> kernel gate (sing-box required, mihomo only
-//	when installed) -> one atomic save that stores the selection and the
-//	approved artifact digest
+//	draft    (identities + credentials, read-only)
+//	preview  (pure composer + kernel gate, read-only)
+//	approve  (draft -> preview -> save, only an approved digest is written)
+//	save     (one transaction: edges, credentials, snapshot + digest)
+//	artifact (download: re-compose from the stored selection, compare digest)
 //
-// The draft exists because the artifact digest depends on the VLESS UUIDs: the
-// wizard must gate the exact bytes the download will later re-derive, so the
-// credentials are minted before the gate and written unchanged after it. A save
-// therefore writes nothing at all when any layer blocks, and the approved digest
-// can never disagree with the credentials it was computed from.
+// The five steps are separate functions so a caller can stop at any of them:
+// the wizard's preview stops after `preview`, and a blocked save stops there
+// too — nothing is written at all. The digest depends on the VLESS UUIDs, so
+// the draft mints them before the gate and the save writes them unchanged; that
+// is why an approved digest can never disagree with the credentials the
+// download later re-derives.
 //
 // The composed bytes are never stored. The snapshot stores the selection and the
 // digest of the approved artifact; a download re-composes from the same
-// selection and compares the digest, so a stored byte could never silently
-// drift from the choice that produced it.
+// selection and compares the digest, so a stored byte could never silently drift
+// from the choice that produced it.
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/policy"
 	"github.com/wingsky-1/MeshMux/internal/subscription"
 )
 
@@ -96,13 +96,20 @@ type SubscriptionDraft struct {
 }
 
 // DraftSubscriptionSelection validates one submitted selection without writing
-// anything. A missing subscriber identity means the create form: a fresh
-// subscriber identity is minted here, so the preview can gate the exact
-// credentials the save will persist.
+// anything.
+//
+// Flow: Normalize (shape, dedupe) -> one read transaction -> subscriber identity
+// (new identity for the create form, stored record for an existing one) ->
+// reference validation -> same-Line Out agreement -> credential material ->
+// composer inputs -> snapshot model. Nothing is INSERTed, UPDATEd or DELETEd.
 func (s *Store) DraftSubscriptionSelection(subscriberID, displayName string, spec SelectionSpec) (SubscriptionDraft, error) {
+	spec, err := spec.Normalize()
+	if err != nil {
+		return SubscriptionDraft{}, err
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return SubscriptionDraft{}, errors.New("DATABASE_UNAVAILABLE")
+		return SubscriptionDraft{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	draft, err := buildSubscriptionDraftTx(tx, subscriberID, displayName, spec)
@@ -110,18 +117,21 @@ func (s *Store) DraftSubscriptionSelection(subscriberID, displayName string, spe
 		return SubscriptionDraft{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return SubscriptionDraft{}, errors.New("DATABASE_UNAVAILABLE")
+		return SubscriptionDraft{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return draft, nil
 }
 
-// buildSubscriptionDraftTx is the one draft builder. It never writes.
+// buildSubscriptionDraftTx is the one draft builder. It never writes. The
+// spec must already be normalized; a second Normalize here would silently
+// reorder a caller's positions.
 func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec SelectionSpec) (SubscriptionDraft, error) {
 	draft := SubscriptionDraft{}
-	diagnostics := []subscription.Diagnostic{}
-	block := func(code, detail string) {
-		diagnostics = append(diagnostics, subscription.Diagnostic{Level: subscription.DiagnosticBlocking, Code: code, Detail: detail})
-	}
+	diagnostics := make([]subscription.Diagnostic, 0, 4)
+
+	// Layer 2 is strict: an unusable identity shape is an error, not a
+	// diagnostic, so a caller can never mistake a malformed request for a
+	// rendered finding.
 	if strings.TrimSpace(subscriberID) == "" {
 		sub, err := subscription.NewSubscriber(displayName)
 		if err != nil {
@@ -130,7 +140,7 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 		draft.Subscriber, draft.Create = sub, true
 	} else {
 		if err := subscription.ValidateID(subscriberID); err != nil {
-			return SubscriptionDraft{}, errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+			return SubscriptionDraft{}, errSubscriberIDInvalid()
 		}
 		sub, err := getSubscriberTx(tx, subscriberID)
 		if err != nil {
@@ -142,41 +152,21 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 		draft.Subscriber = sub
 	}
 
-	// Layer 2 is strict: an unusable identity shape is an error, not a
-	// diagnostic, so a caller can never mistake a malformed request for a
-	// rendered finding.
-	lineIDs, err := normalizeLineSelection(spec.LineIDs)
-	if err != nil {
-		return SubscriptionDraft{}, err
-	}
-	ruleRevisions, err := normalizeRuleSelection(spec.Rules)
-	if err != nil {
-		return SubscriptionDraft{}, err
-	}
-	deviceIDs, err := normalizeDeviceSelection(spec.NetworkIDs)
-	if err != nil {
-		return SubscriptionDraft{}, err
-	}
-	outID := strings.TrimSpace(spec.OutID)
-	if outID != "" && !validNodeID(outID) {
-		return SubscriptionDraft{}, errors.New(CodeSelectionInvalid + ": out_id must be 32 lowercase hex characters")
-	}
-
 	// Layer 2: every reference must exist and be selectable.
-	for _, nodeID := range lineIDs {
+	for _, nodeID := range spec.LineIDs {
 		if err := validateLineTx(tx, nodeID); err != nil {
 			return SubscriptionDraft{}, err
 		}
 	}
-	if err := validateSelectionOutTx(tx, outID); err != nil {
+	if err := validateSelectionOutTx(tx, spec.OutID); err != nil {
 		return SubscriptionDraft{}, err
 	}
-	for _, revision := range ruleRevisions {
+	for _, revision := range spec.Rules {
 		if err := validateRuleRevisionTx(tx, revision); err != nil {
 			return SubscriptionDraft{}, err
 		}
 	}
-	for _, deviceID := range deviceIDs {
+	for _, deviceID := range spec.NetworkIDs {
 		if err := validateSelectionDeviceTx(tx, deviceID); err != nil {
 			return SubscriptionDraft{}, err
 		}
@@ -184,14 +174,14 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 	// The same-Line Out rule applies to a create as well: the new subscriber is
 	// not persisted yet, so every existing row on these Lines is a potential
 	// conflict and must already agree with the submitted Out choice.
-	if err := enforceSameLineOutTx(tx, draft.Subscriber.ID, lineIDs, outID); err != nil {
+	if err := enforceSameLineOutTx(tx, draft.Subscriber.ID, spec.LineIDs, spec.OutID); err != nil {
 		return SubscriptionDraft{}, err
 	}
 
 	// The credentials are minted now and written unchanged after the gate, so
 	// the approved digest is computed over the exact UUIDs the download serves.
-	credentials := make([]subscription.Credential, 0, len(lineIDs))
-	for _, nodeID := range lineIDs {
+	credentials := make([]subscription.Credential, 0, len(spec.LineIDs))
+	for _, nodeID := range spec.LineIDs {
 		credential, err := reusableCredentialTx(tx, draft.Subscriber.ID, nodeID, draft.Create)
 		if err != nil {
 			return SubscriptionDraft{}, err
@@ -200,80 +190,69 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 	}
 	draft.Credentials = credentials
 
-	// Layer 3: the composer inputs and the pure composition.
-	inputs := selectionInputs{}
-	for index, nodeID := range lineIDs {
-		line, err := downloadLineTx(tx, nodeID)
-		if err != nil {
-			block(subscription.CodeComposeLineInvalid, "所选 Line 已不可用")
-			continue
-		}
-		inputs.Lines = append(inputs.Lines, subscription.ComposeLine{Line: publicLine(line), Credential: credentials[index]})
-	}
-	if outID != "" {
-		out, err := selectionOutTx(tx, outID)
-		if err != nil {
-			block(subscription.CodeComposeOutInvalid, "所选 Out 已不可用或未配置出口地址")
-		} else {
-			inputs.Out = []subscription.ComposeOut{out}
-		}
-	}
-	rules, err := selectionRulesTx(tx, ruleRevisions)
+	// Layer 3 inputs: the composer input set plus whatever the read already
+	// knows is unusable.
+	assembly, err := assembleSelectionTx(tx, spec.LineIDs, credentials, spec.OutID, spec.Rules, spec.NetworkIDs)
 	if err != nil {
 		return SubscriptionDraft{}, err
 	}
-	inputs.Rules = rules
-	for _, deviceID := range deviceIDs {
-		var name string
-		err := tx.QueryRow(`SELECT display_name FROM mesh_devices WHERE id=?`, deviceID).Scan(&name)
-		if errors.Is(err, sql.ErrNoRows) {
-			block(subscription.CodeComposeLineInvalid, "所选组网设备不存在")
-			continue
-		}
-		if err != nil {
-			return SubscriptionDraft{}, errors.New("DATABASE_UNAVAILABLE")
-		}
-		inputs.Network = append(inputs.Network, subscription.ComposeNetwork{DeviceID: deviceID, DisplayName: name})
-	}
-	draft.inputs = inputs
-	draft.diagnostics = diagnostics
+	draft.inputs = assembly.inputs
+	draft.diagnostics = append(diagnostics, assembly.diagnostics...)
 
 	// The snapshot model is built from the same order the composer used.
-	selection := subscription.Selection{SubscriberID: draft.Subscriber.ID}
-	if !draft.Create {
-		var stored int64
-		err := tx.QueryRow(`SELECT version FROM subscription_snapshots WHERE subscriber_id=?`, subscriberID).Scan(&stored)
-		switch {
-		case err == nil:
-			selection.Version = stored
-		case errors.Is(err, sql.ErrNoRows):
-		default:
-			return SubscriptionDraft{}, errors.New("DATABASE_UNAVAILABLE")
-		}
-	}
-	selection.Version++
-	for position, nodeID := range lineIDs {
-		lineRevision := int64(0)
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&lineRevision); err != nil {
-			return SubscriptionDraft{}, errors.New("DATABASE_UNAVAILABLE")
-		}
-		selection.Lines = append(selection.Lines, subscription.SelectionLine{NodeID: nodeID, Position: position, LineRevision: lineRevision})
-	}
-	if outID != "" {
-		outRevision := int64(0)
-		if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0) FROM node_candidates WHERE node_id=?`, outID).Scan(&outRevision); err != nil {
-			return SubscriptionDraft{}, errors.New("DATABASE_UNAVAILABLE")
-		}
-		selection.Out = &subscription.SelectionOut{OutID: outID, Position: 0, OutRevision: outRevision}
-	}
-	for position, revision := range ruleRevisions {
-		selection.Rules = append(selection.Rules, subscription.SelectionRule{StableKey: revision.StableKey, Version: revision.Version, Position: position})
-	}
-	for position, deviceID := range deviceIDs {
-		selection.Networks = append(selection.Networks, subscription.SelectionNetwork{DeviceID: deviceID, Position: position})
+	selection, err := buildSelectionTx(tx, draft.Subscriber.ID, draft.Create, spec)
+	if err != nil {
+		return SubscriptionDraft{}, err
 	}
 	draft.Selection = selection
 	return draft, nil
+}
+
+// buildSelectionTx builds the snapshot identity of one canonical selection: the
+// next version, the ordered references and the informational current revisions.
+// It reads, it never writes; the version is only committed by a real save.
+func buildSelectionTx(tx *sql.Tx, subscriberID string, creating bool, spec SelectionSpec) (subscription.Selection, error) {
+	selection := subscription.Selection{SubscriberID: subscriberID}
+	if !creating {
+		stored, err := storedSelectionVersionTx(tx, subscriberID)
+		if err != nil {
+			return subscription.Selection{}, err
+		}
+		selection.Version = stored
+	}
+	selection.Version++
+	for position, nodeID := range spec.LineIDs {
+		revision, err := latestCandidateRevisionTx(tx, nodeID)
+		if err != nil {
+			return subscription.Selection{}, err
+		}
+		selection.Lines = append(selection.Lines, subscription.SelectionLine{NodeID: nodeID, Position: position, LineRevision: revision})
+	}
+	if spec.OutID != "" {
+		revision, err := latestCandidateRevisionTx(tx, spec.OutID)
+		if err != nil {
+			return subscription.Selection{}, err
+		}
+		selection.Out = &subscription.SelectionOut{OutID: spec.OutID, Position: 0, OutRevision: revision}
+	}
+	for position, revision := range spec.Rules {
+		selection.Rules = append(selection.Rules, subscription.SelectionRule{StableKey: revision.StableKey, Version: revision.Version, Position: position})
+	}
+	for position, deviceID := range spec.NetworkIDs {
+		selection.Networks = append(selection.Networks, subscription.SelectionNetwork{DeviceID: deviceID, Position: position})
+	}
+	return selection, nil
+}
+
+// latestCandidateRevisionTx reads the newest stored candidate revision of one
+// node, or zero when it has none. The value is informational for a Line (its
+// transport is not versioned by the subscription) and is recorded honestly.
+func latestCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
+	var revision int64
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
+		return 0, errors.New(CodeDatabaseUnavailable)
+	}
+	return revision, nil
 }
 
 // storedCredentialTx reads the stored credential of one subscriber on one Line,
@@ -289,7 +268,7 @@ func storedCredentialTx(tx *sql.Tx, subscriberID, nodeID string) (subscription.C
 		return subscription.Credential{}, errors.New("CREDENTIAL_NOT_FOUND: no active credential for this line")
 	}
 	if err != nil {
-		return subscription.Credential{}, errors.New("DATABASE_UNAVAILABLE")
+		return subscription.Credential{}, errors.New(CodeDatabaseUnavailable)
 	}
 	return credential, nil
 }
@@ -308,67 +287,54 @@ func reusableCredentialTx(tx *sql.Tx, subscriberID, nodeID string, creating bool
 			return credential, nil
 		case errors.Is(err, sql.ErrNoRows):
 		default:
-			return subscription.Credential{}, errors.New("DATABASE_UNAVAILABLE")
+			return subscription.Credential{}, errors.New(CodeDatabaseUnavailable)
 		}
 	}
 	credential, err := subscription.NewCredential(subscriberID, nodeID)
 	if err != nil {
-		return subscription.Credential{}, errors.New("CREDENTIAL_CREATE_FAILED")
+		return subscription.Credential{}, errCredentialCreateFailed
 	}
 	return credential, nil
 }
 
 // PreviewDraftSelection composes and gates one draft without writing anything.
+//
+// Flow: pure composer -> blocking check -> kernel gate (sing-box required,
+// mihomo optional) -> approved/digest. A blocked composer never runs a binary.
 func (s *Store) PreviewDraftSelection(draft SubscriptionDraft, verifier PublishVerifier) SelectionPreview {
-	return s.composeAndGate(context.Background(), draft.inputs, verifier, draft.diagnostics)
+	return runComposeGate(context.Background(), draft.inputs, verifier, draft.diagnostics)
 }
 
-// SaveSubscriptionDraft writes one draft in a single transaction: the
-// subscriber and its token (create only), the four edge groups, the credentials
-// and the snapshot with the approved artifact digest. It returns the plaintext
-// bearer exactly once for a create.
+// SaveSubscriptionDraft writes one draft in a single transaction: the subscriber
+// and its token (create only), the four edge groups, the credentials and the
+// snapshot with the approved artifact digest. It returns the plaintext bearer
+// exactly once for a create.
 //
 // artifactID may be empty, which records a saved-but-unapproved selection; the
 // download refuses such a snapshot instead of falling back to older bytes.
 func (s *Store) SaveSubscriptionDraft(draft SubscriptionDraft, artifactID string, now time.Time) (string, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	bearer := ""
 	if draft.Create {
 		if _, err = tx.Exec(`INSERT INTO subscribers(id, display_name, state, revision, created_at, updated_at) VALUES(?,?,?,1,?,?)`,
 			draft.Subscriber.ID, draft.Subscriber.DisplayName, string(draft.Subscriber.State), now.Unix(), now.Unix()); err != nil {
-			return "", errors.New("SUBSCRIBER_CREATE_FAILED")
+			return "", errSubscriberCreateFailed
 		}
 		record, token, tErr := subscription.NewSubscriptionToken(draft.Subscriber.ID)
 		if tErr != nil {
-			return "", errors.New("TOKEN_CREATE_FAILED")
+			return "", errTokenCreateFailed
 		}
 		if _, err = tx.Exec(`INSERT INTO subscription_tokens(id, subscriber_id, token_hash, revoked, created_at, revoked_at) VALUES(?,?,?,0,?,0)`,
 			record.ID, record.SubscriberID, record.Hash, now.Unix()); err != nil {
-			return "", errors.New("TOKEN_CREATE_FAILED")
+			return "", errTokenCreateFailed
 		}
 		bearer = token
 	}
-	lineIDs := make([]string, 0, len(draft.Selection.Lines))
-	for _, line := range draft.Selection.Lines {
-		lineIDs = append(lineIDs, line.NodeID)
-	}
-	deviceIDs := make([]string, 0, len(draft.Selection.Networks))
-	for _, device := range draft.Selection.Networks {
-		deviceIDs = append(deviceIDs, device.DeviceID)
-	}
-	ruleRevisions := make([]RuleRevision, 0, len(draft.Selection.Rules))
-	for _, rule := range draft.Selection.Rules {
-		ruleRevisions = append(ruleRevisions, RuleRevision{StableKey: rule.StableKey, Version: rule.Version})
-	}
-	outID := ""
-	if draft.Selection.Out != nil {
-		outID = draft.Selection.Out.OutID
-	}
-	if err := writeSelectionEdgesTx(tx, draft.Subscriber.ID, lineIDs, outID, ruleRevisions, deviceIDs, now); err != nil {
+	if err := writeSelectionEdgesTx(tx, draft.Selection, now); err != nil {
 		return "", err
 	}
 	if err := writeDraftCredentialsTx(tx, draft, now); err != nil {
@@ -378,10 +344,10 @@ func (s *Store) SaveSubscriptionDraft(draft SubscriptionDraft, artifactID string
 		return "", err
 	}
 	if _, err = tx.Exec(`UPDATE subscribers SET revision=revision+1, updated_at=? WHERE id=?`, now.Unix(), draft.Subscriber.ID); err != nil {
-		return "", errors.New("SUBSCRIBER_UPDATE_FAILED")
+		return "", errSubscriberUpdateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return "", errors.New("DATABASE_UNAVAILABLE")
+		return "", errors.New(CodeDatabaseUnavailable)
 	}
 	// The save ends here on purpose (Ruling R10): a subscription selection is not an
 	// ACL input, so it must not republish any Out. The Line's own publication is
@@ -403,13 +369,13 @@ func writeDraftCredentialsTx(tx *sql.Tx, draft SubscriptionDraft, now time.Time)
 		case errors.Is(err, sql.ErrNoRows):
 			if _, err = tx.Exec(`INSERT INTO proxy_credentials(id, subscriber_id, node_id, uuid, active, created_at, updated_at) VALUES(?,?,?,?,1,?,?)`,
 				credential.ID, credential.SubscriberID, credential.NodeID, credential.UUID, now.Unix(), now.Unix()); err != nil {
-				return errors.New("CREDENTIAL_CREATE_FAILED")
+				return errCredentialCreateFailed
 			}
 		case err != nil:
-			return errors.New("DATABASE_UNAVAILABLE")
+			return errors.New(CodeDatabaseUnavailable)
 		case active != 1:
 			if _, err = tx.Exec(`UPDATE proxy_credentials SET active=1, updated_at=? WHERE id=?`, now.Unix(), credential.ID); err != nil {
-				return errors.New("CREDENTIAL_UPDATE_FAILED")
+				return errCredentialUpdateFailed
 			}
 		}
 	}
@@ -432,15 +398,18 @@ type SaveResult struct {
 	Saved bool
 }
 
-// ApproveSubscriptionSelection is the wizard's save: it gates the draft, and
-// only an approved artifact is written. A blocked draft writes nothing at all,
-// so the page can always say "not saved" honestly.
+// ApproveSubscriptionSelection is the wizard's save: draft, gate, and write only
+// an approved artifact. A blocked draft writes nothing at all, so the page can
+// always say "not saved" honestly.
+//
+// It is the composition of three public steps, and each is also callable on its
+// own; this function adds no fourth behaviour.
 func (s *Store) ApproveSubscriptionSelection(ctx context.Context, subscriberID, displayName string, spec SelectionSpec, verifier PublishVerifier, now time.Time) (SaveResult, error) {
 	draft, err := s.DraftSubscriptionSelection(subscriberID, displayName, spec)
 	if err != nil {
 		return SaveResult{}, err
 	}
-	result := SaveResult{Preview: s.composeAndGate(ctx, draft.inputs, verifier, draft.diagnostics), SubscriberID: draft.Subscriber.ID}
+	result := SaveResult{Preview: runComposeGate(ctx, draft.inputs, verifier, draft.diagnostics), SubscriberID: draft.Subscriber.ID}
 	if result.Preview.Blocking() {
 		return result, nil
 	}
@@ -452,142 +421,10 @@ func (s *Store) ApproveSubscriptionSelection(ctx context.Context, subscriberID, 
 	return result, nil
 }
 
-// selectionInputs is the pure composer's input set for one selection.
-type selectionInputs struct {
-	Lines   []subscription.ComposeLine
-	Out     []subscription.ComposeOut
-	Rules   []subscription.ComposeRule
-	Network []subscription.ComposeNetwork
-}
-
-// selectionOutTx resolves one selected egress into its operator-visible dial
-// parameters. The link credential and the HTTP proxy credentials stay in the
-// private tables: a subscription never carries them. An HTTP proxy egress is
-// reported with ComposeOutHTTP so the composer, the UI and the selection
-// identity can tell the two shapes apart.
-func selectionOutTx(tx *sql.Tx, outID string) (subscription.ComposeOut, error) {
-	var role, displayName, server, proxyURL string
-	var port int
-	err := tx.QueryRow(`SELECT n.role, n.display_name,
-	  COALESCE(s.server,''), COALESCE(s.port,0), COALESCE(h.url,'')
-	  FROM nodes n
-	  LEFT JOIN out_settings s ON s.node_id=n.id
-	  LEFT JOIN node_http_proxy h ON h.node_id=n.id
-	  WHERE n.id=?`, outID).
-		Scan(&role, &displayName, &server, &port, &proxyURL)
-	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the egress does not exist")
-	}
-	if err != nil {
-		return subscription.ComposeOut{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	switch role {
-	case "out":
-		if server == "" || port == 0 {
-			return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the out has no transport")
-		}
-		return subscription.ComposeOut{OutID: outID, DisplayName: displayName, Server: server, Port: port}, nil
-	case "http":
-		if proxyURL == "" {
-			return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the http proxy has no URL")
-		}
-		egress, err := node.ParseHTTPProxyURL(proxyURL)
-		if err != nil {
-			return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the http proxy URL is invalid")
-		}
-		return subscription.ComposeOut{
-			OutID: outID, DisplayName: displayName,
-			Server: egress.Server, Port: egress.Port, Kind: subscription.ComposeOutHTTP,
-		}, nil
-	default:
-		return subscription.ComposeOut{}, errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected")
-	}
-}
-
-// selectionRulesTx resolves the pinned rule revisions into composer rules with
-// their pinned artifacts.
-//
-// The pin source comes from the active server policy revision, which is the
-// deployment's single artifact lock. A rule that needs an artifact the active
-// revision does not pin is refused by the composer with
-// COMPOSE_RULESET_UNPINNED, so a subscription can never fetch an unpinned file.
-func selectionRulesTx(tx *sql.Tx, revisions []RuleRevision) ([]subscription.ComposeRule, error) {
-	if len(revisions) == 0 {
-		return []subscription.ComposeRule{}, nil
-	}
-	pins, err := activePolicyPinsTx(tx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]subscription.ComposeRule, 0, len(revisions))
-	for _, revision := range revisions {
-		var name, action, kind, raw string
-		err := tx.QueryRow(`SELECT name, action, matcher_kind, matcher_value FROM policy_rules WHERE stable_key=? AND version=?`,
-			revision.StableKey, revision.Version).Scan(&name, &action, &kind, &raw)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("RULE_NOT_FOUND: a selected rule revision no longer exists")
-		}
-		if err != nil {
-			return nil, errors.New("DATABASE_UNAVAILABLE")
-		}
-		var values []string
-		if err := json.Unmarshal([]byte(raw), &values); err != nil {
-			return nil, errors.New("RULE_INVALID: a stored rule is not readable")
-		}
-		out = append(out, subscription.ComposeRule{
-			StableKey: revision.StableKey,
-			Version:   revision.Version,
-			Action:    subscription.Action(action),
-			Kind:      subscription.MatcherKind(kind),
-			Values:    values,
-			Pins:      pinsForRule(subscription.MatcherKind(kind), values, pins),
-		})
-	}
-	return out, nil
-}
-
-// activePolicyPinsTx reads the pinned artifacts of the active server policy
-// revision. No active revision means no pins, so a geo/ruleset rule is refused
-// instead of rendering an unversioned reference.
-func activePolicyPinsTx(tx *sql.Tx) (policy.RuleSetPins, error) {
-	record, _, err := activePolicyIntentTx(tx, PolicyLayerServer)
-	if err != nil {
-		if isPolicyNotFound(err) {
-			return policy.RuleSetPins{}, nil
-		}
-		return policy.RuleSetPins{}, err
-	}
-	return decodePolicyPins(record.Pins)
-}
-
-// pinsForRule maps the artifact pins of the active revision onto one composer
-// rule, keyed by the geo code or the remote tag the rule names.
-func pinsForRule(kind subscription.MatcherKind, values []string, pins policy.RuleSetPins) map[string]subscription.RuleSetPin {
-	out := make(map[string]subscription.RuleSetPin, len(values))
-	for _, value := range values {
-		var pin policy.RulesetPin
-		var ok bool
-		switch kind {
-		case subscription.MatcherGeoSite:
-			pin, ok = pins.GeoSite[value]
-		case subscription.MatcherGeoIP:
-			pin, ok = pins.GeoIP[value]
-		case subscription.MatcherRuleSet:
-			pin, ok = pins.Remote[value]
-		default:
-			continue
-		}
-		if !ok {
-			continue
-		}
-		out[value] = subscription.RuleSetPin{Source: pin.Source, Version: pin.Version, SHA256: pin.SHA256}
-	}
-	return out
-}
-
-// composeAndGate runs the pure composer and then the kernel gate. A blocking
-// composer finding stops before any binary runs.
-func (s *Store) composeAndGate(ctx context.Context, inputs selectionInputs, verifier PublishVerifier, diagnostics []subscription.Diagnostic) SelectionPreview {
+// runComposeGate runs the pure composer and then the kernel gate. A blocking
+// composer finding stops before any binary runs. It is a free function because
+// it holds no store state: the draft already carries every input.
+func runComposeGate(ctx context.Context, inputs selectionInputs, verifier PublishVerifier, diagnostics []subscription.Diagnostic) SelectionPreview {
 	documents, composeDiagnostics := subscription.ComposeSubscription(inputs.Lines, inputs.Out, inputs.Rules, inputs.Network)
 	diagnostics = append(diagnostics, composeDiagnostics...)
 	preview := SelectionPreview{Diagnostics: diagnostics, Documents: documents, ContentID: documents.ContentID}
@@ -595,20 +432,14 @@ func (s *Store) composeAndGate(ctx context.Context, inputs selectionInputs, veri
 		return preview
 	}
 	if verifier == nil {
-		preview.Diagnostics = append(preview.Diagnostics, subscription.Diagnostic{
-			Level: subscription.DiagnosticBlocking, Code: CodeComposeGateUnavailable,
-			Detail: "缺少内核门禁，无法批准订阅产物",
-		})
+		preview.Diagnostics = append(preview.Diagnostics, blockingDiagnostic(CodeComposeGateUnavailable, "缺少内核门禁，无法批准订阅产物"))
 		return preview
 	}
 	if _, err := verifier.CheckSingBox(ctx, documents.SingBox); err != nil {
-		preview.Diagnostics = append(preview.Diagnostics, subscription.Diagnostic{
-			Level: subscription.DiagnosticBlocking, Code: CodeComposeGateFailed,
-			Detail: "sing-box 拒绝组装后的客户端文档",
-		})
+		preview.Diagnostics = append(preview.Diagnostics, blockingDiagnostic(CodeComposeGateFailed, "sing-box 拒绝组装后的客户端文档"))
 		return preview
 	}
-	preview.Gates = append(preview.Gates, "sing-box")
+	preview.Gates = append(preview.Gates, kernelSingBox)
 	if _, err := verifier.CheckMihomo(ctx, documents.Mihomo); err != nil {
 		if isMihomoMissing(err) {
 			// An absent Mihomo binary is not a failure of the artifact: the
@@ -621,14 +452,11 @@ func (s *Store) composeAndGate(ctx context.Context, inputs selectionInputs, veri
 				Detail: "未安装固定版本的 Mihomo，本次只校验 sing-box 文档",
 			})
 		} else {
-			preview.Diagnostics = append(preview.Diagnostics, subscription.Diagnostic{
-				Level: subscription.DiagnosticBlocking, Code: CodeComposeGateFailed,
-				Detail: "Mihomo 拒绝组装后的客户端文档",
-			})
+			preview.Diagnostics = append(preview.Diagnostics, blockingDiagnostic(CodeComposeGateFailed, "Mihomo 拒绝组装后的客户端文档"))
 			return preview
 		}
 	} else {
-		preview.Gates = append(preview.Gates, "mihomo")
+		preview.Gates = append(preview.Gates, kernelMihomo)
 	}
 	preview.Approved = true
 	return preview
@@ -646,87 +474,117 @@ func isMihomoMissing(err error) bool {
 // source of truth: a saved selection without an approved artifact, or one whose
 // recomposition no longer matches the approved digest, is refused.
 //
-// The recomposition reads the edges and the active credentials of the saved
-// selection. It never mints anything, so a missing credential is a refusal
-// instead of a silently different document.
+// Flow: validate id -> read subscriber, selection and approved digest in one
+// transaction -> resolve inputs from STORED credentials (never mint) -> commit
+// -> pure compose -> compare digest. Any missing record is a refusal, never a
+// silently different document.
 func (s *Store) SubscriptionArtifact(subscriberID string) (subscription.ComposeDocuments, string, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return subscription.ComposeDocuments{}, "", errors.New("SUBSCRIBER_ID_INVALID: need 32 lowercase hex characters")
+		return subscription.ComposeDocuments{}, "", errSubscriberIDInvalid()
 	}
+	stored, err := s.savedArtifactSelection(subscriberID)
+	if err != nil {
+		return subscription.ComposeDocuments{}, "", err
+	}
+	documents, diagnostics := subscription.ComposeSubscription(stored.inputs.Lines, stored.inputs.Out, stored.inputs.Rules, stored.inputs.Network)
+	if hasBlockingDiagnostic(diagnostics) {
+		return subscription.ComposeDocuments{}, "", errors.New(CodeComposeGateFailed + ": the saved selection no longer composes")
+	}
+	if stored.artifactID != documents.ContentID {
+		return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactDrift + ": the composed artifact no longer matches the approved one")
+	}
+	return documents, stored.artifactID, nil
+}
+
+// savedArtifact is the read half of one download: composer inputs and the
+// approved digest of the snapshot that recorded them.
+type savedArtifact struct {
+	inputs     selectionInputs
+	artifactID string
+}
+
+// savedArtifactSelection reads one subscriber's stored selection into composer
+// inputs inside one transaction. It never writes and never mints a credential.
+func (s *Store) savedArtifactSelection(subscriberID string) (savedArtifact, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.ComposeDocuments{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return savedArtifact{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
-		return subscription.ComposeDocuments{}, "", err
+		return savedArtifact{}, err
 	}
 	selection, err := readSelectionTx(tx, subscriberID)
 	if err != nil {
-		return subscription.ComposeDocuments{}, "", err
+		return savedArtifact{}, err
 	}
-	inputs := selectionInputs{}
+	credentials := make([]subscription.Credential, 0, len(selection.Lines))
 	for _, line := range selection.Ordered().Lines {
-		lineRecord, err := downloadLineTx(tx, line.NodeID)
-		if err != nil {
-			return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactDrift + ": a selected Line is no longer available")
-		}
 		credential, err := storedCredentialTx(tx, subscriberID, line.NodeID)
 		if err != nil {
-			return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactDrift + ": a selected Line has no active credential")
+			return savedArtifact{}, errors.New(CodeArtifactDrift + ": a selected Line has no active credential")
 		}
-		inputs.Lines = append(inputs.Lines, subscription.ComposeLine{Line: publicLine(lineRecord), Credential: credential})
-	}
-	if selection.Out != nil {
-		out, err := selectionOutTx(tx, selection.Out.OutID)
-		if err != nil {
-			return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactDrift + ": the selected Out is no longer available")
-		}
-		inputs.Out = []subscription.ComposeOut{out}
+		credentials = append(credentials, credential)
 	}
 	revisions := make([]RuleRevision, 0, len(selection.Rules))
 	for _, rule := range selection.Ordered().Rules {
 		revisions = append(revisions, RuleRevision{StableKey: rule.StableKey, Version: rule.Version})
 	}
-	rules, err := selectionRulesTx(tx, revisions)
-	if err != nil {
-		return subscription.ComposeDocuments{}, "", err
-	}
-	inputs.Rules = rules
+	deviceIDs := make([]string, 0, len(selection.Networks))
 	for _, device := range selection.Ordered().Networks {
-		var name string
-		if err := tx.QueryRow(`SELECT display_name FROM mesh_devices WHERE id=?`, device.DeviceID).Scan(&name); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactDrift + ": a selected mesh device no longer exists")
-			}
-			return subscription.ComposeDocuments{}, "", errors.New("DATABASE_UNAVAILABLE")
-		}
-		inputs.Network = append(inputs.Network, subscription.ComposeNetwork{DeviceID: device.DeviceID, DisplayName: name})
+		deviceIDs = append(deviceIDs, device.DeviceID)
 	}
-	var artifactID string
-	var approved int
-	err = tx.QueryRow(`SELECT artifact_id, artifact_approved FROM subscription_snapshots WHERE subscriber_id=?`, subscriberID).
-		Scan(&artifactID, &approved)
-	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactNotApproved + ": the selection was never approved")
-	}
+	assembly, err := assembleSelectionTx(tx, lineIDsOf(selection), credentials, outIDOf(selection), revisions, deviceIDs)
 	if err != nil {
-		return subscription.ComposeDocuments{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return savedArtifact{}, artifactAssemblyError(err)
+	}
+	if hasBlockingDiagnostic(assembly.diagnostics) {
+		return savedArtifact{}, errors.New(CodeArtifactDrift + ": a selected reference is no longer available")
+	}
+	artifactID, hasSnapshot, err := snapshotArtifactTx(tx, subscriberID)
+	if err != nil {
+		return savedArtifact{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return subscription.ComposeDocuments{}, "", errors.New("DATABASE_UNAVAILABLE")
+		return savedArtifact{}, errors.New(CodeDatabaseUnavailable)
 	}
-	if approved != 1 || artifactID == "" {
-		return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactNotApproved + ": the selection was never approved")
+	if !hasSnapshot || artifactID == "" {
+		return savedArtifact{}, errors.New(CodeArtifactNotApproved + ": the selection was never approved")
 	}
-	documents, diagnostics := subscription.ComposeSubscription(inputs.Lines, inputs.Out, inputs.Rules, inputs.Network)
-	if hasBlockingDiagnostic(diagnostics) {
-		return subscription.ComposeDocuments{}, "", errors.New(CodeComposeGateFailed + ": the saved selection no longer composes")
+	return savedArtifact{inputs: assembly.inputs, artifactID: artifactID}, nil
+}
+
+// artifactAssemblyError maps a read failure of the artifact path onto the
+// download's stable vocabulary: a saved record that no longer resolves is drift,
+// a database failure stays a database failure.
+func artifactAssemblyError(err error) error {
+	if ErrorCodeOf(err) == CodeDatabaseUnavailable {
+		return err
 	}
-	if artifactID != documents.ContentID {
-		return subscription.ComposeDocuments{}, "", errors.New(CodeArtifactDrift + ": the composed artifact no longer matches the approved one")
+	return errors.New(CodeArtifactDrift + ": a selected reference is no longer available")
+}
+
+// lineIDsOf returns the ordered Line ids of one selection.
+func lineIDsOf(selection subscription.Selection) []string {
+	ids := make([]string, 0, len(selection.Lines))
+	for _, line := range selection.Ordered().Lines {
+		ids = append(ids, line.NodeID)
 	}
-	return documents, artifactID, nil
+	return ids
+}
+
+// outIDOf returns the selected egress id, or "" for a direct subscription.
+func outIDOf(selection subscription.Selection) string {
+	if selection.Out == nil {
+		return ""
+	}
+	return selection.Out.OutID
+}
+
+// blockingDiagnostic builds one blocking finding. The helper exists so every
+// blocking diagnostic in this package has the same shape.
+func blockingDiagnostic(code, detail string) subscription.Diagnostic {
+	return subscription.Diagnostic{Level: subscription.DiagnosticBlocking, Code: code, Detail: detail}
 }
 
 // hasBlockingDiagnostic reports whether one diagnostic set refuses the artifact.

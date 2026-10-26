@@ -53,11 +53,11 @@ type OutEgressFacts struct {
 func (s *Store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, error) {
 	lineID = strings.TrimSpace(lineID)
 	if err := subscription.ValidateID(lineID); err != nil {
-		return OutEgressFacts{}, errors.New("LINE_ID_INVALID: need 32 lowercase hex characters")
+		return OutEgressFacts{}, errLineIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return OutEgressFacts{}, errors.New("DATABASE_UNAVAILABLE")
+		return OutEgressFacts{}, errors.New(CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	return outEgressFactsTx(tx, lineID, now)

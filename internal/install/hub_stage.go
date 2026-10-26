@@ -145,7 +145,7 @@ func hubStageArtifacts(ctx context.Context, result *InstallResult, state *Instal
 		}
 		stagedConfigs[target] = path
 	}
-	if _, err := opts.Runner.Run(ctx, caddyPath, "validate", "--config", stagedConfigs["/etc/meshmux/Caddyfile"], "--adapter", "caddyfile"); err != nil {
+	if _, err := opts.Runner.Run(ctx, caddyPath, "validate", "--config", stagedConfigs[caddyConfigPath], "--adapter", "caddyfile"); err != nil {
 		return fail(failures.caddyConfig)
 	}
 	// Configtest must never initialize the final SQLite database or production
@@ -156,7 +156,7 @@ func hubStageArtifacts(ctx context.Context, result *InstallResult, state *Instal
 		return fail(failures.stageValidation)
 	}
 	validationConfig := filepath.Join(validationDir, "headscale.yaml")
-	isolatedYAML := strings.ReplaceAll(targetFiles["/etc/meshmux/headscale.yaml"], "/var/lib/meshmux-headscale/", validationDir+"/")
+	isolatedYAML := strings.ReplaceAll(targetFiles[headscaleConfigPath], "/var/lib/meshmux-headscale/", validationDir+"/")
 	isolatedYAML = strings.ReplaceAll(isolatedYAML, "/run/meshmux-headscale/", validationDir+"/")
 	if err := os.WriteFile(validationConfig, []byte(isolatedYAML), 0600); err != nil {
 		return fail(failures.stageValidation)

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -37,9 +36,9 @@ const (
 )
 
 // stageTargetVersion is the release shape the Agent accepts for a stamped
-// upgrade target. It mirrors the update CLI's own SemVer gate; a floating tag
+// upgrade target. It delegates to the shared wire grammar so a floating tag
 // never reaches the fixed argv.
-var stageTargetVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
+func stageTargetVersion(value string) bool { return protocol.ValidSemVer(value) }
 
 // errRuntimeStateTooLarge refuses a runtime state that does not fit the
 // state size bound. The previous readable state stays untouched.
@@ -266,7 +265,9 @@ func NewRuntimeContext(ctx context.Context, cfg Config, identity Identity, opts 
 		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: 20 * time.Second}
+		// The runtime and the client use one budget, so a slow Hub cannot make
+		// the poll loop and the request layer disagree about a timeout.
+		opts.HTTPClient = &http.Client{Timeout: defaultRequestTimeout}
 	}
 	if opts.LockTimeout <= 0 {
 		opts.LockTimeout = agentLockTimeout
@@ -876,7 +877,7 @@ func (r *Runtime) stampedStageTarget(ctx context.Context, task protocol.Task) (S
 	if !ok {
 		return StageTarget{}, false, nil
 	}
-	if !stageTargetVersion.MatchString(target.Version) || !sha256Pattern.MatchString(target.ManifestSHA256) {
+	if !protocol.ValidSemVer(target.Version) || !protocol.ValidSHA256(target.ManifestSHA256) {
 		return StageTarget{}, false, errors.New("STAGE_TARGET_INVALID: target must be a pinned SemVer release")
 	}
 	if target.Version == r.cfg.AgentVersion {

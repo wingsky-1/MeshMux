@@ -55,7 +55,7 @@ type tokenDisclosure struct {
 func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	app.render(w, r, 200, view.SubscribersPage(view.PageData{Title: "订阅用户", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, page))
@@ -66,7 +66,7 @@ func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess 
 func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	type lineProjection struct {
@@ -420,8 +420,8 @@ func (e *lineInputError) Error() string { return "LINE_INPUT_INVALID" }
 func (app *Server) subscriberFail(w http.ResponseWriter, r *http.Request, err error, fallback, message, next string) {
 	code, status := fallback, http.StatusConflict
 	switch {
-	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
-		code, status = "DATABASE_UNAVAILABLE", http.StatusServiceUnavailable
+	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
+		code, status = store.CodeDatabaseUnavailable, http.StatusServiceUnavailable
 	case strings.HasPrefix(err.Error(), "SUBSCRIBER_NOT_FOUND"):
 		code, status = "SUBSCRIBER_NOT_FOUND", http.StatusNotFound
 	case strings.HasPrefix(err.Error(), "SUBSCRIBER_TRANSITION_INVALID"):

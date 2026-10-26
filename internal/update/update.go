@@ -3,9 +3,16 @@
 // package's own install as a transient systemd unit outside the Agent's cgroup:
 // the old binary never installs itself and never restarts the Agent
 // (pull-then-handoff, #11c-1; transient handoff, #11c-2).
+//
+// Layer: core executor behind the cli's fixed hidden one-shot commands
+// (`__internal-update*`). Run/RunInstall/RunRevert are the complete entry
+// surface: each validates its typed Config first, then performs the fixed-order
+// side effects. The package never imports internal/web, never reads a business
+// table, and takes the frozen record grammar from internal/backup.
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,23 +22,26 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
 	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
-const DefaultWorkDir = "/var/lib/meshmux-agent/update"
+const DefaultWorkDir = versions.AgentUpdateDir
 
 const (
-	// packageSpace is the largest staged package the fetch path accepts
-	// (updatePackageMaxBytes in install_cmd.go).
-	packageSpace = 128 << 20
+	// packageSpace is the largest staged package the fetch path accepts. It is
+	// the same artifact bound the installer and Web use; the download and the
+	// install-cmd self-check both read it.
+	packageSpace = buildinfo.MaxExecutableBytes
 	// snapshotSpace bounds one installer snapshot: the Agent binary and the
 	// co-located sing-box kernel (each bounded by packageSpace) plus unit
 	// files, agent.json, the LKG pair and the ledger.
@@ -59,9 +69,19 @@ const requiredSpace = packageSpace + 3*snapshotSpace + spaceHeadroom
 // no database; a Hub records its own schema when 11d backs up the Web DB.
 const nodeDBSchema int64 = 0
 
-// systemctlPath is the fixed systemd entry used for the unit liveness query and
-// no other command. No caller or remote request can select another executable.
-const systemctlPath = "/usr/bin/systemctl"
+// systemctlPath and systemdRunPath are the two fixed systemd entries this
+// package may execute. Both live here, next to the argv they appear in, so a
+// second copy in another file of this package cannot drift.
+const (
+	systemctlPath  = "/usr/bin/systemctl"
+	systemdRunPath = "/usr/bin/systemd-run"
+)
+
+// downloadTimeout is the one bound of an artifact fetch (manifest, package,
+// installer snapshot source). The installer applies the same bound to its own
+// pinned downloads; the two are unrelated hosts, so each package owns its
+// client but they must not disagree on the order of magnitude silently.
+const downloadTimeout = 90 * time.Second
 
 // Config is one approved update; the manifest body never travels through argv.
 type Config struct {
@@ -123,10 +143,12 @@ type Result struct {
 func fail(code, detail string) error { return errors.New(code + ": " + detail) }
 
 var (
-	// targetRE mirrors upgrade's unexported releaseVersion; keep the two in step.
-	targetRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
-	digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	opIDRE   = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	// Aliases of the one record-grammar definition in internal/backup, the
+	// stdlib-only leaf that freezes these field shapes for every producer.
+	// Do not compile another copy here.
+	targetRE = backup.ReleaseVersionPattern
+	digestRE = backup.DigestPattern
+	opIDRE   = backup.OperationIDPattern
 )
 
 // Run validates the approved target, fetches the pinned manifest and package,
@@ -136,18 +158,30 @@ var (
 // the unit last. Run returns once the unit is enqueued; it never waits for the
 // install and never claims the target is applied — that verdict is the chain's
 // readback (spec §4.1), which the restarted Agent observes.
+// Contract:
+//
+//	input     one approved Config: target version, manifest digest, operation id,
+//	          work/backup dirs, the authenticated manifest channel and the host
+//	          seams (node config, space, installer snapshot);
+//	validate  argv shapes -> fetch -> strict set decode -> local arch projection
+//	          -> approved digest -> target/component -> compatibility -> space;
+//	assemble  the rollback record and the verified staged package;
+//	effects   promote the record, fetch+verify the package, enqueue the one
+//	          transient install unit; the old binary never installs itself;
+//	return    a staged receipt. It never claims the target is applied: that is
+//	          the restarted Agent's readback.
 func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, error) {
 	switch {
 	case !targetRE.MatchString(cfg.Target):
-		return Result{}, fail("UPDATE_TARGET_INVALID", "target is not a SemVer release")
+		return Result{}, fail(backup.CodeTargetInvalid, "target is not a SemVer release")
 	case !digestRE.MatchString(cfg.ManifestSHA256):
-		return Result{}, fail("UPDATE_DIGEST_INVALID", "manifest SHA-256 is not 64 lowercase hex")
+		return Result{}, fail(backup.CodeDigestInvalid, "manifest SHA-256 is not 64 lowercase hex")
 	case cfg.OperationID == "":
 		return Result{}, fail("OPERATION_REQUIRED", "an operation ID is required")
 	case !opIDRE.MatchString(cfg.OperationID):
-		return Result{}, fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return Result{}, fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	case cfg.FetchManifest == nil:
-		return Result{}, fail("MANIFEST_UNAVAILABLE", "no authenticated manifest channel")
+		return Result{}, fail(versions.CodeManifestUnavailable, "no authenticated manifest channel")
 	}
 	if cfg.NodeConfig == nil {
 		cfg.NodeConfig = installedNodeConfig
@@ -157,17 +191,14 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	}
 	body, err := cfg.FetchManifest(ctx)
 	if err != nil || len(body) == 0 {
-		return Result{}, fail("MANIFEST_UNAVAILABLE", "the Hub manifest could not be fetched")
+		return Result{}, fail(versions.CodeManifestUnavailable, "the Hub manifest could not be fetched")
 	}
 	// The channel is a dual-arch set (U4). Parsing it before the digest only
 	// selects the local projection; the approved per-arch SHA-256 still gates
 	// every host action below, so no byte is trusted or executed before it.
-	var set upgrade.ManifestSet
-	if err := json.Unmarshal(body, &set); err != nil {
-		return Result{}, fail("MANIFEST_INVALID", "the manifest set is not valid JSON")
-	}
-	if set.Schema != upgrade.SetSchema {
-		return Result{}, fail("MANIFEST_SCHEMA_INVALID", "the Hub served an unknown manifest set schema")
+	set, err := decodeManifestSet(body)
+	if err != nil {
+		return Result{}, err
 	}
 	// Select this Agent's own runtime.GOARCH entry. A missing table is refused
 	// as MANIFEST_ARCH_INVALID; the Hub never supplies a caller-chosen arch.
@@ -226,11 +257,11 @@ func Run(ctx context.Context, cfg Config, runner node.CommandRunner) (Result, er
 	// binary, so both from_* anchors name the same recorded artifact (11d
 	// supplies the Hub's separate installer-ledger digest).
 	if cfg.BackupSource == nil {
-		return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
+		return Result{}, fail(backup.CodeMissing, "the installer snapshot is unavailable")
 	}
 	snapshot, err := cfg.BackupSource()
 	if err != nil {
-		return Result{}, fail("UPDATE_BACKUP_MISSING", "the installer snapshot is unavailable")
+		return Result{}, fail(backup.CodeMissing, "the installer snapshot is unavailable")
 	}
 	// The installer's manifest claims the exact old package it recorded. That
 	// digest is the from_* anchor the revert later trusts; agent.json is the
@@ -291,7 +322,7 @@ func snapshotAnchor(snapshot, installedAgentSHA string) (string, error) {
 	}
 	manifest, err := install.ReadSnapshotManifest(snapshot)
 	if err != nil {
-		return "", fail("UPDATE_BACKUP_CORRUPT", "the installer rollback snapshot is not a valid manifest tree")
+		return "", fail(backup.CodeCorrupt, "the installer rollback snapshot is not a valid manifest tree")
 	}
 	anchor := ""
 	for _, entry := range manifest.Files {
@@ -301,10 +332,10 @@ func snapshotAnchor(snapshot, installedAgentSHA string) (string, error) {
 		}
 	}
 	if anchor == "" {
-		return "", fail("UPDATE_BACKUP_CORRUPT", "the installer rollback snapshot does not name the Agent binary")
+		return "", fail(backup.CodeCorrupt, "the installer rollback snapshot does not name the Agent binary")
 	}
 	if installedAgentSHA != "" && anchor != installedAgentSHA {
-		return "", fail("UPDATE_BACKUP_MISMATCH", "the installer snapshot belongs to another installed release")
+		return "", fail(backup.CodeMismatch, "the installer snapshot belongs to another installed release")
 	}
 	return anchor, nil
 }
@@ -326,10 +357,10 @@ func requireVerifiedBackup(root, operationID, fromVersion string, dbSchema int64
 	// source. MISSING stays reserved for no record at all and MISMATCH for
 	// another installed state, so no fourth refusal code is introduced.
 	if record.State != BackupStateStaged {
-		return fail("UPDATE_BACKUP_CORRUPT", "the rollback record is not a staged handoff source")
+		return fail(backup.CodeCorrupt, "the rollback record is not a staged handoff source")
 	}
 	if !record.RollbackComplete() {
-		return fail("UPDATE_BACKUP_CORRUPT", "the rollback record holds nothing to restore")
+		return fail(backup.CodeCorrupt, "the rollback record holds nothing to restore")
 	}
 	return nil
 }
@@ -385,7 +416,7 @@ func ValidateTarget(m upgrade.Manifest, target string) (upgrade.Component, error
 		return upgrade.Component{}, fail("MANIFEST_SCHEMA_INVALID", "the target names another manifest schema")
 	}
 	if m.Version != target || !targetRE.MatchString(m.Version) {
-		return upgrade.Component{}, fail("UPDATE_TARGET_INVALID", "the manifest does not describe the approved target")
+		return upgrade.Component{}, fail(backup.CodeTargetInvalid, "the manifest does not describe the approved target")
 	}
 	if m.Architecture != runtime.GOARCH {
 		return upgrade.Component{}, fail("MANIFEST_ARCH_INVALID", "the manifest is for another architecture")
@@ -497,7 +528,7 @@ func writeStagedPackage(path string, data []byte) error {
 func readSource(ctx context.Context, source string) ([]byte, error) {
 	if path, ok := strings.CutPrefix(source, "file://"); ok {
 		data, err := os.ReadFile(path)
-		if err != nil || len(data) == 0 || len(data) > 128<<20 {
+		if err != nil || len(data) == 0 || len(data) > packageSpace {
 			return nil, fail("UPDATE_DOWNLOAD_FAILED", "the manifest source is unavailable")
 		}
 		return data, nil
@@ -517,14 +548,14 @@ func readSource(ctx context.Context, source string) ([]byte, error) {
 	if res.StatusCode != http.StatusOK {
 		return nil, fail("UPDATE_DOWNLOAD_FAILED", "the package host refused the download")
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, 128<<20+1))
-	if err != nil || len(data) == 0 || len(data) > 128<<20 {
+	data, err := io.ReadAll(io.LimitReader(res.Body, packageSpace+1))
+	if err != nil || len(data) == 0 || len(data) > packageSpace {
 		return nil, fail("UPDATE_DOWNLOAD_FAILED", "the package download was incomplete")
 	}
 	return data, nil
 }
 
-var downloadClient = &http.Client{Timeout: 90 * time.Second}
+var downloadClient = &http.Client{Timeout: downloadTimeout}
 
 func hexDigest(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -556,7 +587,7 @@ func HubManifest(ctx context.Context) ([]byte, error) {
 	}
 	body, err := client.Manifest(ctx)
 	if err != nil || len(body) == 0 {
-		return nil, errors.New("MANIFEST_UNAVAILABLE")
+		return nil, errors.New(versions.CodeManifestUnavailable)
 	}
 	return body, nil
 }
@@ -573,8 +604,46 @@ func readAgentFile(path string, v any, code string) error {
 		return errors.New(code)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(data, v) != nil {
+	if err != nil || decodeStrictJSON(data, v) != nil {
 		return errors.New(code)
+	}
+	return nil
+}
+
+// decodeManifestSet is the anti-corruption boundary for the Hub's manifest
+// document: the envelope is classified first (so the operator-visible code for
+// a pre-set or foreign document stays MANIFEST_SCHEMA_INVALID), then the whole
+// set is decoded strictly — an unknown key or a second document is refused
+// instead of being silently dropped.
+func decodeManifestSet(body []byte) (upgrade.ManifestSet, error) {
+	var envelope struct {
+		Schema string `json:"schema"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return upgrade.ManifestSet{}, fail("MANIFEST_INVALID", "the manifest set is not valid JSON")
+	}
+	if envelope.Schema != upgrade.SetSchema {
+		return upgrade.ManifestSet{}, fail("MANIFEST_SCHEMA_INVALID", "the Hub served an unknown manifest set schema")
+	}
+	var set upgrade.ManifestSet
+	if err := decodeStrictJSON(body, &set); err != nil {
+		return upgrade.ManifestSet{}, fail("MANIFEST_INVALID", "the manifest set is not a strict JSON document")
+	}
+	return set, nil
+}
+
+// decodeStrictJSON is the one anti-corruption decoder of this package: a
+// cross-layer document must be exactly the fields this build understands, with
+// no unknown key and no trailing second document.
+func decodeStrictJSON(data []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing struct{}
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("trailing document")
 	}
 	return nil
 }

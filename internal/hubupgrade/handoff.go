@@ -50,10 +50,9 @@ import (
 )
 
 const (
-	// codeHandoffInvalidState is the refusal of an operation that is not a
+	// CodeHandoffInvalidState is the refusal of an operation that is not a
 	// backed_up update (a missing journal, a restore kind, an already queued or
 	// terminal operation). It changes nothing.
-	codeHandoffInvalidState = "HUB_HANDOFF_INVALID_STATE"
 	// codeHandoffStage names a failed target-package stage (spec §5.5). The
 	// operation stays backed_up: the rollback source is still verified and the
 	// operator can retry the same handoff after fixing the source.
@@ -110,6 +109,17 @@ func (cfg HandoffConfig) nowUTC() time.Time {
 }
 
 // Handoff re-verifies one operation and queues it for the root dispatcher.
+// Contract:
+//
+//	input     one HandoffConfig: the operation id, the target manifest path, the
+//	          data directory, the request directory and the clock seam;
+//	validate  journal state (backed_up/verifying only), record digest, manifest
+//	          target/digest/package agreement, request-directory shape;
+//	assemble  the frozen request document for this operation;
+//	effects   publish the request through the staging sibling, then journal
+//	          queued; no root call, no exec, no unit attribute;
+//	return    a queued receipt. The root dispatcher performs the mutation and
+//	          the Web only reconciles its result afterwards.
 func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 	if err := normalizeHandoffConfig(&cfg); err != nil {
 		return HandoffReceipt{}, err
@@ -119,10 +129,10 @@ func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 		return HandoffReceipt{}, backupJournalError(err)
 	}
 	if !ok {
-		return HandoffReceipt{}, fail(codeHandoffInvalidState, "the operation has no journal entry")
+		return HandoffReceipt{}, fail(CodeHandoffInvalidState, "the operation has no journal entry")
 	}
 	if op.Kind != KindUpdate || op.State != StateBackedUp {
-		return HandoffReceipt{}, fail(codeHandoffInvalidState,
+		return HandoffReceipt{}, fail(CodeHandoffInvalidState,
 			"the operation is a "+string(op.Kind)+" in state "+string(op.State)+", not a backed_up update")
 	}
 
@@ -144,7 +154,7 @@ func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 	if op.FromVersion != verified.FromVersion || op.TargetVersion != verified.TargetVersion ||
 		op.ManifestSHA256 != verified.ManifestSHA256 || op.PackageSHA256 != verified.PackageSHA256 ||
 		op.DBSchema != verified.DBSchema {
-		return HandoffReceipt{}, fail("UPDATE_BACKUP_MISMATCH",
+		return HandoffReceipt{}, fail(backup.CodeMismatch,
 			"the journal and the backup record name different operations")
 	}
 
@@ -153,7 +163,7 @@ func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 		return HandoffReceipt{}, err
 	}
 	if target.SHA256 != op.ManifestSHA256 || target.Package.SHA256 != op.PackageSHA256 {
-		return HandoffReceipt{}, fail("HUB_MANIFEST_PACKAGE_MISMATCH",
+		return HandoffReceipt{}, fail(CodeManifestPackageMismatch,
 			"the root manifest no longer names the operation's target package")
 	}
 	// The bit is read from exactly this operation's verified record: never the
@@ -191,7 +201,7 @@ func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
 		return HandoffReceipt{}, backupJournalError(err)
 	}
 	if !ok || fresh.State != StateBackedUp || fresh.ErrorCode != op.ErrorCode || !fresh.UpdatedAt.Equal(op.UpdatedAt) {
-		return HandoffReceipt{}, fail(codeHandoffInvalidState,
+		return HandoffReceipt{}, fail(CodeHandoffInvalidState,
 			"the operation changed while the target package was being staged")
 	}
 	queued, err := Advance(fresh, StateQueued, "")
@@ -233,15 +243,15 @@ func normalizeHandoffConfig(cfg *HandoffConfig) error {
 	}
 	switch {
 	case cfg.DataDir == "" || !filepath.IsAbs(cfg.DataDir):
-		return fail(codeHandoffInvalidState, "the Hub data directory is not absolute")
+		return fail(CodeHandoffInvalidState, "the Hub data directory is not absolute")
 	case !opIDRE.MatchString(cfg.OperationID):
-		return fail(codeHandoffInvalidState, "the operation id is not 32 lowercase hex")
+		return fail(CodeHandoffInvalidState, "the operation id is not 32 lowercase hex")
 	case cfg.Space == nil:
-		return fail(codeHandoffInvalidState, "the space callback is missing")
+		return fail(CodeHandoffInvalidState, "the space callback is missing")
 	case !filepath.IsAbs(cfg.ManifestDir):
-		return fail(codeHandoffInvalidState, "the root manifest directory is not absolute")
+		return fail(CodeHandoffInvalidState, "the root manifest directory is not absolute")
 	case !filepath.IsAbs(cfg.RequestDir):
-		return fail(codeHandoffInvalidState, "the request directory is not absolute")
+		return fail(CodeHandoffInvalidState, "the request directory is not absolute")
 	}
 	return nil
 }

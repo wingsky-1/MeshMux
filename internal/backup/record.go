@@ -12,7 +12,9 @@
 //
 // The package imports the standard library only: it is a leaf both the Agent's
 // update executor and the Hub's Web process can depend on without creating a
-// module cycle (spec C17).
+// module cycle (spec C17). That position also makes it the single owner of the
+// upgrade-record grammar (grammar.go): operation id, SHA-256 and release
+// version shapes are defined there and imported by every producer/consumer.
 package backup
 
 import (
@@ -21,7 +23,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -264,14 +265,16 @@ func encodeRecord(record Record) ([]byte, error) {
 
 func fail(code, detail string) error { return errors.New(code + ": " + detail) }
 
-var (
-	// targetRE mirrors upgrade's unexported releaseVersion; keep the two in step.
-	targetRE = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
-	digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	opIDRE   = regexp.MustCompile(`^[0-9a-f]{32}$`)
-)
-
 var errPayloadUnsafe = errors.New("payload tree is unsafe")
+
+// Aliases of the one grammar definition in grammar.go. They keep this
+// package's frozen call sites and tests on a single source; do not replace
+// them with fresh regexp.MustCompile calls.
+var (
+	targetRE = ReleaseVersionPattern
+	digestRE = DigestPattern
+	opIDRE   = OperationIDPattern
+)
 
 // ownedBy reports whether info is owned by the named account. Ownership is part
 // of the read contract, never a side effect of being able to open the file

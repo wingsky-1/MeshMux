@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/node/protocol"
 )
 
 type singBoxConfig struct {
@@ -60,14 +62,15 @@ type singBoxSSInbound struct {
 	Password   string `json:"password"`
 }
 
-// Server document egress tags. policy.RenderServerRoute maps CompilerActionDirect
-// to "direct" and CompilerActionOut to "out"; the candidate must declare every tag its
-// route names, or the kernel document would reference an egress it does not
-// carry.
+// Server document egress tags. The values are owned by the wire contract in
+// internal/node/protocol; policy.RenderServerRoute maps CompilerActionDirect to
+// the direct tag and CompilerActionOut to the Out tag, and the candidate must
+// declare every tag its route names, or the kernel document would reference an
+// egress it does not carry.
 const (
-	singBoxDirectTag = "direct"
-	singBoxOutTag    = "out"
-	singBoxBlockTag  = "block"
+	singBoxDirectTag = protocol.OutboundDirectTag
+	singBoxOutTag    = protocol.OutboundOutTag
+	singBoxBlockTag  = protocol.OutboundBlockTag
 )
 
 // serverEgress is the set of egress tags one server route references.
@@ -201,8 +204,9 @@ type singBoxVLESSUser struct {
 	Flow string `json:"flow"`
 }
 
-// vlessFlow is the exact flow token accepted by sing-box for VLESS.
-const vlessFlow = "xtls-rprx-vision"
+// vlessFlow is the exact flow token accepted by sing-box for VLESS; the value
+// is owned by the wire contract so the client document cannot spell another.
+const vlessFlow = protocol.VLESSFlow
 
 // CompileCandidate is a pure, deterministic renderer for the fixed native
 // sing-box shape.

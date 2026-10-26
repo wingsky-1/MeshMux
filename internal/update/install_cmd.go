@@ -20,8 +20,10 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/backup"
 	"github.com/wingsky-1/MeshMux/internal/install"
 	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
@@ -29,10 +31,9 @@ const (
 	// unit is not a child of the Agent (spec §4.2), so the restart cannot kill
 	// the install or this process; the command does not wait for the Agent to
 	// come back and says nothing about its health.
-	agentServiceUnit = "meshmux-agent.service"
-	// updatePackageMaxBytes mirrors the package bound of the fetch path: a
-	// staged package is never larger than what fetchPackage accepts.
-	updatePackageMaxBytes = 128 << 20
+	agentServiceUnit = node.AgentUnit
+	// updatePackageMaxBytes is the same package bound as the fetch path.
+	updatePackageMaxBytes = packageSpace
 )
 
 // RunInstall is the body of `__internal-update-install`. The order is fixed and
@@ -108,15 +109,15 @@ func RunInstall(ctx context.Context, cfg Config, runner node.CommandRunner) (Upd
 func validateInstallConfig(cfg Config, runner node.CommandRunner) error {
 	switch {
 	case !targetRE.MatchString(cfg.Target):
-		return fail("UPDATE_TARGET_INVALID", "target is not a SemVer release")
+		return fail(backup.CodeTargetInvalid, "target is not a SemVer release")
 	case !digestRE.MatchString(cfg.ManifestSHA256):
-		return fail("UPDATE_DIGEST_INVALID", "manifest SHA-256 is not 64 lowercase hex")
+		return fail(backup.CodeDigestInvalid, "manifest SHA-256 is not 64 lowercase hex")
 	case !digestRE.MatchString(cfg.PackageSHA256):
-		return fail("UPDATE_DIGEST_INVALID", "package SHA-256 is not 64 lowercase hex")
+		return fail(backup.CodeDigestInvalid, "package SHA-256 is not 64 lowercase hex")
 	case cfg.OperationID == "":
 		return fail("OPERATION_REQUIRED", "an operation ID is required")
 	case !opIDRE.MatchString(cfg.OperationID):
-		return fail("OPERATION_ID_INVALID", "operation ID is not 32 lowercase hex")
+		return fail(backup.CodeOperationInvalid, "operation ID is not 32 lowercase hex")
 	case runner == nil:
 		return fail("UPDATE_INSTALL_UNAVAILABLE", "no command runner is configured")
 	}
@@ -182,9 +183,12 @@ func verifyInstallArch(path string) error {
 	return nil
 }
 
+// elfMachines maps the supported architecture matrix to the ELF machine the
+// self-check must find. A new architecture needs an entry here and in the
+// versions matrix; nothing else in this package enumerates architectures.
 var elfMachines = map[string]elf.Machine{
-	"amd64": elf.EM_X86_64,
-	"arm64": elf.EM_AARCH64,
+	versions.ArchitectureAMD64: elf.EM_X86_64,
+	versions.ArchitectureARM64: elf.EM_AARCH64,
 }
 
 // installArgv is the one fixed install command line: the recorded Node role

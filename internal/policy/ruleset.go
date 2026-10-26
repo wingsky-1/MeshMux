@@ -13,10 +13,13 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+
+	"github.com/wingsky-1/MeshMux/internal/subscription/ir"
 )
 
-// MaxRulesetBytes bounds one Geo or remote artifact. It matches the resolver in
-// ruleset_pin.go so a pinned download cannot become a memory lever on the Hub.
+// MaxRulesetBytes bounds one Geo or remote artifact. It is the single size
+// limit for both the byte verifier here and the retained downloader in
+// ruleset_pin.go, so a pinned artifact cannot become a memory lever on the Hub.
 const MaxRulesetBytes = 8 << 20
 
 // RuleSetPins are the pinned artifacts a generator may reference. The maps are
@@ -33,7 +36,7 @@ type RuleSetPins struct {
 func (p RuleSetPins) Validate(rules []CompilerRule) error {
 	for _, pins := range []map[string]RulesetPin{p.GeoSite, p.GeoIP, p.Remote} {
 		for tag, pin := range pins {
-			if !tagPattern.MatchString(tag) {
+			if !ir.ValidTag(tag) {
 				return errors.New(CodeRulesetUnpinned + ": a ruleset tag must be a lowercase identifier")
 			}
 			if err := pin.Validate(); err != nil {

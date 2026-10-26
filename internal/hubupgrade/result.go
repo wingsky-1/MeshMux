@@ -15,16 +15,17 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/versions"
 )
 
 const (
 	// ResultsDir is the fixed result directory: root:meshmux 0750, files 0640
 	// root:meshmux. The Web can read it and nothing else.
-	ResultsDir = "/var/lib/meshmux-installer/hub-upgrade/results"
+	ResultsDir = versions.HubUpgradeResultsDir
 	// ResultSchema is the frozen result document schema.
 	ResultSchema = 1
 	// ResultMaxBytes bounds the one document a reader parses.
@@ -48,7 +49,7 @@ const (
 	ResultPartial         ResultPhase = "partial"
 )
 
-var errorCodeRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+var errorCodeRE = versions.StableCodePattern
 
 func (phase ResultPhase) valid() bool {
 	switch phase {
