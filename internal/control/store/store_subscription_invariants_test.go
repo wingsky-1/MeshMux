@@ -87,7 +87,7 @@ func TestArtifactDownloadKeepsTheConvergenceGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.SubscriptionArtifactDownload(token, now); err == nil ||
+	if _, err := s.SubscriptionArtifactDownload(token, now); err == nil ||
 		!strings.HasPrefix(err.Error(), "SUBSCRIPTION_DOWNLOAD_REJECTED") {
 		t.Fatalf("download = %v, want SUBSCRIPTION_DOWNLOAD_REJECTED", err)
 	}

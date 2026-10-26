@@ -32,39 +32,47 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
+// SubscriptionDocuments is one resolved download: the two client documents the
+// convergence gate accepted. Returning them together keeps the gate, the
+// snapshot check and the byte resolution in one resolution per request.
+type SubscriptionDocuments struct {
+	SingBox []byte
+	Mihomo  []byte
+}
+
 // SubscriptionArtifactDownload resolves one plaintext bearer into the two
-// approved documents. The convergence gate of SubscriptionDownload still runs
-// first: an unconverged Line refuses the download even when the artifact was
-// approved.
-func (s *Store) SubscriptionArtifactDownload(token string, now time.Time) ([]byte, []byte, error) {
+// approved documents in a single resolution. The convergence gate runs inside
+// that same resolution: an unconverged Line refuses the download even when the
+// artifact was approved.
+func (s *Store) SubscriptionArtifactDownload(token string, now time.Time) (SubscriptionDocuments, error) {
 	resolved, err := s.resolveDownload(token, now)
 	if err != nil {
-		return nil, nil, err
+		return SubscriptionDocuments{}, SubscriptionStoreError(err)
 	}
 	if resolved.hasSnapshot {
 		if resolved.artifactID == "" {
 			// The operator saved a choice that never passed the gate. Falling
 			// back to the legacy bytes here would hide exactly that failure.
-			return nil, nil, ErrSubscriptionRejected
+			return SubscriptionDocuments{}, ErrSubscriptionRejected
 		}
 		documents, artifactID, err := s.SubscriptionArtifact(resolved.subscriberID)
 		if err != nil {
-			return nil, nil, SubscriptionStoreError(err)
+			return SubscriptionDocuments{}, SubscriptionStoreError(err)
 		}
 		if artifactID != resolved.artifactID {
-			return nil, nil, ErrSubscriptionRejected
+			return SubscriptionDocuments{}, ErrSubscriptionRejected
 		}
-		return documents.SingBox, documents.Mihomo, nil
+		return SubscriptionDocuments{SingBox: documents.SingBox, Mihomo: documents.Mihomo}, nil
 	}
 	singBox, err := subscription.ExportSingBox(resolved.lines, resolved.credentials)
 	if err != nil {
-		return nil, nil, ErrSubscriptionRejected
+		return SubscriptionDocuments{}, ErrSubscriptionRejected
 	}
 	mihomo, err := subscription.ExportMihomo(resolved.lines, resolved.credentials)
 	if err != nil {
-		return nil, nil, ErrSubscriptionRejected
+		return SubscriptionDocuments{}, ErrSubscriptionRejected
 	}
-	return singBox, mihomo, nil
+	return SubscriptionDocuments{SingBox: singBox, Mihomo: mihomo}, nil
 }
 
 // downloadSnapshot is the read half of one download: the bearer's subscriber,

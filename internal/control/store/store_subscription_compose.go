@@ -56,10 +56,11 @@ const (
 // exists and every available gate passed.
 type SelectionPreview struct {
 	Diagnostics []subscription.Diagnostic
-	Documents   subscription.ComposeDocuments
 	// Approved is true when the artifact may be saved as the approved one.
 	Approved bool
-	// ContentID is the artifact digest of the composed documents.
+	// ContentID is the artifact digest of the composed documents. It is empty
+	// whenever a blocking diagnostic exists, so a blocked preview never carries
+	// an approvable digest.
 	ContentID string
 	// Gates lists the kernels that actually ran, in order.
 	Gates []string
@@ -301,8 +302,10 @@ func reusableCredentialTx(tx *sql.Tx, subscriberID, nodeID string, creating bool
 //
 // Flow: pure composer -> blocking check -> kernel gate (sing-box required,
 // mihomo optional) -> approved/digest. A blocked composer never runs a binary.
-func (s *Store) PreviewDraftSelection(draft SubscriptionDraft, verifier PublishVerifier) SelectionPreview {
-	return runComposeGate(context.Background(), draft.inputs, verifier, draft.diagnostics)
+// The caller's context bounds the gate subprocesses, so an aborted request stops
+// the check instead of leaving it running.
+func (s *Store) PreviewDraftSelection(ctx context.Context, draft SubscriptionDraft, verifier PublishVerifier) SelectionPreview {
+	return runComposeGate(ctx, draft.inputs, verifier, draft.diagnostics)
 }
 
 // SaveSubscriptionDraft writes one draft in a single transaction: the subscriber
@@ -427,8 +430,10 @@ func (s *Store) ApproveSubscriptionSelection(ctx context.Context, subscriberID, 
 func runComposeGate(ctx context.Context, inputs selectionInputs, verifier PublishVerifier, diagnostics []subscription.Diagnostic) SelectionPreview {
 	documents, composeDiagnostics := subscription.ComposeSubscription(inputs.Lines, inputs.Out, inputs.Rules, inputs.Network)
 	diagnostics = append(diagnostics, composeDiagnostics...)
-	preview := SelectionPreview{Diagnostics: diagnostics, Documents: documents, ContentID: documents.ContentID}
+	preview := SelectionPreview{Diagnostics: diagnostics}
 	if hasBlockingDiagnostic(diagnostics) {
+		// A blocked preview carries no digest: only a document that passed
+		// every available gate may be approved and saved.
 		return preview
 	}
 	if verifier == nil {
@@ -459,6 +464,7 @@ func runComposeGate(ctx context.Context, inputs selectionInputs, verifier Publis
 		preview.Gates = append(preview.Gates, kernelMihomo)
 	}
 	preview.Approved = true
+	preview.ContentID = documents.ContentID
 	return preview
 }
 

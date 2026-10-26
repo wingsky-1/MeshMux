@@ -20,7 +20,6 @@ package handler
 // any layer blocks, so the page can always say "not saved" honestly.
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -419,7 +418,7 @@ func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Requ
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	preview := app.store.PreviewDraftSelection(draft, verifier)
+	preview := app.store.PreviewDraftSelection(r.Context(), draft, verifier)
 	app.event(r, "SUBSCRIPTION_PREVIEWED")
 	model, err := app.subscriptionWizardModelWith(subscriberID, &spec)
 	if err != nil {
@@ -451,7 +450,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	result, err := app.store.ApproveSubscriptionSelection(context.Background(), subscriberID, displayName, spec, verifier, now)
+	result, err := app.store.ApproveSubscriptionSelection(r.Context(), subscriberID, displayName, spec, verifier, now)
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return

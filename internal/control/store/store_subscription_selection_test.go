@@ -445,6 +445,11 @@ func TestApproveSubscriptionSelectionRefusesUnapprovedAndFailedGate(t *testing.T
 	if failedResult.Saved || failedResult.Preview.Approved || failedResult.Preview.Code() != CodeComposeGateFailed {
 		t.Fatalf("result = %+v, want a blocking %s", failedResult, CodeComposeGateFailed)
 	}
+	// A blocked preview must not carry the digest of the refused documents: the
+	// digest is only meaningful once every available gate accepted them.
+	if failedResult.Preview.ContentID != "" {
+		t.Fatalf("blocked preview carries digest %q", failedResult.Preview.ContentID)
+	}
 	if _, _, err := s.SubscriptionArtifact(subID); err == nil || !strings.HasPrefix(err.Error(), CodeArtifactNotApproved) {
 		t.Fatalf("artifact after refused gate = %v, want %s", err, CodeArtifactNotApproved)
 	}
@@ -503,7 +508,7 @@ func TestPreviewSubscriptionSelectionWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	preview := s.PreviewDraftSelection(draft, verifier)
+	preview := s.PreviewDraftSelection(context.Background(), draft, verifier)
 	if !preview.Approved {
 		t.Fatalf("preview = %+v, want approved", preview)
 	}
