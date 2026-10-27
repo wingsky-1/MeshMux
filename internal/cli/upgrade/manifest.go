@@ -208,7 +208,7 @@ func pinnedComponents(architecture string) ([]Component, bool) {
 	fixed = append(fixed, install.Artifact{Component: client.Name, Version: client.Version, Source: client.Source, SHA256: client.SHA256, Format: client.Format})
 	out := make([]Component, 0, len(fixed))
 	for _, a := range fixed {
-		out = append(out, Component{a.Component, a.Version, architecture, a.Source, a.SHA256, a.Format, strings.HasPrefix(a.Version, "dev-")})
+		out = append(out, Component{a.Component, a.Version, architecture, a.Source, a.SHA256, a.Format, versions.IsDevVersion(a.Version)})
 	}
 	return out, true
 }
@@ -248,11 +248,11 @@ func (m Manifest) Validate() error {
 			return errors.New("MANIFEST_COMPONENT_INVALID: component source or digest is not pinned")
 		}
 		if c.Dev {
-			// A dev build is never a release: dev- version and a pinned local
-			// or intranet source, with the digest above as trust anchor.
-			if !strings.HasPrefix(c.Version, "dev-") || len(c.Version) == len("dev-") ||
+			// A dev build is never a release: a dev pre-release version and a
+			// pinned local source, with the digest above as trust anchor.
+			if !versions.IsDevVersion(c.Version) ||
 				!(strings.HasPrefix(c.Source, "file://") || strings.HasPrefix(c.Source, "https://")) {
-				return errors.New("MANIFEST_COMPONENT_INVALID: dev component is not pinned to a dev- build")
+				return errors.New("MANIFEST_COMPONENT_INVALID: dev component is not pinned to a dev build")
 			}
 		} else if !strings.HasPrefix(c.Source, "https://github.com/") {
 			return errors.New("MANIFEST_COMPONENT_INVALID: component source or digest is not pinned")

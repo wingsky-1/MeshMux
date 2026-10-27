@@ -6,14 +6,21 @@ package install
 // and another in a plan row.
 
 import (
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
-// TestPinnedTablesCoverTheSupportedMatrix proves every pinned table (Hub, node,
-// executor) carries one entry per supported architecture and nothing else.
+// TestPinnedTablesCoverTheSupportedMatrix proves every pinned table (Hub, node)
+// carries one entry per supported architecture and nothing else. The executor
+// table is deliberately excluded: it is derived from the running build and the
+// deployed dev drop, so an architecture this build cannot name verifiable bytes
+// for has no entry at all (TestExecutorPinIsVerifiable covers that rule).
 func TestPinnedTablesCoverTheSupportedMatrix(t *testing.T) {
 	for _, table := range []struct {
 		name   string
@@ -21,7 +28,6 @@ func TestPinnedTablesCoverTheSupportedMatrix(t *testing.T) {
 	}{
 		{"hub", PinnedArtifacts},
 		{"node", PinnedNodeArtifacts},
-		{"executor", PinnedMeshmuxd},
 	} {
 		for _, architecture := range versions.SupportedArchitectures() {
 			artifacts := table.pinned(architecture)
@@ -57,17 +63,83 @@ func TestArtifactSourcesDeriveFromThePinnedVersion(t *testing.T) {
 		}
 		for _, artifact := range PinnedMeshmuxd(architecture) {
 			// 12e replaces the dev pin with a published GitHub release asset.
-			// Until then the executor is a dev- build from the Hub-hosted
-			// development directory, named after its architecture (not after the
-			// dev version), and only the version constant moves.
-			if !strings.HasPrefix(artifact.Version, devBuildVersion) {
-				t.Fatalf("executor pin = %q, want the dev pin %q until 12e publishes it",
-					artifact.Version, devBuildVersion)
-			}
-			if want := devBuildSource(architecture); artifact.Source != want {
+			// Until then the executor pin names the running build (this
+			// architecture) or the deployed dev drop, so its source is the fixed
+			// drop path of exactly this architecture and its digest is one a
+			// reader can re-derive.
+			if want := "file://" + versions.DevArtifactPath(architecture); artifact.Source != want {
 				t.Fatalf("executor source = %q, want %q", artifact.Source, want)
 			}
+			if !versions.IsDevVersion(artifact.Version) {
+				t.Fatalf("executor version = %q, want the dev pre-release of this build", artifact.Version)
+			}
+			if !backup.DigestPattern.MatchString(artifact.SHA256) {
+				t.Fatalf("executor digest = %q, want SHA-256 hex", artifact.SHA256)
+			}
 		}
+	}
+}
+
+// TestExecutorPinIsVerifiable pins the property that replaced the placeholder
+// pin: a development build never names bytes it cannot verify. The running
+// architecture pins /proc/self/exe, so its entry must exist and must equal the
+// running digest; another architecture is pinned only from a checksum document
+// the build wrote, and without one the table stays empty rather than naming an
+// unverified file.
+func TestExecutorPinIsVerifiable(t *testing.T) {
+	original := versions.DevArtifactDir
+	versions.DevArtifactDir = t.TempDir()
+	t.Cleanup(func() { versions.DevArtifactDir = original })
+
+	self, err := buildinfo.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := PinnedMeshmuxd(runtime.GOARCH)
+	if len(pins) != 1 || pins[0].SHA256 != self {
+		t.Fatalf("running-architecture pin = %+v, want the running executable digest %q", pins, self)
+	}
+	if !strings.HasPrefix(pins[0].Source, "file://") {
+		t.Fatalf("executor source = %q, want a file source", pins[0].Source)
+	}
+
+	other := versions.ArchitectureARM64
+	if runtime.GOARCH == versions.ArchitectureARM64 {
+		other = versions.ArchitectureAMD64
+	}
+	// No drop on disk: the other architecture is refused instead of guessed.
+	if got := PinnedMeshmuxd(other); len(got) != 0 {
+		t.Fatalf("unpublished architecture pin = %+v, want no entry", got)
+	}
+
+	digest := strings.Repeat("a", 64)
+	writeDevDrop(t, other, digest)
+	pins = PinnedMeshmuxd(other)
+	if len(pins) != 1 || pins[0].SHA256 != digest {
+		t.Fatalf("drop pin = %+v, want the documented digest %q", pins, digest)
+	}
+
+	// A group-writable checksum document is not a trust anchor.
+	sums := versions.DevChecksumsPath()
+	if err := os.Chmod(sums, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if got := PinnedMeshmuxd(other); len(got) != 0 {
+		t.Fatalf("loose checksum document was trusted: %+v", got)
+	}
+}
+
+// writeDevDrop writes one sha256sum-format checksum document for the given
+// architecture's artifact. The artifact bytes are not needed: the pin is read
+// from the document, and the fetch path re-hashes the real file.
+func writeDevDrop(t *testing.T, architecture, digest string) {
+	t.Helper()
+	if err := os.MkdirAll(versions.DevArtifactDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	body := digest + "  " + versions.DevArtifactName(architecture) + "\n"
+	if err := os.WriteFile(versions.DevChecksumsPath(), []byte(body), 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 

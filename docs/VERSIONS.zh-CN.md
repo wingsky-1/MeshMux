@@ -7,11 +7,26 @@
 - 发布后：向后兼容新功能升 MINOR（如 1.1.0）；向后兼容修复升 PATCH（如 1.0.1）；不兼容变更升 MAJOR（如 2.0.0）。
 - API、Agent 协议、配置 schema、持久化数据迁移、订阅格式和运行节点兼容策略都在 SemVer 兼容范围内，不只关心 HTTP API。
 
+## 开发构建（#12e dev lane）
+
+开发构建使用 SemVer 预发布而不是裸 `dev` 标签：
+
+```text
+1.0.0-dev.<UTC 日期>[.<git 提交数>]
+```
+
+- 版本由 `make dev-artifacts` 通过 `-ldflags -X .../buildinfo.Version` 注入；源码默认值 `1.0.0-dev.0` 仍是合法预发布。`versions.IsDevVersion` 是唯一判定（接受 `X.Y.Z-dev.N` 与过渡 `dev-<stamp>`），manifest/update 门禁统一使用。
+- 制品为 `meshmuxd-linux-{amd64,arm64}` + `SHA256SUMS`，固定 `-trimpath -buildvcs=false`，Hub/Line/Out 共用同一二进制。
+- `meshmuxd` 的 dev pin 不再写死占位值：运行架构取 `/proc/self/exe` 的 SHA-256，另一架构从 root-owned `/var/lib/meshmux-dev/SHA256SUMS` 读取；没有来源的架构不 pin，由 manifest 门禁 fail-closed 拒绝。
+- `scripts/dev-artifacts-deploy.sh` 安装运行 drop；`scripts/dev-root-manifest.sh` 从目标版本的制品生成并安装 root manifest，供隔离环境的 Hub 自升级 `backup → apply → 重启 → confirm`。
+- `store.Migrate` 在 schema 迁移前把旧库复制到 `<data-dir>/pre-migration/meshmux-v<from>-<unix>.db`（0600，保留最新 2 份，失败 `SCHEMA_BACKUP_FAILED` 拒绝迁移）。
+- 这些制品不是发行资产：正式 GitHub Release 表与生产 manifest 签名/发布通道仍属 12e；隔离验证步骤见 [开发制品](DEV_ARTIFACTS.zh-CN.md)。
+
 ## 目标运行时锁定候选
 
 这份表是**待发行校验的设计基线**，不是已完成的制品锁。Issue #5 PR A 已固定 **Caddy 2.11.7 / Headscale 0.29.5** 官方 GitHub 的 amd64/arm64 下载来源及 release asset SHA-256（见 `internal/install/artifacts.go`）；MeshMux 自有程序与 Debian apt 包的制品/版本锁尚待 PR B 交付，所以 **禁止真正 apply**。任何真实 install 前仍必须有完整的来源、SHA-256、架构、目标路径和可用签名策略。
 
-**#11a 已交付只读发行 manifest**（`internal/upgrade/manifest.go`，`GET /tasks` 展示）：上表四个固定组件（Caddy / Headscale / sing-box / Mihomo）的版本、架构、官方 GitHub 来源与 SHA-256 由既有 pin 派生为统一结构，附带 `policy_schema=8` 与 `route_policy_revisions` 槽位，并在 `Validate` 中拒绝未知架构、未知 schema、`policy_schema≠8` 与任何被篡改的组件行。manifest 只描述发行，**不下载、不 apply、不回滚**；**#11c-1 起 Agent 通道改为双架构 set**（`meshmux-release-set/v1`，`GET /api/agent/manifest`），每架构条目仍是原单架构 `meshmux-release/v1` 文档，批准与校验按该架构投影的 SHA-256 pin。**#11b 已交付持久化升级任务记录**（复用 `agent_tasks` 的目标列，当批仅领域模型与只读接线）；**#11c-1 已交付受限执行器**（Hub 只记意图，Agent 本地以固定 argv 下载/校验/交棒/回读；`upgrade.*` 仍被拒绝）；**#11c-3 已交付** 已验证备份记录与 handoff 前置、健康门控确认、分级 revert 与 LKG 重发、Hub 存储 schema 10（`database_versions`、`SCHEMA_TOO_NEW` 指向数据库备份记录、不可逆迁移 Web 确认位）以及 installer ledger 严格读取；Hub 自升级（11d）与组件组合兼容闸门（11e）尚未实现，因此本条不构成“Web 统一升级已可用”。
+**#11a 已交付只读发行 manifest**（`internal/upgrade/manifest.go`，`GET /tasks` 展示）：上表四个固定组件（Caddy / Headscale / sing-box / Mihomo）的版本、架构、官方 GitHub 来源与 SHA-256 由既有 pin 派生为统一结构，附带 `policy_schema=8` 与 `route_policy_revisions` 槽位，并在 `Validate` 中拒绝未知架构、未知 schema、`policy_schema≠8` 与任何被篡改的组件行。manifest 只描述发行，**不下载、不 apply、不回滚**；**#11c-1 起 Agent 通道改为双架构 set**（`meshmux-release-set/v1`，`GET /api/agent/manifest`），每架构条目仍是原单架构 `meshmux-release/v1` 文档，批准与校验按该架构投影的 SHA-256 pin。**#11b 已交付持久化升级任务记录**（复用 `agent_tasks` 的目标列，当批仅领域模型与只读接线）；**#11c-1 已交付受限执行器**（Hub 只记意图，Agent 本地以固定 argv 下载/校验/交棒/回读；`upgrade.*` 仍被拒绝）；**#11c-3 已交付** 已验证备份记录与 handoff 前置、健康门控确认、分级 revert 与 LKG 重发、Hub 存储 schema 10（`database_versions`、`SCHEMA_TOO_NEW` 指向数据库备份记录、不可逆迁移 Web 确认位）以及 installer ledger 严格读取；Hub 自升级（11d）已交付 B 级实现（见 FEATURES/ACCEPTANCE），组件组合兼容闸门（11e）尚未实现；正式 GitHub Release 资产与生产 root manifest 发布/签名通道仍待 12e，因此本条不构成“Web 统一升级已在现网可用”。
 
 | 组件 | v1.0.0 候选基线 | 使用范围 |
 | --- | --- | --- |

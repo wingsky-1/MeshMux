@@ -39,6 +39,10 @@ go build ./cmd/meshmux-web
 
 Go 当前使用 1.27.2；目标系统初始仅 Debian 13 amd64/arm64。使用 sqlite 驱动/CGO 前先核实多架构可构建性。
 
+### 开发制品与自升级 dev lane
+
+`make dev-artifacts DEV_VERSION=1.0.0-dev.<UTC日期>.<提交数>` 交叉构建 amd64/arm64 的 `meshmuxd-linux-*` 与 `SHA256SUMS`；版本经 `-ldflags -X` 注入 `buildinfo.Version`，不手改源码默认值。隔离主机上用 `scripts/dev-artifacts-deploy.sh` 发布运行 drop，用 `scripts/dev-root-manifest.sh` 生成自升级目标 drop 与 root manifest。完整步骤、门禁与证据边界见 [开发制品](DEV_ARTIFACTS.zh-CN.md)；这些脚本不是发行流程，也不能用于现网。
+
 ## 保密与不操作现网
 
 公开代码不得包含真实订阅 URL、IP、域名、密钥、Headscale 身份或私人备份。示例统一使用 example.invalid 和 RFC5737 文档地址。无需用户单独授权的 PR 不执行生产安装、清理、路由修改或发行。

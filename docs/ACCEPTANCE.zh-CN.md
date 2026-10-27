@@ -191,7 +191,7 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | --- | --- | --- |
 | per-op 备份、`keep=2`、指针与单飞（§5.2/§5.2.1） | `TestBackupPublishesPerOpThenPointer`、`TestBackupSingleFlight`、`TestLatestIsJournalBacked`、`TestGCKeepTwoConfirmed`、`TestGCNeverCollectsNewestOrStaged`、`TestConfirmCollectsConfirmedBeyondTwo`、`TestConfirmPointerFailureStillCollects`、`TestHubCleanupRejectsKeepBelowTwo` | 记录/载荷为临时目录 fixture；VACUUM 在测试 SQLite 上执行，非生产负载。指针刷新失败只记 `HUB_BACKUP_POINTER_STALE`；已发布但未 fsync 记 `HUB_BACKUP_POINTER_UNFLUSHED`，两者都不回滚确认/GC |
 | 迁移前快照与 `SCHEMA_TOO_NEW` 指引（安装器升级 P0） | `TestMigrateSnapshotsTheDatabaseBeforeSchemaMove`、`TestRestoredSnapshotStartsTheWebAndMigratesAgain`、`TestSchemaTooNewNamesTheMatchingSnapshot`、`TestSchemaTooNewDoesNotClaimAForeignGeneration`、`TestMigrationSnapshotPublishesRecordPayloadAndPointer`、`TestMigrationSnapshotFailureLeavesNoGeneration`、`TestReadFlatPointerResolvesTheCommittedGeneration`、`TestReadFlatPointerRefusesMissingAndDamagedChains`、`TestHubRollbackNamesThePreMigrationDatabaseBackup` | 迁移前 schema-15 库由 legacy 迁移链在临时目录真实生成，`VACUUM INTO` 在测试 SQLite 上执行，恢复后由 `OpenStore` 再次迁移；**未**在真实安装器/systemd 上执行 `--repair` 升级与二进制回滚，C 级隔离 VM 归 #12。名字带 from_version 校验：外来代只报路径与真实标识，不声称可恢复 |
-| 交接、对账、确认（§5.5） | `TestHandoffOrder`、`TestReconcileRestoredMarker`、`TestReconcileClaimSwappingNewBinary`、`TestReconcileClaimOldBinaryInert`、`TestApplyReceipt`、`TestNoSchema11`、`TestReadbackComparesVerifyingOpTarget` | `user_version` 固定 10；无 `hub_upgrade_operations` 表 |
+| 交接、对账、确认（§5.5） | `TestHandoffOrder`、`TestReconcileRestoredMarker`、`TestReconcileClaimSwappingNewBinary`、`TestReconcileClaimOldBinaryInert`、`TestApplyReceipt`、`TestNoSchema11`、`TestReadbackComparesVerifyingOpTarget` | 11d 当批 `user_version` 固定 10（当前存储 schema 以 `store.DatabaseSchemaVersion` 为准，现为 17）；无 `hub_upgrade_operations` 表 |
 | 版本绑定、pre-flight、Line 四 pin、claim（§5.6） | `TestUpdateVersionMismatchZeroWrite`、`TestUpdatePreflightTrial`、`TestApplyPrecheckNeedsFourPins`、`TestLineRepinAllOrNothing`、`TestClaimWrittenBeforeSwap`、`TestApplyResultBeforeRestart` | 通过 fixture ledger/agent.json 证明写集；未执行真实 `systemctl restart` |
 | restore（§5.7） | `TestRestoreHappyPath`、`TestRestoreAcceptsStagedSource`、`TestRestoreRefusesPayloadDigestMismatch`、`TestRestoreRefusesForeignSchemaCopy`、`TestRestoreMissingOldPackage`、`TestRestoreRefusesCarriedRecordAsSource`、`TestRestoreUnitShapeInvalid`、`TestRestoreSecondRequestBusy`、`TestRestoreSpaceCheck`、`TestRestoreConsoleInvocation` | 副本为 fixture SQLite；`/healthz` 由注入 Probe 代表；chown 在测试 uid 下为同主 no-op |
 | 不可逆 UX 与悬空文案（§5.11） | `TestHubUpgradePage`、`TestHubUpgradePageOffersHandoffForBackedUp`、`TestApproveHintPointsToHubUpgrade`、`TestRestoreReceipt`、`TestRestoreSecondRequestBusy`、`TestRestoreRejectsCarriedRecord` | 页面只渲染；不可逆确认位形状与拒绝路径有测试，真实迁移执行仍属目标版本 |
@@ -260,11 +260,17 @@ mv /run/meshmux-hub/staging/<op32hex>.json /run/meshmux-hub/requests/<op32hex>.j
 
 失败安装的 `rollbackManaged` 先 `systemctl disable --now meshmux-hub-dispatch.path`，再按快照恢复/删除两个 Hub dispatch 单元，避免半失败安装留下 root 武装面；repair 回滚在服务恢复后重新 `enable --now` 该 path。**请求/result 目录不参与受管文件回滚**：`/run/meshmux-hub/{requests,staging,boot}` 是 tmpfiles 拥有的 tmpfs 运行时树，`/var/lib/meshmux-installer/hub-upgrade/results/` 是 root 写、Web 只读的证据目录；回滚既不清空请求（可能仍属于上一次已安装的运行面），也不删除 result（它是执行事实，不是安装器文件）。需要人工清理时只删除本操作自己的请求文件或由 root 按操作编号处理 result。
 
+### 12e dev lane 补充（B 级）
+
+dev 构建不再使用 `dev-20261023` 占位 pin。`meshmuxd` 的 pin 由构建产物派生：运行架构取 `/proc/self/exe` 的 SHA-256，另一架构只从 root-owned `/var/lib/meshmux-dev/SHA256SUMS` 读取；两者都不存在时该架构没有 pin，manifest 门禁以 `MANIFEST_ARCH_INVALID` 拒绝，绝不回退到占位摘要。`make dev-artifacts` 以 `1.0.0-dev.N` 注入 `buildinfo.Version`，输出 amd64/arm64 `meshmuxd-linux-*` 与 `SHA256SUMS`；`scripts/dev-artifacts-deploy.sh` 以 root 安装运行 drop，`scripts/dev-root-manifest.sh` 生成目标 drop 与 root manifest。`store.Migrate` 在首次 schema leg 前把低于当前 schema 的数据库复制到 `<data-dir>/pre-migration/`（0600，保留最新 2 份，失败 `SCHEMA_BACKUP_FAILED` 拒绝迁移）。
+
+证据：`TestIsDevVersion`、`TestExecutorPinIsVerifiable`、`TestPinnedTablesCoverTheSupportedMatrix`、`TestForArchPinsEveryComponent`、`TestManifestGate`（root manifest 门禁）、`TestMigrationCopiesTheDatabaseFirst`、`TestPreMigrationKeepsTwoCopies`，以及 `go test ./...`。边界：以上均为单测/文件 fixture；隔离 VM 上真实的 systemd path unit、重启与 confirm 尚未记录，见 [开发制品](DEV_ARTIFACTS.zh-CN.md) 的步骤，C 级归 #12。
+
 ### 明确未完成（C 级归 #12）
 
 - 真实 Debian 13 amd64/arm64 上的 path unit/oneshot、`ReadWritePaths` EROFS/226、`chown -R root→meshmux`、真实 `/healthz` 轮询与 systemd 重启/watchdog kill。
 - 真实 `VACUUM INTO` 并发负载、磁盘耗尽、断电/重启后的 claim 对账与恢复后 Caddy/Headscale 联通。
-- 12e 的发布资产与 root manifest 预置/签名通道；在此之前生产 Hub 自升级只会得到 `MANIFEST_UNAVAILABLE`。
+- 12e 的正式 GitHub Release 资产与生产 root manifest 发布/签名通道；dev lane 只提供本地 drop、manifest 生成脚本与迁移前副本，不改变生产 `MANIFEST_UNAVAILABLE` 的 fail-closed 行为。
 - 还原后的节点/订阅/客户端真实可用性，以及 `mixedVersionGate` 在真实混版本舰队上的行为。
 
 ## v1.0.0 必须完成的真实用户闭环

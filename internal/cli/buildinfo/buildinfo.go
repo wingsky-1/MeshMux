@@ -25,10 +25,20 @@ import (
 // Version is this build's release identity. The default is the development
 // identity; a release build injects the published version with -ldflags -X.
 //
+// Development builds use a SemVer pre-release, never a bare "dev" stamp:
+//
+//	1.0.0-dev.<stamp>[.<sequence>]     e.g. 1.0.0-dev.20261027, 1.0.0-dev.20261027.2
+//
+// `make dev-artifacts` injects that value together with the artifact digests it
+// publishes, so the running build, the release manifest and the artifact table
+// all name the same release. The zero default stays a valid pre-release of the
+// v1.0.0 line so an uninjected `go build` still parses as a dev build rather
+// than as a release.
+//
 // It is a variable only because the linker can only set variables. Production
 // code never writes it; the tests that prove the single-source property save
 // and restore it.
-var Version = "1.0.0-dev"
+var Version = "1.0.0-dev.0"
 
 // MaxExecutableBytes bounds a running executable/package read. It is exported
 // because the installer, the Agent updater, the Hub producer and the Web

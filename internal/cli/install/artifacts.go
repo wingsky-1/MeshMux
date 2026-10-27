@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
@@ -80,31 +81,28 @@ var nodeArtifacts = map[string][]Artifact{
 	},
 }
 
-// meshmuxd is the executor itself. Until 12e publishes it on GitHub Releases it
-// ships as a Hub-hosted dev build: a dev- version and a file:// or intranet
-// https:// source, with SHA-256 as the only trust anchor. No dev build is
-// published yet, so these digests pin no existing artifact: replace them with
-// the published build's digest before serving an upgrade, until then
-// verification fails closed rather than trusting an unpinned file.
-var meshmuxdArtifacts = map[string][]Artifact{
-	versions.ArchitectureAMD64: {
-		{Component: "meshmuxd", Version: devBuildVersion, Source: devBuildSource(versions.ArchitectureAMD64), SHA256: "7f4b5db4d75b5ceea146a4c0f7d0f13598bb4d9e1d1e8cceedd9ad368c163035", Format: "elf"},
-	},
-	versions.ArchitectureARM64: {
-		{Component: "meshmuxd", Version: devBuildVersion, Source: devBuildSource(versions.ArchitectureARM64), SHA256: "de695531ef06285e0bbdd4a12d24d05ef4a74b1e54e86390f2673030fca25b9a", Format: "elf"},
-	},
+// meshmuxd is the executor itself. 12e publishes it as a GitHub release asset;
+// until then a development build pins a root-owned artifact drop, so the pin
+// names bytes that exist and can be verified instead of a placeholder digest.
+//
+// The pin is derived, not declared: the running architecture pins this process's
+// own executable digest, another architecture is pinned only from the drop's
+// SHA256SUMS, and an architecture with neither source has no entry at all. The
+// manifest gates then refuse that architecture rather than naming unverified
+// bytes (see devartifact.go and docs/DEV_ARTIFACTS.zh-CN.md).
+func meshmuxdPin(architecture string) (Artifact, bool) {
+	digest, ok := devExecutorDigest(architecture)
+	if !ok {
+		return Artifact{}, false
+	}
+	return Artifact{
+		Component: "meshmuxd", Version: buildinfo.Version,
+		Source: "file://" + versions.DevArtifactPath(architecture),
+		SHA256: digest, Format: "elf",
+	}, true
 }
 
-// devBuildVersion and devBuildSource name the pre-release executor pin in one
-// place: the version must carry the dev- prefix the manifest treats as a
-// pre-release, and the source stays the Hub-hosted development directory until
-// 12e publishes a GitHub release.
-const devBuildVersion = "dev-20261023"
-
-func devBuildSource(architecture string) string {
-	return "file:///var/lib/meshmux/dev/meshmuxd-linux-" + architecture
-}
-
+// PinnedArtifacts copies the Hub allowlist so a caller cannot mutate the table.
 func PinnedArtifacts(arch string) []Artifact {
 	a := artifacts[arch]
 	out := make([]Artifact, len(a))
@@ -112,12 +110,15 @@ func PinnedArtifacts(arch string) []Artifact {
 	return out
 }
 
-// PinnedMeshmuxd copies the executor pin so a caller cannot mutate the table.
+// PinnedMeshmuxd returns the executor pin of one architecture, or no entry when
+// this build cannot name verifiable bytes for it. Callers must treat an empty
+// result as "no pinnable executor", never as "use another architecture".
 func PinnedMeshmuxd(arch string) []Artifact {
-	a := meshmuxdArtifacts[arch]
-	out := make([]Artifact, len(a))
-	copy(out, a)
-	return out
+	pin, ok := meshmuxdPin(arch)
+	if !ok {
+		return nil
+	}
+	return []Artifact{pin}
 }
 
 func PinnedNodeArtifacts(arch string) []Artifact {
