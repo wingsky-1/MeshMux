@@ -50,7 +50,7 @@ func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request,
 	target := strings.TrimSpace(r.PostForm.Get("target_version"))
 	if !infra.IsValidReleaseVersion(target) {
 		app.Event(r, "MANIFEST_UNAVAILABLE")
-		app.writeJSON(w, http.StatusBadRequest, hubBackupReceipt{
+		app.WriteJSON(w, http.StatusBadRequest, hubBackupReceipt{
 			Status: "failed", ErrorCode: "MANIFEST_UNAVAILABLE", OperationID: infra.Operation(r),
 			Detail:     "目标版本不是 SemVer 发行版。",
 			NextAction: "请选择 root 已预置目标 manifest 的发行版后重试；本次没有写入任何备份。",
@@ -80,7 +80,7 @@ func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request,
 	if err != nil {
 		code := store.ErrorCodeOf(err)
 		app.Event(r, code)
-		app.writeJSON(w, hubBackupHTTPStatus(code), hubBackupReceipt{
+		app.WriteJSON(w, hubBackupHTTPStatus(code), hubBackupReceipt{
 			Status: "failed", ErrorCode: code, OperationID: infra.Operation(r),
 			Detail:     "Hub 数据库备份未完成。",
 			NextAction: hubBackupNextAction(code),
@@ -88,7 +88,7 @@ func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	app.Event(r, "HUB_UPGRADE_BACKUP_STAGED")
-	app.writeJSON(w, http.StatusOK, hubBackupReceipt{
+	app.WriteJSON(w, http.StatusOK, hubBackupReceipt{
 		OK: true, Status: receipt.Status, OperationID: receipt.OperationID,
 		FromVersion: receipt.FromVersion, DBSchema: receipt.DBSchema, IntegrityOK: receipt.IntegrityOK,
 	})
@@ -143,7 +143,7 @@ func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, 
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
 	if !infra.IsValidOperationID(operationID) {
 		app.Event(r, "HUB_HANDOFF_REQUEST_INVALID")
-		app.writeJSON(w, http.StatusBadRequest, hubApplyReceipt{
+		app.WriteJSON(w, http.StatusBadRequest, hubApplyReceipt{
 			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: infra.Operation(r),
 			Detail:     "升级操作编号不正确。",
 			NextAction: "请从 Hub 自升级的备份回执复制 32 位十六进制 operation_id 后重试；未写入任何请求。",
@@ -167,7 +167,7 @@ func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		code := store.ErrorCodeOf(err)
 		app.Event(r, code)
-		app.writeJSON(w, hubApplyHTTPStatus(code), hubApplyReceipt{
+		app.WriteJSON(w, hubApplyHTTPStatus(code), hubApplyReceipt{
 			Status: "failed", ErrorCode: code, OperationID: infra.Operation(r),
 			Detail:     "Hub 升级未交接。",
 			NextAction: hubApplyNextAction(code),
@@ -175,7 +175,7 @@ func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	app.Event(r, "HUB_UPGRADE_QUEUED")
-	app.writeJSON(w, http.StatusOK, hubApplyReceipt{
+	app.WriteJSON(w, http.StatusOK, hubApplyReceipt{
 		OK: true, Status: receipt.Status, OperationID: receipt.OperationID,
 		TargetVersion: receipt.TargetVersion, PackageSHA256: receipt.PackageSHA256,
 	})
@@ -339,7 +339,7 @@ func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
 	if !infra.IsValidOperationID(operationID) {
 		app.Event(r, "HUB_HANDOFF_REQUEST_INVALID")
-		app.writeJSON(w, http.StatusBadRequest, hubRestoreReceipt{
+		app.WriteJSON(w, http.StatusBadRequest, hubRestoreReceipt{
 			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: infra.Operation(r),
 			Detail:     "恢复操作编号不正确。",
 			NextAction: "请从 Hub 自升级区块复制失败操作的 32 位十六进制 operation_id；未写入任何恢复请求。",
@@ -350,7 +350,7 @@ func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		code := store.ErrorCodeOf(err)
 		app.Event(r, code)
-		app.writeJSON(w, hubRestoreHTTPStatus(code), hubRestoreReceipt{
+		app.WriteJSON(w, hubRestoreHTTPStatus(code), hubRestoreReceipt{
 			Status: "failed", ErrorCode: code, OperationID: infra.Operation(r),
 			Detail:     "Hub 恢复未排队。",
 			NextAction: hubRestoreNextAction(code),
@@ -358,7 +358,7 @@ func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request
 		return
 	}
 	app.Event(r, "HUB_UPGRADE_RESTORE_QUEUED")
-	app.writeJSON(w, http.StatusOK, receipt)
+	app.WriteJSON(w, http.StatusOK, receipt)
 }
 
 // queueHubRestore is the unprivileged half of §5.7: prove the journal permits a

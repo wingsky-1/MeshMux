@@ -73,7 +73,7 @@ func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.
 		status = "already_approved"
 	}
 	app.Event(r, "DB_MIGRATION_APPROVED")
-	app.writeJSON(w, http.StatusOK, databaseMigrationReceipt{
+	app.WriteJSON(w, http.StatusOK, databaseMigrationReceipt{
 		OK: true, Status: status, BackupOperationID: operationID, BackupRecord: approval.RecordPath,
 		FromVersion: approval.Record.FromVersion, DBSchema: approval.Record.DBSchema,
 		PolicySchema: approval.Record.PolicySchema, IrreversibleApproved: true,
@@ -117,7 +117,7 @@ func (app *Server) failDatabaseMigration(w http.ResponseWriter, r *http.Request,
 // writeDatabaseMigrationFailure writes the refusal in the management JSON shape.
 func (app *Server) writeDatabaseMigrationFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
 	app.Event(r, code)
-	app.writeJSON(w, status, databaseMigrationReceipt{
+	app.WriteJSON(w, status, databaseMigrationReceipt{
 		Status: "failed", ErrorCode: code, Detail: message, NextAction: next, OperationID: infra.Operation(r),
 	})
 }

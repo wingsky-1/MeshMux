@@ -206,7 +206,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 		return
 	}
 	app.Event(r, "UPGRADE_APPROVED")
-	app.writeJSON(w, http.StatusOK, upgradeApproveReceipt{
+	app.WriteJSON(w, http.StatusOK, upgradeApproveReceipt{
 		OK: true, Status: "queued", Target: target.Version, ManifestSHA256: target.ManifestSHA256,
 		PolicySchema: manifest.PolicySchema, RoutePolicyRevisions: routePolicySlots(manifest),
 		Revision: target.CandidateRevision, StageOperationID: target.StageOperationID,
@@ -243,7 +243,7 @@ func routePolicySlots(manifest upgrade.Manifest) map[string]int64 {
 // writeUpgradeFailure writes the approval refusal in the management JSON shape.
 func (app *Server) writeUpgradeFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
 	app.Event(r, code)
-	app.writeJSON(w, status, upgradeApproveReceipt{
+	app.WriteJSON(w, status, upgradeApproveReceipt{
 		Status: "failed", PolicySchema: upgrade.PolicySchema, RoutePolicyRevisions: map[string]int64{},
 		ErrorCode: code, Detail: message, NextAction: next, OperationID: infra.Operation(r),
 	})
@@ -298,8 +298,3 @@ func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, er
 }
 
 // writeJSON is the management JSON writer of this task.
-func (app *Server) writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
