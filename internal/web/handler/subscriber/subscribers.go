@@ -1,4 +1,4 @@
-package handler
+package subscriber
 
 import (
 	"encoding/json"
@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
@@ -30,21 +29,6 @@ import (
 // The integrator calls this from newServer. The placeholder navigation loop in
 // newServer must skip "/subscribers", otherwise the placeholder page competes
 // with the real subscriber page for the same path.
-func (app *Server) registerSubscriberRoutes(r chi.Router) {
-	r.Get("/subscribers", app.Authenticated(app.subscribersPage))
-	r.Get("/subscribers/wizard", app.Authenticated(app.subscribersWizard))
-	r.Post("/subscribers", app.Mutation(app.subscribersCreate, true))
-	r.Post("/subscribers/rename", app.Mutation(app.subscribersRename, true))
-	r.Post("/subscribers/state", app.Mutation(app.subscribersState, true))
-	r.Post("/subscribers/lines", app.Mutation(app.subscribersSelectLines, true))
-	r.Post("/subscribers/token/rotate", app.Mutation(app.subscribersRotateToken, true))
-	r.Post("/subscribers/token/revoke", app.Mutation(app.subscribersRevokeToken, true))
-	r.Post("/subscribers/sync", app.Mutation(app.subscribersSync, true))
-	app.registerSubscriptionWizardRoutes(r)
-	r.Get("/api/subscribers", app.Authenticated(app.subscribersAPI))
-	r.Post("/lines", app.Mutation(app.linesSave, true))
-}
-
 // tokenDisclosure carries a plaintext subscription bearer. It is only ever
 // filled for the single response that issues it.
 type tokenDisclosure struct {
@@ -53,7 +37,7 @@ type tokenDisclosure struct {
 }
 
 // subscribersPage renders the subscriber management workspace.
-func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
 		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
@@ -64,7 +48,7 @@ func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess 
 
 // subscribersAPI exposes the same non-secret projection as the page: no
 // bearer, no VLESS UUID and no REALITY key ever leaves through this endpoint.
-func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
 		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
@@ -126,7 +110,7 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ sess
 
 // subscribersCreate creates one subscription user with its per-Line
 // credentials and its first subscription token.
-func (app *Server) subscribersCreate(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersCreate(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
 	lineIDs := selectedLineIDs(r)
 	now := app.Now()
@@ -147,7 +131,7 @@ func (app *Server) subscribersCreate(w http.ResponseWriter, r *http.Request, ses
 
 // subscribersRename changes only the mutable display name. The subscriber ID,
 // the credentials and every token stay exactly as they were.
-func (app *Server) subscribersRename(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersRename(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
 	if _, err := app.Store.RenameSubscriber(id, displayName, app.Now()); err != nil {
@@ -162,7 +146,7 @@ func (app *Server) subscribersRename(w http.ResponseWriter, r *http.Request, ses
 // deleting revokes every subscription token in the same transaction, so the
 // public download URL stops working immediately. The VLESS UUIDs of a Line
 // stay authorized until the Line confirmed the revocation by readback.
-func (app *Server) subscribersState(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersState(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	action := strings.TrimSpace(r.PostForm.Get("action"))
 	var state subscription.State
@@ -194,7 +178,7 @@ func (app *Server) subscribersState(w http.ResponseWriter, r *http.Request, sess
 // subscribersSelectLines replaces the Line selection of one subscriber. A Line
 // that stays selected keeps its historical UUID, a newly selected Line gets a
 // fresh credential and a dropped Line is only deactivated.
-func (app *Server) subscribersSelectLines(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersSelectLines(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	lineIDs := selectedLineIDs(r)
 	if _, err := app.Store.SelectLines(id, lineIDs, app.Now()); err != nil {
@@ -214,7 +198,7 @@ func (app *Server) subscribersSelectLines(w http.ResponseWriter, r *http.Request
 // subscribersRotateToken issues a fresh bearer and revokes the previous ones.
 // The new bearer is independent of every VLESS UUID; rotating it never changes
 // a credential that a client already downloaded.
-func (app *Server) subscribersRotateToken(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersRotateToken(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	token, err := app.Store.RotateToken(id, app.Now())
 	if err != nil {
@@ -231,7 +215,7 @@ func (app *Server) subscribersRotateToken(w http.ResponseWriter, r *http.Request
 
 // subscribersRevokeToken revokes every active token of one subscriber without
 // touching its VLESS credentials.
-func (app *Server) subscribersRevokeToken(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersRevokeToken(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	if err := app.Store.RevokeTokens(id, app.Now()); err != nil {
 		app.subscriberFail(w, r, err, "TOKEN_REVOKE_FAILED", "无法吊销订阅 Token。", "确认订阅用户存在后重试。")
@@ -243,7 +227,7 @@ func (app *Server) subscribersRevokeToken(w http.ResponseWriter, r *http.Request
 
 // subscribersSync asks the store to publish the complete credential set of one
 // subscriber to every selected Line.
-func (app *Server) subscribersSync(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersSync(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	if _, err := app.Store.GetSubscriber(id); err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_NOT_FOUND", "订阅用户不存在。", "请刷新页面后重试。")
@@ -267,7 +251,7 @@ func (app *Server) subscribersSync(w http.ResponseWriter, r *http.Request, sess 
 // linesSave stores the transport of one Line. The REALITY key pair and the
 // short ID are generated on the server and never leave it: the page shows no
 // key material at all.
-func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	nodeID := strings.TrimSpace(r.PostForm.Get("node_id"))
 	port, err := integerForm(r.PostForm.Get("port"), 1, 65535)
 	if err != nil {

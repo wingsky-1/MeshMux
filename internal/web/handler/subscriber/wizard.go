@@ -1,4 +1,4 @@
-package handler
+package subscriber
 
 // The subscription wizard (Task 4, ADR-0008 §1–§4).
 //
@@ -26,10 +26,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
@@ -149,17 +149,10 @@ func (m subscriptionWizardView) toView() view.SubscriptionWizardView {
 }
 
 // registerSubscriptionWizardRoutes registers the wizard's two POST endpoints.
-// Both go through the standard mutation boundary (session, Origin, CSRF,
+// Both go through the standard mutation boundary (infra.Session, Origin, CSRF,
 // duplicate-field and size checks), so the wizard inherits the same request
 // contract as every other management action.
-func (app *Server) registerSubscriptionWizardRoutes(r chi.Router) {
-	r.Post("/subscribers/wizard/preview", app.Mutation(app.subscriptionWizardPreview, true))
-	r.Post("/subscribers/wizard/save", app.Mutation(app.subscriptionWizardSave, true))
-}
-
-// subscriptionWizardPage renders the wizard for one subscriber (or the create
-// form when subscriber_id is empty).
-func (app *Server) subscriptionWizardPage(w http.ResponseWriter, r *http.Request, sess session, model subscriptionWizardView) {
+func (app *Server) subscriptionWizardPage(w http.ResponseWriter, r *http.Request, sess infra.Session, model subscriptionWizardView) {
 	app.Render(w, r, http.StatusOK, view.SubscriptionWizardPage(
 		view.PageData{Title: "订阅向导", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP},
 		model.toView(),
@@ -168,7 +161,7 @@ func (app *Server) subscriptionWizardPage(w http.ResponseWriter, r *http.Request
 
 // subscribersWizard is the GET entry point. The subscriber is optional: without
 // one the page is the create form, with one it restores the saved selection.
-func (app *Server) subscribersWizard(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscribersWizard(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	subscriberID := strings.TrimSpace(r.URL.Query().Get("subscriber_id"))
 	// The query string is not a mutation input, but it still must be a
 	// canonical identity before it reaches a store read.
@@ -203,7 +196,7 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 		return model, err
 	}
 	model.Outs = outs
-	rules, err := app.rulesLib().LatestRules()
+	rules, err := app.backends.RuleLibrary().LatestRules()
 	if err != nil {
 		return model, err
 	}
@@ -401,14 +394,14 @@ func readWizardSelection(r *http.Request) (store.SelectionSpec, string, error) {
 }
 
 // subscriptionWizardPreview composes and gates one selection without writing.
-func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	subscriberID := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	spec, _, err := readWizardSelection(r)
 	if err != nil {
 		app.Fail(w, r, http.StatusBadRequest, "SUBSCRIPTION_SELECTION_INVALID", "所选内容不正确。", "请重新勾选线路、Out、规则与组网设备后重试。")
 		return
 	}
-	verifier, err := app.publishVerifier()
+	verifier, err := app.backends.PublishVerifier()
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return
@@ -437,7 +430,7 @@ func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Requ
 
 // subscriptionWizardSave approves and persists one selection. A blocked
 // preview saves nothing and says so.
-func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	subscriberID := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	spec, displayName, err := readWizardSelection(r)
 	if err != nil {
@@ -445,7 +438,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		return
 	}
 	now := app.Now()
-	verifier, err := app.publishVerifier()
+	verifier, err := app.backends.PublishVerifier()
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return

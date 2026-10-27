@@ -11,6 +11,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io/fs"
@@ -32,6 +33,8 @@ type Server struct {
 	nodeServer *node.Server
 	// meshServer is the Mesh device, enrollment and subnet-route domain.
 	meshServer *meshh.Server
+	// subscriberServer is the subscriber workspace and the subscription wizard.
+	subscriberServer *subscriber.Server
 	// publishRunner is the fixed process boundary of the publish gate. It is
 	// nil in production (node.ExecRunner) and replaced by a fixture runner in
 	// tests so no kernel binary is required to exercise the gate.
@@ -140,7 +143,18 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &Server{Runtime: rt, subscriptionServer: subscription.New(rt), nodeServer: node.New(rt), meshServer: meshh.New(rt, meshnet.NewCLIRunner())}
+	subscriptionServer := subscription.New(rt)
+	app := &Server{
+		Runtime:            rt,
+		subscriptionServer: subscriptionServer,
+		nodeServer:         node.New(rt),
+		meshServer:         meshh.New(rt, meshnet.NewCLIRunner()),
+	}
+	app.subscriberServer = subscriber.New(rt, subscriber.Backends{
+		RuleLibrary:     app.rulesLib,
+		PublishVerifier: app.publishVerifier,
+		Downloads:       subscriptionServer,
+	})
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -165,7 +179,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Get("/api/agent/manifest", infra.JSONAPI(app.agentManifest))
 	// The subscriber and Line routes are registered before the generic
 	// navigation loop, so the real subscriber page owns its path.
-	app.registerSubscriberRoutes(r)
+	app.subscriberServer.RegisterRoutes(r, app.Authenticated, app.Mutation)
 	// The mesh device routes own "/mesh" for the same reason. They include the
 	// route approve/revoke pair, which is a separate explicit action.
 	app.meshServer.RegisterRoutes(r, app.Authenticated, app.Mutation)

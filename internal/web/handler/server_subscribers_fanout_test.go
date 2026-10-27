@@ -43,7 +43,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	// The fan-out source is every subscriber that ever held a credential on
 	// the Line, not only the currently selected ones. Both subscribers must be
 	// collected before any store write runs.
-	credentialSubscribers, err := app.lineCredentialSubscriberIDs(node.ID)
+	credentialSubscribers, err := app.subscriberServer.LineCredentialSubscriberIDs(node.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

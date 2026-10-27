@@ -10,6 +10,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -432,7 +433,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		spec, _, err := readWizardSelection(r)
+		spec, _, err := subscriber.ReadWizardSelection(r)
 		if err != nil {
 			t.Fatal(err)
 		}

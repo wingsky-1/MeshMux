@@ -201,7 +201,7 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 // must follow the same serving origin the download routes use.
 func TestSubscriberPageShowsServingDownloadOrigin(t *testing.T) {
 	app, _ := subscriptionAppWithOrigin(t, testSubscriptionOrigin)
-	view, err := app.subscriberViewModel()
+	view, err := app.subscriberServer.SubscriberViewModel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestSubscriberPageShowsServingDownloadOrigin(t *testing.T) {
 	}
 
 	management, _ := subscriptionAppWithOrigin(t, "")
-	managementView, err := management.subscriberViewModel()
+	managementView, err := management.subscriberServer.SubscriberViewModel()
 	if err != nil {
 		t.Fatal(err)
 	}

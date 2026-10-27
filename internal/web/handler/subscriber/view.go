@@ -1,4 +1,4 @@
-package handler
+package subscriber
 
 // Subscriber view model and page rendering.
 //
@@ -18,7 +18,7 @@ import (
 
 // renderSubscribers renders the subscriber page, optionally with a one-time
 // plaintext bearer.
-func (app *Server) renderSubscribers(w http.ResponseWriter, r *http.Request, sess session, disclosure *tokenDisclosure) {
+func (app *Server) renderSubscribers(w http.ResponseWriter, r *http.Request, sess infra.Session, disclosure *tokenDisclosure) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
 		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
@@ -126,7 +126,7 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 		}
 		page.Subscribers = append(page.Subscribers, entry)
 	}
-	page.Origin = app.subscriptionServer.Origin()
+	page.Origin = app.backends.Downloads.Origin()
 	return page, nil
 }
 
