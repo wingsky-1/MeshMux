@@ -18,7 +18,7 @@ func composeFixture(t *testing.T, nodeID, name string, sortOrder int) ComposeLin
 	return ComposeLine{Line: line, Credential: credential}
 }
 
-// composePins is the version-locked artifact set of the composer tests. The
+// composePins is the optional artifact metadata of the composer tests. The
 // URLs use example.invalid on purpose: `sing-box check` validates the document
 // shape, never fetches the artifact.
 func composePins() RuleSetPin {
@@ -29,8 +29,8 @@ func composePins() RuleSetPin {
 	}
 }
 
-// composeRules is a small library selection covering the three actions and the
-// two matcher families that need a pin.
+// composeRules is a small library selection covering the three actions, both
+// pin-carrying matcher families and one bare geo identifier.
 func composeRules() []ComposeRule {
 	pin := composePins()
 	return []ComposeRule{
@@ -172,18 +172,95 @@ func TestComposeSubscriptionRulesReachBothDocuments(t *testing.T) {
 	}
 }
 
-// TestComposeSubscriptionRefusesUnpinnedRuleSet pins the version lock: a geo
-// or ruleset rule without a pinned artifact is a blocking diagnostic and no
-// document is emitted.
-func TestComposeSubscriptionRefusesUnpinnedRuleSet(t *testing.T) {
+// TestComposeSubscriptionRendersBareRuleSetWithoutPin pins the "no pin" model:
+// a geo or rule-set rule without artifact metadata is assembled exactly as the
+// operator configured it. The tag is the bare identifier, no remote artifact is
+// declared, and nothing blocks — the Hub pre-checks shapes, not the artifact.
+func TestComposeSubscriptionRendersBareRuleSetWithoutPin(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
-	rules := []ComposeRule{{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet, Values: []string{"ai"}}}
-	documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
-	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 {
-		t.Fatal("an unpinned ruleset produced a document")
+	rules := []ComposeRule{
+		{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet, Values: []string{"ai"}},
+		{StableKey: "custom-cn", Version: 1, Action: ActionDirect, Kind: MatcherGeoSite, Values: []string{"cn"}},
 	}
-	if !hasBlocking(diagnostics, "COMPOSE_RULESET_UNPINNED") {
-		t.Fatalf("diagnostics = %+v, want a blocking COMPOSE_RULESET_UNPINNED", diagnostics)
+	documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
+	if anyBlocking(diagnostics) {
+		t.Fatalf("a rule without a pin blocked the artifact: %+v", diagnostics)
+	}
+	singBox := string(documents.SingBox)
+	// The bare identifiers are rendered as configured, with no version suffix
+	// and no rule_set declaration.
+	for _, required := range []string{`"rule_set": [`, `"ai"`, `"geosite-cn"`} {
+		if !strings.Contains(singBox, required) {
+			t.Fatalf("sing-box document misses %q:\n%s", required, singBox)
+		}
+	}
+	if strings.Contains(singBox, "@") {
+		t.Fatalf("an unpinned tag grew a version suffix:\n%s", singBox)
+	}
+	if strings.Contains(singBox, "rulesets.example.invalid") {
+		t.Fatalf("an unpinned rule declared a remote artifact:\n%s", singBox)
+	}
+	mihomo := string(documents.Mihomo)
+	for _, required := range []string{`- "RULE-SET,ai,PROXY"`, `- "RULE-SET,geosite-cn,DIRECT"`} {
+		if !strings.Contains(mihomo, required) {
+			t.Fatalf("mihomo document misses %q:\n%s", required, mihomo)
+		}
+	}
+	if strings.Contains(mihomo, "rule-providers:") {
+		t.Fatalf("an unpinned rule declared a rule provider:\n%s", mihomo)
+	}
+}
+
+// TestComposeSubscriptionRendersPinnedRuleSetWithVersion pins the other half:
+// a well-formed pin still adds the version to the tag and declares its source,
+// so an operator who locks a version keeps that lock in the client document.
+func TestComposeSubscriptionRendersPinnedRuleSetWithVersion(t *testing.T) {
+	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
+	pin := composePins()
+	rules := []ComposeRule{
+		{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet,
+			Values: []string{"ai"}, Pins: map[string]RuleSetPin{"ai": pin}},
+	}
+	documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
+	if anyBlocking(diagnostics) {
+		t.Fatalf("a pinned rule blocked the artifact: %+v", diagnostics)
+	}
+	for _, required := range []string{`"ai@20261026"`, pin.Source} {
+		if !strings.Contains(string(documents.SingBox), required) {
+			t.Fatalf("sing-box document misses %q:\n%s", required, documents.SingBox)
+		}
+	}
+	if !strings.Contains(string(documents.Mihomo), `- "RULE-SET,ai@20261026,PROXY"`) {
+		t.Fatalf("mihomo document lost the versioned tag:\n%s", documents.Mihomo)
+	}
+}
+
+// TestComposeSubscriptionRefusesMalformedPin pins the remaining shape check: a
+// pin that is present but malformed (mutable version, non-HTTPS source,
+// truncated digest) is a configuration defect, so it is refused instead of
+// silently rendering a different tag than the operator asked for.
+func TestComposeSubscriptionRefusesMalformedPin(t *testing.T) {
+	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
+	good := composePins()
+	cases := map[string]RuleSetPin{
+		"mutable version": {Source: good.Source, Version: "latest", SHA256: good.SHA256},
+		"plain http":      {Source: "http://rulesets.example.invalid/a.srs", Version: "1", SHA256: good.SHA256},
+		"query string":    {Source: good.Source + "?x=1", Version: "1", SHA256: good.SHA256},
+		"truncated hash":  {Source: good.Source, Version: "1", SHA256: "abc"},
+		"loopback host":   {Source: "https://127.0.0.1/a.srs", Version: "1", SHA256: good.SHA256},
+	}
+	for name, pin := range cases {
+		t.Run(name, func(t *testing.T) {
+			rules := []ComposeRule{{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet,
+				Values: []string{"ai"}, Pins: map[string]RuleSetPin{"ai": pin}}}
+			documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
+			if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 {
+				t.Fatal("a malformed pin produced a document")
+			}
+			if !hasBlocking(diagnostics, "COMPOSE_RULE_INVALID") {
+				t.Fatalf("diagnostics = %+v, want a blocking COMPOSE_RULE_INVALID", diagnostics)
+			}
+		})
 	}
 }
 

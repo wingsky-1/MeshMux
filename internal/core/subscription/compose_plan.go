@@ -9,7 +9,7 @@ package subscription
 // Flow of one composition:
 //
 //	input (four wizard groups)
-//	  -> buildComposeSelection: shape checks, ordering, rule pin/overlap checks
+//	  -> buildComposeSelection: shape checks, ordering, rule overlap checks
 //	     (deterministic, no I/O); a blocking finding stops here
 //	  -> composeDocuments: stage 1 mesh material (sing-box only), stage 2 one
 //	     Line selector block, stage 3 the client egress (Line selector + the
@@ -180,11 +180,19 @@ func buildLineBlock(nodes []exportNode) composeLineBlock {
 
 // buildComposeRuleSets declares every referenced remote artifact exactly once
 // in first-use order. Behavior is the fixed prefix rule shared by both kernels.
+//
+// A tag with no source declares nothing: a geo or rule-set identifier the
+// operator configured without a pin is a bare tag the client kernel resolves on
+// its own (or refuses), not a remote file this composer may fetch. Only a
+// pinned artifact contributes a rule-set declaration.
 func buildComposeRuleSets(rules []composeRenderedRule) []composeRuleSet {
 	sets := make([]composeRuleSet, 0, len(rules))
 	declared := make(map[string]struct{}, len(rules))
 	for _, rule := range rules {
 		for index, tag := range rule.tags {
+			if index >= len(rule.sources) || rule.sources[index] == "" {
+				continue
+			}
 			if _, exists := declared[tag]; exists {
 				continue
 			}

@@ -27,9 +27,10 @@
 // proxy rule names the Out tag. ComposeDocuments.LineRoutes is therefore always
 // empty and only kept for source compatibility.
 //
-// The subscription IR vocabulary (matcher kinds, actions, pins, tailnet
-// prefixes) lives in the child package ir, the one place policy may import
-// downward; policy's generators read it instead of keeping a second copy.
+// The subscription IR vocabulary (matcher kinds, actions, artifact
+// descriptors, tailnet prefixes) lives in the child package ir, the one place
+// policy may import downward; policy's generators read it instead of keeping a
+// second copy.
 //
 // The snapshot (snapshot.go) records what one subscription chose: the
 // referenced entities, their immutable versions and their order. It never
