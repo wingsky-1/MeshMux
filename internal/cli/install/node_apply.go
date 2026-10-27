@@ -631,6 +631,11 @@ func checkNodeTargets(root string, cfg node.Config, ssh []int, state InstallStat
 	if !layout.ReuseHubSSHJail {
 		paths = append(paths, nodeSSHJailPath)
 	}
+	// The host-level journald quota is the standalone Line's own file; a
+	// co-located Line reuses the Hub-owned copy.
+	if !layout.CoLocated {
+		paths = append(paths, journaldDropInPath)
+	}
 	if cfg.Role == node.RoleOut {
 		paths = append(paths, unitPath(node.ACLUnit))
 	}

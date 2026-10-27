@@ -66,6 +66,18 @@ systemd-analyze verify /etc/systemd/system/meshmux-web.service \
   /etc/systemd/system/meshmux-hub-dispatch.service \
   /etc/systemd/system/meshmux-hub-dispatch.path
 
+# The journald drop-in is not a unit, so it is validated by content and by the
+# real journald.conf.d lookup: the three quota keys only exist in
+# /etc/systemd/journald.conf.d/99-meshmux.conf, so systemd-analyze cat-config
+# proving the merged journald config contains them proves discovery too. Nothing
+# else (storage, forwarding, rate limits) is taken over.
+install -d -m 0755 /etc/systemd/journald.conf.d
+install -m 0644 "$fixture/99-meshmux.conf" /etc/systemd/journald.conf.d/99-meshmux.conf
+journald_config="$(systemd-analyze cat-config systemd/journald.conf)"
+grep -qx 'SystemMaxUse=1G' <<<"$journald_config"
+grep -qx 'RuntimeMaxUse=512M' <<<"$journald_config"
+grep -qx 'MaxFileSec=30day' <<<"$journald_config"
+
 # The dispatch substrate depends on the exact tmpfiles modes: the Web must be
 # able to write requests and read results, while the ledger tree stays 0600 and
 # the request.done tree stays root-only. staging/ is the unwatched sibling the

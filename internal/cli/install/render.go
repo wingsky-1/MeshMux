@@ -282,6 +282,7 @@ usedns = no
 		fail2banJailDir + "/" + sshJailFileName: sshJail,
 		fail2banJailDir + "/meshmux-web.local":  webJail,
 		fail2banFilterDir + "/" + webFilterName: webFilter,
+		journaldDropInPath:                      journaldDropIn,
 	}
 	for path, body := range hubDispatchFiles() {
 		files[path] = body

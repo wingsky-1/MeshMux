@@ -352,6 +352,10 @@ func buildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 	} else {
 		plan.Paths = append(plan.Paths, nodeSSHJailPath)
 	}
+	// The journald quota is host-level, so a co-located Line never claims it.
+	if !layout.CoLocated {
+		plan.Paths = append(plan.Paths, journaldDropInPath)
+	}
 	if cfg.Role == node.RoleOut {
 		plan.Units = append([]string{node.ACLUnit}, plan.Units...)
 		plan.Paths = append(plan.Paths, node.ACLPath, unitPath(node.ACLUnit))

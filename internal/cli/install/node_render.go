@@ -83,6 +83,15 @@ func nodeManagedFilesForLayout(cfg node.Config, ssh []int, identity node.Identit
 			Path: nodeSSHJailPath, Body: nodeSSHJail(ssh), Mode: 0644, Owner: "root:root", Static: true,
 		}
 	}
+	// The journald quota is host-level. A standalone Line writes it like every
+	// other static target; a co-located Line reuses the Hub's copy, because the
+	// same path must have exactly one ledger owner (a second writer would turn
+	// the Hub's own file into a MANAGED_PATH_CONFLICT on the next Hub repair).
+	if !layout.CoLocated {
+		files[journaldDropInPath] = nodeManagedFile{
+			Path: journaldDropInPath, Body: journaldDropIn, Mode: 0644, Owner: "root:root", Static: true,
+		}
+	}
 	if cfg.Role == node.RoleOut {
 		// The path is owned by the installer but the bytes are dynamic: the
 		// installer writes the default-deny guard and the Agent later
