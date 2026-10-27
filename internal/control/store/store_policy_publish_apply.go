@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
@@ -107,7 +108,7 @@ func PublishTargetTx(tx *sql.Tx, target PublishTarget, now time.Time) (PolicyLin
 	if unfinished != 0 {
 		return PolicyLineEvidence{}, errors.New(CodePublishTasksInProgress + ": the line has an unfinished task chain; retry after it finishes")
 	}
-	revision, err := NextCandidateRevisionTx(tx, target.LineID)
+	revision, err := storecandidate.NextCandidateRevisionTx(tx, target.LineID)
 	if err != nil {
 		return PolicyLineEvidence{}, err
 	}
@@ -117,7 +118,7 @@ func PublishTargetTx(tx *sql.Tx, target PublishTarget, now time.Time) (PolicyLin
 	if !sameSnapshotCandidateTx(tx, target) {
 		return PolicyLineEvidence{}, errors.New(codePublishCandidateChanged + ": the line snapshot changed after the gate; retry the publication")
 	}
-	if _, err = publishCandidateTx(tx, target.LineID, target.Candidate, now); err != nil {
+	if _, err = storecandidate.PublishTx(tx, target.LineID, target.Candidate, now); err != nil {
 		return PolicyLineEvidence{}, err
 	}
 	return PolicyLineEvidence{

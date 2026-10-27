@@ -60,6 +60,7 @@ import (
 	"strings"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
@@ -457,7 +458,7 @@ func outCandidateAtRevisionTx(tx *sql.Tx, outID string, revision int64) (string,
 }
 
 // OutReadbackAllowlistTx reads the allowlist that the newest chain of one
-// revision carried. Because publishCandidateTx enqueues the four kinds in order,
+// revision carried. Because storecandidate.PublishOutTx enqueues the four kinds in order,
 // the newest row that points at the revision is the readback task, which is
 // exactly the task the Agent compares against its applied state.
 //
@@ -911,7 +912,7 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 	if offline {
 		return outDrainDeferred, errors.New("OUT_OFFLINE: out is offline; the authorization change stays pending")
 	}
-	revision, err := NextCandidateRevisionTx(tx, outID)
+	revision, err := storecandidate.NextCandidateRevisionTx(tx, outID)
 	if err != nil {
 		return outDrainNoop, err
 	}
@@ -919,7 +920,11 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 	if err != nil {
 		return outDrainNoop, err
 	}
-	if _, err := publishCandidateTx(tx, outID, candidate, now); err != nil {
+	desired, err := outAuthorizationTx(tx, outID)
+	if err != nil {
+		return outDrainNoop, err
+	}
+	if _, err := storecandidate.PublishOutTx(tx, outID, candidate, now, desired); err != nil {
 		return outDrainNoop, err
 	}
 	return outDrainPublished, nil
@@ -942,15 +947,6 @@ func outPublishedAuthorizationTx(tx *sql.Tx, outID string, revision int64, diges
 		return false, err
 	}
 	return present && node.SameACLSourceSet(published, desired), nil
-}
-
-// NextCandidateRevisionTx returns the next immutable revision of one node.
-func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
-	var revision int64
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		return 0, errors.New(common.CodeDatabaseUnavailable)
-	}
-	return revision, nil
 }
 
 // retryOutSync is the explicit retry and rollback pointer of one Out. It

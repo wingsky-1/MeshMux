@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
+
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
@@ -162,7 +164,7 @@ func LatestPublishedCandidateTx(tx *sql.Tx, nodeID string) (revision int64, dige
 	if scanErr != nil {
 		return 0, "", nil, false, errors.New(common.CodeDatabaseUnavailable)
 	}
-	digest, err = CandidateSHA256(document)
+	digest, err = storecandidate.SHA256(document)
 	if err != nil {
 		return 0, "", nil, false, common.ErrCandidateCorrupt
 	}
@@ -501,7 +503,7 @@ func DrainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 	if digest != desiredDigest {
 		return common.ErrCandidateRenderFailed
 	}
-	if _, err := publishCandidateTx(tx, nodeID, candidate, now); err != nil {
+	if _, err := storecandidate.PublishTx(tx, nodeID, candidate, now); err != nil {
 		return err
 	}
 	return nil

@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
+
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
@@ -137,11 +140,11 @@ func (s *Store) CreateNode(role, displayName string, vlessPort, sshPort int, now
 	candidate := nodedomain.Candidate{
 		NodeID:        node.ID,
 		Role:          nodedomain.Role(node.Role),
-		Revision:      initialCandidateRevision,
+		Revision:      storecandidate.InitialRevision,
 		VLESSPort:     node.VlessPort,
 		KernelVersion: nodedomain.KernelVersion,
 	}
-	if err = InsertCandidateTx(tx, candidate, now.Unix()); err != nil {
+	if err = storecandidate.InsertTx(tx, candidate, now.Unix()); err != nil {
 		return Node{}, "", common.ErrNodeCreateFailed
 	}
 	if err = tx.Commit(); err != nil {
@@ -307,7 +310,7 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 		if _, err = tx.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID); err != nil {
 			return "", errors.New(common.CodeDatabaseUnavailable)
 		}
-		if err = SeedInitialTasksTx(tx, nodeID, now); err != nil {
+		if err = storecandidate.SeedInitialTasksTx(tx, nodeID, now, outAuthorizationTx); err != nil {
 			return "", err
 		}
 		if err = tx.Commit(); err != nil {
@@ -477,108 +480,74 @@ func (s *Store) RevokeIdentity(nodeID string, now time.Time) error {
 	return nil
 }
 
-func normalizeParams(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return "{}"
-	}
-	return string(raw)
-}
-
-// enqueueTaskAt persists a validated task with exact-envelope idempotency and a
-// per-node monotonic revision. An identical re-enqueue is a success (nil); the
-// same operation_id or idempotency_key with different content is a conflict;
-// a revision that would rewind the node chain is stale. Reserved
-// upgrade/rollback kinds never reach storage because protocol.ValidateTask
-// rejects them first.
+// reconcileNode publishes one immutable revision and the fixed four task chain
+// in a single transaction. Callers cannot supply kinds or params.
 //
-// Every request path threads the handler clock through enqueueTaskAt, so one
-// request has one timestamp.
-func (s *Store) EnqueueTaskAt(task protocol.Task, now time.Time) error {
+// A Line with stored transport settings publishes the full snapshot, so a
+// manual reconcile never erases the credentials of another subscriber. A node
+// without Line settings keeps the frozen v1 baseline and the Out behavior is
+// unchanged.
+func (s *Store) ReconcileNode(nodeID string, now time.Time) (storecandidate.Stored, []protocol.Task, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New(common.CodeDatabaseUnavailable)
+		return storecandidate.Stored{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
-	if err = enqueueTaskTx(tx, task, now); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return errors.New(common.CodeDatabaseUnavailable)
-	}
-	return nil
-}
-
-// enqueueTaskTx is the sole task insertion path. It never begins or commits a
-// transaction, so candidate publication and pairing can include tasks without
-// nesting transactions on the MaxOpenConns(1) SQLite pool. The caller-supplied
-// clock is shared with the candidate inserted in the same transaction, so one
-// publication has one consistent timestamp.
-func enqueueTaskTx(tx *sql.Tx, task protocol.Task, now time.Time) error {
-	if err := protocol.ValidateTask(task); err != nil {
-		return err
-	}
-	params := normalizeParams(task.Params)
-	res, err := lookupTask(tx, "operation_id=?", task.OperationID, task, params)
-	if err != nil {
-		return err
-	}
-	if res == taskLookupExact {
-		return nil
-	}
-	if res == taskLookupConflict {
-		return errors.New("IDEMPOTENCY_CONFLICT: operation_id already recorded with different content")
-	}
-	res, err = lookupTask(tx, "idempotency_key=?", task.IdempotencyKey, task, params)
-	if err != nil {
-		return err
-	}
-	if res == taskLookupExact {
-		return nil
-	}
-	if res == taskLookupConflict {
-		return errors.New("IDEMPOTENCY_CONFLICT: idempotency_key already recorded with different content")
-	}
-	var maxRev sql.NullInt64
-	if err = tx.QueryRow(`SELECT MAX(revision) FROM agent_tasks WHERE node_id=?`, task.NodeID).Scan(&maxRev); err != nil {
-		return errors.New(common.CodeDatabaseUnavailable)
-	}
-	if maxRev.Valid && task.Revision <= maxRev.Int64 {
-		return errors.New("REVISION_STALE: revision must increase monotonically")
-	}
-	stamp := now.Unix()
-	if _, err = tx.Exec(`INSERT INTO agent_tasks(operation_id, node_id, kind, revision, idempotency_key, status, params, created_at, updated_at) VALUES(?,?,?,?,?,'pending',?,?,?)`, task.OperationID, task.NodeID, task.Kind, task.Revision, task.IdempotencyKey, params, stamp, stamp); err != nil {
-		return errors.New(common.CodeDatabaseUnavailable)
-	}
-	return nil
-}
-
-type taskLookup int
-
-const (
-	taskLookupNone taskLookup = iota
-	taskLookupExact
-	taskLookupConflict
-)
-
-// lookupTask classifies an existing row matched by whereArg against the
-// incoming envelope. The full stored envelope is compared so an idempotent
-// replay is only accepted when every field matches exactly.
-func lookupTask(tx *sql.Tx, where string, arg any, task protocol.Task, params string) (taskLookup, error) {
-	var (
-		opID, nodeID, kind, idem, storedParams string
-		revision                               int64
-	)
-	err := tx.QueryRow(`SELECT operation_id, node_id, kind, revision, idempotency_key, params FROM agent_tasks WHERE `+where, arg).Scan(&opID, &nodeID, &kind, &revision, &idem, &storedParams)
+	var role string
+	var vless int
+	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, nodeID).Scan(&role, &vless)
 	if errors.Is(err, sql.ErrNoRows) {
-		return taskLookupNone, nil
+		return storecandidate.Stored{}, nil, common.ErrNodeNotFound
 	}
 	if err != nil {
-		return taskLookupNone, errors.New(common.CodeDatabaseUnavailable)
+		return storecandidate.Stored{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
-	if opID == task.OperationID && nodeID == task.NodeID && kind == task.Kind && revision == task.Revision && idem == task.IdempotencyKey && storedParams == params {
-		return taskLookupExact, nil
+	if role == string(nodedomain.RoleHTTP) {
+		// An external HTTP proxy has no Agent, candidate or readback; a
+		// reconcile would have nowhere to go (Ruling R11).
+		return storecandidate.Stored{}, nil, errors.New("NODE_ROLE_INVALID: an external http proxy has no agent candidate")
 	}
-	return taskLookupConflict, nil
+	var unfinished int
+	if err = tx.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status IN ('pending','applying','verifying')`, nodeID).Scan(&unfinished); err != nil {
+		return storecandidate.Stored{}, nil, errors.New(common.CodeDatabaseUnavailable)
+	}
+	if unfinished != 0 {
+		return storecandidate.Stored{}, nil, errors.New("TASKS_IN_PROGRESS")
+	}
+	var revision int64
+	if err = tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
+		return storecandidate.Stored{}, nil, errors.New(common.CodeDatabaseUnavailable)
+	}
+	candidate, err := BuildLineCandidateTx(tx, nodeID, revision)
+	if err != nil {
+		return storecandidate.Stored{}, nil, err
+	}
+	if candidate.Role != nodedomain.Role(role) || candidate.VLESSPort != vless {
+		return storecandidate.Stored{}, nil, errors.New("CANDIDATE_MISMATCH: candidate does not match the node")
+	}
+	// An Out candidate always carries its source authorization, including the
+	// explicit empty one; an Edge candidate never does.
+	var tasks []protocol.Task
+	if candidate.Role == nodedomain.RoleOut {
+		allowed, authErr := outAuthorizationTx(tx, nodeID)
+		if authErr != nil {
+			return storecandidate.Stored{}, nil, authErr
+		}
+		tasks, err = storecandidate.PublishOutTx(tx, nodeID, candidate, now, allowed)
+	} else {
+		tasks, err = storecandidate.PublishTx(tx, nodeID, candidate, now)
+	}
+	if err != nil {
+		return storecandidate.Stored{}, nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return storecandidate.Stored{}, nil, errors.New(common.CodeDatabaseUnavailable)
+	}
+	stored, err := s.Candidate(nodeID, candidate.Revision)
+	if err != nil {
+		return storecandidate.Stored{}, nil, fmt.Errorf("CANDIDATE_READBACK_FAILED: %w", err)
+	}
+	return stored, tasks, nil
 }
 
 // pendingTasksAt returns every unfinished task for one node: pending, applying

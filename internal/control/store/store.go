@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
 	_ "modernc.org/sqlite"
@@ -30,10 +31,18 @@ const (
 // minutes) is shared by setup, login and password change. Its window and budget
 // live in store_transport.go with the other fixed lifetimes.
 
+// Store is the assembled persistence handle. Each domain contributes one
+// embedded handle, so a caller reads the same methods it always has while every
+// implementation lives in its own package. The fields here are the ones the
+// root owns: the connection, the data directory and the process lock.
 type Store struct {
 	DB   *sql.DB
 	lock *os.File
 	Dir  string
+
+	// The candidate/task leaf. Its Out authorization is wired after the
+	// database opens, once the Out domain exists.
+	*storecandidate.Store
 }
 type Session struct {
 	Hash    []byte
@@ -87,7 +96,7 @@ func OpenStore(dir string) (*Store, error) {
 		lock.Close()
 		return nil, errors.New("DATA_LOCKED: another Web process uses this directory")
 	}
-	s := &Store{lock: lock, Dir: abs}
+	s := &Store{lock: lock, Dir: abs, Store: &storecandidate.Store{}}
 	f, err := os.OpenFile(filepath.Join(abs, databaseFileName), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		s.Close()
@@ -101,6 +110,7 @@ func OpenStore(dir string) (*Store, error) {
 		return nil, err
 	}
 	s.DB.SetMaxOpenConns(1)
+	s.Store.DB = s.DB
 	if err = s.Migrate(); err != nil {
 		s.Close()
 		return nil, err
@@ -213,7 +223,7 @@ func (s *Store) migrateSchemaChain() error {
 		version = 2
 	}
 	if version == 2 {
-		if err = migrateSchema3(tx); err != nil {
+		if err = storecandidate.MigrateSchema3(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 3

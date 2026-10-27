@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/clientdoc"
@@ -368,7 +369,7 @@ func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool
 		return PublishTarget{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
-	revision, err := NextCandidateRevisionTx(tx, lineID)
+	revision, err := storecandidate.NextCandidateRevisionTx(tx, lineID)
 	if err != nil {
 		return PublishTarget{}, err
 	}

@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
+
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
@@ -167,7 +169,7 @@ func (s *Store) clearOutACLBeforeDeleteTx(tx *sql.Tx, outID string, now time.Tim
 		} else if unfinished != 0 {
 			return true, errors.New(CodeOutSyncPending + ": the out still has an unfinished chain")
 		}
-		revision, nextErr := NextCandidateRevisionTx(tx, outID)
+		revision, nextErr := storecandidate.NextCandidateRevisionTx(tx, outID)
 		if nextErr != nil {
 			return false, nextErr
 		}
@@ -175,7 +177,7 @@ func (s *Store) clearOutACLBeforeDeleteTx(tx *sql.Tx, outID string, now time.Tim
 		if buildErr != nil {
 			return false, buildErr
 		}
-		if err := insertCandidateWithAllowlistTx(tx, outID, candidate, []string{}, now); err != nil {
+		if _, err := storecandidate.PublishOutTx(tx, outID, candidate, now, []string{}); err != nil {
 			return false, err
 		}
 	}

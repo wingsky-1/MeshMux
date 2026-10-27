@@ -14,6 +14,7 @@ import (
 	"errors"
 	"time"
 
+	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
@@ -218,7 +219,7 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 			}
 		}
 	}
-	revision, err := NextCandidateRevisionTx(tx, nodeID)
+	revision, err := storecandidate.NextCandidateRevisionTx(tx, nodeID)
 	if err != nil {
 		return ApprovedUpgrade{}, err
 	}
@@ -241,7 +242,16 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest upgrade.Manifest, manifes
 	if err := MixedVersionGate(candidate, observed); err != nil {
 		return ApprovedUpgrade{}, err
 	}
-	tasks, err := publishCandidateTx(tx, nodeID, candidate, now)
+	var tasks []protocol.Task
+	if candidate.Role == node.RoleOut {
+		allowed, authErr := outAuthorizationTx(tx, nodeID)
+		if authErr != nil {
+			return ApprovedUpgrade{}, authErr
+		}
+		tasks, err = storecandidate.PublishOutTx(tx, nodeID, candidate, now, allowed)
+	} else {
+		tasks, err = storecandidate.PublishTx(tx, nodeID, candidate, now)
+	}
 	if err != nil {
 		return ApprovedUpgrade{}, err
 	}
