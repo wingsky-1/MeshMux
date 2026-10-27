@@ -275,10 +275,7 @@ func (app *Server) reconcileHubUpgrade(ctx context.Context, startup bool) hubupg
 // loop, and Close stops it and waits for the pass in flight.
 func (app *Server) startHubUpgradeReconcile(ctx context.Context) {
 	app.stopHubUpgradeReconcile()
-	interval := hubUpgradeReconcileInterval
-	if app.reconcileInterval > 0 {
-		interval = app.reconcileInterval
-	}
+	interval := app.reconcileIntervalOr()
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	app.reconcileMu.Lock()

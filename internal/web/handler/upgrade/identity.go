@@ -245,10 +245,7 @@ func (app *Server) startHubIdentityRefresh(ctx context.Context) {
 	// A second start replaces the first loop instead of leaving it behind.
 	app.stopHubIdentityRefresh()
 	now := app.Now
-	interval := hubIdentityRefreshInterval
-	if app.identityInterval > 0 {
-		interval = app.identityInterval
-	}
+	interval := app.identityIntervalOr()
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	app.identityMu.Lock()
