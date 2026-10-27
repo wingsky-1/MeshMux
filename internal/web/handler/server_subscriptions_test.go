@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
@@ -541,7 +543,7 @@ func TestSubscriptionRejectsUnconfiguredLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line, err := readStoredLine(t, s, nodeID)
+	line, err := storetest.ReadStoredLine(t, s, nodeID)
 	if err != nil {
 		t.Fatal(err)
 	}

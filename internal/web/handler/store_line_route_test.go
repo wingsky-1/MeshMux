@@ -13,12 +13,14 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/url"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
@@ -32,14 +34,14 @@ const outServerPolicy = `{"default":"direct","rules":[{"priority":100,"match":{"
 const staleOutRoute = `{"rules":[{"domain":["ai.example.invalid"],"outbound":"out"}],"final":"out"}`
 
 // activateServerPolicy creates and activates one server revision on a fixture.
-func activateServerPolicy(t *testing.T, f outSyncFixture, payload string) {
+func activateServerPolicy(t *testing.T, f storetest.OutSyncFixture, payload string) {
 	t.Helper()
-	created, err := f.store.CreateRoutePolicy(store.PolicyLayerServer, "服务端策略",
-		json.RawMessage(payload), nil, "op-policy", f.now)
+	created, err := f.Store.CreateRoutePolicy(store.PolicyLayerServer, "服务端策略",
+		json.RawMessage(payload), nil, "op-policy", f.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.ActivateRoutePolicy(created.ID, created.Revision, "op-activate", f.now); err != nil {
+	if _, err := f.Store.ActivateRoutePolicy(created.ID, created.Revision, "op-activate", f.Now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -98,8 +100,8 @@ func routeSelectsOut(raw string) bool {
 // Out, changing the policy or revoking it changes the next route instead of
 // preserving an old one.
 func TestLineRouteDerivationFollowsLiveIntent(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, line, out := f.store, f.now, f.line, f.out
+	f := storetest.NewOutSyncFixture(t)
+	s, now, line, out := f.Store, f.Now, f.Line, f.Out
 
 	deriveRoute := func() (string, error) {
 		tx, err := s.DB.Begin()
@@ -121,8 +123,8 @@ func TestLineRouteDerivationFollowsLiveIntent(t *testing.T) {
 
 	// The policy selects the Out and the Out is authorized: the route names it.
 	activateServerPolicy(t, f, outServerPolicy)
-	enableOutForLine(t, s, out, line, now)
-	confirmChain(t, s, out, now)
+	storetest.EnableOutForLine(t, s, out, line, now)
+	storetest.ConfirmChain(t, s, out, now)
 	got, err := deriveRoute()
 	if err != nil {
 		t.Fatalf("route with a healthy Out: %v", err)
@@ -133,14 +135,14 @@ func TestLineRouteDerivationFollowsLiveIntent(t *testing.T) {
 
 	// The Out is unbound while the policy still selects it: fail-closed, never a
 	// stale "out" reference and never a silent direct render.
-	disableOutForLine(t, s, out, line, now)
-	if _, err := deriveRoute(); err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
+	storetest.DisableOutForLine(t, s, out, line, now)
+	if _, err := deriveRoute(); err == nil || !storetest.HasErrorCode(err, "OUT_BINDING_INVALID") {
 		t.Fatalf("route without the Out = %v, want OUT_BINDING_INVALID", err)
 	}
 
 	// The operator moves the policy back to direct: the route no longer names an
 	// Out, so an unbound Out is not an error either.
-	activateServerPolicy(t, f, publishServerDirect)
+	activateServerPolicy(t, f, storetest.PublishServerDirect)
 	got, err = deriveRoute()
 	if err != nil {
 		t.Fatalf("direct route: %v", err)
@@ -166,51 +168,51 @@ func TestLineRouteDerivationFollowsLiveIntent(t *testing.T) {
 // regression: a credential change publishes the route the active revision
 // resolves now, so a stale "out" route cannot ride into the next revision.
 func TestSubscriberSyncRedrivesRouteInsteadOfCarryingTheOldOne(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, line, out := f.store, f.now, f.line, f.out
+	f := storetest.NewOutSyncFixture(t)
+	s, now, line, out := f.Store, f.Now, f.Line, f.Out
 
 	activateServerPolicy(t, f, outServerPolicy)
-	enableOutForLine(t, s, out, line, now)
-	confirmChain(t, s, out, now)
-	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+	storetest.EnableOutForLine(t, s, out, line, now)
+	storetest.ConfirmChain(t, s, out, now)
+	if err := storetest.PrepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
 	}
 	if got := latestStoredRoute(t, s, line); !routeSelectsOut(got) {
 		t.Fatalf("published route does not select the Out: %s", got)
 	}
-	confirmChain(t, s, line, now)
+	storetest.ConfirmChain(t, s, line, now)
 	// The derived route is the same bytes the publication stored: an unchanged
 	// snapshot is confirmed, so a subscriber event does not republish it.
-	revisions := candidateCount(t, s, line)
-	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+	revisions := storetest.CandidateCount(t, s, line)
+	if err := storetest.PrepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatalf("unchanged publication after the out policy: %v", err)
 	}
-	if got := candidateCount(t, s, line); got != revisions {
+	if got := storetest.CandidateCount(t, s, line); got != revisions {
 		t.Fatalf("an unchanged confirmed snapshot was republished: %d -> %d", revisions, got)
 	}
-	tasks := taskCount(t, s, line)
+	tasks := storetest.TaskCount(t, s, line)
 
 	// The Out is unbound while the policy still selects it: the publication fails
 	// closed, stores nothing and names the conflict, so the stale "out" route is
 	// not refreshed under a new revision either.
-	disableOutForLine(t, s, out, line, now)
-	err := prepareSubscriberSyncForLine(s, line, now)
-	if err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
+	storetest.DisableOutForLine(t, s, out, line, now)
+	err := storetest.PrepareSubscriberSyncForLine(s, line, now)
+	if err == nil || !storetest.HasErrorCode(err, "OUT_BINDING_INVALID") {
 		t.Fatalf("publication while the policy still selects the unbound Out = %v, want OUT_BINDING_INVALID", err)
 	}
-	if got := candidateCount(t, s, line); got != revisions {
+	if got := storetest.CandidateCount(t, s, line); got != revisions {
 		t.Fatalf("fail-closed publication stored %d revisions, want %d", got, revisions)
 	}
-	if got := taskCount(t, s, line); got != tasks {
+	if got := storetest.TaskCount(t, s, line); got != tasks {
 		t.Fatalf("fail-closed publication enqueued %d tasks, want %d", got, tasks)
 	}
 	// The subscriber projection reports the conflict instead of a stale healthy.
-	if status, code, err := subscriberSyncStatusForLine(s, line, now); err != nil {
+	if status, code, err := storetest.SubscriberSyncStatusForLine(s, line, now); err != nil {
 		t.Fatal(err)
 	} else if status != store.SubscriberSyncPartial || code != "OUT_BINDING_INVALID" {
 		t.Fatalf("line status = %s/%s, want partial/OUT_BINDING_INVALID", status, code)
 	}
-	activateServerPolicy(t, f, publishServerDirect)
+	activateServerPolicy(t, f, storetest.PublishServerDirect)
 
 	subscribers, err := s.ListSubscribers()
 	if err != nil || len(subscribers) != 1 {
@@ -239,33 +241,33 @@ func TestSubscriberSyncRedrivesRouteInsteadOfCarryingTheOldOne(t *testing.T) {
 // live egress), so the fixture releases the selection first — the same migration the
 // refusal asks the operator for — and then deletes the Out.
 func TestSubscriberSyncFailsClosedWhenTheOutIsDeleted(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, line, out := f.store, f.now, f.line, f.out
+	f := storetest.NewOutSyncFixture(t)
+	s, now, line, out := f.Store, f.Now, f.Line, f.Out
 
 	activateServerPolicy(t, f, outServerPolicy)
-	enableOutForLine(t, s, out, line, now)
-	confirmChain(t, s, out, now)
-	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+	storetest.EnableOutForLine(t, s, out, line, now)
+	storetest.ConfirmChain(t, s, out, now)
+	if err := storetest.PrepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
 	}
-	confirmChain(t, s, line, now)
-	revisions := candidateCount(t, s, line)
+	storetest.ConfirmChain(t, s, line, now)
+	revisions := storetest.CandidateCount(t, s, line)
 
 	// A live reference refuses the delete and changes nothing: the Out is still the
 	// authorized egress, so this is not the fail-closed state yet.
-	if err := s.DeleteOutAt(out, now); err == nil || !hasErrorCode(err, store.CodeOutReferenced) {
+	if err := s.DeleteOutAt(out, now); err == nil || !storetest.HasErrorCode(err, store.CodeOutReferenced) {
 		t.Fatalf("delete of a selected out = %v, want %s", err, store.CodeOutReferenced)
 	}
-	clearOutForLine(t, s, line, now)
-	settleTasks(t, s, out)
+	storetest.ClearOutForLine(t, s, line, now)
+	storetest.SettleTasks(t, s, out)
 	if err := s.DeleteOutAt(out, now); err != nil {
 		t.Fatalf("delete out: %v", err)
 	}
-	err := prepareSubscriberSyncForLine(s, line, now)
-	if err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
+	err := storetest.PrepareSubscriberSyncForLine(s, line, now)
+	if err == nil || !storetest.HasErrorCode(err, "OUT_BINDING_INVALID") {
 		t.Fatalf("publication after the Out was deleted = %v, want OUT_BINDING_INVALID", err)
 	}
-	if got := candidateCount(t, s, line); got != revisions {
+	if got := storetest.CandidateCount(t, s, line); got != revisions {
 		t.Fatalf("fail-closed publication after delete stored %d revisions, want %d", got, revisions)
 	}
 }
@@ -274,27 +276,27 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsDeleted(t *testing.T) {
 // binding still exists, but the Out cannot carry the traffic, so an
 // Out-selecting policy refuses with the policy package's own code.
 func TestSubscriberSyncFailsClosedWhenTheOutIsOffline(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, line, out := f.store, f.now, f.line, f.out
+	f := storetest.NewOutSyncFixture(t)
+	s, now, line, out := f.Store, f.Now, f.Line, f.Out
 
 	activateServerPolicy(t, f, outServerPolicy)
-	enableOutForLine(t, s, out, line, now)
-	confirmChain(t, s, out, now)
-	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+	storetest.EnableOutForLine(t, s, out, line, now)
+	storetest.ConfirmChain(t, s, out, now)
+	if err := storetest.PrepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
 	}
-	confirmChain(t, s, line, now)
-	revisions := candidateCount(t, s, line)
+	storetest.ConfirmChain(t, s, line, now)
+	revisions := storetest.CandidateCount(t, s, line)
 
 	if _, err := s.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, s, line, now)
-	err := prepareSubscriberSyncForLine(s, line, now)
-	if err == nil || !hasErrorCode(err, policy.CodeOutOfflineFailClosed) {
+	storetest.MarkLineOnline(t, s, line, now)
+	err := storetest.PrepareSubscriberSyncForLine(s, line, now)
+	if err == nil || !storetest.HasErrorCode(err, policy.CodeOutOfflineFailClosed) {
 		t.Fatalf("publication with an offline Out = %v, want %s", err, policy.CodeOutOfflineFailClosed)
 	}
-	if got := candidateCount(t, s, line); got != revisions {
+	if got := storetest.CandidateCount(t, s, line); got != revisions {
 		t.Fatalf("offline fail-closed publication stored %d revisions, want %d", got, revisions)
 	}
 }
@@ -342,7 +344,7 @@ func upgradeManifestVersion(t *testing.T) string {
 // the stale "out" fragment a removed policy left behind.
 func TestUpgradeApprovalInvalidatesAStaleRoute(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
-	if _, err := app.Store.SetLine(testLine(nodeID, "upgrade-line"), app.Now()); err != nil {
+	if _, err := app.Store.SetLine(storetest.TestLine(nodeID, "upgrade-line"), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	seedStoredRouteCandidate(t, app, nodeID, staleOutRoute)
@@ -363,7 +365,7 @@ func TestUpgradeApprovalInvalidatesAStaleRoute(t *testing.T) {
 func TestUpgradeApprovalRefusesAnUnboundOut(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
 	now := app.Now()
-	settings := testLine(nodeID, "upgrade-line")
+	settings := storetest.TestLine(nodeID, "upgrade-line")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(settings, now); err != nil {
@@ -395,28 +397,28 @@ func TestUpgradeApprovalRefusesAnUnboundOut(t *testing.T) {
 func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
 	now := app.Now()
-	settings := testLine(nodeID, "upgrade-line")
+	settings := storetest.TestLine(nodeID, "upgrade-line")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	out := pairedStoreNode(t, app.Store, "out", now)
-	markLineOnline(t, app.Store, out, now)
-	configureOut(t, app.Store, out, now)
+	out := storetest.PairedStoreNode(t, app.Store, "out", now)
+	storetest.MarkLineOnline(t, app.Store, out, now)
+	storetest.ConfigureOut(t, app.Store, out, now)
 	// Enrollment publishes the Out guard (Ruling R10); the fixture settles and confirms
 	// it so the offline state below is the only reason for the refusal.
 	app.Store.RepublishOutAuthorizations(now)
-	settleTasks(t, app.Store, out)
-	confirmChain(t, app.Store, out, now)
-	enableOutForLine(t, app.Store, out, nodeID, now)
+	storetest.SettleTasks(t, app.Store, out)
+	storetest.ConfirmChain(t, app.Store, out, now)
+	storetest.EnableOutForLine(t, app.Store, out, nodeID, now)
 	// Selecting the Out makes the Line route through it; the Line's own chain has to
 	// settle before the approval can be judged on the Out state alone.
-	if err := app.Store.PrepareSubscriberSync(nodeSubscriberID(t, app.Store, nodeID), now); err != nil {
+	if err := app.Store.PrepareSubscriberSync(storetest.NodeSubscriberID(t, app.Store, nodeID), now); err != nil {
 		t.Fatalf("publish the line: %v", err)
 	}
-	settleTasks(t, app.Store, nodeID)
-	confirmChain(t, app.Store, nodeID, now)
+	storetest.SettleTasks(t, app.Store, nodeID)
+	storetest.ConfirmChain(t, app.Store, nodeID, now)
 	created, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
 		json.RawMessage(outServerPolicy), nil, "op-upgrade-policy", now)
 	if err != nil {
@@ -450,13 +452,13 @@ func TestSubscriberSyncEndpointReportsTheOutRefusal(t *testing.T) {
 
 	now := app.Now()
 	line := createPairedWebNode(t, app, "edge", "line-sync-out", 8443, 2222)
-	settings := testLine(line.ID, "line-sync-out")
+	settings := storetest.TestLine(line.ID, "line-sync-out")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.Store, line.ID, now)
+	storetest.MarkLineOnline(t, app.Store, line.ID, now)
 	subscriber, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -488,32 +490,32 @@ func TestSubscriberSyncEndpointReportsTheOutRefusal(t *testing.T) {
 // not change the publication path: an Out-free direct policy still assembles,
 // and the route it stores is exactly what the implicit derivation produces.
 func TestPublishAssemblyStillUsesTheSameOutFacts(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatalf("direct assembly: %v", err)
 	}
 	if assembly.EgressState != policy.AIEgressLine || len(assembly.Targets) != 1 {
 		t.Fatalf("assembly = %s/%+v", assembly.EgressState, assembly.Targets)
 	}
-	if _, err := f.store.PublishPolicyAssembly(assembly, f.now); err != nil {
+	if _, err := f.Store.PublishPolicyAssembly(assembly, f.Now); err != nil {
 		t.Fatalf("store publication: %v", err)
 	}
-	tx, err := f.store.DB.Begin()
+	tx, err := f.Store.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	live, err := store.LineServerRouteTx(tx, f.line, f.now)
+	live, err := store.LineServerRouteTx(tx, f.Line, f.Now)
 	tx.Rollback()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored := latestStoredRoute(t, f.store, f.line); !sameJSON(t, string(live), stored) {
+	if stored := latestStoredRoute(t, f.Store, f.Line); !sameJSON(t, string(live), stored) {
 		t.Fatalf("implicit route %q disagrees with the published route %q", live, stored)
 	}
 }
@@ -543,9 +545,9 @@ func sameJSON(t *testing.T, left, right string) bool {
 // TestLineRouteSkipsNonEdgeNodes keeps the derivation scoped to a Line: an Out
 // node and an unconfigured Edge carry no server route.
 func TestLineRouteSkipsNonEdgeNodes(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	out := pairedStoreNode(t, s, "out", now)
-	unconfigured := pairedStoreNode(t, s, "edge", now)
+	s, now := storetest.SubscriberStore(t)
+	out := storetest.PairedStoreNode(t, s, "out", now)
+	unconfigured := storetest.PairedStoreNode(t, s, "edge", now)
 	created, err := s.CreateRoutePolicy(store.PolicyLayerServer, "服务端策略",
 		json.RawMessage(outServerPolicy), nil, "op-policy", now)
 	if err != nil {

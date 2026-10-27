@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
@@ -117,7 +119,7 @@ func TestMeshControlPlaneFailRefusesForeignCodes(t *testing.T) {
 // stay out of the page, and the log carries the code rather than the message.
 func TestMeshPageNoticeNeverRendersFreeFormText(t *testing.T) {
 	app, b, _, logs := meshTestApp(t)
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

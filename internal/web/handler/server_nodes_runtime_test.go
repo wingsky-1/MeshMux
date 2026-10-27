@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/web/view"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"

@@ -1,4 +1,4 @@
-package handler
+package policy_test
 
 // Assembly tests for the publication pipeline (10d-2b): the three Out states,
 // the fail-closed refusals, the ruleset pin gate and the kernel gate ordering.
@@ -6,72 +6,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
-
-// publishFixture is one Hub with a paired Line, stored transport and an active
-// server intent, so a publication has a real target.
-type publishFixture struct {
-	store    *store.Store
-	now      time.Time
-	line     string
-	lineName string
-}
-
-// newPublishFixture builds the fixture without any Out: the "Line direct"
-// configured state, which is the default deployment.
-func newPublishFixture(t *testing.T) publishFixture {
-	t.Helper()
-	s, now := subscriberStoreFixture(t)
-	line := pairedStoreNode(t, s, "edge", now)
-	settings := testLine(line, "line-a")
-	settings.Server = "203.0.113.7"
-	settings.ServerName = "line.example.invalid"
-	if _, err := s.SetLine(settings, now); err != nil {
-		t.Fatal(err)
-	}
-	markLineOnline(t, s, line, now)
-	if _, _, err := s.CreateSubscriber("alice", []string{line}, now); err != nil {
-		t.Fatal(err)
-	}
-	seedInitialChain(t, s, line, now)
-	confirmChain(t, s, line, now)
-	return publishFixture{store: s, now: now, line: line, lineName: "line-a"}
-}
-
-// activatePolicy creates and activates one revision for a layer. The client
-// layer was closed to writes in Task 6, so its calls insert a legacy revision
-// directly: the preview/gate path still needs a row to read, and this is the
-// only way such a row can exist after the upgrade.
-func (f publishFixture) activatePolicy(t *testing.T, layer store.PolicyLayer, payload, pins string) store.RoutePolicy {
-	t.Helper()
-	if layer == store.PolicyLayerClient {
-		seedLegacyClientPolicyStore(t, f.store, json.RawMessage(payload), f.now)
-		return store.RoutePolicy{Layer: layer, Revision: 1}
-	}
-	if pins == "" {
-		pins = `{}`
-	}
-	created, err := f.store.CreateRoutePolicy(layer, "策略-"+string(layer),
-		json.RawMessage(payload), json.RawMessage(pins), "op-create", f.now)
-	if err != nil {
-		t.Fatalf("create %s policy: %v", layer, err)
-	}
-	active, err := f.store.ActivateRoutePolicy(created.ID, created.Revision, "op-activate", f.now)
-	if err != nil {
-		t.Fatalf("activate %s policy: %v", layer, err)
-	}
-	return active
-}
-
-const publishServerDirect = `{"default":"direct","rules":[]}`
 
 // assertRealOutEgress proves the assembled Line document carries the Hub's
 // Out access path: the "out" tag is a Shadowsocks outbound (Ruling R7: the
@@ -116,8 +60,8 @@ func assertRealOutEgress(t *testing.T, document []byte) {
 }
 
 func TestPublishAssemblyOutStates(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
 
 	// State 1: no Out configured. The Line egresses directly and the route
 	// names no Out, so the assembled candidate is a valid Line document.
@@ -125,15 +69,15 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := &fixturePublishVerifier{}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now)
+	verifier := &storetest.FixturePublishVerifier{}
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), verifier, request, f.Now)
 	if err != nil {
 		t.Fatalf("direct assembly: %v", err)
 	}
 	if assembly.EgressState != policy.AIEgressLine || assembly.EgressCode != "" {
 		t.Fatalf("egress = %s/%s, want line/none", assembly.EgressState, assembly.EgressCode)
 	}
-	if len(assembly.Targets) != 1 || assembly.Targets[0].LineID != f.line {
+	if len(assembly.Targets) != 1 || assembly.Targets[0].LineID != f.Line {
 		t.Fatalf("targets = %+v", assembly.Targets)
 	}
 	if !strings.Contains(string(assembly.RouteFragment), `"final": "direct"`) {
@@ -148,21 +92,21 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 
 	// State 2: an Out is bound and healthy. The AI rule selects the Out and the
 	// route names it, so the Line document must be compiled with the Out fact.
-	out := pairedStoreNode(t, f.store, "out", f.now)
-	markLineOnline(t, f.store, out, f.now)
-	configureOut(t, f.store, out, f.now)
+	out := storetest.PairedStoreNode(t, f.Store, "out", f.Now)
+	storetest.MarkLineOnline(t, f.Store, out, f.Now)
+	storetest.ConfigureOut(t, f.Store, out, f.Now)
 	// The Out's authorization is node membership (Ruling R10), so enrollment is what
 	// publishes its guard; the fixture reproduces that event instead of relying on a
 	// subscription edit to trigger a republication.
-	f.store.RepublishOutAuthorizations(f.now)
-	settleTasks(t, f.store, out)
-	confirmChain(t, f.store, out, f.now)
-	enableOutForLine(t, f.store, out, f.line, f.now)
-	f.activatePolicy(t, store.PolicyLayerServer,
+	f.Store.RepublishOutAuthorizations(f.Now)
+	storetest.SettleTasks(t, f.Store, out)
+	storetest.ConfirmChain(t, f.Store, out, f.Now)
+	storetest.EnableOutForLine(t, f.Store, out, f.Line, f.Now)
+	f.ActivatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
 
-	verifier = &fixturePublishVerifier{}
-	assembly, err = f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now)
+	verifier = &storetest.FixturePublishVerifier{}
+	assembly, err = f.Store.AssemblePolicyPublication(context.Background(), verifier, request, f.Now)
 	if err != nil {
 		t.Fatalf("out assembly: %v", err)
 	}
@@ -172,7 +116,7 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if !strings.Contains(string(assembly.RouteFragment), `"outbound": "out"`) {
 		t.Fatalf("route fragment does not select the Out: %s", assembly.RouteFragment)
 	}
-	if !verifier.hasSingBoxDocument(`"outbound": "out"`) {
+	if !verifier.HasSingBoxDocument(`"outbound": "out"`) {
 		t.Fatal("the gated Line document does not carry the Out rule")
 	}
 	// The gated document must declare the tag its route names, or the kernel
@@ -180,45 +124,45 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	// renders the real VLESS egress from its configured transport and the
 	// Hub-issued credential; the fail-closed block stub only remains for the
 	// never-route tag.
-	if !verifier.hasSingBoxDocument(`"tag": "out"`) {
+	if !verifier.HasSingBoxDocument(`"tag": "out"`) {
 		t.Fatal("the gated Line document does not declare the out outbound")
 	}
 	assertRealOutEgress(t, assembly.Targets[0].Config)
-	if !verifier.hasSingBoxDocument(`"type": "block"`) {
+	if !verifier.HasSingBoxDocument(`"type": "block"`) {
 		t.Fatal("the gated Line document does not carry the fail-closed block stub")
 	}
 
 	// State 3: the Out is unhealthy. The publication fails closed and stores
 	// nothing, and no kernel check runs on a document that must not exist.
-	disableOutForLine(t, f.store, out, f.line, f.now)
-	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
+	storetest.DisableOutForLine(t, f.Store, out, f.Line, f.Now)
+	if _, err := f.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
-	enableOutForLine(t, f.store, out, f.line, f.now)
-	settleTasks(t, f.store, out)
-	verifier = &fixturePublishVerifier{}
-	candidatesBefore := candidateCount(t, f.store, f.line)
-	_, err = f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now)
+	storetest.EnableOutForLine(t, f.Store, out, f.Line, f.Now)
+	storetest.SettleTasks(t, f.Store, out)
+	verifier = &storetest.FixturePublishVerifier{}
+	candidatesBefore := storetest.CandidateCount(t, f.Store, f.Line)
+	_, err = f.Store.AssemblePolicyPublication(context.Background(), verifier, request, f.Now)
 	if err == nil || !strings.HasPrefix(err.Error(), policy.CodeOutOfflineFailClosed) {
 		t.Fatalf("unhealthy Out assembly = %v, want %s", err, policy.CodeOutOfflineFailClosed)
 	}
-	if singBox, mihomo := verifier.counts(); singBox != 0 || mihomo != 0 {
+	if singBox, mihomo := verifier.Counts(); singBox != 0 || mihomo != 0 {
 		t.Fatalf("failed-closed assembly ran %d sing-box and %d mihomo checks", singBox, mihomo)
 	}
-	if got := candidateCount(t, f.store, f.line); got != candidatesBefore {
+	if got := storetest.CandidateCount(t, f.Store, f.Line); got != candidatesBefore {
 		t.Fatalf("failed-closed assembly stored %d candidates, want %d", got, candidatesBefore)
 	}
 }
 
 func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer,
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
-	out := pairedStoreNode(t, f.store, "out", f.now)
-	markLineOnline(t, f.store, out, f.now)
-	configureOut(t, f.store, out, f.now)
-	enableOutForLine(t, f.store, out, f.line, f.now)
-	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
+	out := storetest.PairedStoreNode(t, f.Store, "out", f.Now)
+	storetest.MarkLineOnline(t, f.Store, out, f.Now)
+	storetest.ConfigureOut(t, f.Store, out, f.Now)
+	storetest.EnableOutForLine(t, f.Store, out, f.Line, f.Now)
+	if _, err := f.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
 
@@ -227,7 +171,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now); err == nil ||
+	if _, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), policy.CodeOutOfflineFailClosed) {
 		t.Fatalf("assembly without opt-in = %v, want fail-closed", err)
 	}
@@ -237,7 +181,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, fallback, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, fallback, f.Now)
 	if err != nil {
 		t.Fatalf("fallback assembly: %v", err)
 	}
@@ -260,51 +204,51 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 // egress state and present it for the whole fleet. A healthy Line next to a
 // fail-closed Line must read as "mixed" while each Line keeps its own state.
 func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
-	f := newPublishFixture(t)
-	healthy := pairedStoreNode(t, f.store, "out", f.now)
-	markLineOnline(t, f.store, healthy, f.now)
-	configureOut(t, f.store, healthy, f.now)
+	f := storetest.NewPublishFixture(t)
+	healthy := storetest.PairedStoreNode(t, f.Store, "out", f.Now)
+	storetest.MarkLineOnline(t, f.Store, healthy, f.Now)
+	storetest.ConfigureOut(t, f.Store, healthy, f.Now)
 	// Enrollment publishes the Out's membership guard (Ruling R10); the selection only
 	// makes the Line route through it.
-	f.store.RepublishOutAuthorizations(f.now)
-	settleTasks(t, f.store, healthy)
-	confirmChain(t, f.store, healthy, f.now)
-	enableOutForLine(t, f.store, healthy, f.line, f.now)
+	f.Store.RepublishOutAuthorizations(f.Now)
+	storetest.SettleTasks(t, f.Store, healthy)
+	storetest.ConfirmChain(t, f.Store, healthy, f.Now)
+	storetest.EnableOutForLine(t, f.Store, healthy, f.Line, f.Now)
 
 	// The second Line has a bound Out that stopped reporting: its own state is
 	// fail-closed, which must not be replaced by the healthy Line's "out".
-	second := pairedStoreNode(t, f.store, "edge", f.now)
-	settings := testLine(second, "line-b")
+	second := storetest.PairedStoreNode(t, f.Store, "edge", f.Now)
+	settings := storetest.TestLine(second, "line-b")
 	settings.Server = "198.51.100.9"
 	settings.ServerName = "line-b.example.invalid"
 	settings.SortOrder = 2
-	if _, err := f.store.SetLine(settings, f.now); err != nil {
+	if _, err := f.Store.SetLine(settings, f.Now); err != nil {
 		t.Fatal(err)
 	}
 	// A new Line is a membership change (Ruling R10), so the healthy Out republished
 	// its guard: the fixture settles that chain before asserting states, exactly as a
 	// reachable Out would.
-	settleTasks(t, f.store, healthy)
-	confirmChain(t, f.store, healthy, f.now)
-	markLineOnline(t, f.store, second, f.now)
-	offline := pairedStoreNode(t, f.store, "out", f.now)
-	markLineOnline(t, f.store, offline, f.now)
-	configureOut(t, f.store, offline, f.now)
+	storetest.SettleTasks(t, f.Store, healthy)
+	storetest.ConfirmChain(t, f.Store, healthy, f.Now)
+	storetest.MarkLineOnline(t, f.Store, second, f.Now)
+	offline := storetest.PairedStoreNode(t, f.Store, "out", f.Now)
+	storetest.MarkLineOnline(t, f.Store, offline, f.Now)
+	storetest.ConfigureOut(t, f.Store, offline, f.Now)
 	// The offline Out never confirms its guard, so its Line's own state is the
 	// fail-closed one the aggregate has to report.
-	enableOutForLine(t, f.store, offline, second, f.now)
-	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
+	storetest.EnableOutForLine(t, f.Store, offline, second, f.Now)
+	if _, err := f.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
 		t.Fatal(err)
 	}
 
 	// The policy does not select the Out, so the offline Out is a reported
 	// per-Line state rather than a refusal: the publication still assembles.
-	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
+	f.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatalf("mixed assembly: %v", err)
 	}
@@ -318,7 +262,7 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	for _, target := range assembly.Targets {
 		perLine[target.LineID] = target.Egress
 	}
-	if perLine[f.line] != policy.AIEgressOut || perLine[second] != store.PolicyEgressFailClosed {
+	if perLine[f.Line] != policy.AIEgressOut || perLine[second] != store.PolicyEgressFailClosed {
 		t.Fatalf("per-line egress = %v", perLine)
 	}
 }
@@ -329,48 +273,48 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 // next to a healthy Out renders different bytes, so no shared fragment can be
 // reported and each candidate keeps its own.
 func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
-	f := newPublishFixture(t)
-	healthy := pairedStoreNode(t, f.store, "out", f.now)
-	markLineOnline(t, f.store, healthy, f.now)
-	configureOut(t, f.store, healthy, f.now)
+	f := storetest.NewPublishFixture(t)
+	healthy := storetest.PairedStoreNode(t, f.Store, "out", f.Now)
+	storetest.MarkLineOnline(t, f.Store, healthy, f.Now)
+	storetest.ConfigureOut(t, f.Store, healthy, f.Now)
 	// Enrollment publishes the Out's membership guard (Ruling R10); the selection only
 	// makes the Line route through it.
-	f.store.RepublishOutAuthorizations(f.now)
-	settleTasks(t, f.store, healthy)
-	confirmChain(t, f.store, healthy, f.now)
-	enableOutForLine(t, f.store, healthy, f.line, f.now)
+	f.Store.RepublishOutAuthorizations(f.Now)
+	storetest.SettleTasks(t, f.Store, healthy)
+	storetest.ConfirmChain(t, f.Store, healthy, f.Now)
+	storetest.EnableOutForLine(t, f.Store, healthy, f.Line, f.Now)
 
-	second := pairedStoreNode(t, f.store, "edge", f.now)
-	settings := testLine(second, "line-b")
+	second := storetest.PairedStoreNode(t, f.Store, "edge", f.Now)
+	settings := storetest.TestLine(second, "line-b")
 	settings.Server = "198.51.100.9"
 	settings.ServerName = "line-b.example.invalid"
 	settings.SortOrder = 2
-	if _, err := f.store.SetLine(settings, f.now); err != nil {
+	if _, err := f.Store.SetLine(settings, f.Now); err != nil {
 		t.Fatal(err)
 	}
 	// A new Line is a membership change (Ruling R10), so the healthy Out republished
 	// its guard: the fixture settles that chain before asserting states, exactly as a
 	// reachable Out would.
-	settleTasks(t, f.store, healthy)
-	confirmChain(t, f.store, healthy, f.now)
-	markLineOnline(t, f.store, second, f.now)
-	offline := pairedStoreNode(t, f.store, "out", f.now)
-	markLineOnline(t, f.store, offline, f.now)
-	configureOut(t, f.store, offline, f.now)
+	storetest.SettleTasks(t, f.Store, healthy)
+	storetest.ConfirmChain(t, f.Store, healthy, f.Now)
+	storetest.MarkLineOnline(t, f.Store, second, f.Now)
+	offline := storetest.PairedStoreNode(t, f.Store, "out", f.Now)
+	storetest.MarkLineOnline(t, f.Store, offline, f.Now)
+	storetest.ConfigureOut(t, f.Store, offline, f.Now)
 	// The offline Out never confirms its guard, so its Line's own state is the
 	// fail-closed one the aggregate has to report.
-	enableOutForLine(t, f.store, offline, second, f.now)
-	if _, err := f.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
+	storetest.EnableOutForLine(t, f.Store, offline, second, f.Now)
+	if _, err := f.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, offline); err != nil {
 		t.Fatal(err)
 	}
 
-	f.activatePolicy(t, store.PolicyLayerServer,
+	f.ActivatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-fallback","fallback_to_line":true}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatalf("fallback assembly: %v", err)
 	}
@@ -384,9 +328,9 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	for _, target := range assembly.Targets {
 		perLine[target.LineID] = target
 	}
-	if perLine[f.line].Egress != policy.AIEgressOut ||
-		!strings.Contains(string(perLine[f.line].Candidate.Route), `"outbound": "out"`) {
-		t.Fatalf("healthy line target = %+v", perLine[f.line])
+	if perLine[f.Line].Egress != policy.AIEgressOut ||
+		!strings.Contains(string(perLine[f.Line].Candidate.Route), `"outbound": "out"`) {
+		t.Fatalf("healthy line target = %+v", perLine[f.Line])
 	}
 	if perLine[second].Egress != policy.AIEgressLineFallback ||
 		strings.Contains(string(perLine[second].Candidate.Route), `"outbound": "out"`) {
@@ -427,27 +371,27 @@ func TestAggregatePolicyEgress(t *testing.T) {
 }
 
 func TestPublishAssemblyRefusesUnpinnedAndInvalidPolicy(t *testing.T) {
-	f := newPublishFixture(t)
+	f := storetest.NewPublishFixture(t)
 	// A geo rule needs its pin. The create path already proves this, so the
 	// regression here is the assembly path: a stored row whose pins were
 	// emptied behind the store's back must be refused, not rendered as a
 	// "use the built-in database" fallback.
 	pinned := `{"geosite":{"ai":{"source":"https://rulesets.example.invalid/geosite/ai/2026.10.21.srs","version":"2026.10.21","sha256":"` + strings.Repeat("a", 64) + `"}}}`
-	record := f.activatePolicy(t, store.PolicyLayerServer,
+	record := f.ActivatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"geosite":["ai"]},"action":"direct"}]}`, pinned)
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"layer":"server","operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.DB.Exec(`UPDATE route_policies SET pins='{}' WHERE id=? AND revision=?`, record.ID, record.Revision); err != nil {
+	if _, err := f.Store.DB.Exec(`UPDATE route_policies SET pins='{}' WHERE id=? AND revision=?`, record.ID, record.Revision); err != nil {
 		t.Fatal(err)
 	}
-	verifier := &fixturePublishVerifier{}
-	if _, err := f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now); err == nil ||
+	verifier := &storetest.FixturePublishVerifier{}
+	if _, err := f.Store.AssemblePolicyPublication(context.Background(), verifier, request, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), policy.CodeRulesetUnpinned) {
 		t.Fatalf("unpinned ruleset = %v, want %s", err, policy.CodeRulesetUnpinned)
 	}
-	if singBox, mihomo := verifier.counts(); singBox != 0 || mihomo != 0 {
+	if singBox, mihomo := verifier.Counts(); singBox != 0 || mihomo != 0 {
 		t.Fatal("an unpinned ruleset reached the kernel gate")
 	}
 	// A layer without any active revision is a 404-class refusal.
@@ -455,33 +399,33 @@ func TestPublishAssemblyRefusesUnpinnedAndInvalidPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, none, f.now); err == nil ||
+	if _, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, none, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), store.CodePublishNoPolicy) {
 		t.Fatalf("missing client policy = %v, want %s", err, store.CodePublishNoPolicy)
 	}
 	// A server policy with no Line to publish to is refused explicitly.
-	if _, err := f.store.DB.Exec(`UPDATE route_policies SET pins=? WHERE id=? AND revision=?`, pinned, record.ID, record.Revision); err != nil {
+	if _, err := f.Store.DB.Exec(`UPDATE route_policies SET pins=? WHERE id=? AND revision=?`, pinned, record.ID, record.Revision); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.DB.Exec(`DELETE FROM line_settings`); err != nil {
+	if _, err := f.Store.DB.Exec(`DELETE FROM line_settings`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now); err == nil ||
+	if _, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), store.CodePublishNoLines) {
 		t.Fatalf("policy without a line = %v, want %s", err, store.CodePublishNoLines)
 	}
 }
 
 func TestPublishAssemblyClientDocuments(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerClient,
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerClient,
 		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"layer":"client","operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := &fixturePublishVerifier{}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now)
+	verifier := &storetest.FixturePublishVerifier{}
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), verifier, request, f.Now)
 	if err != nil {
 		t.Fatalf("client assembly: %v", err)
 	}
@@ -496,7 +440,7 @@ func TestPublishAssemblyClientDocuments(t *testing.T) {
 		!strings.Contains(string(assembly.MihomoDocument), "DOMAIN,news.example.invalid,DIRECT") {
 		t.Fatalf("mihomo client document = %s", assembly.MihomoDocument)
 	}
-	singBox, mihomo := verifier.counts()
+	singBox, mihomo := verifier.Counts()
 	if singBox != 1 || mihomo != 1 {
 		t.Fatalf("client gate ran sing-box=%d mihomo=%d, want 1/1", singBox, mihomo)
 	}
@@ -509,28 +453,28 @@ func TestPublishAssemblyClientDocuments(t *testing.T) {
 }
 
 func TestPublishGateRefusals(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
 		name     string
-		verifier *fixturePublishVerifier
+		verifier *storetest.FixturePublishVerifier
 		want     string
 	}{
-		{"sing-box refuses the line candidate", &fixturePublishVerifier{rejectSingBoxAt: 1}, node.CodePublishCheckSingBox},
-		{"sing-box is missing", &fixturePublishVerifier{missingSingBox: true}, node.CodePublishSingBoxMissing},
+		{"sing-box refuses the line candidate", &storetest.FixturePublishVerifier{RejectSingBoxAt: 1}, node.CodePublishCheckSingBox},
+		{"sing-box is missing", &storetest.FixturePublishVerifier{MissingSingBox: true}, node.CodePublishSingBoxMissing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			before := candidateCount(t, f.store, f.line)
-			if _, err := f.store.AssemblePolicyPublication(context.Background(), tc.verifier, request, f.now); err == nil ||
+			before := storetest.CandidateCount(t, f.Store, f.Line)
+			if _, err := f.Store.AssemblePolicyPublication(context.Background(), tc.verifier, request, f.Now); err == nil ||
 				!strings.HasPrefix(err.Error(), tc.want) {
 				t.Fatalf("gate refusal = %v, want %s", err, tc.want)
 			}
-			if got := candidateCount(t, f.store, f.line); got != before {
+			if got := storetest.CandidateCount(t, f.Store, f.Line); got != before {
 				t.Fatalf("a refused gate stored %d candidates", got-before)
 			}
 		})
@@ -538,19 +482,19 @@ func TestPublishGateRefusals(t *testing.T) {
 
 	// A client publication requires the Mihomo kernel: a missing binary is a
 	// refusal, never a silently skipped check.
-	f.activatePolicy(t, store.PolicyLayerClient,
+	f.ActivatePolicy(t, store.PolicyLayerClient,
 		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`, "")
 	clientRequest, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"layer":"client","operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.AssemblePolicyPublication(context.Background(),
-		&fixturePublishVerifier{missingMihomo: true}, clientRequest, f.now); err == nil ||
+	if _, err := f.Store.AssemblePolicyPublication(context.Background(),
+		&storetest.FixturePublishVerifier{MissingMihomo: true}, clientRequest, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), node.CodePublishMihomoMissing) {
 		t.Fatalf("missing mihomo = %v, want %s", err, node.CodePublishMihomoMissing)
 	}
-	if _, err := f.store.AssemblePolicyPublication(context.Background(),
-		&fixturePublishVerifier{}, clientRequest, f.now); err != nil {
+	if _, err := f.Store.AssemblePolicyPublication(context.Background(),
+		&storetest.FixturePublishVerifier{}, clientRequest, f.Now); err != nil {
 		t.Fatalf("client assembly with both kernels: %v", err)
 	}
 }
@@ -580,13 +524,13 @@ func TestPublishRequestValidation(t *testing.T) {
 }
 
 func TestPublishAssemblyCarriesManifestFields(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"layer":"server","operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,25 +545,25 @@ func TestPublishAssemblyCarriesManifestFields(t *testing.T) {
 // TestPublishCandidateRouteIsInCandidateDocument proves the route reaches the
 // candidate document the Agent pulls, instead of only reaching the gate.
 func TestPublishCandidateRouteIsInCandidateDocument(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer,
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"direct"}]}`, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"layer":"server","operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publication, err := f.store.PublishPolicyAssembly(assembly, f.now)
+	publication, err := f.Store.PublishPolicyAssembly(assembly, f.Now)
 	if err != nil {
 		t.Fatalf("store publication: %v", err)
 	}
 	if len(publication.Lines) != 1 || publication.Lines[0].Status != "queued" {
 		t.Fatalf("publication = %+v", publication)
 	}
-	stored, err := f.store.LatestCandidate(f.line)
+	stored, err := f.Store.LatestCandidate(f.Line)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +586,7 @@ func TestPublishCandidateRouteIsInCandidateDocument(t *testing.T) {
 		t.Fatalf("stored digest %s does not match the compiled document", stored.ConfigSHA256)
 	}
 	// The four fixed task kinds are queued for the publication.
-	tasks := chainRevisionParams(t, f.store, f.line, stored.Revision)
+	tasks := storetest.ChainRevisionParams(t, f.Store, f.Line, stored.Revision)
 	if len(tasks) != len(protocolKinds()) {
 		t.Fatalf("chain length = %d, want %d", len(tasks), len(protocolKinds()))
 	}
@@ -654,37 +598,37 @@ func TestPublishCandidateRouteIsInCandidateDocument(t *testing.T) {
 }
 
 func TestPublishRefusesChangedSnapshotAndUnfinishedChain(t *testing.T) {
-	f := newPublishFixture(t)
-	f.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
+	f := storetest.NewPublishFixture(t)
+	f.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(`{"operation_id":"op-publish"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err := f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A chain in flight must not be replaced by a publication.
-	if _, err := f.store.DB.Exec(`UPDATE agent_tasks SET status='pending' WHERE node_id=?`, f.line); err != nil {
+	if _, err := f.Store.DB.Exec(`UPDATE agent_tasks SET status='pending' WHERE node_id=?`, f.Line); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.PublishPolicyAssembly(assembly, f.now); err == nil ||
+	if _, err := f.Store.PublishPolicyAssembly(assembly, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), store.CodePublishTasksInProgress) {
 		t.Fatalf("unfinished chain = %v, want %s", err, store.CodePublishTasksInProgress)
 	}
-	settleTasks(t, f.store, f.line)
+	storetest.SettleTasks(t, f.Store, f.Line)
 
 	// A candidate revision that advanced after the gate makes the gated bytes
 	// stale, so the publication is refused rather than storing them.
-	assembly, err = f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now)
+	assembly, err = f.Store.AssemblePolicyPublication(context.Background(), &storetest.FixturePublishVerifier{}, request, f.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.store.ReconcileNode(f.line, f.now); err != nil {
+	if _, _, err := f.Store.ReconcileNode(f.Line, f.Now); err != nil {
 		t.Fatalf("advance the line: %v", err)
 	}
-	settleTasks(t, f.store, f.line)
-	if _, err := f.store.PublishPolicyAssembly(assembly, f.now); err == nil ||
+	storetest.SettleTasks(t, f.Store, f.Line)
+	if _, err := f.Store.PublishPolicyAssembly(assembly, f.Now); err == nil ||
 		!strings.HasPrefix(err.Error(), store.CodePublishRevisionChanged) {
 		t.Fatalf("stale assembly = %v, want %s", err, store.CodePublishRevisionChanged)
 	}

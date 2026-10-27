@@ -1,11 +1,13 @@
-package handler
+package node_test
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
@@ -37,10 +39,10 @@ func latestTaskOfKind(t *testing.T, s *store.Store, nodeID, kind string) (operat
 // the drain delivery window to the same caller clock. The rows were stamped with
 // the fixture clock, so a wall-clock projection would report them offline.
 func TestNodeClockOfflineWindowAgreesWithSubscriberDrain(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 
 	cases := []struct {
 		name    string
@@ -111,8 +113,8 @@ func TestNodeClockOfflineWindowAgreesWithSubscriberDrain(t *testing.T) {
 // and the candidate publication path: every created task row carries the
 // caller's clock, not the wall clock.
 func TestEnqueueAndPublishUseInjectedClock(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
 
 	operationID, err := protocol.NewID()
 	if err != nil {
@@ -137,8 +139,8 @@ func TestEnqueueAndPublishUseInjectedClock(t *testing.T) {
 	}
 
 	// Publication stamps the candidate and the fixed four-task chain together.
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +170,7 @@ func TestEnqueueAndPublishUseInjectedClock(t *testing.T) {
 	if candidateCreated != publishedAt.Unix() {
 		t.Fatalf("candidate created_at = %d, want %d", candidateCreated, publishedAt.Unix())
 	}
-	chain := chainTasksForRevision(t, s, edge, latest.Revision)
+	chain := storetest.ChainTasksForRevision(t, s, edge, latest.Revision)
 	if len(chain) != len(store.SubscriberChainKinds) {
 		t.Fatalf("published chain has %d tasks, want %d", len(chain), len(store.SubscriberChainKinds))
 	}
@@ -183,10 +185,10 @@ func TestEnqueueAndPublishUseInjectedClock(t *testing.T) {
 // TestReportResultUsesInjectedClock verifies that one request clock stamps the
 // task update, the node success and the observation together.
 func TestReportResultUsesInjectedClock(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)

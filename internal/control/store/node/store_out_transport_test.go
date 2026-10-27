@@ -1,4 +1,4 @@
-package handler
+package node_test
 
 import (
 	"encoding/json"
@@ -7,33 +7,18 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
-
-// configureOut stores the dial address of one Out node for tests. The port
-// always matches the node's VLESS port, mirroring the production port-match
-// rule, and the server is a documentation address.
-func configureOut(t *testing.T, s *store.Store, outID string, now time.Time) store.OutTransport {
-	t.Helper()
-	node, err := s.GetNodeAt(outID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport, err := s.SetOutTransport(outID, "out.example.invalid", node.VlessPort, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return transport
-}
 
 // TestSetOutTransportIssuesAndPreservesCredential pins the Ruling R7
 // issuance: the first set mints a Hub-issued SS link key (16 random bytes,
 // base64-std, the length the 2022-blake3-aes-128-gcm dial side requires),
 // an address update keeps it, and no read path exposes it.
 func TestSetOutTransportIssuesAndPreservesCredential(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	out := pairedStoreNode(t, s, "out", now)
-	line := pairedStoreNode(t, s, "edge", now)
+	s, now := storetest.SubscriberStore(t)
+	out := storetest.PairedStoreNode(t, s, "out", now)
+	line := storetest.PairedStoreNode(t, s, "edge", now)
 
 	first, err := s.SetOutTransport(out, "out.example.invalid", 8443, now)
 	if err != nil {
@@ -74,19 +59,19 @@ func TestSetOutTransportIssuesAndPreservesCredential(t *testing.T) {
 	}
 
 	// Role, port-match and shape refusals never create a row.
-	if _, err := s.SetOutTransport(line, "out.example.invalid", 8443, now); err == nil || !hasErrorCode(err, "OUT_ROLE_INVALID") {
+	if _, err := s.SetOutTransport(line, "out.example.invalid", 8443, now); err == nil || !storetest.HasErrorCode(err, "OUT_ROLE_INVALID") {
 		t.Fatalf("edge transport error = %v, want OUT_ROLE_INVALID", err)
 	}
-	if _, err := s.SetOutTransport(out, "out.example.invalid", 9999, now); err == nil || !hasErrorCode(err, "OUT_PORT_MISMATCH") {
+	if _, err := s.SetOutTransport(out, "out.example.invalid", 9999, now); err == nil || !storetest.HasErrorCode(err, "OUT_PORT_MISMATCH") {
 		t.Fatalf("port mismatch error = %v, want OUT_PORT_MISMATCH", err)
 	}
-	if _, err := s.SetOutTransport(out, "https://out.example.invalid", 8443, now); err == nil || !hasErrorCode(err, "OUT_TRANSPORT_INVALID") {
+	if _, err := s.SetOutTransport(out, "https://out.example.invalid", 8443, now); err == nil || !storetest.HasErrorCode(err, "OUT_TRANSPORT_INVALID") {
 		t.Fatalf("bad server error = %v, want OUT_TRANSPORT_INVALID", err)
 	}
-	if _, err := s.SetOutTransport(strings.Repeat("c", 32), "out.example.invalid", 8443, now); err == nil || !hasErrorCode(err, "OUT_NOT_FOUND") {
+	if _, err := s.SetOutTransport(strings.Repeat("c", 32), "out.example.invalid", 8443, now); err == nil || !storetest.HasErrorCode(err, "OUT_NOT_FOUND") {
 		t.Fatalf("unknown out error = %v, want OUT_NOT_FOUND", err)
 	}
-	if _, err := s.SetOutTransport("nope", "out.example.invalid", 8443, now); err == nil || !hasErrorCode(err, "OUT_BINDING_INVALID") {
+	if _, err := s.SetOutTransport("nope", "out.example.invalid", 8443, now); err == nil || !storetest.HasErrorCode(err, "OUT_BINDING_INVALID") {
 		t.Fatalf("malformed id error = %v, want OUT_BINDING_INVALID", err)
 	}
 
@@ -108,10 +93,10 @@ func TestSetOutTransportIssuesAndPreservesCredential(t *testing.T) {
 // compat is owed beyond keeping stored candidates verifiable (the node
 // package keeps decoding the legacy shape).
 func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	out := pairedStoreNode(t, s, "out", now)
-	line := pairedStoreNode(t, s, "edge", now)
-	configureLine(t, s, line, "line-migrated", now)
+	s, now := storetest.SubscriberStore(t)
+	out := storetest.PairedStoreNode(t, s, "out", now)
+	line := storetest.PairedStoreNode(t, s, "edge", now)
+	storetest.ConfigureLine(t, s, line, "line-migrated", now)
 
 	// Simulate the pre-SS table shape with one Task-2 UUID row.
 	if _, err := s.DB.Exec(`DROP TABLE out_settings`); err != nil {
@@ -147,8 +132,8 @@ func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
 
 	// End to end: the migrated key reaches the published Line candidate and
 	// renders the SS out body (migration -> store -> kernel bytes).
-	configureOut(t, s, out, now)
-	enableOutForLine(t, s, out, line, now)
+	storetest.ConfigureOut(t, s, out, now)
+	storetest.EnableOutForLine(t, s, out, line, now)
 	target, err := s.PublishTarget(line,
 		json.RawMessage(`{"rules":[{"domain":["chat.example.invalid"],"outbound":"out"}],"final":"direct"}`),
 		true, "healthy", "")
@@ -188,16 +173,16 @@ func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
 // The selection is read from the subscription edges, so a pool entry and the ACL
 // derivation cannot disagree about which Lines an Out serves.
 func TestOutPoolListsTransportAndSelection(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	line := pairedStoreNode(t, s, "edge", now)
-	configureLine(t, s, line, "line-pool", now)
-	outA := pairedStoreNode(t, s, "out", now)
-	outB := pairedStoreNode(t, s, "out", now)
-	configureOut(t, s, outA, now)
-	markLineOnline(t, s, line, now)
-	markLineOnline(t, s, outA, now)
+	s, now := storetest.SubscriberStore(t)
+	line := storetest.PairedStoreNode(t, s, "edge", now)
+	storetest.ConfigureLine(t, s, line, "line-pool", now)
+	outA := storetest.PairedStoreNode(t, s, "out", now)
+	outB := storetest.PairedStoreNode(t, s, "out", now)
+	storetest.ConfigureOut(t, s, outA, now)
+	storetest.MarkLineOnline(t, s, line, now)
+	storetest.MarkLineOnline(t, s, outA, now)
 
-	enableOutForLine(t, s, outA, line, now)
+	storetest.EnableOutForLine(t, s, outA, line, now)
 
 	pool, err := s.OutPool(now)
 	if err != nil {
@@ -228,23 +213,23 @@ func TestOutPoolListsTransportAndSelection(t *testing.T) {
 // stub while the Out gate reports healthy. The refusal happens at the subscription
 // edge, which is the only authorization source now.
 func TestOutSelectionRequiresOutTransport(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	out := pairedStoreNode(t, s, "out", now)
-	line := pairedStoreNode(t, s, "edge", now)
-	configureLine(t, s, line, "line-egress", now)
-	subscriberID := testSubscriberForLine(t, s, line, now)
+	s, now := storetest.SubscriberStore(t)
+	out := storetest.PairedStoreNode(t, s, "out", now)
+	line := storetest.PairedStoreNode(t, s, "edge", now)
+	storetest.ConfigureLine(t, s, line, "line-egress", now)
+	subscriberID := storetest.TestSubscriberForLine(t, s, line, now)
 
 	_, err := s.SaveSubscriptionSelection(subscriberID, store.SelectionSpec{
 		LineIDs: []string{line}, OutID: out,
 	}, now)
-	if err == nil || !hasErrorCode(err, "OUT_NOT_CONFIGURED") {
+	if err == nil || !storetest.HasErrorCode(err, "OUT_NOT_CONFIGURED") {
 		t.Fatalf("select an out without transport = %v, want OUT_NOT_CONFIGURED", err)
 	}
 	// The refused save wrote nothing: no subscription selects the Out.
 	if subscribers, selErr := s.OutAuthorizedSubscribers(out); selErr != nil || len(subscribers) != 0 {
 		t.Fatalf("a refused selection was recorded: %v err=%v", subscribers, selErr)
 	}
-	configureOut(t, s, out, now)
+	storetest.ConfigureOut(t, s, out, now)
 	if _, err := s.SaveSubscriptionSelection(subscriberID, store.SelectionSpec{
 		LineIDs: []string{line}, OutID: out,
 	}, now); err != nil {

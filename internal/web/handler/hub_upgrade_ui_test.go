@@ -15,13 +15,14 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 func plantHubUpgradePage(t *testing.T, app *Server, state hubupgrade.State) (string, backup.Record) {
 	t.Helper()
 	app.upgradeServer.SetHubResultsDirForTest(t.TempDir())
 	operationID := strings.Repeat("a", 32)
-	_, record := hubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
+	_, record := storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
 		record.IrreversibleApproved = true
 	})
 	op := hubupgrade.Op{

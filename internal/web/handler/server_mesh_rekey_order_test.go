@@ -11,13 +11,15 @@ package handler
 //   - an expired device reaches pending only together with a usable key.
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
@@ -367,7 +369,7 @@ func TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict(t *testing.T) {
 	}
 	// A second device takes the released name. The page derives a node name from
 	// the label, so the collision is built from the expired device's own name.
-	taker := meshSpec("nas2", mesh.PurposeMeshOnly, "")
+	taker := storetest.MeshSpec("nas2", mesh.PurposeMeshOnly, "")
 	taker.NodeName = device.NodeName
 	if _, err := app.Store.CreateMeshDevice(taker, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
@@ -496,7 +498,7 @@ func TestMeshRekeyStagedKeyBelongsToItsDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := app.Store.ApplyMeshRekey(first.ID, key, app.Now()); err == nil ||
-		!hasErrorCode(err, mesh.CodeKeyDeviceMismatch) {
+		!storetest.HasErrorCode(err, mesh.CodeKeyDeviceMismatch) {
 		t.Fatalf("cross-device key accepted: %v", err)
 	}
 	// Neither device changed.
@@ -516,7 +518,7 @@ func TestMeshRekeyApplyRefusesNonIssuedKey(t *testing.T) {
 	}
 	key.State = mesh.KeyRevoked
 	if _, err := app.Store.ApplyMeshRekey(device.ID, key, now); err == nil ||
-		!hasErrorCode(err, mesh.CodeKeyTransitionInvalid) {
+		!storetest.HasErrorCode(err, mesh.CodeKeyTransitionInvalid) {
 		t.Fatalf("a revoked key was installed: %v", err)
 	}
 	live := meshIOLiveKey(t, app, device.ID, now)

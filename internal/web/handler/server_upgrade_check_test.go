@@ -12,10 +12,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
-	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +19,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
+	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/web/view"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
@@ -45,7 +47,7 @@ func upgradeApproveFixture(t *testing.T, observed string) (b *browser, app *Serv
 	if err := json.Unmarshal(pairing.Body.Bytes(), &paired); err != nil || paired.IdentityToken == "" {
 		t.Fatalf("pairing did not issue an identity: %.200s", pairing.Body.String())
 	}
-	confirmChain(t, app.Store, created.ID, app.Now())
+	storetest.ConfirmChain(t, app.Store, created.ID, app.Now())
 	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_agent_version=?, observed_at=? WHERE id=?`,
 		observed, app.Now().Unix(), created.ID); err != nil {
 		t.Fatal(err)
@@ -100,11 +102,11 @@ func approveUpgrade(t *testing.T, b *browser, nodeID, version string) *httptest.
 func seedUpgradeRouteIntent(t *testing.T, app *Server, nodeID string) {
 	t.Helper()
 	now := app.Now()
-	if _, err := app.Store.SetLine(testLine(nodeID, "upgrade-line"), now); err != nil {
+	if _, err := app.Store.SetLine(storetest.TestLine(nodeID, "upgrade-line"), now); err != nil {
 		t.Fatal(err)
 	}
 	created, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
-		json.RawMessage(publishServerDirect), nil, "op-upgrade-policy", now)
+		json.RawMessage(storetest.PublishServerDirect), nil, "op-upgrade-policy", now)
 	if err != nil {
 		t.Fatal(err)
 	}

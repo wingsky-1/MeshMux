@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 func TestHTTPProxyCreateThroughNodesPage(t *testing.T) {
@@ -123,14 +125,14 @@ func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.Store.SetLine(testLine(lineNode.ID, "line"), app.Now()); err != nil {
+	if _, err := app.Store.SetLine(storetest.TestLine(lineNode.ID, "line"), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	proxy, err := app.Store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	enableOutForLine(t, app.Store, proxy.ID, lineNode.ID, app.Now())
+	storetest.EnableOutForLine(t, app.Store, proxy.ID, lineNode.ID, app.Now())
 
 	w := browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, http.StatusConflict)
@@ -141,7 +143,7 @@ func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
 		t.Fatal("refused delete destroyed the proxy")
 	}
 
-	clearOutForLine(t, app.Store, lineNode.ID, app.Now())
+	storetest.ClearOutForLine(t, app.Store, lineNode.ID, app.Now())
 	w = browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "HTTP 代理节点已彻底删除") {

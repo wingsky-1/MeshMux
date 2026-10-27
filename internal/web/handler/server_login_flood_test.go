@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"net/url"
 	"os"
@@ -10,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 )
 
 // TestAnonymousFloodCannotLockTheLoginPage is the regression for #113 3-3. The

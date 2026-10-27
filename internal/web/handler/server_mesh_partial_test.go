@@ -3,13 +3,14 @@ package handler
 import (
 	"context"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"

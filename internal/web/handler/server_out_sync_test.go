@@ -3,11 +3,13 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
@@ -41,7 +43,7 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	now := time.Now()
 	out := createPairedWebNode(t, app, "out", "out-sync", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-sync", 8443, 2222)
-	lineSettings := testLine(line.ID, "line-sync")
+	lineSettings := storetest.TestLine(line.ID, "line-sync")
 	lineSettings.Server = "203.0.113.7"
 	lineSettings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(lineSettings, now); err != nil {
@@ -52,7 +54,7 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	}
 	// The fixture Out always carries its dial address, so enabling a binding
 	// in a test exercises the egress path instead of the transport refusal.
-	configureOut(t, app.Store, out.ID, now)
+	storetest.ConfigureOut(t, app.Store, out.ID, now)
 	// The tokens are issued after the roles are known. A reissue resets the
 	// node to pending, so both are marked online again afterwards and their
 	// seeded chains are settled, which lets the test attribute every later chain
@@ -62,9 +64,9 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 		outToken: agentToken(t, app, out.ID), lineToken: agentToken(t, app, line.ID),
 	}
 	for _, nodeID := range []string{out.ID, line.ID} {
-		markLineOnline(t, app.Store, nodeID, now)
-		settleTasks(t, app.Store, nodeID)
-		confirmChain(t, app.Store, nodeID, now)
+		storetest.MarkLineOnline(t, app.Store, nodeID, now)
+		storetest.SettleTasks(t, app.Store, nodeID)
+		storetest.ConfirmChain(t, app.Store, nodeID, now)
 	}
 	return result
 }
@@ -111,7 +113,7 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	// the membership list is not yet the published one.
 	w := heartbeatJSON(t, app, f.outToken)
 	requireStatus(t, w, 200)
-	settled := candidateCount(t, app.Store, f.outID)
+	settled := storetest.CandidateCount(t, app.Store, f.outID)
 	if settled < 1 {
 		t.Fatalf("out has no published chain: %d", settled)
 	}
@@ -139,10 +141,10 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	}
 	// The Out is healthy and its own confirmation released the Line: the Line
 	// chain is now queued by the result event, not by a manual action.
-	if got := candidateCount(t, app.Store, f.lineID); got != 2 {
+	if got := storetest.CandidateCount(t, app.Store, f.lineID); got != 2 {
 		t.Fatalf("line revisions after out confirmation = %d, want 2", got)
 	}
-	state, code, err := outSyncStatusForTest(t, app.Store, f.outID, now)
+	state, code, err := storetest.OutSyncStatusForTest(t, app.Store, f.outID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,9 +183,9 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 
 	// A further heartbeat after convergence changes nothing: the drain is
 	// idempotent and never repeats a confirmed chain.
-	before := candidateCount(t, app.Store, f.outID)
+	before := storetest.CandidateCount(t, app.Store, f.outID)
 	requireStatus(t, heartbeatJSON(t, app, f.outToken), 200)
-	if got := candidateCount(t, app.Store, f.outID); got != before {
+	if got := storetest.CandidateCount(t, app.Store, f.outID); got != before {
 		t.Fatalf("converged heartbeat republished: %d -> %d", before, got)
 	}
 	_ = subscription.StateActive
@@ -195,9 +197,9 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	f := newPairedWebOutSyncApp(t)
 	app, now := f.app, time.Now()
 
-	enableOutForLine(t, app.Store, f.outID, f.lineID, now)
-	settleTasks(t, app.Store, f.outID)
-	confirmChain(t, app.Store, f.outID, now)
+	storetest.EnableOutForLine(t, app.Store, f.outID, f.lineID, now)
+	storetest.SettleTasks(t, app.Store, f.outID)
+	storetest.ConfirmChain(t, app.Store, f.outID, now)
 	allowed, err := app.Store.DeriveOutAllowlist(f.outID)
 	if err != nil || len(allowed) != 1 {
 		t.Fatalf("derivation before revoke = %v err=%v", allowed, err)
@@ -217,7 +219,7 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoked, present, err := outReadbackAllowlist(app.Store, f.outID, latest.Revision)
+	revoked, present, err := storetest.OutReadbackAllowlist(app.Store, f.outID, latest.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +247,7 @@ func TestOutSyncIdempotencyConflictIsUnchanged(t *testing.T) {
 	changed.Params = []byte(`{}`)
 	changed.Kind = protocol.KindHealthStatus
 	changed.Revision = 2
-	if err := app.Store.EnqueueTaskAt(changed, time.Now()); err == nil || !hasErrorCode(err, "IDEMPOTENCY_CONFLICT") {
+	if err := app.Store.EnqueueTaskAt(changed, time.Now()); err == nil || !storetest.HasErrorCode(err, "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("changed envelope error = %v, want IDEMPOTENCY_CONFLICT", err)
 	}
 	// An identical replay stays a success.

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 )
 
@@ -103,8 +104,8 @@ func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 	}
 	// The queued server candidate needs its own readback before the download
 	// gate reopens; the client layer is not what unblocks it.
-	settleTasks(t, b.app.Store, line)
-	confirmChain(t, b.app.Store, line, b.app.Now())
+	storetest.SettleTasks(t, b.app.Store, line)
+	storetest.ConfirmChain(t, b.app.Store, line, b.app.Now())
 	if got := subscriptionBytes(t, b.app, bearer, subscription.SingBoxFormat); got != singBoxBefore {
 		t.Fatal("the applied server publication changed the sing-box download")
 	}

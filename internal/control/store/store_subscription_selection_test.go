@@ -7,112 +7,28 @@ package store_test
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
-	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	subdomain "github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
-
-// selectionStore opens a store at the current schema.
-func selectionStore(t *testing.T) *store.Store {
-	t.Helper()
-	s, err := store.OpenStore(filepath.Join(t.TempDir(), "state"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return s
-}
 
 // selectionFixture inserts one configured Line, one configured Out and one
 // active subscriber that selects the Line.
 func selectionFixture(t *testing.T, s *store.Store, now time.Time) (string, string, string) {
 	t.Helper()
-	lineNode, _, err := s.CreateNode("edge", "line", 8443, 2222, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	line, err := s.SetLine(testSelectionLine(t, lineNode.ID), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = line
-	outNode, _, err := s.CreateNode("out", "out", 8444, 2223, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.SetOutTransport(outNode.ID, "out.example.invalid", outNode.VlessPort, now); err != nil {
-		t.Fatal(err)
-	}
-	sub, _, err := s.CreateSubscriber("alice", []string{lineNode.ID}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return lineNode.ID, outNode.ID, sub.ID
-}
-
-// testSelectionLine builds one canonical public Line transport.
-func testSelectionLine(t *testing.T, nodeID string) subdomain.Line {
-	t.Helper()
-	pair, err := subdomain.NewRealityKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	shortID, err := subdomain.NewShortID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return subdomain.Line{
-		NodeID: nodeID, DisplayName: "香港 01", Server: "line.example.invalid", Port: 8443, SortOrder: 1,
-		ServerName: "line.example.invalid", HandshakeServer: "handshake.example.invalid", HandshakePort: 443,
-		PrivateKey: pair.PrivateKey, PublicKey: pair.PublicKey, ShortID: shortID,
-	}
-}
-
-// selectionVerifier is a fake kernel gate. It records the documents it saw and
-// can fail either kernel.
-type selectionVerifier struct {
-	singBoxCalls int
-	mihomoCalls  int
-	singBoxDocs  [][]byte
-	mihomoDocs   [][]byte
-	failSingBox  bool
-	failMihomo   bool
-	missingMiho  bool
-}
-
-func (v *selectionVerifier) CheckSingBox(_ context.Context, document []byte) (string, error) {
-	v.singBoxCalls++
-	v.singBoxDocs = append(v.singBoxDocs, append([]byte(nil), document...))
-	if v.failSingBox {
-		return "", errors.New(nodedomain.CodePublishCheckSingBox + ": refused")
-	}
-	return "sing-box accepted", nil
-}
-
-func (v *selectionVerifier) CheckMihomo(_ context.Context, document []byte) (string, error) {
-	v.mihomoCalls++
-	v.mihomoDocs = append(v.mihomoDocs, append([]byte(nil), document...))
-	if v.missingMiho {
-		return "", errors.New(nodedomain.CodePublishMihomoMissing + ": not installed")
-	}
-	if v.failMihomo {
-		return "", errors.New(nodedomain.CodePublishCheckMihomo + ": refused")
-	}
-	return "mihomo accepted", nil
+	return storetest.SelectionFixture(t, s, now)
 }
 
 func TestSchema13CreatesSelectionTables(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	var version int
 	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
@@ -136,7 +52,7 @@ func TestSchema13CreatesSelectionTables(t *testing.T) {
 }
 
 func TestSaveSubscriptionSelectionWritesEdgesAndSnapshot(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
 
@@ -179,7 +95,7 @@ func TestSaveSubscriptionSelectionWritesEdgesAndSnapshot(t *testing.T) {
 }
 
 func TestSaveSubscriptionSelectionKeepsCredentialPerLine(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 	before, err := s.ListSubscriberCredentials(subID)
@@ -203,7 +119,7 @@ func TestSaveSubscriptionSelectionKeepsCredentialPerLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetLine(testSelectionLine(t, second.ID), now); err != nil {
+	if _, err := s.SetLine(storetest.SelectionLine(t, second.ID), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{second.ID}}, now); err != nil {
@@ -235,7 +151,7 @@ func TestSaveSubscriptionSelectionKeepsCredentialPerLine(t *testing.T) {
 }
 
 func TestSaveSubscriptionSelectionRefusesSecondOutAndOutConflict(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
 
@@ -268,7 +184,7 @@ func TestSaveSubscriptionSelectionRefusesSecondOutAndOutConflict(t *testing.T) {
 }
 
 func TestSaveSubscriptionSelectionStrictValidation(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
 
@@ -308,7 +224,7 @@ func TestSaveSubscriptionSelectionStrictValidation(t *testing.T) {
 }
 
 func TestSelectionUsedByNames(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
 	device, err := s.CreateMeshDevice(mesh.DeviceSpec{
@@ -351,7 +267,7 @@ func TestSelectionUsedByNames(t *testing.T) {
 // the Task-4 edge table agree: the rule library refuses the delete and names
 // the subscription.
 func TestRuleDeleteRefusedWithSubscriptionName(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{
@@ -390,10 +306,10 @@ func TestRuleDeleteRefusedWithSubscriptionName(t *testing.T) {
 }
 
 func TestApproveSubscriptionSelectionRecordsArtifactAndRefusesDrift(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	verifier := &selectionVerifier{}
+	verifier := &storetest.Verifier{}
 	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, verifier, now)
 	if err != nil {
 		t.Fatalf("ApproveSubscriptionSelection: %v", err)
@@ -402,8 +318,8 @@ func TestApproveSubscriptionSelectionRecordsArtifactAndRefusesDrift(t *testing.T
 	if !result.Saved || !preview.Approved || preview.ContentID == "" {
 		t.Fatalf("result = %+v, want an approved artifact", result)
 	}
-	if verifier.singBoxCalls != 1 || verifier.mihomoCalls != 1 {
-		t.Fatalf("gate calls = %d/%d, want 1/1", verifier.singBoxCalls, verifier.mihomoCalls)
+	if verifier.SingBoxCalls != 1 || verifier.MihomoCalls != 1 {
+		t.Fatalf("gate calls = %d/%d, want 1/1", verifier.SingBoxCalls, verifier.MihomoCalls)
 	}
 	documents, artifactID, err := s.SubscriptionArtifact(subID)
 	if err != nil {
@@ -428,7 +344,7 @@ func TestApproveSubscriptionSelectionRecordsArtifactAndRefusesDrift(t *testing.T
 }
 
 func TestApproveSubscriptionSelectionRefusesUnapprovedAndFailedGate(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 	// A saved selection without an approval cannot be downloaded.
@@ -440,7 +356,7 @@ func TestApproveSubscriptionSelectionRefusesUnapprovedAndFailedGate(t *testing.T
 	}
 
 	// A refusing sing-box gate leaves the artifact unapproved.
-	failing := &selectionVerifier{failSingBox: true}
+	failing := &storetest.Verifier{FailSingBox: true}
 	failedResult, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, failing, now)
 	if err != nil {
 		t.Fatalf("gate refusal must be a diagnostic, not an error: %v", err)
@@ -459,10 +375,10 @@ func TestApproveSubscriptionSelectionRefusesUnapprovedAndFailedGate(t *testing.T
 }
 
 func TestMihomoAbsentDegradesWithoutBlocking(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	verifier := &selectionVerifier{missingMiho: true}
+	verifier := &storetest.Verifier{MissingMihom: true}
 	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, verifier, now)
 	if err != nil {
 		t.Fatal(err)
@@ -485,7 +401,7 @@ func TestMihomoAbsentDegradesWithoutBlocking(t *testing.T) {
 	}
 
 	// A Mihomo that refuses a document is a blocking failure, not a skip.
-	refusing := &selectionVerifier{failMihomo: true}
+	refusing := &storetest.Verifier{FailMihomo: true}
 	refusedResult, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, refusing, now)
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +412,7 @@ func TestMihomoAbsentDegradesWithoutBlocking(t *testing.T) {
 }
 
 func TestPreviewSubscriptionSelectionWritesNothing(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 	var edgesBefore, snapshotsBefore int
@@ -506,7 +422,7 @@ func TestPreviewSubscriptionSelectionWritesNothing(t *testing.T) {
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM subscription_snapshots`).Scan(&snapshotsBefore); err != nil {
 		t.Fatal(err)
 	}
-	verifier := &selectionVerifier{}
+	verifier := &storetest.Verifier{}
 	draft, err := s.DraftSubscriptionSelection(subID, "", store.SelectionSpec{LineIDs: []string{lineID}})
 	if err != nil {
 		t.Fatal(err)
@@ -532,7 +448,7 @@ func TestPreviewSubscriptionSelectionWritesNothing(t *testing.T) {
 // credential row yet is still drained, and a credential row whose edge is gone
 // stays in the set so its UUID is removed from the Line.
 func TestImplicitRecomputeReadsTheEdgeTable(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 

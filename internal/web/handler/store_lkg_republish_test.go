@@ -11,12 +11,13 @@ package handler
 
 import (
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )

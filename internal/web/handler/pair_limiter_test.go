@@ -2,13 +2,14 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 )
 
 // wrongCode returns a code-shaped secret that is never the real one, so a burst

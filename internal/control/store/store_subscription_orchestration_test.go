@@ -15,12 +15,13 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
 func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now); err != nil {
@@ -64,7 +65,7 @@ func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
 }
 
 func TestPreviewSelectionImpactOnTheCreateForm(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, _ := selectionFixture(t, s, now)
 	// No subscriber yet: the create form must still answer, and it must not
@@ -87,7 +88,7 @@ func TestPreviewSelectionImpactOnTheCreateForm(t *testing.T) {
 }
 
 func TestBatchApproveSucceedsPerSubscriber(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, first := selectionFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(first, store.SelectionSpec{LineIDs: []string{lineID}}, now); err != nil {
@@ -107,7 +108,7 @@ func TestBatchApproveSucceedsPerSubscriber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetLine(testSelectionLine(t, thirdLine.ID), now); err != nil {
+	if _, err := s.SetLine(storetest.SelectionLine(t, thirdLine.ID), now); err != nil {
 		t.Fatal(err)
 	}
 	thirdSub, _, err := s.CreateSubscriber("carol", []string{thirdLine.ID}, now)
@@ -119,7 +120,7 @@ func TestBatchApproveSucceedsPerSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := s.BatchApproveSubscriptions(context.Background(), []string{first, second, third}, &selectionVerifier{}, now)
+	result, err := s.BatchApproveSubscriptions(context.Background(), []string{first, second, third}, &storetest.Verifier{}, now)
 	if err != nil {
 		t.Fatalf("BatchApproveSubscriptions: %v", err)
 	}
@@ -157,9 +158,9 @@ func TestBatchApproveSucceedsPerSubscriber(t *testing.T) {
 }
 
 func TestBatchApproveRefusesBadInputBeforeAnyWork(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
-	if _, err := s.BatchApproveSubscriptions(context.Background(), nil, &selectionVerifier{}, now); err == nil ||
+	if _, err := s.BatchApproveSubscriptions(context.Background(), nil, &storetest.Verifier{}, now); err == nil ||
 		!strings.HasPrefix(err.Error(), store.CodeSelectionInvalid) {
 		t.Fatalf("empty batch = %v, want %s", err, store.CodeSelectionInvalid)
 	}
@@ -167,11 +168,11 @@ func TestBatchApproveRefusesBadInputBeforeAnyWork(t *testing.T) {
 	for index := range common.MaxBatchSubscribers + 1 {
 		tooMany = append(tooMany, strings.Repeat("a", 31)+string(rune('0'+index%10)))
 	}
-	if _, err := s.BatchApproveSubscriptions(context.Background(), tooMany, &selectionVerifier{}, now); err == nil ||
+	if _, err := s.BatchApproveSubscriptions(context.Background(), tooMany, &storetest.Verifier{}, now); err == nil ||
 		!strings.HasPrefix(err.Error(), store.CodeSelectionInvalid) {
 		t.Fatalf("oversized batch = %v, want %s", err, store.CodeSelectionInvalid)
 	}
-	if _, err := s.BatchApproveSubscriptions(context.Background(), []string{"nope"}, &selectionVerifier{}, now); err == nil ||
+	if _, err := s.BatchApproveSubscriptions(context.Background(), []string{"nope"}, &storetest.Verifier{}, now); err == nil ||
 		!strings.HasPrefix(err.Error(), "SUBSCRIBER_ID_INVALID") {
 		t.Fatalf("bad id = %v, want SUBSCRIBER_ID_INVALID", err)
 	}
@@ -180,10 +181,10 @@ func TestBatchApproveRefusesBadInputBeforeAnyWork(t *testing.T) {
 // TestArtifactDownloadRejectsAChangedSelection proves the download compares the
 // recomposition with the approved digest instead of trusting a stored byte.
 func TestArtifactDownloadRejectsAChangedSelection(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &storetest.Verifier{}, now)
 	if err != nil || !result.Saved {
 		t.Fatalf("approve: %+v err=%v", result, err)
 	}
@@ -200,7 +201,7 @@ func TestArtifactDownloadRejectsAChangedSelection(t *testing.T) {
 // TestBlockingSaveLeavesEveryTableUntouched is the "blocking does not write"
 // invariant across all five storage legs of one save.
 func TestBlockingSaveLeavesEveryTableUntouched(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 	tables := []string{"subscribers", "subscription_lines", "subscription_outs", "subscription_rules", "subscription_networks", "subscription_snapshots", "proxy_credentials", "subscription_tokens"}
@@ -209,7 +210,7 @@ func TestBlockingSaveLeavesEveryTableUntouched(t *testing.T) {
 		before[table] = countRows(t, s, table)
 	}
 	// A refusing kernel gate is a blocking diagnostic, not an error.
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{failSingBox: true}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &storetest.Verifier{FailSingBox: true}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

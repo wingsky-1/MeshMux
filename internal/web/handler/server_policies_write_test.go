@@ -3,12 +3,14 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 )
 
 func policyWriteApp(t *testing.T) *browser {
@@ -37,7 +39,7 @@ func policyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) polic
 
 func TestPolicyWriteAPILifecycle(t *testing.T) {
 	b := policyWriteApp(t)
-	_, server, pins := policyFixtures()
+	_, server, pins := storetest.PolicyFixtures()
 	created := policyReceipt(t, postPolicy(t, b, "/policies",
 		fmt.Sprintf(`{"layer":"server","name":"服务端默认策略","payload":%s,"pins":%s,"operation_id":"op-create"}`, server, pins)), http.StatusCreated)
 	if !created.OK || created.ID == "" || created.Revision != 1 || created.Status != "draft" || created.OperationID == "" {
@@ -88,7 +90,7 @@ func TestPolicyWriteAPILifecycle(t *testing.T) {
 
 func TestPolicyWriteAPIRejectsBadRequests(t *testing.T) {
 	b := policyWriteApp(t)
-	_, server, _ := policyFixtures()
+	_, server, _ := storetest.PolicyFixtures()
 	for _, tc := range []struct {
 		name, path, body string
 		status           int

@@ -3,12 +3,13 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )

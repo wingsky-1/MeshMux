@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +14,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
 const testOrigin = "https://admin.example.invalid"

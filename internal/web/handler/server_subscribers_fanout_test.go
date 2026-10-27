@@ -2,11 +2,13 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
@@ -21,10 +23,10 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 	node, _ := createPendingNode(t, app, "edge", "line-fan-01", 8443, 2222)
-	configureLine(t, app.Store, node.ID, "line-a", time.Now())
+	storetest.ConfigureLine(t, app.Store, node.ID, "line-a", time.Now())
 	// A Line outside the delivery window is never published, so put it inside
 	// the window before the save under test.
-	markLineOnline(t, app.Store, node.ID, app.Now())
+	storetest.MarkLineOnline(t, app.Store, node.ID, app.Now())
 
 	for _, name := range []string{"alice", "bob"} {
 		w := b.post("/subscribers", url.Values{"display_name": {name}, "line_" + node.ID: {"1"}})
@@ -38,7 +40,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	// second creation is still in flight, and the drain correctly refuses to
 	// enqueue while that is the case, so settle it: the save below has to be
 	// the only publication trigger left.
-	settleTasks(t, app.Store, node.ID)
+	storetest.SettleTasks(t, app.Store, node.ID)
 
 	// The fan-out source is every subscriber that ever held a credential on
 	// the Line, not only the currently selected ones. Both subscribers must be
@@ -153,7 +155,7 @@ func subscriberPublicationSnapshot(t *testing.T, s *store.Store, nodeID string) 
 		Scan(&snapshot.latestRevision); err != nil {
 		t.Fatal(err)
 	}
-	snapshot.tasks = taskCount(t, s, nodeID)
+	snapshot.tasks = storetest.TaskCount(t, s, nodeID)
 	return snapshot
 }
 

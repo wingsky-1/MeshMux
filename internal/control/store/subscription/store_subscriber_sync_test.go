@@ -1,21 +1,15 @@
-package handler
+package subscription_test
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
-
-// markLineOnline puts one Line inside the task delivery window.
-func markLineOnline(t *testing.T, s *store.Store, nodeID string, now time.Time) {
-	t.Helper()
-	if _, err := s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=? WHERE id=?`, now.Unix(), nodeID); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // drainLineNow runs the Line drain in the caller's transaction.
 func drainLineNow(t *testing.T, s *store.Store, nodeID string, now time.Time) error {
@@ -35,36 +29,6 @@ func drainLineNow(t *testing.T, s *store.Store, nodeID string, now time.Time) er
 		t.Fatal(err)
 	}
 	return nil
-}
-
-// candidateCount returns the number of immutable revisions of one Line.
-func candidateCount(t *testing.T, s *store.Store, nodeID string) int {
-	t.Helper()
-	var count int
-	if err := s.DB.QueryRow(`SELECT count(*) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	return count
-}
-
-// taskCount returns the number of tasks of one Line.
-func taskCount(t *testing.T, s *store.Store, nodeID string) int {
-	t.Helper()
-	var count int
-	if err := s.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=?`, nodeID).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	return count
-}
-
-// settleTasks marks the whole current chain of one Line as successfully
-// finished. The result is only used to make the next drain see no in-flight
-// chain; the exact readback evidence is simulated separately.
-func settleTasks(t *testing.T, s *store.Store, nodeID string) {
-	t.Helper()
-	if _, err := s.DB.Exec(`UPDATE agent_tasks SET status='healthy' WHERE node_id=? AND status<>'healthy'`, nodeID); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // confirmLatest simulates the exact local readback a Line reports after it
@@ -92,9 +56,9 @@ func confirmLatest(t *testing.T, s *store.Store, nodeID string, now time.Time) {
 }
 
 func TestSubscriberSyncOfflineKeepsIntentAndPublishesAfterReconnect(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -106,13 +70,13 @@ func TestSubscriberSyncOfflineKeepsIntentAndPublishesAfterReconnect(t *testing.T
 	if err == nil {
 		t.Fatal("offline line reported a successful publication")
 	}
-	if !hasErrorCode(err, "LINE_OFFLINE") {
+	if !storetest.HasErrorCode(err, "LINE_OFFLINE") {
 		t.Fatalf("error %q does not carry LINE_OFFLINE", err)
 	}
-	if got := candidateCount(t, s, edge); got != 1 {
+	if got := storetest.CandidateCount(t, s, edge); got != 1 {
 		t.Fatalf("candidate revisions after offline prepare = %d, want the initial revision only", got)
 	}
-	if got := taskCount(t, s, edge); got != 0 {
+	if got := storetest.TaskCount(t, s, edge); got != 0 {
 		t.Fatalf("offline prepare enqueued %d tasks", got)
 	}
 	status, code, err := subscriberSyncStatusForTest(t, s, alice.ID, now)
@@ -125,14 +89,14 @@ func TestSubscriberSyncOfflineKeepsIntentAndPublishesAfterReconnect(t *testing.T
 
 	// The Line connects again: the persisted intent is published without a
 	// second subscriber action.
-	markLineOnline(t, s, edge, now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	if err := drainLineNow(t, s, edge, now); err != nil {
 		t.Fatal(err)
 	}
-	if got := candidateCount(t, s, edge); got != 2 {
+	if got := storetest.CandidateCount(t, s, edge); got != 2 {
 		t.Fatalf("candidate revisions after reconnect = %d, want 2", got)
 	}
-	if got := taskCount(t, s, edge); got != 4 {
+	if got := storetest.TaskCount(t, s, edge); got != 4 {
 		t.Fatalf("tasks after reconnect = %d, want the fixed chain of 4", got)
 	}
 	latest, err := s.LatestCandidate(edge)
@@ -152,10 +116,10 @@ func TestSubscriberSyncOfflineKeepsIntentAndPublishesAfterReconnect(t *testing.T
 }
 
 func TestSubscriberSyncWaitsForInFlightChainThenPublishesChangedSnapshot(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -190,16 +154,16 @@ func TestSubscriberSyncWaitsForInFlightChainThenPublishesChangedSnapshot(t *test
 	if err := drainLineNow(t, s, edge, now); err != nil {
 		t.Fatal(err)
 	}
-	if got := candidateCount(t, s, edge); got != 2 {
+	if got := storetest.CandidateCount(t, s, edge); got != 2 {
 		t.Fatalf("drain replaced the in-flight chain: revisions = %d, want 2", got)
 	}
 
 	// Once the chain finished, the next drain publishes the changed snapshot.
-	settleTasks(t, s, edge)
+	storetest.SettleTasks(t, s, edge)
 	if err := drainLineNow(t, s, edge, now); err != nil {
 		t.Fatal(err)
 	}
-	if got := candidateCount(t, s, edge); got != 3 {
+	if got := storetest.CandidateCount(t, s, edge); got != 3 {
 		t.Fatalf("revisions after the chain settled = %d, want 3", got)
 	}
 	latest, err := s.LatestCandidate(edge)
@@ -225,10 +189,10 @@ func TestSubscriberSyncWaitsForInFlightChainThenPublishesChangedSnapshot(t *test
 }
 
 func TestSubscriberSyncAutomaticPollDoesNotRepeatFailedSnapshotAndRetryUsesNewIDs(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +235,7 @@ func TestSubscriberSyncAutomaticPollDoesNotRepeatFailedSnapshotAndRetryUsesNewID
 	if err := drainLineNow(t, s, edge, now); err != nil {
 		t.Fatal(err)
 	}
-	if got := candidateCount(t, s, edge); got != 2 {
+	if got := storetest.CandidateCount(t, s, edge); got != 2 {
 		t.Fatalf("automatic poll republished a failed snapshot: revisions = %d, want 2", got)
 	}
 
@@ -279,7 +243,7 @@ func TestSubscriberSyncAutomaticPollDoesNotRepeatFailedSnapshotAndRetryUsesNewID
 	if err := s.RetrySubscriberSync(alice.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if got := candidateCount(t, s, edge); got != 3 {
+	if got := storetest.CandidateCount(t, s, edge); got != 3 {
 		t.Fatalf("revisions after explicit retry = %d, want 3", got)
 	}
 	second, err := s.LatestCandidate(edge)
@@ -320,10 +284,10 @@ func TestSubscriberSyncAutomaticPollDoesNotRepeatFailedSnapshotAndRetryUsesNewID
 }
 
 func TestSubscriberSyncDeletionWaitsForExactReadbackAndKeepsOtherUser(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)

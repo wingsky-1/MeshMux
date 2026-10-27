@@ -9,12 +9,13 @@ package handler
 
 import (
 	"context"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // blockingPublishVerifier holds the gate open until release is closed, so a

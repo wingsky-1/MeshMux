@@ -2,14 +2,16 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -34,34 +36,34 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 
 	out := createPairedWebNode(t, app, "out", "out-line-save", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-line-save", 8443, 2222)
-	configureOut(t, app.Store, out.ID, now)
+	storetest.ConfigureOut(t, app.Store, out.ID, now)
 	// The Line starts at one documentation address and both nodes are online
 	// with settled chains, so every later chain is attributable.
-	lineSettings := testLine(line.ID, "line-line-save")
+	lineSettings := storetest.TestLine(line.ID, "line-line-save")
 	lineSettings.Server = "203.0.113.7"
 	lineSettings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(lineSettings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.Store, line.ID, now)
-	markLineOnline(t, app.Store, out.ID, now)
+	storetest.MarkLineOnline(t, app.Store, line.ID, now)
+	storetest.MarkLineOnline(t, app.Store, out.ID, now)
 	for _, nodeID := range []string{out.ID, line.ID} {
-		settleTasks(t, app.Store, nodeID)
-		confirmChain(t, app.Store, nodeID, now)
+		storetest.SettleTasks(t, app.Store, nodeID)
+		storetest.ConfirmChain(t, app.Store, nodeID, now)
 	}
 	if _, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
 		t.Fatal(err)
 	}
-	settleTasks(t, app.Store, line.ID)
-	confirmChain(t, app.Store, line.ID, now)
+	storetest.SettleTasks(t, app.Store, line.ID)
+	storetest.ConfirmChain(t, app.Store, line.ID, now)
 
-	enableOutForLine(t, app.Store, out.ID, line.ID, now)
-	settleTasks(t, app.Store, out.ID)
-	confirmChain(t, app.Store, out.ID, now)
+	storetest.EnableOutForLine(t, app.Store, out.ID, line.ID, now)
+	storetest.SettleTasks(t, app.Store, out.ID)
+	storetest.ConfirmChain(t, app.Store, out.ID, now)
 	if allowed, err := app.Store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 || allowed[0] != "203.0.113.7/32" {
 		t.Fatalf("allowlist before the save = %v err=%v", allowed, err)
 	}
-	outRevisionsBefore := candidateCount(t, app.Store, out.ID)
+	outRevisionsBefore := storetest.CandidateCount(t, app.Store, out.ID)
 
 	// The save changes the Line's server address, which is exactly the value the
 	// Out allowlist is derived from.
@@ -78,14 +80,14 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 		t.Fatalf("allowlist after the save = %v err=%v, want the new line address", allowed, err)
 	}
 	// ...and the save itself republished it, without a second trigger.
-	if got := candidateCount(t, app.Store, out.ID); got != outRevisionsBefore+1 {
+	if got := storetest.CandidateCount(t, app.Store, out.ID); got != outRevisionsBefore+1 {
 		t.Fatalf("out revisions after the save = %d, want exactly one more than %d", got, outRevisionsBefore)
 	}
 	latest, err := app.Store.LatestCandidate(out.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	published, present, err := outReadbackAllowlist(app.Store, out.ID, latest.Revision)
+	published, present, err := storetest.OutReadbackAllowlist(app.Store, out.ID, latest.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,17 +119,17 @@ func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 
 	out := createPairedWebNode(t, app, "out", "out-unbound", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-unbound", 8443, 2222)
-	lineSettings := testLine(line.ID, "line-unbound")
+	lineSettings := storetest.TestLine(line.ID, "line-unbound")
 	lineSettings.Server = "203.0.113.7"
 	lineSettings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(lineSettings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.Store, line.ID, now)
-	markLineOnline(t, app.Store, out.ID, now)
-	settleTasks(t, app.Store, out.ID)
-	confirmChain(t, app.Store, out.ID, now)
-	before := candidateCount(t, app.Store, out.ID)
+	storetest.MarkLineOnline(t, app.Store, line.ID, now)
+	storetest.MarkLineOnline(t, app.Store, out.ID, now)
+	storetest.SettleTasks(t, app.Store, out.ID)
+	storetest.ConfirmChain(t, app.Store, out.ID, now)
+	before := storetest.CandidateCount(t, app.Store, out.ID)
 
 	w := b.post("/lines", url.Values{
 		"node_id": {line.ID}, "display_name": {"line-unbound"}, "sort_order": {"1"},
@@ -137,7 +139,7 @@ func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 	})
 	require2xx(t, w)
 
-	if got := candidateCount(t, app.Store, out.ID); got != before+1 {
+	if got := storetest.CandidateCount(t, app.Store, out.ID); got != before+1 {
 		t.Fatalf("out revisions after the address change = %d, want exactly one more than %d", got, before)
 	}
 	allowed, err := app.Store.DeriveOutAllowlist(out.ID)
@@ -168,8 +170,8 @@ func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 // node really confirmed that revision: they are the rollback target, so a
 // fabricated one would point a rollback at a revision nobody applied.
 func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, out, line := f.store, f.now, f.out, f.line
+	f := storetest.NewOutSyncFixture(t)
+	s, now, out, line := f.Store, f.Now, f.Out, f.Line
 
 	// Direct egress: nothing to retry.
 	direct, err := s.NodeCoordinationReadback(line, now)
@@ -180,7 +182,7 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 		t.Fatalf("direct egress reported retry_pending: %+v", direct)
 	}
 
-	enableOutForLine(t, s, out, line, now)
+	storetest.EnableOutForLine(t, s, out, line, now)
 	// In flight: the selected Out has no confirmed evidence, so the pair is a
 	// transition. Retry must stay false while a chain is still applying.
 	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0, observed_revision=0, observed_config_sha256='' WHERE id=?`, out); err != nil {
@@ -214,11 +216,11 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 	}
 
 	// A confirmed pair: healthy and not retryable, with a real rollback target.
-	confirmChain(t, s, out, now)
-	if err := prepareSubscriberSyncForLine(s, line, now); err != nil {
+	storetest.ConfirmChain(t, s, out, now)
+	if err := storetest.PrepareSubscriberSyncForLine(s, line, now); err != nil {
 		t.Fatal(err)
 	}
-	confirmChain(t, s, line, now)
+	storetest.ConfirmChain(t, s, line, now)
 	healthy, err := s.NodeCoordinationReadback(line, now)
 	if err != nil {
 		t.Fatal(err)
@@ -262,14 +264,14 @@ func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
 	// The Out is a member and its guard is confirmed (Ruling R10: enrollment publishes
 	// it), and the Line routes through it because the subscription selected it.
 	app.Store.RepublishOutAuthorizations(now)
-	settleTasks(t, app.Store, f.outID)
-	confirmChain(t, app.Store, f.outID, now)
-	enableOutForLine(t, app.Store, f.outID, f.lineID, now)
+	storetest.SettleTasks(t, app.Store, f.outID)
+	storetest.ConfirmChain(t, app.Store, f.outID, now)
+	storetest.EnableOutForLine(t, app.Store, f.outID, f.lineID, now)
 	if err := app.Store.PrepareSubscriberSync(f.subscriberIDForTest(t), now); err != nil {
 		t.Fatalf("publish the line: %v", err)
 	}
-	settleTasks(t, app.Store, f.lineID)
-	confirmChain(t, app.Store, f.lineID, now)
+	storetest.SettleTasks(t, app.Store, f.lineID)
+	storetest.ConfirmChain(t, app.Store, f.lineID, now)
 	// Fail the Out chain, then heartbeat: the readback event must carry
 	// retry_pending=true together with the stable failure code.
 	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, f.outID); err != nil {
@@ -294,11 +296,11 @@ func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
 
 	// A converged pair emits retry_pending=false, so the flag is meaningful in
 	// both directions and not a constant.
-	confirmChain(t, app.Store, f.outID, now)
-	if err := prepareSubscriberSyncForLine(app.Store, f.lineID, now); err != nil {
+	storetest.ConfirmChain(t, app.Store, f.outID, now)
+	if err := storetest.PrepareSubscriberSyncForLine(app.Store, f.lineID, now); err != nil {
 		t.Fatal(err)
 	}
-	confirmChain(t, app.Store, f.lineID, now)
+	storetest.ConfirmChain(t, app.Store, f.lineID, now)
 	before := len(outReadbackEvents(f.logsForTest()))
 	requireStatus(t, heartbeatJSON(t, app, f.lineToken), 200)
 	events := outReadbackEvents(f.logsForTest())
@@ -332,12 +334,12 @@ func outReadbackEvents(logs string) []string {
 // it. That decision was untested; a regression here would either keep a
 // revoked source authorized or break every re-pair.
 func TestReissueDisablesOutAuthorization(t *testing.T) {
-	f := newOutSyncFixture(t)
-	s, now, out, line := f.store, f.now, f.out, f.line
+	f := storetest.NewOutSyncFixture(t)
+	s, now, out, line := f.Store, f.Now, f.Out, f.Line
 
-	enableOutForLine(t, s, out, line, now)
-	settleTasks(t, s, out)
-	confirmChain(t, s, out, now)
+	storetest.EnableOutForLine(t, s, out, line, now)
+	storetest.SettleTasks(t, s, out)
+	storetest.ConfirmChain(t, s, out, now)
 	if allowed, err := s.DeriveOutAllowlist(out); err != nil || len(allowed) != 1 {
 		t.Fatalf("allowlist before the reissue = %v err=%v", allowed, err)
 	}
@@ -352,12 +354,12 @@ func TestReissueDisablesOutAuthorization(t *testing.T) {
 		t.Fatalf("allowlist after the reissue = %v err=%v, want empty (fail-closed)", allowed, err)
 	}
 	// An Out event in the window publishes that empty authorization...
-	drainOut(t, s, out, now)
+	storetest.DrainOut(t, s, out, now)
 	latest, err := s.LatestCandidate(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoked, present, err := outReadbackAllowlist(s, out, latest.Revision)
+	revoked, present, err := storetest.OutReadbackAllowlist(s, out, latest.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +367,7 @@ func TestReissueDisablesOutAuthorization(t *testing.T) {
 		t.Fatalf("chain after the reissue = %v present=%v, want an explicit empty list", revoked, present)
 	}
 	// ...and the pair is not reported healthy while the source is unproven.
-	state, _, err := lineEgressState(s, line, now)
+	state, _, err := storetest.LineEgressState(s, line, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,8 +384,8 @@ func TestReissueDisablesOutAuthorization(t *testing.T) {
 	if _, err := s.ConsumePairing(line, "edge", code, "meshmux-agent test", "6.1-test", now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, s, line, now)
-	settleTasks(t, s, out)
+	storetest.MarkLineOnline(t, s, line, now)
+	storetest.SettleTasks(t, s, out)
 	if err := s.RetryOutSync(out, now); err != nil {
 		t.Fatalf("restoring the authorization failed: %v", err)
 	}

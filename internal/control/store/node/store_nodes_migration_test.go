@@ -1,14 +1,18 @@
-package handler
+package node_test
 
 import (
 	"database/sql"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
+
+// testStorePassword is the administrator password the legacy-schema fixtures hash.
+const testStorePassword = "test-only-long-password-47!"
 
 func TestSchemaV1MigrationPreservesAdminSessions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
@@ -19,7 +23,7 @@ func TestSchemaV1MigrationPreservesAdminSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash, err := store.HashPassword(testPassword)
+	hash, err := store.HashPassword(testStorePassword)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +88,7 @@ PRAGMA user_version=1;
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !store.VerifyPassword(adminHash, testPassword) {
+	if !store.VerifyPassword(adminHash, testStorePassword) {
 		t.Fatal("admin password not preserved")
 	}
 	if adminHash != hash {

@@ -61,6 +61,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
@@ -268,7 +269,7 @@ func (f *doubleHopFixture) startHTTPTarget() {
 // authorization the fixture publishes.
 func (f *doubleHopFixture) buildHubState(t *testing.T) {
 	t.Helper()
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	f.store = s
 
 	// The Line is addressed by loopback: the fixture never leaves the host, so the

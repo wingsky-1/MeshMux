@@ -3,7 +3,6 @@ package handler
 import (
 	"bytes"
 	"context"
-	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -11,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
@@ -48,7 +50,7 @@ func meshConvergedSubscriber(t *testing.T, app *Server, now time.Time) (subscrip
 		t.Fatal(err)
 	}
 	enrollNodeIdentity(t, app.Store, created.ID, now)
-	line := configureLine(t, app.Store, created.ID, "line-a", now)
+	line := storetest.ConfigureLine(t, app.Store, created.ID, "line-a", now)
 	sub, _, err := app.Store.CreateSubscriber("alice", []string{created.ID}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +183,7 @@ func TestMeshConfigRegeneratesForAPendingProxyDevice(t *testing.T) {
 func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +206,7 @@ func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 func TestMeshConfigPurposeReachesTheExporter(t *testing.T) {
 	app, _, _, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
-	device, err := app.Store.CreateMeshDevice(meshSpec("nas", mesh.PurposeSubnetRouter, ""), now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("nas", mesh.PurposeSubnetRouter, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,8 +233,8 @@ func TestMeshConfigPurposeReachesTheExporter(t *testing.T) {
 func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, "")
 	now := app.Now()
-	subID := meshSubscriberFixture(t, app.Store, now)
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subID), now)
+	subID := storetest.MeshSubscriberFixture(t, app.Store, now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,8 +252,8 @@ func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 func TestMeshConfigRefusesInactiveSubscriberBeforeKeys(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
-	subID := meshSubscriberFixture(t, app.Store, now)
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subID), now)
+	subID := storetest.MeshSubscriberFixture(t, app.Store, now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +275,7 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 	app, _, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, sub.ID), now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, sub.ID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +308,7 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	app, b, fake, logs := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +376,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 func TestMeshClaimRefusesNodeNameMismatch(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}

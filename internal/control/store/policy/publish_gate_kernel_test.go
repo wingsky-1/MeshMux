@@ -1,4 +1,4 @@
-package handler
+package policy_test
 
 // The publish gate's real-kernel evidence. The fixture verifier proves the
 // pipeline; this file asks the pinned sing-box binary whether the documents the
@@ -13,11 +13,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
@@ -92,9 +94,9 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 
 	// State 1: no Out. The Line is a direct Line and the candidate keeps the
 	// single direct outbound.
-	direct := newPublishFixture(t)
-	direct.activatePolicy(t, store.PolicyLayerServer, publishServerDirect, "")
-	assembly, err := direct.store.AssemblePolicyPublication(context.Background(), verifier, request, direct.now)
+	direct := storetest.NewPublishFixture(t)
+	direct.ActivatePolicy(t, store.PolicyLayerServer, storetest.PublishServerDirect, "")
+	assembly, err := direct.Store.AssemblePolicyPublication(context.Background(), verifier, request, direct.Now)
 	if err != nil {
 		t.Fatalf("the real kernel refused the Out-free Line candidate: %v", err)
 	}
@@ -107,19 +109,19 @@ func TestPublishGateRealKernelOutCandidate(t *testing.T) {
 
 	// State 2: a healthy Out selected by the AI rule. The gate must accept the
 	// document that actually carries the named "out" outbound.
-	out := pairedStoreNode(t, direct.store, "out", direct.now)
-	markLineOnline(t, direct.store, out, direct.now)
-	configureOut(t, direct.store, out, direct.now)
+	out := storetest.PairedStoreNode(t, direct.Store, "out", direct.Now)
+	storetest.MarkLineOnline(t, direct.Store, out, direct.Now)
+	storetest.ConfigureOut(t, direct.Store, out, direct.Now)
 	// Enrollment publishes the Out guard (Ruling R10); the selection only routes the
 	// Line through it.
-	direct.store.RepublishOutAuthorizations(direct.now)
-	settleTasks(t, direct.store, out)
-	confirmChain(t, direct.store, out, direct.now)
-	enableOutForLine(t, direct.store, out, direct.line, direct.now)
-	direct.activatePolicy(t, store.PolicyLayerServer,
+	direct.Store.RepublishOutAuthorizations(direct.Now)
+	storetest.SettleTasks(t, direct.Store, out)
+	storetest.ConfirmChain(t, direct.Store, out, direct.Now)
+	storetest.EnableOutForLine(t, direct.Store, out, direct.Line, direct.Now)
+	direct.ActivatePolicy(t, store.PolicyLayerServer,
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`, "")
 
-	assembly, err = direct.store.AssemblePolicyPublication(context.Background(), verifier, request, direct.now)
+	assembly, err = direct.Store.AssemblePolicyPublication(context.Background(), verifier, request, direct.Now)
 	if err != nil {
 		t.Fatalf("the real kernel refused the Out-selecting Line candidate: %v", err)
 	}

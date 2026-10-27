@@ -1,4 +1,4 @@
-package store_test
+package policy_test
 
 import (
 	"path/filepath"

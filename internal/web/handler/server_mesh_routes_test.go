@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
@@ -58,8 +60,8 @@ func routeCallIndex(calls []string, name string) int {
 func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.Now()
-	line := createEdgeNode(t, app.Store, now)
-	configureLine(t, app.Store, line, "line-a", now)
+	line := storetest.CreateEdgeNode(t, app.Store, now)
+	storetest.ConfigureLine(t, app.Store, line, "line-a", now)
 	// A subnet_router may be bound to a subscriber; the binding must not turn
 	// it into a proxy+mesh device.
 	sub, _, err := app.Store.CreateSubscriber("alice", []string{line}, now)
@@ -222,7 +224,7 @@ func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 	if stored.Desired != mesh.RouteDesiredApproved || stored.Observed != mesh.RouteObservedApproved {
 		t.Fatalf("stored route = %+v", stored)
 	}
-	if got := routeEventKinds(t, app.Store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got := storetest.RouteEventKinds(t, app.Store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("untracked approval events = %v", got)
 	}
 	body := w.Body.String()
@@ -411,7 +413,7 @@ func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 	if stored.Desired != mesh.RouteDesiredAdvertised {
 		t.Fatalf("reconcile approved a prefix: %+v", stored)
 	}
-	if got := routeEventKinds(t, app.Store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got := storetest.RouteEventKinds(t, app.Store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("untracked advertisement events = %v", got)
 	}
 }

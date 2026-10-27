@@ -3,8 +3,6 @@ package handler
 import (
 	"bytes"
 	"context"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,6 +10,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
@@ -451,7 +453,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
-	records, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
+	records, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +494,7 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	now := app.Now()
-	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -544,8 +546,8 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
 	now := app.Now()
-	line := createEdgeNode(t, app.Store, now)
-	configureLine(t, app.Store, line, "line-a", now)
+	line := storetest.CreateEdgeNode(t, app.Store, now)
+	storetest.ConfigureLine(t, app.Store, line, "line-a", now)
 	subscriber, token, err := app.Store.CreateSubscriber("alice", []string{line}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -627,7 +629,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	if len(credentials) == 0 {
 		t.Fatal("subscriber credentials disappeared with the mesh device")
 	}
-	if _, err = resolveBearer(t, app.Store, token); err != nil {
+	if _, err = storetest.ResolveBearer(t, app.Store, token); err != nil {
 		t.Fatalf("subscription token stopped working: %v", err)
 	}
 	// The sibling device of the same subscriber is untouched.

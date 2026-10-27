@@ -1,139 +1,24 @@
-package handler
+package subscription_test
 
 import (
-	"database/sql"
 	"encoding/json"
-	"errors"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
-// subscriberStoreFixture opens a private store and returns it with the fixed
-// test clock. Every test works on its own temporary directory.
-func subscriberStoreFixture(t *testing.T) (*store.Store, time.Time) {
-	t.Helper()
-	dir := filepath.Join(t.TempDir(), "state")
-	s, err := store.OpenStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return s, time.Unix(1_700_000_000, 0)
-}
-
-// resolveBearer is the test-side read of the bearer contract: only an active
-// token of an active subscriber resolves. The production download path resolves
-// the same rows inside one snapshot transaction.
-func resolveBearer(t *testing.T, s *store.Store, token string) (subscription.Subscriber, error) {
-	t.Helper()
-	if err := subscription.ValidateToken(token); err != nil {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
-	var subscriberID string
-	err := s.DB.QueryRow(`SELECT subscriber_id FROM subscription_tokens WHERE token_hash=? AND revoked=0`,
-		subscription.TokenHash(token)).Scan(&subscriberID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
-	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
-	}
-	sub, err := s.GetSubscriber(subscriberID)
-	if err != nil {
-		if strings.HasPrefix(err.Error(), "SUBSCRIBER_NOT_FOUND") {
-			return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-		}
-		return subscription.Subscriber{}, err
-	}
-	if sub.State != subscription.StateActive {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
-	}
-	return sub, nil
-}
-
-// readStoredLine returns one stored Line through the production list path. It
-// keeps the old single-row assertions while the single-row getter is gone.
-func readStoredLine(t *testing.T, s *store.Store, nodeID string) (subscription.Line, error) {
-	t.Helper()
-	lines, err := s.ListLines()
-	if err != nil {
-		return subscription.Line{}, err
-	}
-	for _, line := range lines {
-		if line.NodeID == nodeID {
-			return line, nil
-		}
-	}
-	return subscription.Line{}, errors.New("LINE_NOT_FOUND: unknown line")
-}
-
-// createEdgeNode inserts one edge node so it can be used as a proxy Line.
-// The display name is a fixed short label: it must fit the node name policy.
-func createEdgeNode(t *testing.T, s *store.Store, now time.Time) string {
-	t.Helper()
-	node, _, err := s.CreateNode("edge", "line", 8443, 2222, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return node.ID
-}
-
-// createOutNode inserts one out node; it can never serve a proxy Line.
-func createOutNode(t *testing.T, s *store.Store, now time.Time) string {
-	t.Helper()
-	node, _, err := s.CreateNode("out", "out", 8444, 2223, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return node.ID
-}
-
-// testLine returns a valid Line transport for one node. The port matches the
-// VLESS port of the fixture nodes.
-func testLine(nodeID, name string) subscription.Line {
-	pair, err := subscription.NewRealityKeyPair()
-	if err != nil {
-		panic(err)
-	}
-	shortID, err := subscription.NewShortID()
-	if err != nil {
-		panic(err)
-	}
-	return subscription.Line{
-		NodeID:          nodeID,
-		DisplayName:     name,
-		Server:          "line.example.invalid",
-		Port:            8443,
-		SortOrder:       1,
-		ServerName:      "line.example.invalid",
-		HandshakeServer: "handshake.example.invalid",
-		HandshakePort:   443,
-		PrivateKey:      pair.PrivateKey,
-		PublicKey:       pair.PublicKey,
-		ShortID:         shortID,
-	}
-}
-
-// configureLine stores a Line transport for one edge node.
-func configureLine(t *testing.T, s *store.Store, nodeID, name string, now time.Time) subscription.Line {
-	t.Helper()
-	line, err := s.SetLine(testLine(nodeID, name), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return line
-}
+// testStorePassword is the administrator password the legacy-schema fixtures hash.
+const testStorePassword = "test-only-long-password-47!"
 
 func TestSubscriberCreateRejectsBadSelectionWithoutWrites(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	out := createOutNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	out := storetest.CreateOutNode(t, s, now)
 
 	// An Out node is not a proxy Line.
 	if _, _, err := s.CreateSubscriber("alice", []string{out}, now); err == nil {
@@ -167,9 +52,9 @@ func TestSubscriberCreateRejectsBadSelectionWithoutWrites(t *testing.T) {
 }
 
 func TestSubscriberCreateStoresCredentialAndToken(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	sub, bearer, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -182,7 +67,7 @@ func TestSubscriberCreateStoresCredentialAndToken(t *testing.T) {
 		t.Fatalf("bearer is not canonical: %v", err)
 	}
 	// The bearer resolves to exactly this subscriber.
-	resolved, err := resolveBearer(t, s, bearer)
+	resolved, err := storetest.ResolveBearer(t, s, bearer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,9 +96,9 @@ func TestSubscriberCreateStoresCredentialAndToken(t *testing.T) {
 }
 
 func TestSubscriberRenameKeepsIdentityAndLeavesOtherSubscriberUntouched(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	alice, aliceToken, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -270,16 +155,16 @@ func TestSubscriberRenameKeepsIdentityAndLeavesOtherSubscriberUntouched(t *testi
 	}
 	// Both bearers still work; a rename never revokes a token.
 	for _, bearer := range []string{aliceToken, bobToken} {
-		if _, err := resolveBearer(t, s, bearer); err != nil {
+		if _, err := storetest.ResolveBearer(t, s, bearer); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
 func TestSubscriberTokenRotationRevokesOldBearerOnly(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	alice, aliceToken, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -301,14 +186,14 @@ func TestSubscriberTokenRotationRevokesOldBearerOnly(t *testing.T) {
 	if rotated == aliceToken {
 		t.Fatal("rotation returned the same bearer")
 	}
-	if _, err := resolveBearer(t, s, rotated); err != nil {
+	if _, err := storetest.ResolveBearer(t, s, rotated); err != nil {
 		t.Fatalf("new bearer rejected: %v", err)
 	}
-	if _, err := resolveBearer(t, s, aliceToken); err == nil {
+	if _, err := storetest.ResolveBearer(t, s, aliceToken); err == nil {
 		t.Fatal("old bearer still accepted")
 	}
 	// The other subscriber keeps his bearer.
-	if _, err := resolveBearer(t, s, bobToken); err != nil {
+	if _, err := storetest.ResolveBearer(t, s, bobToken); err != nil {
 		t.Fatal(err)
 	}
 	// A rotation never touches the VLESS credential.
@@ -326,9 +211,9 @@ func TestSubscriberTokenRotationRevokesOldBearerOnly(t *testing.T) {
 }
 
 func TestSubscriberStateChangeRevokesTokensInSameTransaction(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	alice, aliceToken, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -348,7 +233,7 @@ func TestSubscriberStateChangeRevokesTokensInSameTransaction(t *testing.T) {
 			t.Fatalf("state = %s, want %s", updated.State, state)
 		}
 		// A non-active subscriber can never download.
-		if _, err := resolveBearer(t, s, aliceToken); err == nil {
+		if _, err := storetest.ResolveBearer(t, s, aliceToken); err == nil {
 			t.Fatalf("token still accepted in state %s", state)
 		}
 		// The revocation is persisted, not only filtered at read time.
@@ -360,7 +245,7 @@ func TestSubscriberStateChangeRevokesTokensInSameTransaction(t *testing.T) {
 			t.Fatalf("revoked tokens = %d, want 1", revoked)
 		}
 		// The other subscriber is unaffected.
-		if _, err := resolveBearer(t, s, bobToken); err != nil {
+		if _, err := storetest.ResolveBearer(t, s, bobToken); err != nil {
 			t.Fatal(err)
 		}
 		bobSubscriber, err := s.GetSubscriber(bob.ID)
@@ -391,9 +276,9 @@ func TestSubscriberStateChangeRevokesTokensInSameTransaction(t *testing.T) {
 }
 
 func TestSubscriberStateChangeRejectsInvalidTransition(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	sub, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -414,11 +299,11 @@ func TestSubscriberStateChangeRejectsInvalidTransition(t *testing.T) {
 }
 
 func TestSelectLinesPreservesHistoricalUUID(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	first := createEdgeNode(t, s, now)
-	second := createEdgeNode(t, s, now)
-	configureLine(t, s, first, "line-a", now)
-	configureLine(t, s, second, "line-b", now)
+	s, now := storetest.SubscriberStore(t)
+	first := storetest.CreateEdgeNode(t, s, now)
+	second := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, first, "line-a", now)
+	storetest.ConfigureLine(t, s, second, "line-b", now)
 
 	sub, _, err := s.CreateSubscriber("alice", []string{first}, now)
 	if err != nil {
@@ -492,10 +377,10 @@ func TestSelectLinesPreservesHistoricalUUID(t *testing.T) {
 }
 
 func TestSelectLinesRejectsInvalidSelection(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	out := createOutNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	out := storetest.CreateOutNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	sub, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -518,11 +403,11 @@ func TestSelectLinesRejectsInvalidSelection(t *testing.T) {
 }
 
 func TestSelectLinesRequiresActiveSubscriber(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	second := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	configureLine(t, s, second, "line-b", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	second := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.ConfigureLine(t, s, second, "line-b", now)
 
 	sub, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -544,14 +429,14 @@ func TestSelectLinesRequiresActiveSubscriber(t *testing.T) {
 }
 
 func TestSetLinePreservesTransportIdentity(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	out := createOutNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	out := storetest.CreateOutNode(t, s, now)
 
-	stored := configureLine(t, s, edge, "line-a", now)
+	stored := storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	// A rename with new keys keeps the original REALITY identity.
-	renamed := testLine(edge, "line-renamed")
+	renamed := storetest.TestLine(edge, "line-renamed")
 	renamed.SortOrder = 5
 	renamed.PrivateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	renamed.PublicKey = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
@@ -565,7 +450,7 @@ func TestSetLinePreservesTransportIdentity(t *testing.T) {
 	if updated.PrivateKey != stored.PrivateKey || updated.PublicKey != stored.PublicKey || updated.ShortID != stored.ShortID {
 		t.Fatal("transport identity was replaced")
 	}
-	reloaded, err := readStoredLine(t, s, edge)
+	reloaded, err := storetest.ReadStoredLine(t, s, edge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,26 +461,26 @@ func TestSetLinePreservesTransportIdentity(t *testing.T) {
 		t.Fatalf("stored label not updated: name=%q order=%d", reloaded.DisplayName, reloaded.SortOrder)
 	}
 	// An Out node never becomes a Line.
-	if _, err := s.SetLine(testLine(out, "out-line"), now); err == nil {
+	if _, err := s.SetLine(storetest.TestLine(out, "out-line"), now); err == nil {
 		t.Fatal("out node accepted as line")
 	}
 	// A line for an unknown node is rejected.
-	if _, err := s.SetLine(testLine("ffffffffffffffffffffffffffffffff", "ghost"), now); err == nil {
+	if _, err := s.SetLine(storetest.TestLine("ffffffffffffffffffffffffffffffff", "ghost"), now); err == nil {
 		t.Fatal("unknown node accepted as line")
 	}
 }
 
 func TestListLinesOrdersBySortOrder(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	first := createEdgeNode(t, s, now)
-	second := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	first := storetest.CreateEdgeNode(t, s, now)
+	second := storetest.CreateEdgeNode(t, s, now)
 	// The second line is stored first but must be listed last.
-	late := testLine(second, "line-a")
+	late := storetest.TestLine(second, "line-a")
 	late.SortOrder = 9
 	if _, err := s.SetLine(late, now); err != nil {
 		t.Fatal(err)
 	}
-	early := testLine(first, "line-b")
+	early := storetest.TestLine(first, "line-b")
 	early.SortOrder = 2
 	if _, err := s.SetLine(early, now); err != nil {
 		t.Fatal(err)
@@ -614,9 +499,9 @@ func TestListLinesOrdersBySortOrder(t *testing.T) {
 }
 
 func TestSubscriberTokenRevocationIsIndependentOfCredential(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	sub, bearer, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -629,7 +514,7 @@ func TestSubscriberTokenRevocationIsIndependentOfCredential(t *testing.T) {
 	if err := s.RevokeTokens(sub.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveBearer(t, s, bearer); err == nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err == nil {
 		t.Fatal("revoked bearer still accepted")
 	}
 	after, err := s.ListSubscriberCredentials(sub.ID)
@@ -646,14 +531,14 @@ func TestSubscriberTokenRevocationIsIndependentOfCredential(t *testing.T) {
 }
 
 func TestUnknownBearerIsRejected(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	if _, _, err := s.CreateSubscriber("alice", []string{edge}, now); err != nil {
 		t.Fatal(err)
 	}
 	for _, token := range []string{"", "short", "not-a-token"} {
-		if _, err := resolveBearer(t, s, token); err == nil {
+		if _, err := storetest.ResolveBearer(t, s, token); err == nil {
 			t.Fatalf("invalid token accepted: %q", token)
 		}
 	}
@@ -662,7 +547,7 @@ func TestUnknownBearerIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveBearer(t, s, unknown); err == nil {
+	if _, err := storetest.ResolveBearer(t, s, unknown); err == nil {
 		t.Fatal("unknown token accepted")
 	}
 }
@@ -672,25 +557,25 @@ func TestUnknownBearerIsRejected(t *testing.T) {
 // reported as a database problem, because a client that retries after a
 // transient failure has to be able to tell the two cases apart.
 func TestBearerResolutionReportsDatabaseFailure(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	_, bearer, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The bearer is valid and known before the database goes away.
-	if _, err := resolveBearer(t, s, bearer); err != nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = resolveBearer(t, s, bearer)
+	_, err = storetest.ResolveBearer(t, s, bearer)
 	if err == nil {
 		t.Fatal("closed database reported a resolved subscriber")
 	}
-	if !hasErrorCode(err, "DATABASE_UNAVAILABLE") {
+	if !storetest.HasErrorCode(err, "DATABASE_UNAVAILABLE") {
 		t.Fatalf("error %q does not carry code DATABASE_UNAVAILABLE", err)
 	}
 	// The failure message never contains the bearer.
@@ -703,9 +588,9 @@ func TestBearerResolutionReportsDatabaseFailure(t *testing.T) {
 // unknown subscriber is an error instead of a silent success. A mistyped
 // identifier must never be reported as a successful revocation.
 func TestRevokeTokensRejectsUnknownSubscriber(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	sub, bearer, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -715,18 +600,18 @@ func TestRevokeTokensRejectsUnknownSubscriber(t *testing.T) {
 	if err == nil {
 		t.Fatal("revocation of an unknown subscriber reported success")
 	}
-	if !hasErrorCode(err, "SUBSCRIBER_NOT_FOUND") {
+	if !storetest.HasErrorCode(err, "SUBSCRIBER_NOT_FOUND") {
 		t.Fatalf("error %q does not carry code SUBSCRIBER_NOT_FOUND", err)
 	}
 	// The known subscriber keeps his bearer: the failed call revoked nothing.
-	if _, err := resolveBearer(t, s, bearer); err != nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 	// The known subscriber can still be revoked normally.
 	if err := s.RevokeTokens(sub.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveBearer(t, s, bearer); err == nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err == nil {
 		t.Fatal("revoked bearer still accepted")
 	}
 }
@@ -735,9 +620,9 @@ func TestRevokeTokensRejectsUnknownSubscriber(t *testing.T) {
 // subscriber keeps its tombstone: its display name stays frozen. A paused
 // subscriber may still be renamed.
 func TestRenameSubscriberRejectsTombstone(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	sub, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -761,7 +646,7 @@ func TestRenameSubscriberRejectsTombstone(t *testing.T) {
 	}
 	if _, err := s.RenameSubscriber(sub.ID, "alice-renamed", now); err == nil {
 		t.Fatal("deleting subscriber was renamed")
-	} else if !hasErrorCode(err, "SUBSCRIBER_TOMBSTONED") {
+	} else if !storetest.HasErrorCode(err, "SUBSCRIBER_TOMBSTONED") {
 		t.Fatalf("error %q does not carry code SUBSCRIBER_TOMBSTONED", err)
 	}
 	// A deleted subscriber keeps its tombstone too.
@@ -770,7 +655,7 @@ func TestRenameSubscriberRejectsTombstone(t *testing.T) {
 	}
 	if _, err := s.RenameSubscriber(sub.ID, "alice-renamed", now); err == nil {
 		t.Fatal("deleted subscriber was renamed")
-	} else if !hasErrorCode(err, "SUBSCRIBER_TOMBSTONED") {
+	} else if !storetest.HasErrorCode(err, "SUBSCRIBER_TOMBSTONED") {
 		t.Fatalf("error %q does not carry code SUBSCRIBER_TOMBSTONED", err)
 	}
 	// The stored name is exactly the one from before the deletion.
@@ -788,9 +673,9 @@ func TestRenameSubscriberRejectsTombstone(t *testing.T) {
 // modified outside the Hub must fail instead of reaching a client
 // configuration.
 func TestCorruptLineSettingsAreRejected(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	// An IP address is not a valid REALITY server name. The write path never
 	// stores such a value, so the row is corrupted on purpose.
@@ -798,23 +683,23 @@ func TestCorruptLineSettingsAreRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := readStoredLine(t, s, edge)
+	_, err := storetest.ReadStoredLine(t, s, edge)
 	if err == nil {
 		t.Fatal("corrupt line was returned by getLine")
 	}
-	if !hasErrorCode(err, "LINE_SETTINGS_CORRUPT") {
+	if !storetest.HasErrorCode(err, "LINE_SETTINGS_CORRUPT") {
 		t.Fatalf("error %q does not carry code LINE_SETTINGS_CORRUPT", err)
 	}
 	if _, err := s.ListLines(); err == nil {
 		t.Fatal("corrupt line was returned by listLines")
-	} else if !hasErrorCode(err, "LINE_SETTINGS_CORRUPT") {
+	} else if !storetest.HasErrorCode(err, "LINE_SETTINGS_CORRUPT") {
 		t.Fatalf("error %q does not carry code LINE_SETTINGS_CORRUPT", err)
 	}
 }
 
 func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
 
 	// Seed real schema-3 rows that must survive the upgrade: an agent task
 	// and a session. The task is enqueued through the validated path.
@@ -825,7 +710,7 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	if err = s.EnqueueTaskAt(task, now); err != nil {
 		t.Fatal(err)
 	}
-	hash, err := store.HashPassword(testPassword)
+	hash, err := store.HashPassword(testStorePassword)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -904,12 +789,12 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 	}
 
 	// The new tables work on the migrated database.
-	configureLine(t, s, edge, "line-a", now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	sub, bearer, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveBearer(t, s, bearer); err != nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetSubscriber(sub.ID); err != nil {
@@ -918,8 +803,8 @@ func TestSchemaV3DataSurvivesV4Migration(t *testing.T) {
 }
 
 func TestSchemaV4MigrationRollsBackOnFailure(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
 
 	// Simulate a v3 database and a failing v4 migration. The failure must
 	// leave the database exactly at v3 without any partial table.
@@ -964,11 +849,11 @@ func TestSchemaV4MigrationRollsBackOnFailure(t *testing.T) {
 }
 
 func TestSelectLinesReselectRestoresInactiveCredential(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	first := createEdgeNode(t, s, now)
-	second := createEdgeNode(t, s, now)
-	configureLine(t, s, first, "line-a", now)
-	configureLine(t, s, second, "line-b", now)
+	s, now := storetest.SubscriberStore(t)
+	first := storetest.CreateEdgeNode(t, s, now)
+	second := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, first, "line-a", now)
+	storetest.ConfigureLine(t, s, second, "line-b", now)
 
 	sub, _, err := s.CreateSubscriber("alice", []string{first, second}, now)
 	if err != nil {
@@ -1026,9 +911,9 @@ func TestSelectLinesReselectRestoresInactiveCredential(t *testing.T) {
 }
 
 func TestSubscriberStateChangeIsIdempotent(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	sub, bearer, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -1053,7 +938,7 @@ func TestSubscriberStateChangeIsIdempotent(t *testing.T) {
 	if revisionAfter != revisionBefore {
 		t.Fatalf("revision changed on an idempotent call: %d -> %d", revisionBefore, revisionAfter)
 	}
-	if _, err := resolveBearer(t, s, bearer); err != nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1064,7 +949,7 @@ func TestSubscriberStateChangeIsIdempotent(t *testing.T) {
 	if _, err = s.SetSubscriberState(sub.ID, subscription.StateDeleting, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveBearer(t, s, bearer); err == nil {
+	if _, err := storetest.ResolveBearer(t, s, bearer); err == nil {
 		t.Fatal("token accepted after a repeated deleting state")
 	}
 	var revoked int
@@ -1077,49 +962,49 @@ func TestSubscriberStateChangeIsIdempotent(t *testing.T) {
 }
 
 func TestSetLineRejectsPortMismatch(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	line := testLine(edge, "line-a")
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	line := storetest.TestLine(edge, "line-a")
 	line.Port = 443
 	if _, err := s.SetLine(line, now); err == nil {
 		t.Fatal("port mismatch accepted")
 	}
 	// The rejected line was not stored.
-	if _, err := readStoredLine(t, s, edge); err == nil {
+	if _, err := storetest.ReadStoredLine(t, s, edge); err == nil {
 		t.Fatal("rejected line was stored")
 	}
 }
 
 func TestSetLineRejectsInvalidRealitySettings(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
 
 	// An IP address is not a valid REALITY server name.
-	ipServer := testLine(edge, "line-a")
+	ipServer := storetest.TestLine(edge, "line-a")
 	ipServer.ServerName = "203.0.113.7"
 	if _, err := s.SetLine(ipServer, now); err == nil {
 		t.Fatal("ip server name accepted")
 	}
 
 	// A host with a scheme is not a valid handshake target.
-	scheme := testLine(edge, "line-a")
+	scheme := storetest.TestLine(edge, "line-a")
 	scheme.HandshakeServer = "https://handshake.example.invalid"
 	if _, err := s.SetLine(scheme, now); err == nil {
 		t.Fatal("handshake server with scheme accepted")
 	}
 
 	// Nothing was stored by the rejected attempts.
-	if _, err := readStoredLine(t, s, edge); err == nil {
+	if _, err := storetest.ReadStoredLine(t, s, edge); err == nil {
 		t.Fatal("rejected line was stored")
 	}
 }
 
 func TestSetLineCanonicalizesLowercaseHosts(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
 
 	// Upper case DNS names are valid input; the stored value is canonical.
-	line := testLine(edge, "line-a")
+	line := storetest.TestLine(edge, "line-a")
 	line.ServerName = "Line.Example.Invalid"
 	line.HandshakeServer = "Handshake.Example.Invalid"
 	stored, err := s.SetLine(line, now)
@@ -1129,7 +1014,7 @@ func TestSetLineCanonicalizesLowercaseHosts(t *testing.T) {
 	if stored.ServerName != "line.example.invalid" || stored.HandshakeServer != "handshake.example.invalid" {
 		t.Fatalf("hosts were not canonicalized: %q %q", stored.ServerName, stored.HandshakeServer)
 	}
-	reloaded, err := readStoredLine(t, s, edge)
+	reloaded, err := storetest.ReadStoredLine(t, s, edge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1139,9 +1024,9 @@ func TestSetLineCanonicalizesLowercaseHosts(t *testing.T) {
 }
 
 func TestSubscriberErrorsCarryStableCodes(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	sub, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -1160,17 +1045,8 @@ func TestSubscriberErrorsCarryStableCodes(t *testing.T) {
 		if tc.err == nil {
 			t.Fatalf("%s: expected an error", tc.name)
 		}
-		if !hasErrorCode(tc.err, tc.code) {
+		if !storetest.HasErrorCode(tc.err, tc.code) {
 			t.Fatalf("%s: error %q does not carry code %s", tc.name, tc.err, tc.code)
 		}
 	}
-}
-
-// hasErrorCode reports whether the sanitized error carries the given stable
-// error code.
-func hasErrorCode(err error, code string) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), code)
 }

@@ -10,7 +10,6 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,16 +20,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
+
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // wizardApp opens a Web runtime whose publish gate is the fixture verifier.
-func wizardApp(t *testing.T) (*Server, *browser, *fixturePublishVerifier) {
+func wizardApp(t *testing.T) (*Server, *browser, *storetest.FixturePublishVerifier) {
 	t.Helper()
 	app, _ := testApp(t)
-	verifier := &fixturePublishVerifier{}
+	verifier := &storetest.FixturePublishVerifier{}
 	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	initialize(t, b)
@@ -42,7 +44,7 @@ func wizardApp(t *testing.T) (*Server, *browser, *fixturePublishVerifier) {
 func wizardLine(t *testing.T, app *Server, name string) string {
 	t.Helper()
 	node, _ := createPendingNode(t, app, "edge", name, 8443, 2222)
-	configureLine(t, app.Store, node.ID, name, app.Now())
+	storetest.ConfigureLine(t, app.Store, node.ID, name, app.Now())
 	return node.ID
 }
 
@@ -121,7 +123,7 @@ func TestWizardPreviewWritesNothingAndRemindsOnRecordedGroups(t *testing.T) {
 	}
 	// The gate did run on the composed documents, so the preview proves what
 	// the save would prove.
-	if calls, _ := verifier.counts(); calls != 1 {
+	if calls, _ := verifier.Counts(); calls != 1 {
 		t.Fatalf("sing-box gate calls = %d, want 1", calls)
 	}
 }
@@ -161,7 +163,7 @@ func TestWizardSaveApprovesArtifactAndDownloadServesIt(t *testing.T) {
 	if approved != 1 || artifactID == "" {
 		t.Fatalf("artifact = %q approved=%d, want an approved digest", artifactID, approved)
 	}
-	if calls, _ := verifier.counts(); calls != 1 {
+	if calls, _ := verifier.Counts(); calls != 1 {
 		t.Fatalf("sing-box gate calls = %d, want 1", calls)
 	}
 	// The approved artifact is the download's single source of truth.
@@ -203,7 +205,7 @@ func TestWizardSaveRefusesBlockingPreviewWithoutWriting(t *testing.T) {
 
 func TestWizardSaveRefusesGateFailure(t *testing.T) {
 	app, b, verifier := wizardApp(t)
-	verifier.rejectSingBoxAt = 1
+	verifier.RejectSingBoxAt = 1
 	lineID := wizardLine(t, app, "hk-01")
 
 	w := b.post("/subscribers/wizard/save", url.Values{
@@ -260,7 +262,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 	// Absent binary: approved, with the skipped-gate reminder. The create
 	// response is the one-time bearer page, so the reminder is asserted on the
 	// re-save that renders the wizard.
-	verifier.missingMihomo = true
+	verifier.MissingMihomo = true
 	w := b.post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
@@ -284,8 +286,8 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 
 	// A rejecting binary is a blocking failure for a fresh subscriber. The two
 	// saves above already spent mihomo calls 1 and 2.
-	verifier.missingMihomo = false
-	verifier.rejectMihomoAt = 3
+	verifier.MissingMihomo = false
+	verifier.RejectMihomoAt = 3
 	other := wizardLine(t, app, "hk-02")
 	w = b.post("/subscribers/wizard/save", url.Values{
 		"display_name":  {"carol"},
@@ -360,7 +362,7 @@ func TestWizardMeshGroupRefusesRevokedDevice(t *testing.T) {
 // wizardDeviceID inserts one selectable mesh device.
 func wizardDeviceID(t *testing.T, app *Server) string {
 	t.Helper()
-	device, err := app.Store.CreateMeshDevice(meshSpec("ipad", mesh.PurposeMeshOnly, ""), app.Now())
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("ipad", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

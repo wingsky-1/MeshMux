@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"

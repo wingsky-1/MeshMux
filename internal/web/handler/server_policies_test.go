@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	corepolicy "github.com/wingsky-1/MeshMux/internal/core/policy"
 	policy "github.com/wingsky-1/MeshMux/internal/web/handler/policy"
@@ -21,7 +22,7 @@ func policiesLiveApp(t *testing.T) (*Server, *browser) {
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	if _, err := app.Store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, sub.ID), now); err != nil {
+	if _, err := app.Store.CreateMeshDevice(storetest.MeshSpec("policy-phone", mesh.PurposeProxyMesh, sub.ID), now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b
@@ -62,17 +63,17 @@ func TestPoliciesPageWithoutMeshDataFallsBackToDraft(t *testing.T) {
 
 // policiesOutFixture attaches the Out synchronization fixture to a real
 // console, then creates the proxy_mesh device the live snapshot needs.
-func policiesOutFixture(t *testing.T) (*Server, *browser, outSyncFixture) {
+func policiesOutFixture(t *testing.T) (*Server, *browser, storetest.OutSyncFixture) {
 	t.Helper()
-	f := newOutSyncFixture(t)
+	f := storetest.NewOutSyncFixture(t)
 	app, _ := testApp(t)
 	if err := app.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	app.Store = f.store
+	app.Store = f.Store
 	app.Cfg.HeadscaleOrigin = testHeadscaleOrigin
-	app.Now = func() time.Time { return f.now }
-	if err := app.Store.PrepareBootstrap(f.now); err != nil {
+	app.Now = func() time.Time { return f.Now }
+	if err := app.Store.PrepareBootstrap(f.Now); err != nil {
 		t.Fatal(err)
 	}
 	b := &browser{app: app}
@@ -82,7 +83,7 @@ func policiesOutFixture(t *testing.T) (*Server, *browser, outSyncFixture) {
 	if err != nil || len(subscribers) == 0 {
 		t.Fatalf("subscribers = %v err=%v", subscribers, err)
 	}
-	if _, err = app.Store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, subscribers[0].ID), f.now); err != nil {
+	if _, err = app.Store.CreateMeshDevice(storetest.MeshSpec("policy-phone", mesh.PurposeProxyMesh, subscribers[0].ID), f.Now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b, f
@@ -96,20 +97,20 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 		t.Fatalf("absent state missing: %.400s", w.Body.String())
 	}
 
-	enableOutForLine(t, f.store, f.out, f.line, f.now)
-	confirmChain(t, f.store, f.out, f.now)
-	markLineOnline(t, f.store, f.line, f.now)
-	if err := prepareSubscriberSyncForLine(f.store, f.line, f.now); err != nil {
+	storetest.EnableOutForLine(t, f.Store, f.Out, f.Line, f.Now)
+	storetest.ConfirmChain(t, f.Store, f.Out, f.Now)
+	storetest.MarkLineOnline(t, f.Store, f.Line, f.Now)
+	if err := storetest.PrepareSubscriberSyncForLine(f.Store, f.Line, f.Now); err != nil {
 		t.Fatal(err)
 	}
-	confirmChain(t, f.store, f.line, f.now)
+	storetest.ConfirmChain(t, f.Store, f.Line, f.Now)
 	w = b.req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "Out 已接入") || !strings.Contains(w.Body.String(), "Out 直出（可选）") {
 		t.Fatalf("active state missing: %.400s", w.Body.String())
 	}
 
-	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.out); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.Out); err != nil {
 		t.Fatal(err)
 	}
 	w = b.req("GET", "/policies", nil, nil)

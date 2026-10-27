@@ -1,10 +1,12 @@
-package handler
+package mesh_test
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 )
@@ -32,38 +34,15 @@ func createSubnetRouter(t *testing.T, s *store.Store, name string, declared []st
 	return record
 }
 
-// routeEventKinds returns the audit kinds recorded for one prefix, oldest
-// first. The table is append-only, so this is the whole history.
-func routeEventKinds(t *testing.T, s *store.Store, deviceID, prefix string) []string {
-	t.Helper()
-	rows, err := s.DB.Query(`SELECT kind FROM mesh_route_events WHERE device_id=? AND prefix=? ORDER BY id`, deviceID, prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var kind string
-		if err := rows.Scan(&kind); err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, kind)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
 // TestSchemaV7MigrationAddsRouteTablesAndPreservesV6 upgrades a schema-6
 // database and checks that the route tables appear, the pre-existing device and
 // key rows survive and the future-schema guard moved to 9. The migration must
 // stay additive: dropping the two new tables returns the file to the schema-6
 // shape.
 func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
-	device, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +92,7 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 	if _, err = s.DB.Exec(`PRAGMA user_version=18`); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {
+	if err = s.Migrate(); err == nil || !storetest.HasErrorCode(err, "SCHEMA_TOO_NEW") {
 		t.Fatalf("future schema accepted: %v", err)
 	}
 }
@@ -122,9 +101,9 @@ func TestSchemaV7MigrationAddsRouteTablesAndPreservesV6(t *testing.T) {
 // transaction: when the route tables cannot be created, the database stays at
 // version 6 and every schema-6 table and row is still there.
 func TestSchemaV7MigrationRollsBackWithoutDestroyingV6(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
-	device, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +116,7 @@ func TestSchemaV7MigrationRollsBackWithoutDestroyingV6(t *testing.T) {
 	if _, err = s.DB.Exec(`CREATE TABLE mesh_routes (stale TEXT)`); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_MIGRATION_FAILED") {
+	if err = s.Migrate(); err == nil || !storetest.HasErrorCode(err, "SCHEMA_MIGRATION_FAILED") {
 		t.Fatalf("colliding migration reported as success: %v", err)
 	}
 	var version int
@@ -160,7 +139,7 @@ func TestSchemaV7MigrationRollsBackWithoutDestroyingV6(t *testing.T) {
 // one canonical row per prefix, source=device when pre-declared, and a repeat
 // that changes nothing and appends no second event.
 func TestMeshRouteDeclarationIsAdditiveAndIdempotent(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{" 192.168.1.0/24 ", "10.0.0.0/8", "192.168.1.0/24"}, now)
 
 	routes, err := s.ListMeshRoutes(router.ID)
@@ -181,7 +160,7 @@ func TestMeshRouteDeclarationIsAdditiveAndIdempotent(t *testing.T) {
 			t.Fatalf("%s source = %q, want device", route.Prefix, route.Source)
 		}
 	}
-	if got := routeEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 1 || got[0] != store.RouteEventDeclared {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 1 || got[0] != store.RouteEventDeclared {
 		t.Fatalf("pre-declaration events = %v, want one DECLARED", got)
 	}
 
@@ -194,7 +173,7 @@ func TestMeshRouteDeclarationIsAdditiveAndIdempotent(t *testing.T) {
 	if again.Source != mesh.RouteSourceDevice || again.Desired != mesh.RouteDesiredAdvertised {
 		t.Fatalf("repeat declaration rewrote the row: %+v", again)
 	}
-	if got := routeEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 1 {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 1 {
 		t.Fatalf("repeat declaration appended an event: %v", got)
 	}
 	// The canonical spelling is stored, and a second spelling of the same
@@ -212,7 +191,7 @@ func TestMeshRouteDeclarationIsAdditiveAndIdempotent(t *testing.T) {
 // reaches the storage boundary: an exit route, the tailnet range and a prefix
 // with host bits are refused before a row exists.
 func TestMeshRouteRejectsUnroutableDeclarations(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", nil, now)
 	for _, raw := range []string{"0.0.0.0/0", "::/0", "100.64.0.0/10", "fd7a:115c:a1e0::/48", "192.168.1.5/24", "127.0.0.0/8"} {
 		if _, err := s.UpsertMeshRoute(router.ID, raw, mesh.RouteSourceOperator, "op", now); err == nil {
@@ -240,11 +219,11 @@ func TestMeshRouteRejectsUnroutableDeclarations(t *testing.T) {
 // TestMeshRoutePrefixConflictAcrossDevices keeps one prefix with one device: a
 // second device cannot claim it, and a withdrawn prefix becomes available again.
 func TestMeshRoutePrefixConflictAcrossDevices(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	first := createSubnetRouter(t, s, "nas-a", []string{"192.168.1.0/24"}, now)
 	second := createSubnetRouter(t, s, "nas-b", nil, now)
 
-	if _, err := s.UpsertMeshRoute(second.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !hasErrorCode(err, store.CodeMeshRouteConflict) {
+	if _, err := s.UpsertMeshRoute(second.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshRouteConflict) {
 		t.Fatalf("cross-device duplicate accepted: %v", err)
 	}
 	// The partial unique index is the real guard, not only the pre-check.
@@ -253,7 +232,7 @@ func TestMeshRoutePrefixConflictAcrossDevices(t *testing.T) {
 		t.Fatalf("active-prefix index missing: %v", err)
 	}
 	// A pre-declaration collision refuses the whole second device creation.
-	if _, err := s.CreateMeshDevice(subnetRouterSpec("nas-c", "192.168.1.0/24"), now); err == nil || !hasErrorCode(err, store.CodeMeshRouteConflict) {
+	if _, err := s.CreateMeshDevice(subnetRouterSpec("nas-c", "192.168.1.0/24"), now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshRouteConflict) {
 		t.Fatalf("pre-declaration collision accepted: %v", err)
 	}
 	// Withdrawing the prefix frees it for another device.
@@ -269,10 +248,10 @@ func TestMeshRoutePrefixConflictAcrossDevices(t *testing.T) {
 // the last line of defence: no desired change and no revival happens without an
 // audit key, and a revoked row cannot come back with the same key.
 func TestMeshRouteDesiredNeedsAuditKey(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 
-	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "", now); err == nil || !hasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
+	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
 		t.Fatalf("approval without an audit key accepted: %v", err)
 	}
 	// The database refuses the same change even when the store check is bypassed.
@@ -295,12 +274,12 @@ func TestMeshRouteDesiredNeedsAuditKey(t *testing.T) {
 	}
 	// A revoked row is terminal for the desired-state path; it is revived only by
 	// declaring it again, which is a new audited act.
-	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredAdvertised, "op-revive", now); err == nil || !hasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
+	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredAdvertised, "op-revive", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
 		t.Fatalf("revoked route revived through setMeshRouteDesired: %v", err)
 	}
 	// A revival with the same audit key as the revocation is refused, so a
 	// withdrawn prefix cannot be flipped back under one operation id.
-	if _, err := s.UpsertMeshRoute(router.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op-revoke", now); err == nil || !hasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
+	if _, err := s.UpsertMeshRoute(router.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op-revoke", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
 		t.Fatalf("revival reused the revocation audit key: %v", err)
 	}
 	if _, err := s.DB.Exec(`UPDATE mesh_routes SET desired='advertised', operation_id='op-revoke' WHERE device_id=?`, router.ID); err == nil || !strings.Contains(err.Error(), "MESH_ROUTE_REVIVAL_UNTRACKED") {
@@ -325,7 +304,7 @@ func TestMeshRouteDesiredNeedsAuditKey(t *testing.T) {
  VALUES(?,?,'revoked','','operator','op',?,?)`, router.ID, "10.9.0.0/16", now.Unix(), now.Unix()); err == nil || !strings.Contains(err.Error(), "MESH_ROUTE_TRANSITION_UNAUDITED") {
 		t.Fatalf("route born revoked accepted: %v", err)
 	}
-	if got := routeEventKinds(t, s, router.ID, "192.168.1.0/24"); strings.Join(got, ",") !=
+	if got := storetest.RouteEventKinds(t, s, router.ID, "192.168.1.0/24"); strings.Join(got, ",") !=
 		strings.Join([]string{store.RouteEventDeclared, store.RouteEventApproved, store.RouteEventRevoked, store.RouteEventDeclared}, ",") {
 		t.Fatalf("route history = %v", got)
 	}
@@ -334,7 +313,7 @@ func TestMeshRouteDesiredNeedsAuditKey(t *testing.T) {
 // TestMeshRouteEventsAreAppendOnly proves the audit trail cannot be rewritten:
 // an UPDATE or DELETE of a recorded event is refused by the database itself.
 func TestMeshRouteEventsAreAppendOnly(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 	if _, err := s.DB.Exec(`UPDATE mesh_route_events SET kind='MESH_ROUTE_APPROVED' WHERE device_id=?`, router.ID); err == nil || !strings.Contains(err.Error(), "MESH_ROUTE_EVENT_IMMUTABLE") {
 		t.Fatalf("audit event updated: %v", err)
@@ -348,7 +327,7 @@ func TestMeshRouteEventsAreAppendOnly(t *testing.T) {
 // observation stores what Headscale reported, appends one event per change, and
 // never approves a prefix.
 func TestMeshRouteObservationNeverApproves(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 
 	observed, declared, err := s.RecordMeshRouteObservation(router.ID, "192.168.1.0/24", mesh.RouteObservedAdvertised, "op-observe", now)
@@ -362,7 +341,7 @@ func TestMeshRouteObservationNeverApproves(t *testing.T) {
 	if _, _, err = s.RecordMeshRouteObservation(router.ID, "192.168.1.0/24", mesh.RouteObservedAdvertised, "op-observe", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if got := routeEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 2 {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 2 {
 		t.Fatalf("repeated observation appended events: %v", got)
 	}
 
@@ -376,7 +355,7 @@ func TestMeshRouteObservationNeverApproves(t *testing.T) {
 	if err := s.DB.QueryRow(`SELECT count(*) FROM mesh_routes WHERE prefix='10.5.0.0/16'`).Scan(&rows); err != nil || rows != 0 {
 		t.Fatalf("untracked prefix became a route row: %d err=%v", rows, err)
 	}
-	got := routeEventKinds(t, s, router.ID, "10.5.0.0/16")
+	got := storetest.RouteEventKinds(t, s, router.ID, "10.5.0.0/16")
 	if len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("untracked events = %v", got)
 	}
@@ -385,7 +364,7 @@ func TestMeshRouteObservationNeverApproves(t *testing.T) {
 	if _, declared, err = s.RecordMeshRouteObservation(router.ID, "0.0.0.0/0", mesh.RouteObservedAdvertised, "op-exit", now); err != nil || declared {
 		t.Fatalf("exit advertisement not recorded as untracked: %v %v", declared, err)
 	}
-	if got = routeEventKinds(t, s, router.ID, "0.0.0.0/0"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got = storetest.RouteEventKinds(t, s, router.ID, "0.0.0.0/0"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("exit advertisement events = %v", got)
 	}
 	if routes, err := s.ListMeshRoutes(router.ID); err != nil || len(routes) != 1 {
@@ -397,7 +376,7 @@ func TestMeshRouteObservationNeverApproves(t *testing.T) {
 // rule: losing the evidence leaves the approved intent in place, so a transient
 // Headscale read cannot silently un-approve a working LAN.
 func TestMeshRouteObservedEmptyDoesNotRevertDesired(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-approve", now); err != nil {
 		t.Fatal(err)
@@ -415,7 +394,7 @@ func TestMeshRouteObservedEmptyDoesNotRevertDesired(t *testing.T) {
 	if cleared.Desired != mesh.RouteDesiredApproved {
 		t.Fatalf("desired reverted to %q by an observation, want approved", cleared.Desired)
 	}
-	if got := routeEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 4 {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "192.168.1.0/24"); len(got) != 4 {
 		t.Fatalf("observation history = %v", got)
 	}
 	// A pending-approval queue never contains the approved route.
@@ -429,7 +408,7 @@ func TestMeshRouteObservedEmptyDoesNotRevertDesired(t *testing.T) {
 // approval queue: advertised routes only, across devices, with the canonical
 // prefix order.
 func TestMeshRoutePendingListsOnlyAwaitingApproval(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	first := createSubnetRouter(t, s, "nas-a", []string{"192.168.2.0/24", "10.0.0.0/8"}, now)
 	second := createSubnetRouter(t, s, "nas-b", []string{"192.168.3.0/24"}, now)
 	if _, err := s.SetMeshRouteDesired(second.ID, "192.168.3.0/24", mesh.RouteDesiredApproved, "op", now); err != nil {
@@ -455,7 +434,7 @@ func TestMeshRoutePendingListsOnlyAwaitingApproval(t *testing.T) {
 	if routes, err := s.ListMeshRoutes("ffffffffffffffffffffffffffffffff"); err != nil || len(routes) != 0 {
 		t.Fatalf("unknown device listed %d routes err=%v", len(routes), err)
 	}
-	if _, err = s.ListMeshRoutes("bad-id"); err == nil || !hasErrorCode(err, mesh.CodeDeviceIDInvalid) {
+	if _, err = s.ListMeshRoutes("bad-id"); err == nil || !storetest.HasErrorCode(err, mesh.CodeDeviceIDInvalid) {
 		t.Fatalf("malformed device id accepted: %v", err)
 	}
 }
@@ -464,8 +443,8 @@ func TestMeshRoutePendingListsOnlyAwaitingApproval(t *testing.T) {
 // routes settle in one transaction, and that the subscriber, credential and
 // token of a bound subscriber stay untouched.
 func TestMeshRouteDeviceRevocationSettlesEveryRoute(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
 	spec := subnetRouterSpec("nas", "192.168.1.0/24", "10.0.0.0/8")
 	spec.SubscriberID = subscriberID
 	router, err := s.CreateMeshDevice(spec, now)
@@ -494,7 +473,7 @@ func TestMeshRouteDeviceRevocationSettlesEveryRoute(t *testing.T) {
 		}
 	}
 	// The prefix is free again because the device no longer holds it.
-	if _, err = s.UpsertMeshRoute(router.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op-late", now); err == nil || !hasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
+	if _, err = s.UpsertMeshRoute(router.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op-late", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteTransitionInvalid) {
 		t.Fatalf("revoked device declared a prefix: %v", err)
 	}
 	other := createSubnetRouter(t, s, "nas-b", nil, now)
@@ -521,33 +500,33 @@ func TestMeshRouteDeviceRevocationSettlesEveryRoute(t *testing.T) {
 // boundary: a proxy_mesh or mesh_only device is not the router of a LAN, and a
 // revoked device is a tombstone.
 func TestMeshRouteOnlySubnetRouterDeclares(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
-	proxy, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	proxy, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.UpsertMeshRoute(proxy.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !hasErrorCode(err, mesh.CodeRouteDeclarationInvalid) {
+	if _, err = s.UpsertMeshRoute(proxy.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteDeclarationInvalid) {
 		t.Fatalf("proxy_mesh declared a subnet route: %v", err)
 	}
-	meshOnly, err := s.CreateMeshDevice(meshSpec("tablet", mesh.PurposeMeshOnly, ""), now)
+	meshOnly, err := s.CreateMeshDevice(storetest.MeshSpec("tablet", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.UpsertMeshRoute(meshOnly.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !hasErrorCode(err, mesh.CodeRouteDeclarationInvalid) {
+	if _, err = s.UpsertMeshRoute(meshOnly.ID, "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteDeclarationInvalid) {
 		t.Fatalf("mesh_only declared a subnet route: %v", err)
 	}
 	// The pre-declaration form is refused before the device row exists.
-	if _, err = s.CreateMeshDevice(meshSpec("tablet2", mesh.PurposeMeshOnly, ""), now); err != nil {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("tablet2", mesh.PurposeMeshOnly, ""), now); err != nil {
 		t.Fatal(err)
 	}
 	spec := subnetRouterSpec("nas", "192.168.1.0/24")
 	spec.Purpose = mesh.PurposeMeshOnly
-	if _, err = s.CreateMeshDevice(spec, now); err == nil || !hasErrorCode(err, mesh.CodeRouteDeclarationInvalid) {
+	if _, err = s.CreateMeshDevice(spec, now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRouteDeclarationInvalid) {
 		t.Fatalf("mesh_only pre-declared a route: %v", err)
 	}
 	// An unknown device is reported as missing, not as a purpose failure.
-	if _, err = s.UpsertMeshRoute("ffffffffffffffffffffffffffffffff", "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, err = s.UpsertMeshRoute("ffffffffffffffffffffffffffffffff", "192.168.1.0/24", mesh.RouteSourceOperator, "op", now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device declared a route: %v", err)
 	}
 }
@@ -555,12 +534,12 @@ func TestMeshRouteOnlySubnetRouterDeclares(t *testing.T) {
 // TestMeshRouteMissingRowRejected keeps every read and transition honest about
 // a prefix the device never declared.
 func TestMeshRouteMissingRowRejected(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", nil, now)
-	if _, err := s.GetMeshRoute(router.ID, "192.168.1.0/24"); err == nil || !hasErrorCode(err, store.CodeMeshRouteNotFound) {
+	if _, err := s.GetMeshRoute(router.ID, "192.168.1.0/24"); err == nil || !storetest.HasErrorCode(err, store.CodeMeshRouteNotFound) {
 		t.Fatalf("unknown route read: %v", err)
 	}
-	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op", now); err == nil || !hasErrorCode(err, store.CodeMeshRouteNotFound) {
+	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op", now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshRouteNotFound) {
 		t.Fatalf("unknown route approved: %v", err)
 	}
 	if routes, err := s.ListMeshRoutes(router.ID); err != nil || len(routes) != 0 {
@@ -574,7 +553,7 @@ func TestMeshRouteMissingRowRejected(t *testing.T) {
 // TestMeshRouteCorruptRowRejected proves a hand-edited row is reported instead
 // of being rendered as a valid declaration.
 func TestMeshRouteCorruptRowRejected(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 	// The CHECK constraint refuses an undefined desired value outright, so the
 	// corrupt-row path is exercised through a non-canonical prefix, which the
@@ -582,10 +561,10 @@ func TestMeshRouteCorruptRowRejected(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE mesh_routes SET prefix='192.168.001.0/24' WHERE device_id=?`, router.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetMeshRoute(router.ID, "192.168.001.0/24"); err == nil || !hasErrorCode(err, store.CodeMeshRouteCorrupt) {
+	if _, err := s.GetMeshRoute(router.ID, "192.168.001.0/24"); err == nil || !storetest.HasErrorCode(err, store.CodeMeshRouteCorrupt) {
 		t.Fatalf("non-canonical stored prefix rendered: %v", err)
 	}
-	if _, err := s.ListMeshRoutes(router.ID); err == nil || !hasErrorCode(err, store.CodeMeshRouteCorrupt) {
+	if _, err := s.ListMeshRoutes(router.ID); err == nil || !storetest.HasErrorCode(err, store.CodeMeshRouteCorrupt) {
 		t.Fatalf("corrupt row listed: %v", err)
 	}
 }
@@ -594,20 +573,20 @@ func TestMeshRouteCorruptRowRejected(t *testing.T) {
 // of changes: polling the same untracked advertisement appends one event, and a
 // different observation appends a second.
 func TestMeshRouteUntrackedObservationIsIdempotent(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", nil, now)
 	for i := 0; i < 3; i++ {
 		if _, declared, err := s.RecordMeshRouteObservation(router.ID, "10.5.0.0/16", mesh.RouteObservedAdvertised, "op", now.Add(time.Duration(i)*time.Minute)); err != nil || declared {
 			t.Fatalf("untracked observation %d: %v %v", i, declared, err)
 		}
 	}
-	if got := routeEventKinds(t, s, router.ID, "10.5.0.0/16"); len(got) != 1 {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "10.5.0.0/16"); len(got) != 1 {
 		t.Fatalf("repeated untracked observation appended events: %v", got)
 	}
 	if _, _, err := s.RecordMeshRouteObservation(router.ID, "10.5.0.0/16", mesh.RouteObservedServed, "op", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if got := routeEventKinds(t, s, router.ID, "10.5.0.0/16"); len(got) != 2 {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "10.5.0.0/16"); len(got) != 2 {
 		t.Fatalf("changed untracked observation not recorded: %v", got)
 	}
 	// The row keeps the latest audit key of the intent change.
@@ -629,7 +608,7 @@ func TestMeshRouteUntrackedObservationIsIdempotent(t *testing.T) {
 // TestMeshRouteReenrollmentKeepsRoutesRevoked proves a re-enrolled device does
 // not silently regain its old prefixes: re-declaring them is a new, audited act.
 func TestMeshRouteReenrollmentKeepsRoutesRevoked(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 	if _, err := s.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-approve", now); err != nil {
 		t.Fatal(err)
@@ -670,7 +649,7 @@ func TestMeshRouteReenrollmentKeepsRoutesRevoked(t *testing.T) {
 // prefix nobody declared becomes a MESH_ROUTE_UNTRACKED event only, and no
 // prefix is ever approved by the pass.
 func TestReconcileMeshRoutesNeverApprovesUntracked(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	router := createSubnetRouter(t, s, "nas", []string{"192.168.1.0/24"}, now)
 	result, err := s.ReconcileMeshRoutes(router.ID, []store.MeshRouteObservation{
 		{Prefix: "192.168.1.0/24", Observed: mesh.RouteObservedAdvertised},
@@ -693,10 +672,10 @@ func TestReconcileMeshRoutesNeverApprovesUntracked(t *testing.T) {
 	if routes[0].Desired != mesh.RouteDesiredAdvertised {
 		t.Fatalf("reconcile approved a prefix: %+v", routes[0])
 	}
-	if got := routeEventKinds(t, s, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("untracked advertisement events = %v", got)
 	}
-	if got := routeEventKinds(t, s, router.ID, "0.0.0.0/0"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got := storetest.RouteEventKinds(t, s, router.ID, "0.0.0.0/0"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("exit advertisement events = %v", got)
 	}
 	// A second identical pass changes nothing.
@@ -710,7 +689,7 @@ func TestReconcileMeshRoutesNeverApprovesUntracked(t *testing.T) {
 	if again.Changed != 0 || again.Untracked != 1 {
 		t.Fatalf("repeated reconcile result = %+v", again)
 	}
-	if _, err = s.ReconcileMeshRoutes("ffffffffffffffffffffffffffffffff", nil, "op", now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, err = s.ReconcileMeshRoutes("ffffffffffffffffffffffffffffffff", nil, "op", now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device reconciled: %v", err)
 	}
 }

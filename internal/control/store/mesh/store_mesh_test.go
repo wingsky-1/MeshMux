@@ -1,48 +1,25 @@
-package handler
+package mesh_test
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
-
-// meshSpec returns a valid device specification. The caller decides the purpose
-// and the subscriber binding; everything else stays canonical.
-func meshSpec(name string, purpose mesh.Purpose, subscriberID string) mesh.DeviceSpec {
-	return mesh.DeviceSpec{
-		DisplayName:  name,
-		Purpose:      purpose,
-		Platform:     mesh.PlatformIOS,
-		NodeName:     strings.ToLower(name),
-		SubscriberID: subscriberID,
-	}
-}
-
-// meshSubscriberFixture creates one configured Line and one active subscriber,
-// then returns the subscriber id.
-func meshSubscriberFixture(t *testing.T, s *store.Store, now time.Time) string {
-	t.Helper()
-	line := createEdgeNode(t, s, now)
-	configureLine(t, s, line, "line-a", now)
-	sub, _, err := s.CreateSubscriber("alice", []string{line}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sub.ID
-}
 
 // TestSchemaV6MigrationAddsMeshTablesAndPreservesV5 upgrades a v5 database and
 // checks that the mesh tables appear, the pre-existing rows survive and the
 // future-schema guard moved to 9. The migration must stay additive: a rollback
 // to the previous binary still reads every schema-5 table.
 func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
-	device, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +58,7 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	if err = s.DB.QueryRow(`SELECT count(*) FROM nodes WHERE id=?`, device.ID).Scan(&nodes); err != nil || nodes != 0 {
 		t.Fatalf("mesh device leaked into nodes: %d err=%v", nodes, err)
 	}
-	if _, err = s.CreateMeshDevice(meshSpec("tablet", mesh.PurposeMeshOnly, ""), now); err != nil {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("tablet", mesh.PurposeMeshOnly, ""), now); err != nil {
 		t.Fatalf("mesh creation after migration failed: %v", err)
 	}
 
@@ -89,7 +66,7 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 	if _, err = s.DB.Exec(`PRAGMA user_version=18`); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_TOO_NEW") {
+	if err = s.Migrate(); err == nil || !storetest.HasErrorCode(err, "SCHEMA_TOO_NEW") {
 		t.Fatalf("future schema accepted: %v", err)
 	}
 }
@@ -98,8 +75,8 @@ func TestSchemaV6MigrationAddsMeshTablesAndPreservesV5(t *testing.T) {
 // transaction: when the mesh tables cannot be created, the database stays at
 // version 5 and every schema-5 table and row is still there.
 func TestSchemaV6MigrationRollsBackWithoutDestroyingV5(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
 	line, err := s.ListLines()
 	if err != nil || len(line) != 1 {
 		t.Fatalf("line fixture: %d %v", len(line), err)
@@ -113,7 +90,7 @@ func TestSchemaV6MigrationRollsBackWithoutDestroyingV5(t *testing.T) {
 	if _, err = s.DB.Exec(`CREATE TABLE mesh_devices (stale TEXT)`); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Migrate(); err == nil || !hasErrorCode(err, "SCHEMA_MIGRATION_FAILED") {
+	if err = s.Migrate(); err == nil || !storetest.HasErrorCode(err, "SCHEMA_MIGRATION_FAILED") {
 		t.Fatalf("colliding migration reported as success: %v", err)
 	}
 	var version int
@@ -137,10 +114,10 @@ func TestSchemaV6MigrationRollsBackWithoutDestroyingV5(t *testing.T) {
 // storage rule: mesh_only needs no subscriber at all, proxy_mesh needs a real
 // one, and a missing subscriber cannot be smuggled in as a dangling reference.
 func TestMeshDevicePurposeBinding(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 
 	// A mesh_only device is valid without any subscriber and without a Line.
-	device, err := s.CreateMeshDevice(meshSpec("nas", mesh.PurposeMeshOnly, ""), now)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("nas", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatalf("mesh_only without subscriber rejected: %v", err)
 	}
@@ -156,19 +133,19 @@ func TestMeshDevicePurposeBinding(t *testing.T) {
 	}
 
 	// A mesh_only device that names a subscriber is refused by the domain.
-	if _, err = s.CreateMeshDevice(meshSpec("nas2", mesh.PurposeMeshOnly, "ffffffffffffffffffffffffffffffff"), now); err == nil || !hasErrorCode(err, mesh.CodeSubscriberBindingInvalid) {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("nas2", mesh.PurposeMeshOnly, "ffffffffffffffffffffffffffffffff"), now); err == nil || !storetest.HasErrorCode(err, mesh.CodeSubscriberBindingInvalid) {
 		t.Fatalf("mesh_only with subscriber accepted: %v", err)
 	}
 	// proxy_mesh requires an existing subscriber row.
-	if _, err = s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, ""), now); err == nil || !hasErrorCode(err, mesh.CodeSubscriberBindingInvalid) {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, ""), now); err == nil || !storetest.HasErrorCode(err, mesh.CodeSubscriberBindingInvalid) {
 		t.Fatalf("proxy_mesh without subscriber accepted: %v", err)
 	}
-	if _, err = s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, "ffffffffffffffffffffffffffffffff"), now); err == nil || !hasErrorCode(err, mesh.CodeSubscriberBindingInvalid) {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, "ffffffffffffffffffffffffffffffff"), now); err == nil || !storetest.HasErrorCode(err, mesh.CodeSubscriberBindingInvalid) {
 		t.Fatalf("proxy_mesh with unknown subscriber accepted: %v", err)
 	}
 
-	subscriberID := meshSubscriberFixture(t, s, now)
-	bound, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	bound, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,16 +158,16 @@ func TestMeshDevicePurposeBinding(t *testing.T) {
 // a name is refused only while another device still occupies it, so a revoked
 // device releases its name for a fresh attempt.
 func TestMeshDeviceNodeNameUniqueWhileOccupied(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	first, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	s, now := storetest.SubscriberStore(t)
+	first, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now); err == nil || !hasErrorCode(err, mesh.CodeNodeNameDuplicate) {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now); err == nil || !storetest.HasErrorCode(err, mesh.CodeNodeNameDuplicate) {
 		t.Fatalf("duplicate occupied node name accepted: %v", err)
 	}
 	// Another Headscale user may use the same name: uniqueness is per user.
-	other := meshSpec("phone", mesh.PurposeMeshOnly, "")
+	other := storetest.MeshSpec("phone", mesh.PurposeMeshOnly, "")
 	other.HeadscaleUser = "second"
 	if _, err = s.CreateMeshDevice(other, now); err != nil {
 		t.Fatalf("name of another headscale user rejected: %v", err)
@@ -207,7 +184,7 @@ func TestMeshDeviceNodeNameUniqueWhileOccupied(t *testing.T) {
 		t.Fatalf("device not revoked: %+v err=%v", revoked, err)
 	}
 	// The terminal device released the name.
-	if _, err = s.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now.Add(2*time.Minute)); err != nil {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("name not released after revoke: %v", err)
 	}
 }
@@ -215,8 +192,8 @@ func TestMeshDeviceNodeNameUniqueWhileOccupied(t *testing.T) {
 // TestMeshEnrollmentKeySingleActive enforces D1's one-issued-key rule at the
 // storage boundary and retires a lapsed key instead of blocking a fresh one.
 func TestMeshEnrollmentKeySingleActive(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	device, err := s.CreateMeshDevice(meshSpec("nas", mesh.PurposeMeshOnly, ""), now)
+	s, now := storetest.SubscriberStore(t)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("nas", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +215,7 @@ func TestMeshEnrollmentKeySingleActive(t *testing.T) {
 	if string(storedHash) == secret {
 		t.Fatal("plaintext secret stored")
 	}
-	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, now.Add(time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeKeyAlreadyActive) {
+	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, now.Add(time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeKeyAlreadyActive) {
 		t.Fatalf("second issued key accepted: %v", err)
 	}
 	// The rule is a partial unique index, not only a code path: a direct insert
@@ -267,7 +244,7 @@ func TestMeshEnrollmentKeySingleActive(t *testing.T) {
 		t.Fatalf("key states = %+v, want the old one expired and the new one issued", states)
 	}
 	// A lapsed key ended on its own: withdrawing it is not a revocation.
-	if _, err = s.RevokeMeshEnrollmentKey(key.ID); err == nil || !hasErrorCode(err, mesh.CodeKeyTransitionInvalid) {
+	if _, err = s.RevokeMeshEnrollmentKey(key.ID); err == nil || !storetest.HasErrorCode(err, mesh.CodeKeyTransitionInvalid) {
 		t.Fatalf("expired key revoked: %v", err)
 	}
 
@@ -313,7 +290,7 @@ func TestMeshEnrollmentKeySingleActive(t *testing.T) {
 	if matches != 0 {
 		t.Fatalf("a spent key secret still matches %d row(s)", matches)
 	}
-	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, later); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
+	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, later); err == nil || !storetest.HasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
 		t.Fatalf("key issued for a registered device: %v", err)
 	}
 }
@@ -324,8 +301,8 @@ func TestMeshEnrollmentKeySingleActive(t *testing.T) {
 // observation neither revives nor re-spends it. The row itself survives for
 // audit and the trigger refuses any later state change.
 func TestMeshRegistrationConsumesKey(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	device, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	s, now := storetest.SubscriberStore(t)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,9 +366,9 @@ func TestMeshRegistrationConsumesKey(t *testing.T) {
 // isolation rule: revoking one mesh device never disables the subscriber, its
 // VLESS credentials or its subscription token.
 func TestMeshRevokeLeavesSubscriberAndCredentialUntouched(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
-	device, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +390,7 @@ func TestMeshRevokeLeavesSubscriberAndCredentialUntouched(t *testing.T) {
 		t.Fatalf("repeat rewrote the audit intent: %+v", repeated)
 	}
 	// A lowercase reason is refused: it could not be logged as a stable code.
-	if _, _, err = s.RequestMeshDeviceRevocation(device.ID, "user_delete", now); err == nil || !hasErrorCode(err, mesh.CodeRevokeReasonInvalid) {
+	if _, _, err = s.RequestMeshDeviceRevocation(device.ID, "user_delete", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeRevokeReasonInvalid) {
 		t.Fatalf("lowercase reason accepted: %v", err)
 	}
 
@@ -459,8 +436,8 @@ func TestMeshRevokeLeavesSubscriberAndCredentialUntouched(t *testing.T) {
 // registered, and a registered device whose node disappeared becomes expired
 // while keeping the last observed id for display.
 func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	device, err := s.CreateMeshDevice(meshSpec("nas", mesh.PurposeMeshOnly, ""), now)
+	s, now := storetest.SubscriberStore(t)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("nas", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +449,7 @@ func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
 		t.Fatalf("registration not recorded: %+v", registered)
 	}
 	// A contradicting node id is refused instead of overwriting the reference.
-	if _, err = s.RecordMeshObservation(device.ID, 12, now.Add(2*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeHeadscaleNodeIDInvalid) {
+	if _, err = s.RecordMeshObservation(device.ID, 12, now.Add(2*time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeHeadscaleNodeIDInvalid) {
 		t.Fatalf("contradicting node id accepted: %v", err)
 	}
 	expired, err := s.RecordMeshObservation(device.ID, 0, now.Add(3*time.Minute))
@@ -484,7 +461,7 @@ func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
 	}
 	// An expired device must re-enroll through pending first: the store never
 	// revives it implicitly just because a key was requested.
-	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, now.Add(4*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
+	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, now.Add(4*time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
 		t.Fatalf("expired device accepted an enrollment key without re-enrolling: %v", err)
 	}
 	// The explicit re-enrollment clears the observed reference and returns the
@@ -511,7 +488,7 @@ func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
 	}
 	// The installed key is the one live row: a second issue would break the
 	// one-issued-key rule.
-	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, now.Add(5*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeKeyAlreadyActive) {
+	if _, _, err = s.IssueMeshEnrollmentKey(device.ID, now.Add(5*time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeKeyAlreadyActive) {
 		t.Fatalf("re-enrollment left room for a second live key: %v", err)
 	}
 	// Only pending or expired is a legal re-enrollment source: a revoked
@@ -526,7 +503,7 @@ func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ApplyMeshRekey(device.ID, revokedKey, now.Add(7*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
+	if _, err = s.ApplyMeshRekey(device.ID, revokedKey, now.Add(7*time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
 		t.Fatalf("revoked device accepted a key swap: %v", err)
 	}
 }
@@ -534,8 +511,8 @@ func TestMeshObservationRecordsRegistrationAndDisappearance(t *testing.T) {
 // TestMeshEnrollmentKeyRevokeTerminal checks the revoke path: issued → revoked,
 // a repeat is a no-op, and a revoked key can never be spent.
 func TestMeshEnrollmentKeyRevokeTerminal(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	device, err := s.CreateMeshDevice(meshSpec("nas", mesh.PurposeMeshOnly, ""), now)
+	s, now := storetest.SubscriberStore(t)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("nas", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +539,7 @@ func TestMeshEnrollmentKeyRevokeTerminal(t *testing.T) {
 	if state != string(mesh.KeyRevoked) {
 		t.Fatalf("a revoked key row became %q after registration", state)
 	}
-	if _, err = s.RevokeMeshEnrollmentKey("ffffffffffffffffffffffffffffffff"); err == nil || !hasErrorCode(err, store.CodeMeshEnrollmentKeyNotFound) {
+	if _, err = s.RevokeMeshEnrollmentKey("ffffffffffffffffffffffffffffffff"); err == nil || !storetest.HasErrorCode(err, store.CodeMeshEnrollmentKeyNotFound) {
 		t.Fatalf("unknown key reported as revoked: %v", err)
 	}
 }
@@ -571,9 +548,9 @@ func TestMeshEnrollmentKeyRevokeTerminal(t *testing.T) {
 // device: the id, binding, node name and lifecycle stay as they were, and a
 // revoked tombstone refuses the edit.
 func TestMeshDeviceRenameKeepsIdentity(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	subscriberID := meshSubscriberFixture(t, s, now)
-	device, err := s.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
+	s, now := storetest.SubscriberStore(t)
+	subscriberID := storetest.MeshSubscriberFixture(t, s, now)
+	device, err := s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeProxyMesh, subscriberID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,10 +564,10 @@ func TestMeshDeviceRenameKeepsIdentity(t *testing.T) {
 		t.Fatalf("rename changed more than the label: %+v", renamed)
 	}
 	// The node name stays occupied, so another device still cannot take it.
-	if _, err = s.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now.Add(2*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeNodeNameDuplicate) {
+	if _, err = s.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now.Add(2*time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeNodeNameDuplicate) {
 		t.Fatalf("rename released the node name: %v", err)
 	}
-	if _, err = s.RenameMeshDevice(device.ID, "", now); err == nil || !hasErrorCode(err, mesh.CodeDisplayNameInvalid) {
+	if _, err = s.RenameMeshDevice(device.ID, "", now); err == nil || !storetest.HasErrorCode(err, mesh.CodeDisplayNameInvalid) {
 		t.Fatalf("empty label accepted: %v", err)
 	}
 	if _, _, err = s.RequestMeshDeviceRevocation(device.ID, "USER_DELETE", now); err != nil {
@@ -599,7 +576,7 @@ func TestMeshDeviceRenameKeepsIdentity(t *testing.T) {
 	if _, err = s.RecordMeshObservation(device.ID, 0, now.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.RenameMeshDevice(device.ID, "retired", now.Add(4*time.Minute)); err == nil || !hasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
+	if _, err = s.RenameMeshDevice(device.ID, "retired", now.Add(4*time.Minute)); err == nil || !storetest.HasErrorCode(err, mesh.CodeStatusTransitionInvalid) {
 		t.Fatalf("revoked tombstone renamed: %v", err)
 	}
 }
@@ -607,21 +584,21 @@ func TestMeshDeviceRenameKeepsIdentity(t *testing.T) {
 // TestMeshMissingDeviceRejected keeps every entry point honest about unknown
 // devices instead of creating orphan rows or a generic database failure.
 func TestMeshMissingDeviceRejected(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
+	s, now := storetest.SubscriberStore(t)
 	unknown := "ffffffffffffffffffffffffffffffff"
-	if _, err := s.GetMeshDevice(unknown); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, err := s.GetMeshDevice(unknown); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device read: %v", err)
 	}
-	if _, _, err := s.IssueMeshEnrollmentKey(unknown, now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, _, err := s.IssueMeshEnrollmentKey(unknown, now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device key: %v", err)
 	}
-	if _, _, err := s.RequestMeshDeviceRevocation(unknown, "USER_DELETE", now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, _, err := s.RequestMeshDeviceRevocation(unknown, "USER_DELETE", now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device revoke: %v", err)
 	}
-	if _, err := s.RecordMeshObservation(unknown, 1, now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, err := s.RecordMeshObservation(unknown, 1, now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device observation: %v", err)
 	}
-	if _, err := s.RenameMeshDevice(unknown, "other", now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, err := s.RenameMeshDevice(unknown, "other", now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device rename: %v", err)
 	}
 	// The staged key has to name a real device before the swap writes anything.
@@ -629,7 +606,7 @@ func TestMeshMissingDeviceRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ApplyMeshRekey(unknown, unknownKey, now); err == nil || !hasErrorCode(err, store.CodeMeshDeviceNotFound) {
+	if _, err := s.ApplyMeshRekey(unknown, unknownKey, now); err == nil || !storetest.HasErrorCode(err, store.CodeMeshDeviceNotFound) {
 		t.Fatalf("unknown device reenroll: %v", err)
 	}
 	devices, err := s.ListMeshDevices()

@@ -20,6 +20,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 const hubBackupPath = "/tasks/hub-upgrade/backup"
@@ -191,7 +192,7 @@ func TestHubBackupCallbacksUseTheStore(t *testing.T) {
 func TestHubBackupRouteDoesNotReadTheApprovalBit(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("d", 32)
-	hubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
+	storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
 		record.IrreversibleApproved = true
 	})
 	var got hubupgrade.BackupConfig

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 const hubRestorePath = "/tasks/hub-upgrade/restore"
@@ -46,7 +47,7 @@ func decodeHubRestore(t *testing.T, w *httptest.ResponseRecorder, status int) hu
 func plantHubRestoreOperation(t *testing.T, app *Server, state hubupgrade.State) (string, hubupgrade.Op) {
 	t.Helper()
 	operationID := strings.Repeat("a", 32)
-	_, record := hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
+	_, record := storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 	op := hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: state, TargetVersion: "1.0.1", FromVersion: "1.0.0",

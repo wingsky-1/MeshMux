@@ -11,8 +11,6 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +18,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 )
@@ -54,7 +56,7 @@ func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status 
 func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("d", 32)
-	recordPath, _ := hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
+	recordPath, _ := storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 	before, err := os.ReadFile(recordPath)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +84,7 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 			t.Fatalf("inexplicit bit %q accepted: %+v", truthy, receipt)
 		}
 	}
-	if stored := readStoredDatabaseRecord(t, recordPath); stored.IrreversibleApproved {
+	if stored := storetest.ReadStoredDatabaseRecord(t, recordPath); stored.IrreversibleApproved {
 		t.Fatal("refusals set the bit anyway")
 	}
 
@@ -104,7 +106,7 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 	if filepath.Dir(approved.BackupRecord) == filepath.Join(app.Store.Dir, store.DatabaseBackupDirName) {
 		t.Fatalf("approval wrote the flat pointer %q", approved.BackupRecord)
 	}
-	if stored := readStoredDatabaseRecord(t, recordPath); !stored.IrreversibleApproved {
+	if stored := storetest.ReadStoredDatabaseRecord(t, recordPath); !stored.IrreversibleApproved {
 		t.Fatal("bit was not stored on the backup record")
 	}
 
@@ -127,7 +129,7 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 
 	t.Run("authentication, origin and csrf stay required", func(t *testing.T) {
 		b, app := databaseMigrationBrowser(t)
-		hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
+		storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 		anonymous := &browser{app: app}
 		requireStatus(t, anonymous.req("POST", databaseMigrationApprovePath, approvedForm(), nil), http.StatusUnauthorized)
 		requireStatus(t, b.req("POST", databaseMigrationApprovePath,
@@ -210,7 +212,7 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
-			path, _ := hubDatabaseRecord(t, app.Store.Dir, operationID, tc.mutate)
+			path, _ := storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, tc.mutate)
 			if tc.write != nil {
 				tc.write(path)
 			}
@@ -219,7 +221,7 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 				t.Fatalf("receipt: %+v", receipt)
 			}
 			if tc.write == nil {
-				if stored := readStoredDatabaseRecord(t, path); stored.IrreversibleApproved {
+				if stored := storetest.ReadStoredDatabaseRecord(t, path); stored.IrreversibleApproved {
 					t.Fatal("refused approval set the bit")
 				}
 			}

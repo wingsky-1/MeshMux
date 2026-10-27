@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 // nodesOutTestApp opens one authenticated browser on a Hub with a paired Out
@@ -20,7 +21,7 @@ func nodesOutTestApp(t *testing.T) (*Server, *browser, string, string) {
 	now := time.Now()
 	line := createPairedWebNode(t, app, "edge", "line-pool-ui", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-pool-ui", 9443, 2223)
-	settings := testLine(line.ID, "line-pool-ui")
+	settings := storetest.TestLine(line.ID, "line-pool-ui")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(settings, now); err != nil {
@@ -93,12 +94,12 @@ func TestOutTransportSetFlow(t *testing.T) {
 func TestOutDeleteConfirmFlow(t *testing.T) {
 	app, b, lineID, outID := nodesOutTestApp(t)
 	now := time.Now()
-	configureOut(t, app.Store, outID, now)
-	markLineOnline(t, app.Store, lineID, now)
-	markLineOnline(t, app.Store, outID, now)
-	enableOutForLine(t, app.Store, outID, lineID, now)
-	settleTasks(t, app.Store, outID)
-	confirmChain(t, app.Store, outID, now)
+	storetest.ConfigureOut(t, app.Store, outID, now)
+	storetest.MarkLineOnline(t, app.Store, lineID, now)
+	storetest.MarkLineOnline(t, app.Store, outID, now)
+	storetest.EnableOutForLine(t, app.Store, outID, lineID, now)
+	storetest.SettleTasks(t, app.Store, outID)
+	storetest.ConfirmChain(t, app.Store, outID, now)
 
 	body := nodesPageBody(t, b)
 	if !strings.Contains(body, "1 个被订阅选中") || !strings.Contains(body, lineID) {
@@ -113,7 +114,7 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	if !strings.Contains(body, "确认删除出口") || !strings.Contains(body, lineID) {
 		t.Fatalf("delete confirm does not name the used-by Line: %.500s", body)
 	}
-	if tables := tableExists(t, app.Store, "out_bindings"); tables {
+	if tables := storetest.TableExists(t, app.Store, "out_bindings"); tables {
 		t.Fatal("the nodes page still projects a binding table the schema dropped")
 	}
 
@@ -138,7 +139,7 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	// Once the subscription stops selecting it, the release action succeeds. It does
 	// NOT empty the ACL: the published set is the node membership (Ruling R10), so the
 	// page only reports that the hub-side publication was refreshed.
-	clearOutForLine(t, app.Store, lineID, now)
+	storetest.ClearOutForLine(t, app.Store, lineID, now)
 	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "已解除") {
@@ -164,12 +165,12 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 func TestOutUnbindCopyNamesMembership(t *testing.T) {
 	app, b, lineID, outID := nodesOutTestApp(t)
 	now := time.Now()
-	configureOut(t, app.Store, outID, now)
-	markLineOnline(t, app.Store, lineID, now)
-	markLineOnline(t, app.Store, outID, now)
-	enableOutForLine(t, app.Store, outID, lineID, now)
-	settleTasks(t, app.Store, outID)
-	confirmChain(t, app.Store, outID, now)
+	storetest.ConfigureOut(t, app.Store, outID, now)
+	storetest.MarkLineOnline(t, app.Store, lineID, now)
+	storetest.MarkLineOnline(t, app.Store, outID, now)
+	storetest.EnableOutForLine(t, app.Store, outID, lineID, now)
+	storetest.SettleTasks(t, app.Store, outID)
+	storetest.ConfirmChain(t, app.Store, outID, now)
 
 	// A live reference is refused; the refusal must not claim a subscription-driven
 	// ACL recompute would follow.
@@ -186,7 +187,7 @@ func TestOutUnbindCopyNamesMembership(t *testing.T) {
 	}
 
 	// Released: the action succeeds and reports what it actually did.
-	clearOutForLine(t, app.Store, lineID, now)
+	storetest.ClearOutForLine(t, app.Store, lineID, now)
 	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
 	notice := w.Body.String()

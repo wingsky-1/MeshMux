@@ -10,13 +10,14 @@ package handler
 import (
 	"database/sql"
 	"errors"
-	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"

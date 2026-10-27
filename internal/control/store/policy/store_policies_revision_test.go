@@ -1,15 +1,17 @@
-package handler
+package policy_test
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 func TestRoutePolicyRevisionStateMachine(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	_, serverPayload, pins := policyFixtures()
+	s, now := storetest.SubscriberStore(t)
+	_, serverPayload, pins := storetest.PolicyFixtures()
 	p, err := s.CreateRoutePolicy(store.PolicyLayerServer, "服务端默认策略", serverPayload, pins, "op-create", now)
 	if err != nil {
 		t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -87,7 +88,7 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 		"handshake_server": {"handshake.example.invalid"}, "handshake_port": {"443"},
 	})
 	require2xx(t, w)
-	line, err := readStoredLine(t, app.Store, node.ID)
+	line, err := storetest.ReadStoredLine(t, app.Store, node.ID)
 	if err != nil {
 		t.Fatal("Line was not stored")
 	}
@@ -159,7 +160,7 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 	node, _ := createPendingNode(t, app, "edge", "line-01", 8443, 2222)
-	configureLine(t, app.Store, node.ID, "line-a", time.Now())
+	storetest.ConfigureLine(t, app.Store, node.ID, "line-a", time.Now())
 
 	w := b.post("/subscribers", url.Values{"display_name": {"alice"}, "line_" + node.ID: {"1"}})
 	require2xx(t, w)

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,15 +18,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // publishApp builds an authenticated browser and installs the fixture gate.
-func publishApp(t *testing.T) (*browser, *fixturePublishVerifier) {
+func publishApp(t *testing.T) (*browser, *storetest.FixturePublishVerifier) {
 	t.Helper()
 	app, _ := testApp(t)
-	verifier := &fixturePublishVerifier{}
+	verifier := &storetest.FixturePublishVerifier{}
 	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	initialize(t, b)
@@ -58,19 +60,19 @@ func publishReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) stor
 func seedPublishLine(t *testing.T, app *Server) string {
 	t.Helper()
 	now := app.Now()
-	line := pairedStoreNode(t, app.Store, "edge", now)
-	settings := testLine(line, "line-a")
+	line := storetest.PairedStoreNode(t, app.Store, "edge", now)
+	settings := storetest.TestLine(line, "line-a")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.Store, line, now)
+	storetest.MarkLineOnline(t, app.Store, line, now)
 	if _, _, err := app.Store.CreateSubscriber("alice", []string{line}, now); err != nil {
 		t.Fatal(err)
 	}
-	seedInitialChain(t, app.Store, line, now)
-	confirmChain(t, app.Store, line, now)
+	storetest.SeedInitialChain(t, app.Store, line, now)
+	storetest.ConfirmChain(t, app.Store, line, now)
 	return line
 }
 
@@ -125,7 +127,7 @@ func TestPublishEndpointStoresCandidate(t *testing.T) {
 	if strings.Contains(body, "ai.example.invalid") || strings.Contains(body, "outbounds") {
 		t.Fatalf("check evidence leaked the document: %q", body)
 	}
-	if singBox, _ := verifier.counts(); singBox != 1 {
+	if singBox, _ := verifier.Counts(); singBox != 1 {
 		t.Fatalf("sing-box gate calls = %d, want 1", singBox)
 	}
 	// Exactly one new candidate revision carrying the route is stored.
@@ -160,10 +162,10 @@ func TestPublishEndpointRefusals(t *testing.T) {
 
 	activateViaAPI(t, b, "server",
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`)
-	out := pairedStoreNode(t, b.app.Store, "out", b.app.Now())
-	markLineOnline(t, b.app.Store, out, b.app.Now())
-	configureOut(t, b.app.Store, out, b.app.Now())
-	enableOutForLine(t, b.app.Store, out, line, b.app.Now())
+	out := storetest.PairedStoreNode(t, b.app.Store, "out", b.app.Now())
+	storetest.MarkLineOnline(t, b.app.Store, out, b.app.Now())
+	storetest.ConfigureOut(t, b.app.Store, out, b.app.Now())
+	storetest.EnableOutForLine(t, b.app.Store, out, line, b.app.Now())
 	if _, err := b.app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +182,7 @@ func TestPublishEndpointRefusals(t *testing.T) {
 func TestPublishEndpointClientOnlyIsGatedNotStored(t *testing.T) {
 	b, verifier := publishApp(t)
 	line := seedPublishLine(t, b.app)
-	candidatesBefore := candidateCount(t, b.app.Store, line)
+	candidatesBefore := storetest.CandidateCount(t, b.app.Store, line)
 	activateViaAPI(t, b, "client",
 		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`)
 
@@ -197,17 +199,17 @@ func TestPublishEndpointClientOnlyIsGatedNotStored(t *testing.T) {
 	if receipt.NextAction == "" {
 		t.Fatal("client-only receipt does not explain that no candidate is pushed")
 	}
-	if got := candidateCount(t, b.app.Store, line); got != candidatesBefore {
+	if got := storetest.CandidateCount(t, b.app.Store, line); got != candidatesBefore {
 		t.Fatalf("client-only publication stored %d candidates", got-candidatesBefore)
 	}
-	if singBox, mihomo := verifier.counts(); singBox != 1 || mihomo != 1 {
+	if singBox, mihomo := verifier.Counts(); singBox != 1 || mihomo != 1 {
 		t.Fatalf("client-only gate calls = %d/%d", singBox, mihomo)
 	}
 }
 
 func TestPublishEndpointRequiresAdminSession(t *testing.T) {
 	app, _ := testApp(t)
-	verifier := &fixturePublishVerifier{}
+	verifier := &storetest.FixturePublishVerifier{}
 	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	w := b.req("POST", "/policies/publish", url.Values{"publish": {`{"operation_id":"op"}`}}, nil)

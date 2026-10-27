@@ -1,4 +1,4 @@
-package handler
+package store_test
 
 // The Hub database gate of #11c-3 (spec §4.5, §4.10, §4.13, §6). Two version
 // spaces meet here and must never be confused: `PRAGMA user_version` is the
@@ -14,17 +14,14 @@ package handler
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/cli/backup"
-	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
@@ -52,59 +49,6 @@ func userVersion(t *testing.T, dir string) int {
 		t.Fatal(err)
 	}
 	return version
-}
-
-// hubDatabaseRecord writes the per-operation Hub database backup record the gate
-// and the irreversible-confirmation action read. It is metadata only and 0600;
-// the payload is one private database copy, because an approval must never
-// confirm a record that holds nothing to restore. The record lives at
-// <data-dir>/database-backup/<op32hex>/record.json, never in the flat pointer.
-func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*backup.Record)) (string, backup.Record) {
-	t.Helper()
-	root := filepath.Join(dataDir, store.DatabaseBackupDirName)
-	opDir := filepath.Join(root, operationID)
-	payload := filepath.Join(opDir, store.DatabaseBackupPayloadDirName)
-	if err := os.MkdirAll(payload, 0700); err != nil {
-		t.Fatal(err)
-	}
-	// The payload bytes are a fixture copy, never opened by the approval path.
-	if err := os.WriteFile(filepath.Join(payload, "meshmux.db"), []byte("fixture database copy"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	record := backup.Record{
-		Schema: backup.RecordSchema, OperationID: operationID,
-		FromVersion: "1.0.0", TargetVersion: "1.0.1",
-		DBSchema: store.DatabaseSchemaVersion - 1, PolicySchema: upgrade.PolicySchema,
-		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("b", 64),
-		PayloadPath: payload, PayloadSHA256: strings.Repeat("c", 64),
-		PayloadFiles: 1, IntegrityOK: true, State: backup.StateStaged,
-		CreatedAt: time.Now().UTC(),
-	}
-	if mutate != nil {
-		mutate(&record)
-	}
-	data, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(opDir, store.DatabaseBackupRecordName)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	return path, record
-}
-
-func readStoredDatabaseRecord(t *testing.T, path string) backup.Record {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var record backup.Record
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatalf("stored record is not JSON: %v", err)
-	}
-	return record
 }
 
 func TestSchemaTooNewNamesTheBackupRecord(t *testing.T) {

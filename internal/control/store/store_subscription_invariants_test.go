@@ -16,17 +16,18 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 )
 
 func TestRuleWithoutAnActivePinBlocksApproval(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 
 	// A geo matcher needs an artifact pin. No active server policy revision
 	// exists yet, so the pin source is empty and the composer refuses it: the
 	// approval must therefore block and write nothing.
-	verifier := &selectionVerifier{}
+	verifier := &storetest.Verifier{}
 	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{
 		LineIDs: []string{lineID},
 		Rules:   []store.RuleRevision{{StableKey: "preset-direct-cn", Version: 1}},
@@ -40,8 +41,8 @@ func TestRuleWithoutAnActivePinBlocksApproval(t *testing.T) {
 	if code := result.Preview.Code(); code != "COMPOSE_RULESET_UNPINNED" {
 		t.Fatalf("blocking code = %q, want COMPOSE_RULESET_UNPINNED", code)
 	}
-	if verifier.singBoxCalls != 0 || verifier.mihomoCalls != 0 {
-		t.Fatalf("a blocked composer ran the kernel gate: %d/%d", verifier.singBoxCalls, verifier.mihomoCalls)
+	if verifier.SingBoxCalls != 0 || verifier.MihomoCalls != 0 {
+		t.Fatalf("a blocked composer ran the kernel gate: %d/%d", verifier.SingBoxCalls, verifier.MihomoCalls)
 	}
 	if countRows(t, s, "subscription_snapshots") != 0 {
 		t.Fatal("a pin-blocked approval wrote a snapshot")
@@ -49,10 +50,10 @@ func TestRuleWithoutAnActivePinBlocksApproval(t *testing.T) {
 }
 
 func TestSnapshotStoresNoRenderedByte(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &storetest.Verifier{}, now)
 	if err != nil || !result.Saved {
 		t.Fatalf("approve: %+v err=%v", result, err)
 	}
@@ -76,10 +77,10 @@ func TestSnapshotStoresNoRenderedByte(t *testing.T) {
 // never served from an unconverged Line: the gate runs before the digest is
 // even consulted.
 func TestArtifactDownloadKeepsTheConvergenceGate(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &storetest.Verifier{}, now)
 	if err != nil || !result.Saved {
 		t.Fatalf("approve: %+v err=%v", result, err)
 	}

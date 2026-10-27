@@ -1,9 +1,11 @@
-package handler
+package node_test
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
@@ -26,9 +28,9 @@ func buildLineCandidateFixture(t *testing.T, s *store.Store, nodeID string) node
 }
 
 func TestBuildLineCandidateIncludesTwoSubscribersAndSkipsPaused(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	line := configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	line := storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
@@ -112,9 +114,9 @@ func TestBuildLineCandidateIncludesTwoSubscribersAndSkipsPaused(t *testing.T) {
 }
 
 func TestBuildLineCandidateKeepsEmptyUserArray(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 
 	candidate := buildLineCandidateFixture(t, s, edge)
 	if candidate.Users == nil {
@@ -132,8 +134,8 @@ func TestBuildLineCandidateKeepsEmptyUserArray(t *testing.T) {
 }
 
 func TestBuildLineCandidateOutStaysBaseline(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	out := createOutNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	out := storetest.CreateOutNode(t, s, now)
 
 	candidate := buildLineCandidateFixture(t, s, out)
 	if candidate.NodeID != out || candidate.Role != node.RoleOut ||
@@ -153,9 +155,9 @@ func TestBuildLineCandidateOutStaysBaseline(t *testing.T) {
 // Out side: an Out with configured transport carries the link key in a v4
 // document, so its Agent renders the SS guard instead of the VLESS baseline.
 func TestBuildLineCandidateOutWithTransportCarriesLinkKey(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	out := createOutNode(t, s, now)
-	configureOut(t, s, out, now)
+	s, now := storetest.SubscriberStore(t)
+	out := storetest.CreateOutNode(t, s, now)
+	storetest.ConfigureOut(t, s, out, now)
 
 	candidate := buildLineCandidateFixture(t, s, out)
 	if candidate.Out == nil || candidate.Out.Key == "" {
@@ -171,8 +173,8 @@ func TestBuildLineCandidateOutWithTransportCarriesLinkKey(t *testing.T) {
 }
 
 func TestBuildLineCandidateWithoutLineSettingsStaysBaseline(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
 
 	candidate := buildLineCandidateFixture(t, s, edge)
 	if candidate.NodeID != edge || candidate.Role != node.RoleEdge ||
@@ -186,9 +188,9 @@ func TestBuildLineCandidateWithoutLineSettingsStaysBaseline(t *testing.T) {
 }
 
 func TestBuildLineCandidateRejectsPortMismatchWithoutSecrets(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
 	if _, err := s.DB.Exec(`UPDATE line_settings SET port=9443 WHERE node_id=?`, edge); err != nil {
 		t.Fatal(err)
 	}

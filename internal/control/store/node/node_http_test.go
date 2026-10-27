@@ -1,4 +1,4 @@
-package store_test
+package node_test
 
 // Ruling R11: an HTTP proxy is a Hub-visible external egress node. It has no
 // Agent, pairing, candidate or readback (status is always "external"), its
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
@@ -31,7 +32,7 @@ func httpProxyFixture(t *testing.T, s *store.Store, now time.Time) (string, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetLine(testSelectionLine(t, lineNode.ID), now); err != nil {
+	if _, err := s.SetLine(storetest.SelectionLine(t, lineNode.ID), now); err != nil {
 		t.Fatal(err)
 	}
 	proxy, err := s.CreateHTTPProxyNode("办公室代理", "http://alice:s3cret@proxy.example.invalid:8080", now)
@@ -46,7 +47,7 @@ func httpProxyFixture(t *testing.T, s *store.Store, now time.Time) (string, stri
 }
 
 func TestHTTPProxyNodeIsExternalAndHasNoAgentState(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	proxy, err := s.CreateHTTPProxyNode("办公室代理", "http://Alice:S3cret@Proxy.Example.Invalid:8080/", now)
 	if err != nil {
@@ -108,7 +109,7 @@ func TestHTTPProxyNodeIsExternalAndHasNoAgentState(t *testing.T) {
 }
 
 func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
@@ -161,7 +162,7 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 }
 
 func TestHTTPProxyEgressIsExcludedFromOutAuthorizationGate(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
@@ -196,7 +197,7 @@ func TestHTTPProxyEgressIsExcludedFromOutAuthorizationGate(t *testing.T) {
 }
 
 func TestHTTPProxyDeleteIsThoroughAndInterlocked(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
@@ -232,7 +233,7 @@ func TestHTTPProxyDeleteIsThoroughAndInterlocked(t *testing.T) {
 // child tables, the HTTP proxy row and the candidate immutability trigger
 // intact.
 func TestSchema16RebuildPreservesNodesAndChildren(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
@@ -299,7 +300,7 @@ func TestSchema16RebuildPreservesNodesAndChildren(t *testing.T) {
 // turn every proxy delete into a permanent failure), and it must never publish
 // an empty ACL chain for a host that does not exist.
 func TestHTTPProxyDeleteSkipsTheOutCandidateChain(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	_, proxyID, _ := httpProxyFixture(t, s, now)
 	// A published candidate on the proxy would be the only way the cleanup
@@ -331,7 +332,7 @@ func TestHTTPProxyDeleteSkipsTheOutCandidateChain(t *testing.T) {
 // "not applicable" code instead of a silent success that would read as a
 // published and confirmed chain.
 func TestHTTPProxyRetryIsAnExplicitNoop(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	_, proxyID, _ := httpProxyFixture(t, s, now)
 	if err := s.RetryOutSync(proxyID, now); err == nil ||
@@ -352,7 +353,7 @@ func TestHTTPProxyRetryIsAnExplicitNoop(t *testing.T) {
 // and never as a healthy managed Out, and the declaration alone never makes the
 // pair healthy — the Line still has to prove its own inbound half.
 func TestHTTPProxyReadbackReportsTheDeclaration(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	if _, err := s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=? WHERE id=?`, now.Unix(), lineID); err != nil {
@@ -389,7 +390,7 @@ func TestHTTPProxyReadbackReportsTheDeclaration(t *testing.T) {
 // SetOutTransport does for a managed Out. Without it, a Line keeps dialing the
 // previous endpoint from its last candidate until some unrelated event.
 func TestHTTPProxyURLUpdateConvergesTheBoundLines(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	// The Line has to be reachable for the post-commit drain to publish it: an
@@ -474,7 +475,7 @@ func candidateCount(t *testing.T, s *store.Store, nodeID string) int {
 }
 
 func TestHTTPProxyCreateValidatesURLAndDisplayName(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	for _, raw := range []string{
 		"",
@@ -507,14 +508,14 @@ func TestHTTPProxyCreateValidatesURLAndDisplayName(t *testing.T) {
 // through the download path: the HTTP egress remains part of the approved
 // artifact without ever entering a client document.
 func TestHTTPProxyEgressComposesAndSurvivesArtifact(t *testing.T) {
-	s := selectionStore(t)
+	s := storetest.SelectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
 	if _, err := s.DB.Exec(`INSERT INTO policy_rules(stable_key, version, name, action, matcher_kind, matcher_value, origin, created_at, updated_at)
 	  VALUES('custom-proxy-http','1','代理','proxy','domain','["ai.example.invalid"]','custom',?,?)`, now.Unix(), now.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	verifier := &selectionVerifier{}
+	verifier := &storetest.Verifier{}
 	result, err := s.ApproveSubscriptionSelection(t.Context(), subID, "", store.SelectionSpec{
 		LineIDs: []string{lineID},
 		OutID:   proxyID,

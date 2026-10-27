@@ -1,61 +1,19 @@
-package handler
+package subscription_test
 
 import (
-	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
-// chainFixtureTask is one agent_tasks row narrowed to a candidate revision
-// chain. Tests read and settle task rows directly because the store never
-// rewrites an already delivered chain.
-type chainFixtureTask struct {
-	OperationID string
-	Kind        string
-	Revision    int64
-	Status      string
-	ErrorCode   string
-}
-
-// chainTasksForRevision returns every fixed-chain task whose params point at
-// exactly one candidate revision. An older chain of another revision is never
-// included, so a test can keep it failed while a newer revision settles.
-func chainTasksForRevision(t *testing.T, s *store.Store, nodeID string, revision int64) []chainFixtureTask {
-	t.Helper()
-	rows, err := s.DB.Query(`SELECT operation_id, kind, revision, status, error_code, params
- FROM agent_tasks WHERE node_id=? ORDER BY revision`, nodeID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var tasks []chainFixtureTask
-	for rows.Next() {
-		var task chainFixtureTask
-		var params string
-		if err := rows.Scan(&task.OperationID, &task.Kind, &task.Revision, &task.Status, &task.ErrorCode, &params); err != nil {
-			t.Fatal(err)
-		}
-		var decoded struct {
-			Revision int64 `json:"revision"`
-		}
-		if json.Unmarshal([]byte(params), &decoded) != nil || decoded.Revision != revision {
-			continue
-		}
-		tasks = append(tasks, task)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return tasks
-}
-
 // chainTaskStatus reads one task of a candidate revision chain.
 func chainTaskStatus(t *testing.T, s *store.Store, nodeID string, revision int64, kind string) (string, string) {
 	t.Helper()
-	for _, task := range chainTasksForRevision(t, s, nodeID, revision) {
+	for _, task := range storetest.ChainTasksForRevision(t, s, nodeID, revision) {
 		if task.Kind == kind {
 			return task.Status, task.ErrorCode
 		}
@@ -73,11 +31,11 @@ func settleChainForRevision(t *testing.T, s *store.Store, nodeID string, revisio
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks := chainTasksForRevision(t, s, nodeID, revision)
+	tasks := storetest.ChainTasksForRevision(t, s, nodeID, revision)
 	if len(tasks) != len(store.SubscriberChainKinds) {
 		t.Fatalf("chain of revision %d has %d tasks, want %d", revision, len(tasks), len(store.SubscriberChainKinds))
 	}
-	byKind := make(map[string]chainFixtureTask, len(tasks))
+	byKind := make(map[string]storetest.ChainFixtureTask, len(tasks))
 	for _, task := range tasks {
 		byKind[task.Kind] = task
 	}
@@ -105,7 +63,7 @@ func settleChainForRevision(t *testing.T, s *store.Store, nodeID string, revisio
 // be accepted as confirmation.
 func partialChainFailure(t *testing.T, s *store.Store, nodeID string, revision int64, kind, code string) {
 	t.Helper()
-	for _, task := range chainTasksForRevision(t, s, nodeID, revision) {
+	for _, task := range storetest.ChainTasksForRevision(t, s, nodeID, revision) {
 		if task.Kind != kind {
 			continue
 		}
@@ -154,10 +112,10 @@ func desiredPublishedRevision(t *testing.T, s *store.Store, nodeID string, now t
 func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 	for _, failedKind := range []string{protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply} {
 		t.Run(failedKind, func(t *testing.T) {
-			s, now := subscriberStoreFixture(t)
-			edge := createEdgeNode(t, s, now)
-			configureLine(t, s, edge, "line-a", now)
-			markLineOnline(t, s, edge, now)
+			s, now := storetest.SubscriberStore(t)
+			edge := storetest.CreateEdgeNode(t, s, now)
+			storetest.ConfigureLine(t, s, edge, "line-a", now)
+			storetest.MarkLineOnline(t, s, edge, now)
 			alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 			if err != nil {
 				t.Fatal(err)
@@ -197,15 +155,15 @@ func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 				t.Fatalf("latest task = %s/%s terminal=%v, want failed/%s", latestStatus, latestCode, terminal, failureCode)
 			}
 
-			candidates := candidateCount(t, s, edge)
-			tasks := taskCount(t, s, edge)
+			candidates := storetest.CandidateCount(t, s, edge)
+			tasks := storetest.TaskCount(t, s, edge)
 			if err := drainLineNow(t, s, edge, now); err != nil {
 				t.Fatal(err)
 			}
-			if got := candidateCount(t, s, edge); got != candidates {
+			if got := storetest.CandidateCount(t, s, edge); got != candidates {
 				t.Fatalf("automatic drain republished after a partial chain: revisions = %d, want %d", got, candidates)
 			}
-			if got := taskCount(t, s, edge); got != tasks {
+			if got := storetest.TaskCount(t, s, edge); got != tasks {
 				t.Fatalf("automatic drain appended tasks after a partial chain: tasks = %d, want %d", got, tasks)
 			}
 			if status, code := chainTaskStatus(t, s, edge, revision, failedKind); status != "failed" || code != failureCode {
@@ -222,10 +180,10 @@ func TestSubscriberSyncPriorChainFailureIsNotConfirmed(t *testing.T) {
 // the newest revision decides: an older failed chain stays failed and visible
 // in the task history, but it never downgrades a fully healthy newer chain.
 func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -289,11 +247,11 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 		t.Fatalf("older chain was rewritten: %s/%s", status, code)
 	}
 
-	candidates := candidateCount(t, s, edge)
+	candidates := storetest.CandidateCount(t, s, edge)
 	if err := drainLineNow(t, s, edge, now); err != nil {
 		t.Fatal(err)
 	}
-	if got := candidateCount(t, s, edge); got != candidates {
+	if got := storetest.CandidateCount(t, s, edge); got != candidates {
 		t.Fatalf("drain republished a confirmed newer chain: revisions = %d, want %d", got, candidates)
 	}
 }
@@ -302,10 +260,10 @@ func TestSubscriberSyncNewerRevisionHealthyChainOverridesOlderFailure(t *testing
 // ensures a deleting subscriber is finalized only by a complete healthy chain
 // of the exact snapshot without its UUIDs, not by its healthy readback row.
 func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *testing.T) {
-	s, now := subscriberStoreFixture(t)
-	edge := createEdgeNode(t, s, now)
-	configureLine(t, s, edge, "line-a", now)
-	markLineOnline(t, s, edge, now)
+	s, now := storetest.SubscriberStore(t)
+	edge := storetest.CreateEdgeNode(t, s, now)
+	storetest.ConfigureLine(t, s, edge, "line-a", now)
+	storetest.MarkLineOnline(t, s, edge, now)
 	alice, _, err := s.CreateSubscriber("alice", []string{edge}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -339,8 +297,8 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 		t.Fatalf("deleting status = %s/%s, want partial/CONFIG_CHECK_FAILED", status, code)
 	}
 
-	candidates := candidateCount(t, s, edge)
-	tasks := taskCount(t, s, edge)
+	candidates := storetest.CandidateCount(t, s, edge)
+	tasks := storetest.TaskCount(t, s, edge)
 	if err := drainLineNow(t, s, edge, now); err != nil {
 		t.Fatal(err)
 	}
@@ -351,10 +309,10 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 	if stored.State != "deleting" {
 		t.Fatalf("state after a partial chain = %s, want deleting", stored.State)
 	}
-	if got := candidateCount(t, s, edge); got != candidates {
+	if got := storetest.CandidateCount(t, s, edge); got != candidates {
 		t.Fatalf("drain republished during deletion: revisions = %d, want %d", got, candidates)
 	}
-	if got := taskCount(t, s, edge); got != tasks {
+	if got := storetest.TaskCount(t, s, edge); got != tasks {
 		t.Fatalf("drain appended tasks during deletion: tasks = %d, want %d", got, tasks)
 	}
 
@@ -371,7 +329,7 @@ func TestSubscriberSyncDeletingSubscriberWithPriorChainFailureStaysDeleting(t *t
 	if stored.State != "deleted" {
 		t.Fatalf("state after a complete chain = %s, want deleted", stored.State)
 	}
-	if got := candidateCount(t, s, edge); got != candidates {
+	if got := storetest.CandidateCount(t, s, edge); got != candidates {
 		t.Fatalf("finalizing republished a converged snapshot: revisions = %d, want %d", got, candidates)
 	}
 }
