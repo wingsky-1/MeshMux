@@ -3,12 +3,15 @@ package install
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
@@ -49,6 +52,7 @@ type hubApplyErrors struct {
 func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *InstallState, previous InstallState, hasState, repair bool, opts ApplyOptions, record func(string, string, string) error, c Config, operationID, operationDir string, targets []string, staged hubStaged, checks []Check, artifacts []Artifact, failures hubApplyErrors) error {
 	fail := func(haveSnapshots bool, snapshots []fileSnapshot, stage, code, recovery string) error {
 		res, err := failAndRollback(*result, *state, previous, hasState, opts, snapshots, haveSnapshots, record, stage, code, recovery)
+		noteHubDatabaseBackup(opts.Root, &res, err, record, stage)
 		*result = res
 		return err
 	}
@@ -212,4 +216,54 @@ func hubApplyAndVerify(ctx context.Context, result *InstallResult, state *Instal
 	result.Stage, result.Status, result.Checks = "verify", "installed", checks
 	result.Artifacts = componentsFor(artifacts)
 	return nil
+}
+
+// hubDataDirPath is the fixed Hub data directory; the Web service owns it and
+// the installer never guesses a different one.
+const hubDataDirPath = versions.HubDataDir
+
+// noteHubDatabaseBackup adds the verified pre-migration database backup to a
+// failed Hub apply. The new binary snapshots the database before its first
+// schema migration, so a failure after that point leaves the only way back on
+// disk; the rollback path must name it instead of letting the operator discover
+// SCHEMA_TOO_NEW in journalctl. The note is best-effort and factual: when no
+// verified pointer exists (a failure before the new binary started), nothing is
+// added. The operation journal records the same path so the recovery evidence
+// survives the terminal result.
+func noteHubDatabaseBackup(root string, result *InstallResult, err error, record func(string, string, string) error, stage string) {
+	dataDir := rooted(root, hubDataDirPath)
+	owner, ok := directoryOwner(dataDir)
+	if !ok {
+		return
+	}
+	pointer, pointerErr := backup.ReadFlatPointer(filepath.Join(dataDir, versions.HubDatabaseBackupDir), owner)
+	if pointerErr != nil {
+		return
+	}
+	note := fmt.Sprintf(" A pre-migration Hub database backup exists: record %s, database copy %s (from_version %s, db_schema %d).",
+		pointer.RecordPath, pointer.PayloadPath, pointer.Record.FromVersion, pointer.Record.DBSchema)
+	result.Recovery = strings.TrimSpace(result.Recovery + note)
+	var ie *InstallError
+	if errors.As(err, &ie) {
+		ie.Recovery = result.Recovery
+	}
+	if record != nil {
+		_ = record(stage, "hub_database_backup", pointer.RecordPath)
+	}
+}
+
+// directoryOwner returns the account of an existing private directory. The
+// installer reads the Hub store as root but must apply the same owner rule the
+// Web applies: the data directory names the service account whose files may be
+// trusted.
+func directoryOwner(path string) (int, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return 0, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return int(stat.Uid), true
 }

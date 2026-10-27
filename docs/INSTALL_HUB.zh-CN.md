@@ -102,6 +102,8 @@ Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建�
 5. 采用分层 CI：L1 每次 Go 回归；L2 Debian 13 容器验证固定版本真实 Caddy/Headscale/systemd/Fail2ban 配置；L3 PR B 退出时通过至少一套自动化 Debian 13 完整 systemd VM 验证真实安装、重复执行、重启及故障恢复。arm64 若无完整宿主机验证须明确限制。参见 [CI 验证规范](CI_HUB_VALIDATION.zh-CN.md)。
 6. 所有修复先停受影响服务、备份 SQLite 一致性快照，再仅更换该项目受管文件。不能依赖删除数据库来恢复成功安装。
 
+**升级回滚与迁移前数据库快照（P0）：** `install hub --repair` 换入新二进制后，新 Web 在第一次改写 schema 之前用自己打开的连接 `VACUUM INTO` 一份旧库，写成 `<data-dir>/database-backup/<op32hex>/payload/meshmux.db`，并把记录发布为 `<data-dir>/database-backup/record.json`（`from_version` 是上一个确认过的构建，`db_schema` 是迁移前 schema）。repair 若在启动/验证阶段失败，安装器回滚受管文件，并把这条记录与副本路径写入 `next_action` 和 `/var/lib/meshmux-installer/operations/<op>/events.jsonl`。回滚后的旧 Web 报 `SCHEMA_TOO_NEW` 说明数据库已被迁移：先停 Web，用记录里的 `payload/meshmux.db` 覆盖 `/var/lib/meshmux/meshmux.db` 并删除同目录的 `meshmux.db-wal`/`meshmux.db-shm`，再用 `from_version` 对应的二进制启动；快照之后的写入会丢失。记录里的 `from_version` 与本机二进制不一致时不要恢复那份副本，先换回写库的构建。每次跨 schema 升级保留一份，v1.0.0 不自动回收，确认新版本稳定后可手工删除较旧的 `<op32hex>` 目录（保留最新一份）。
+
 ## 与后续 Issue 的接口
 
 PR B 输出稳定 Hub 配置路径、systemd 单元、MeshMux Web loopback、Headscale 0.29.5 本地服务/API、可追踪 operation_id 与锁定制品 manifest。Issue #6 只消费这些已确认接口，实现 Line/Out Agent 主动纳管，不重新建立 Web/Headscale 身份或修改 SSH。

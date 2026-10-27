@@ -190,6 +190,22 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Migrate() error {
+	version, err := s.liveSchemaVersion()
+	if err != nil {
+		return err
+	}
+	// SCHEMA_TOO_NEW is decided before anything is copied or written: a newer
+	// file is never snapshotted, migrated or opened for writes.
+	if version > DatabaseSchemaVersion {
+		return s.schemaTooNew(version)
+	}
+	// The pre-migration snapshot is the rollback source of the one-way schema
+	// move below. It runs only when this build actually has a migration to do.
+	if version > 0 && version < DatabaseSchemaVersion {
+		if err := s.snapshotBeforeMigration(); err != nil {
+			return err
+		}
+	}
 	// The sequential chain stops at schema 15. Schema 16 rebuilds the nodes
 	// table with role "http" and must toggle foreign_keys OFF, which SQLite
 	// only honours outside a transaction; it therefore runs as its own atomic
@@ -204,6 +220,17 @@ func (s *Store) Migrate() error {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
 	return nil
+}
+
+// liveSchemaVersion reads the file's PRAGMA user_version without writing
+// anything. It is the one version read the snapshot decision and the too-new
+// gate share before the migration transaction starts.
+func (s *Store) liveSchemaVersion() (int, error) {
+	var version int
+	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
 }
 
 // migrateSchemaChain applies every additive leg up to schema 15. It is one

@@ -190,6 +190,7 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | 能力（spec） | B 级证据 | 边界 |
 | --- | --- | --- |
 | per-op 备份、`keep=2`、指针与单飞（§5.2/§5.2.1） | `TestBackupPublishesPerOpThenPointer`、`TestBackupSingleFlight`、`TestLatestIsJournalBacked`、`TestGCKeepTwoConfirmed`、`TestGCNeverCollectsNewestOrStaged`、`TestConfirmCollectsConfirmedBeyondTwo`、`TestConfirmPointerFailureStillCollects`、`TestHubCleanupRejectsKeepBelowTwo` | 记录/载荷为临时目录 fixture；VACUUM 在测试 SQLite 上执行，非生产负载。指针刷新失败只记 `HUB_BACKUP_POINTER_STALE`；已发布但未 fsync 记 `HUB_BACKUP_POINTER_UNFLUSHED`，两者都不回滚确认/GC |
+| 迁移前快照与 `SCHEMA_TOO_NEW` 指引（安装器升级 P0） | `TestMigrateSnapshotsTheDatabaseBeforeSchemaMove`、`TestRestoredSnapshotStartsTheWebAndMigratesAgain`、`TestSchemaTooNewNamesTheMatchingSnapshot`、`TestSchemaTooNewDoesNotClaimAForeignGeneration`、`TestMigrationSnapshotPublishesRecordPayloadAndPointer`、`TestMigrationSnapshotFailureLeavesNoGeneration`、`TestReadFlatPointerResolvesTheCommittedGeneration`、`TestReadFlatPointerRefusesMissingAndDamagedChains`、`TestHubRollbackNamesThePreMigrationDatabaseBackup` | 迁移前 schema-15 库由 legacy 迁移链在临时目录真实生成，`VACUUM INTO` 在测试 SQLite 上执行，恢复后由 `OpenStore` 再次迁移；**未**在真实安装器/systemd 上执行 `--repair` 升级与二进制回滚，C 级隔离 VM 归 #12。名字带 from_version 校验：外来代只报路径与真实标识，不声称可恢复 |
 | 交接、对账、确认（§5.5） | `TestHandoffOrder`、`TestReconcileRestoredMarker`、`TestReconcileClaimSwappingNewBinary`、`TestReconcileClaimOldBinaryInert`、`TestApplyReceipt`、`TestNoSchema11`、`TestReadbackComparesVerifyingOpTarget` | `user_version` 固定 10；无 `hub_upgrade_operations` 表 |
 | 版本绑定、pre-flight、Line 四 pin、claim（§5.6） | `TestUpdateVersionMismatchZeroWrite`、`TestUpdatePreflightTrial`、`TestApplyPrecheckNeedsFourPins`、`TestLineRepinAllOrNothing`、`TestClaimWrittenBeforeSwap`、`TestApplyResultBeforeRestart` | 通过 fixture ledger/agent.json 证明写集；未执行真实 `systemctl restart` |
 | restore（§5.7） | `TestRestoreHappyPath`、`TestRestoreAcceptsStagedSource`、`TestRestoreRefusesPayloadDigestMismatch`、`TestRestoreRefusesForeignSchemaCopy`、`TestRestoreMissingOldPackage`、`TestRestoreRefusesCarriedRecordAsSource`、`TestRestoreUnitShapeInvalid`、`TestRestoreSecondRequestBusy`、`TestRestoreSpaceCheck`、`TestRestoreConsoleInvocation` | 副本为 fixture SQLite；`/healthz` 由注入 Probe 代表；chown 在测试 uid 下为同主 no-op |
@@ -201,7 +202,7 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 - **LOSSY 位置**：`lossy=true` 与 `snapshot_at` 只存在于 `hub-upgrade/restored.json`（schema 1）和 `/tasks` 的 Hub 区块。**result schema 1 没有 `lossy` 字段**，不得声称 result 显示 LOSSY。
 - **标记清除时机**：由**下一次对账 pass**（`internal/cli/hubupgrade/reconcile.go` 的 `clearSupersededMarker`，约 609-640 行）在见到新的已提交备份（journal `backed_up` 且 per-op 记录 `staged|confirmed` 可读）时清除；不是 backup producer 在提交瞬间清除。Web 停机期间标记会保留，这是有意的。
 - **§5.5 偏差（记录在 T7 文档，不回写 spec）**：`HUB_BACKUP_STAGE_FAILED` 时 journal 保持 `backed_up`，不是 `failed`；只有 per-op 记录与载荷可复用、同一 `operation_id` 可重试。spec §5.5 的“任意失败 → 终态”不覆盖“尚未触碰主机、可安全重试”的暂存失败。
-- **指针稳定码**：`HUB_BACKUP_POINTER_STALE`（未发布新指针）与 `HUB_BACKUP_POINTER_UNFLUSHED`（已发布但未 fsync）都只记录、不回滚确认与 GC。
+- **指针稳定码**：`HUB_BACKUP_POINTER_STALE`（未发布新指针）与 `HUB_BACKUP_POINTER_UNFLUSHED`（已发布但未 fsync）在 Web 自升级路径只记录、不回滚确认与 GC。迁移前快照路径不同：扁平指针是 `SCHEMA_TOO_NEW` 恢复链本身，发布失败以 `HUB_BACKUP_POINTER_FAILED` 拒绝启动，迁移不开始（数据库保持旧 schema）。
 - **活动数据目录**：恢复后的 `--data-dir` 是 `<原-data-dir>/restore-<op>-<unix>`；删除原目录会删除活动数据库（详见下方恢复警告）。
 
 ### 记录字节冻结的“替换等价”措辞（T1r carry）

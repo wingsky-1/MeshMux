@@ -435,9 +435,13 @@ func ReadRecordBytes(dir, operationID string, expectedOwner int) ([]byte, error)
 // readRecordFileBytes is the one read path of a record file: it returns both the
 // exact bytes and their decoded form, so a byte-republishing caller and a
 // metadata caller can never disagree about what is acceptable. ReadRecord and
-// ReadRecordBytes add the operation-identity check.
+// ReadRecordBytes add the operation-identity check; ReadFlatPointer (pointer.go)
+// is the one reader without it.
 func readRecordFileBytes(dir string, expectedOwner int) ([]byte, Record, error) {
-	path := filepath.Join(dir, RecordName)
+	return readRecordFile(filepath.Join(dir, RecordName), expectedOwner)
+}
+
+func readRecordFile(path string, expectedOwner int) ([]byte, Record, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, Record{}, fail(CodeMissing, "no verified rollback record exists")
