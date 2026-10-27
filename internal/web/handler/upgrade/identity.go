@@ -1,4 +1,4 @@
-package handler
+package upgrade
 
 // Read-only Hub identity readback for #11d (spec §5.3, §5.4).
 //
@@ -33,19 +33,19 @@ import (
 )
 
 const (
-	// codeSchemaReadbackFailed is the management event for a database whose
+	// CodeSchemaReadbackFailed is the management event for a database whose
 	// user_version is not the schema this binary owns, or one whose identity
 	// could not be read. /healthz still answers 200 while SQLite answers
 	// SELECT 1: the storage is readable, the identity is not confirmed.
-	codeSchemaReadbackFailed = "SCHEMA_READBACK_FAILED"
-	// codeDatabaseUnconfirmed means the schema matches and no started binary
+	CodeSchemaReadbackFailed = "SCHEMA_READBACK_FAILED"
+	// CodeDatabaseUnconfirmed means the schema matches and no started binary
 	// has confirmed this database. It is a management event, never a startup
 	// refusal.
-	codeDatabaseUnconfirmed = "DATABASE_UNCONFIRMED"
-	// codeDatabaseVersionMismatch means the row exists but names another
+	CodeDatabaseUnconfirmed = "DATABASE_UNCONFIRMED"
+	// CodeDatabaseVersionMismatch means the row exists but names another
 	// version or schema, or names a different target than a verifying upgrade
 	// operation. Reported, never rewritten.
-	codeDatabaseVersionMismatch = "DATABASE_VERSION_MISMATCH"
+	CodeDatabaseVersionMismatch = "DATABASE_VERSION_MISMATCH"
 )
 
 // hubIdentityRefreshInterval is the bounded refresh period. A test may shorten
@@ -53,10 +53,11 @@ const (
 // request drives the refresh.
 const hubIdentityRefreshInterval = 30 * time.Second
 
-// databaseIdentity is one read-only observation of the database identity: the
+// DatabaseIdentity is one read-only observation of the database identity: the
 // storage schema and the single last-known-good row, when it exists. A missing
 // row stays distinct from a row naming an empty release.
-type databaseIdentity struct {
+// DatabaseIdentity is one read-only observation of the database identity.
+type DatabaseIdentity struct {
 	UserVersion int
 	Row         store.DatabaseVersion
 	HasRow      bool
@@ -75,7 +76,7 @@ type opTargetFunc func(operationID string) (version, digest string, ok bool)
 // target and package digest frozen by its backup. It reads only: a corrupt
 // journal yields ok=false, because the readback is advisory and must not turn
 // an unreadable operation record into a confirmed identity.
-func (app *Server) hubOpTarget(operationID string) (version, digest string, ok bool) {
+func (app *Server) HubOpTarget(operationID string) (version, digest string, ok bool) {
 	ops, err := hubupgrade.ListOps(app.Store.Dir, os.Geteuid())
 	if err != nil {
 		return "", "", false
@@ -98,14 +99,14 @@ func (app *Server) hubOpTarget(operationID string) (version, digest string, ok b
 // queries, so the readback cannot write. The test replays it through a
 // `mode=ro` connection, which refuses every write, so success proves the
 // statements are read-only rather than merely quiet on this fixture.
-func readDatabaseIdentityFrom(db *sql.DB) (databaseIdentity, error) {
-	var out databaseIdentity
+func readDatabaseIdentityFrom(db *sql.DB) (DatabaseIdentity, error) {
+	var out DatabaseIdentity
 	if err := db.QueryRow("PRAGMA user_version").Scan(&out.UserVersion); err != nil {
-		return databaseIdentity{}, errIdentityRead
+		return DatabaseIdentity{}, errIdentityRead
 	}
 	row, ok, err := store.LastGoodDatabaseVersionFrom(db)
 	if err != nil {
-		return databaseIdentity{}, errIdentityRead
+		return DatabaseIdentity{}, errIdentityRead
 	}
 	out.Row, out.HasRow = row, ok
 	return out, nil
@@ -113,14 +114,14 @@ func readDatabaseIdentityFrom(db *sql.DB) (databaseIdentity, error) {
 
 // readDatabaseIdentity is the store's entry point. It is the only identity read
 // path: a second one would be a second chance to write.
-func (app *Server) readDatabaseIdentity() (databaseIdentity, error) {
+func (app *Server) readDatabaseIdentity() (DatabaseIdentity, error) {
 	return readDatabaseIdentityFrom(app.Store.DB)
 }
 
 // errIdentityRead marks an identity read that failed. The caller reports
 // SCHEMA_READBACK_FAILED and never the SQL text, so a path or statement cannot
 // reach a page or a log line.
-var errIdentityRead = errors.New(codeSchemaReadbackFailed)
+var errIdentityRead = errors.New(CodeSchemaReadbackFailed)
 
 // hubOpTarget is one resolved upgrade target: the release the journal says is
 // being verified. Both halves are compared, because a release is proved by the
@@ -136,12 +137,12 @@ type hubOpTarget struct {
 // The optional target is the journal's verifying operation (Task 5). When one
 // exists, the row and the running package digest must both name it: a release
 // is proved by version and digest together, never by either alone.
-func judgeHubIdentity(ident databaseIdentity, target *hubOpTarget, runningDigest string) string {
+func judgeHubIdentity(ident DatabaseIdentity, target *hubOpTarget, runningDigest string) string {
 	if ident.UserVersion != store.DatabaseSchemaVersion {
-		return codeSchemaReadbackFailed
+		return CodeSchemaReadbackFailed
 	}
 	if !ident.HasRow {
-		return codeDatabaseUnconfirmed
+		return CodeDatabaseUnconfirmed
 	}
 	if target != nil {
 		// A verifying operation that cannot name its target cannot confirm
@@ -149,14 +150,14 @@ func judgeHubIdentity(ident databaseIdentity, target *hubOpTarget, runningDigest
 		// record of. A nil target means no verifying operation exists, so there
 		// is nothing to compare against and the build's own identity stands.
 		if target.Version == "" || target.Digest == "" {
-			return codeDatabaseVersionMismatch
+			return CodeDatabaseVersionMismatch
 		}
 		if ident.Row.Version != target.Version || runningDigest == "" || runningDigest != target.Digest {
-			return codeDatabaseVersionMismatch
+			return CodeDatabaseVersionMismatch
 		}
 	}
 	if ident.Row.Version != buildinfo.Version || ident.Row.Schema != store.DatabaseSchemaVersion {
-		return codeDatabaseVersionMismatch
+		return CodeDatabaseVersionMismatch
 	}
 	return ""
 }
@@ -175,7 +176,7 @@ func (app *Server) hubIdentityAt(now time.Time, opTarget opTargetFunc) view.HubI
 	snapshot := view.HubIdentity{Version: buildinfo.Version, Schema: store.DatabaseSchemaVersion, CheckedAt: now.UTC()}
 	ident, err := app.readDatabaseIdentity()
 	if err != nil {
-		snapshot.Code = codeSchemaReadbackFailed
+		snapshot.Code = CodeSchemaReadbackFailed
 		return snapshot
 	}
 	snapshot.UserVersion = ident.UserVersion
@@ -238,7 +239,7 @@ func (app *Server) refreshHubIdentity() view.HubIdentity {
 
 // startHubIdentityRefresh starts the one bounded refresher. Observation does not
 // depend on a browser: the snapshot advances on its own after start, and Close
-// stops it. now is captured here so a test that replaces app.now cannot race
+// stops it. now is captured here so a test that replaces app.Now cannot race
 // the goroutine.
 func (app *Server) startHubIdentityRefresh(ctx context.Context) {
 	// A second start replaces the first loop instead of leaving it behind.

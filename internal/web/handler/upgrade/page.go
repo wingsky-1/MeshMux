@@ -1,6 +1,7 @@
-package handler
+package upgrade
 
 import (
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"runtime"
 	"time"
@@ -39,7 +40,7 @@ func (app *Server) upgradeView(now time.Time) (view.UpgradeSnapshot, error) {
 	return snap, nil
 }
 
-func (app *Server) tasksPage(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) tasksPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	snap, err := app.upgradeView(app.Now())
 	if err != nil {
 		app.Fail(w, r, 503,

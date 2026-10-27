@@ -1,7 +1,7 @@
-package handler
+package upgrade
 
 // The Hub backup producer surface of #11d (spec §5.2). It is one authenticated
-// admin mutation on the existing boundary: one session, exact Origin, CSRF
+// admin mutation on the existing boundary: one infra.Session, exact Origin, CSRF
 // token, a bounded form, and an operation id on every receipt.
 //
 // The Web process owns the SQLite handle, so it supplies the four database
@@ -46,7 +46,7 @@ type hubBackupReceipt struct {
 	NextAction  string `json:"next_action,omitempty"`
 }
 
-func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	target := strings.TrimSpace(r.PostForm.Get("target_version"))
 	if !infra.IsValidReleaseVersion(target) {
 		app.Event(r, "MANIFEST_UNAVAILABLE")
@@ -139,7 +139,7 @@ type hubApplyReceipt struct {
 // package and digests come from the journal, the per-operation record and the
 // root manifest, never from the form. The route never waits for the upgrade:
 // queued is the honest maximum it can claim.
-func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
 	if !infra.IsValidOperationID(operationID) {
 		app.Event(r, "HUB_HANDOFF_REQUEST_INVALID")
@@ -335,7 +335,7 @@ type hubRestoreReceipt struct {
 // host, a queued request must be consumed first, and a carried record after an
 // earlier restore is never a source. The privileged executor re-derives every
 // byte, schema and pin check on the root side.
-func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
 	if !infra.IsValidOperationID(operationID) {
 		app.Event(r, "HUB_HANDOFF_REQUEST_INVALID")

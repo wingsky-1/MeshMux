@@ -1,4 +1,4 @@
-package handler
+package upgrade
 
 // Read-only Hub self-upgrade projection for the /tasks page (#11d, spec
 // §5.4/§5.5/§5.11).

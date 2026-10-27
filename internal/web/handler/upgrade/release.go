@@ -1,4 +1,4 @@
-package handler
+package upgrade
 
 // The explicit release check and the gated approval of one target per node
 // (#11c-1 Task 6).
@@ -47,12 +47,12 @@ import (
 // Stable approval refusals of this task. The literals live in codes.go so a
 // second handler never re-spells them.
 const (
-	// codeUpgradeManifestUnavailable: no pinned manifest describes the
+	// CodeUpgradeManifestUnavailable: no pinned manifest describes the
 	// requested release, so the operator's tag is still only a suggestion. The
 	// Hub never falls back to a cached or newer release.
-	codeUpgradeManifestUnavailable = infra.CodeManifestUnavailable
-	// codeUpgradeTargetInvalid: the requested version is not a SemVer release.
-	codeUpgradeTargetInvalid = "UPGRADE_TARGET_INVALID"
+	CodeUpgradeManifestUnavailable = infra.CodeManifestUnavailable
+	// CodeUpgradeTargetInvalid: the requested version is not a SemVer release.
+	CodeUpgradeTargetInvalid = "UPGRADE_TARGET_INVALID"
 	// codeUpgradeSchemaIncompatible: the target names another stored policy
 	// schema, so it cannot be adopted by this Hub.
 	codeUpgradeSchemaIncompatible = "UPGRADE_SCHEMA_INCOMPATIBLE"
@@ -69,7 +69,8 @@ var releaseClient = &http.Client{Timeout: 10 * time.Second}
 
 // upgradeApproveReceipt is the typed approval result. It reports queued work and
 // the pinned release, never that the target is installed.
-type upgradeApproveReceipt struct {
+// ApproveReceipt is the receipt of one per-node approval.
+type ApproveReceipt struct {
 	OK                   bool             `json:"ok"`
 	Status               string           `json:"status"`
 	Target               string           `json:"target,omitempty"`
@@ -91,7 +92,7 @@ type upgradeApproveReceipt struct {
 // tasksCheck is the explicit release check. It is a read-only GET: the response
 // is the page with the unverified suggestion, and a failed query is shown as
 // unknown rather than as a version.
-func (app *Server) tasksCheck(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) tasksCheck(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	page, err := app.upgradeView(app.Now())
 	if err != nil {
 		app.Fail(w, r, 503, "UPGRADE_SNAPSHOT_UNAVAILABLE", "无法读取升级只读快照。", "请检查数据库后重试。")
@@ -150,16 +151,16 @@ func githubLatestRelease(ctx context.Context) (string, error) {
 // tasksApprove is the confirm step. It accepts exactly one node id and one
 // version, resolves the version to the pinned manifest of this build, and
 // enqueues the chain in one transaction with its stamped stage row.
-func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	nodeID := strings.TrimSpace(r.PostForm.Get("node_id"))
 	version := strings.TrimPrefix(strings.TrimSpace(r.PostForm.Get("version")), "v")
 	if !infra.IsValidNodeID(nodeID) {
-		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
+		app.writeUpgradeFailure(w, r, http.StatusBadRequest, CodeUpgradeTargetInvalid,
 			"节点标识不正确。", "请从任务页面的节点行重新提交批准。")
 		return
 	}
 	if !infra.IsValidReleaseVersion(version) {
-		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
+		app.writeUpgradeFailure(w, r, http.StatusBadRequest, CodeUpgradeTargetInvalid,
 			"目标版本不是 SemVer 发行版。", "请重新检查新版本后再批准。")
 		return
 	}
@@ -177,7 +178,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 	}
 	manifest, manifestSHA, err := pinnedManifest(architecture)
 	if err != nil {
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeManifestUnavailable,
+		app.writeUpgradeFailure(w, r, http.StatusConflict, CodeUpgradeManifestUnavailable,
 			"该节点架构没有可验证的发行 manifest。", "请确认节点架构受支持（amd64/arm64）后重试；未写入任何升级记录。")
 		return
 	}
@@ -191,7 +192,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 	// node's read-back differs, so it passes through to the gates below, which
 	// decide whether the chain may queue.
 	if manifest.Version != version {
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeManifestUnavailable,
+		app.writeUpgradeFailure(w, r, http.StatusConflict, CodeUpgradeManifestUnavailable,
 			"该版本尚未有可验证的 manifest pin。", "latest 只是建议；请等待该发行提供 manifest 后再批准。")
 		return
 	}
@@ -206,7 +207,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 		return
 	}
 	app.Event(r, "UPGRADE_APPROVED")
-	app.WriteJSON(w, http.StatusOK, upgradeApproveReceipt{
+	app.WriteJSON(w, http.StatusOK, ApproveReceipt{
 		OK: true, Status: "queued", Target: target.Version, ManifestSHA256: target.ManifestSHA256,
 		PolicySchema: manifest.PolicySchema, RoutePolicyRevisions: routePolicySlots(manifest),
 		Revision: target.CandidateRevision, StageOperationID: target.StageOperationID,
@@ -243,7 +244,7 @@ func routePolicySlots(manifest upgrade.Manifest) map[string]int64 {
 // writeUpgradeFailure writes the approval refusal in the management JSON shape.
 func (app *Server) writeUpgradeFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
 	app.Event(r, code)
-	app.WriteJSON(w, status, upgradeApproveReceipt{
+	app.WriteJSON(w, status, ApproveReceipt{
 		Status: "failed", PolicySchema: upgrade.PolicySchema, RoutePolicyRevisions: map[string]int64{},
 		ErrorCode: code, Detail: message, NextAction: next, OperationID: infra.Operation(r),
 	})

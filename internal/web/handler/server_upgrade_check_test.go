@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"net/http/httptest"
@@ -73,10 +74,10 @@ func countStamped(t *testing.T, app *Server, nodeID string) int {
 	return count
 }
 
-func decodeApprove(t *testing.T, w *httptest.ResponseRecorder, status int) upgradeApproveReceipt {
+func decodeApprove(t *testing.T, w *httptest.ResponseRecorder, status int) handlerupgrade.ApproveReceipt {
 	t.Helper()
 	requireStatus(t, w, status)
-	var receipt upgradeApproveReceipt
+	var receipt handlerupgrade.ApproveReceipt
 	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
 		t.Fatalf("approval receipt: %v %.300s", err, w.Body.String())
 	}
@@ -117,7 +118,7 @@ func seedUpgradeRouteIntent(t *testing.T, app *Server, nodeID string) {
 // guessed version, and an unverified tag can never be approved.
 func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
-	app.releaseSource = func(context.Context) (string, error) { return "1.0.1", nil }
+	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return "1.0.1", nil })
 	before := latestRevision(t, app, nodeID)
 
 	w := b.req("GET", "/tasks/check", nil, nil)
@@ -136,7 +137,7 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 	}
 
 	// A failed query is unknown, never a cached or guessed release.
-	app.releaseSource = func(context.Context) (string, error) { return "", errors.New("unreachable") }
+	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return "", errors.New("unreachable") })
 	w = b.req("GET", "/tasks/check", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "无法确认") {
@@ -150,7 +151,7 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 
 	// Approving the unverified tag is refused and stores nothing.
 	receipt := decodeApprove(t, approveUpgrade(t, b, nodeID, "1.0.1"), http.StatusConflict)
-	if receipt.OK || receipt.ErrorCode != codeUpgradeManifestUnavailable {
+	if receipt.OK || receipt.ErrorCode != handlerupgrade.CodeUpgradeManifestUnavailable {
 		t.Fatalf("unverified approval = %+v, want MANIFEST_UNAVAILABLE", receipt)
 	}
 	if got := countStamped(t, app, nodeID); got != 0 {
@@ -434,10 +435,10 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 	if got := decodeApprove(t, approveUpgrade(t, b, strings.Repeat("f", 32), manifest.Version), http.StatusNotFound); got.ErrorCode != "NODE_NOT_FOUND" {
 		t.Fatalf("unknown node = %+v", got)
 	}
-	if got := decodeApprove(t, approveUpgrade(t, b, "not-a-node", manifest.Version), http.StatusBadRequest); got.ErrorCode != codeUpgradeTargetInvalid {
+	if got := decodeApprove(t, approveUpgrade(t, b, "not-a-node", manifest.Version), http.StatusBadRequest); got.ErrorCode != handlerupgrade.CodeUpgradeTargetInvalid {
 		t.Fatalf("malformed node = %+v", got)
 	}
-	if got := decodeApprove(t, approveUpgrade(t, b, nodeID, "latest"), http.StatusBadRequest); got.ErrorCode != codeUpgradeTargetInvalid {
+	if got := decodeApprove(t, approveUpgrade(t, b, nodeID, "latest"), http.StatusBadRequest); got.ErrorCode != handlerupgrade.CodeUpgradeTargetInvalid {
 		t.Fatalf("floating version = %+v", got)
 	}
 	// The approval is a CSRF-protected management POST.
@@ -472,7 +473,7 @@ func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
 
 	// The page states the boundary instead of letting the operator discover it
 	// through a refusal.
-	app.releaseSource = func(context.Context) (string, error) { return manifest.Version, nil }
+	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return manifest.Version, nil })
 	// The page states the boundary precisely: newer releases need 11d, while a
 	// lagging node is still approvable to this Hub's release.
 	body := b.req("GET", "/tasks/check", nil, nil).Body.String()

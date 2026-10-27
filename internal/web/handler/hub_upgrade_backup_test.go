@@ -54,13 +54,13 @@ func TestHubBackupReceipt(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("a", 32)
 	var got hubupgrade.BackupConfig
-	app.hubBackup = func(_ context.Context, cfg hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
+	app.upgradeServer.SetHubBackupForTest(func(_ context.Context, cfg hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
 		got = cfg
 		return hubupgrade.BackupReceipt{
 			Status: "staged", OperationID: operationID, FromVersion: "1.0.0",
 			DBSchema: 10, IntegrityOK: true,
 		}, nil
-	}
+	})
 	receipt := decodeHubBackup(t, b.post(hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "staged" || receipt.OperationID != operationID ||
@@ -96,10 +96,10 @@ func TestHubBackupReceipt(t *testing.T) {
 func TestHubBackupRejectsMalformedTarget(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	called := false
-	app.hubBackup = func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
+	app.upgradeServer.SetHubBackupForTest(func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
 		called = true
 		return hubupgrade.BackupReceipt{}, nil
-	}
+	})
 	for _, target := range []string{"", "latest", "1.0", "../1.0.1", "1.0.1/../../etc"} {
 		receipt := decodeHubBackup(t, b.post(hubBackupPath,
 			url.Values{"target_version": {target}}), http.StatusBadRequest)
@@ -127,9 +127,9 @@ func TestHubBackupFailureCodes(t *testing.T) {
 	} {
 		t.Run(strings.SplitN(tc.err, ":", 2)[0], func(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
-			app.hubBackup = func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
+			app.upgradeServer.SetHubBackupForTest(func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
 				return hubupgrade.BackupReceipt{}, &hubBackupError{tc.err}
-			}
+			})
 			receipt := decodeHubBackup(t, b.post(hubBackupPath,
 				url.Values{"target_version": {"1.0.1"}}), tc.status)
 			if receipt.OK || receipt.Status == "staged" ||
@@ -153,10 +153,10 @@ func (e *hubBackupError) Error() string { return e.text }
 func TestHubBackupCallbacksUseTheStore(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	var got hubupgrade.BackupConfig
-	app.hubBackup = func(_ context.Context, cfg hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
+	app.upgradeServer.SetHubBackupForTest(func(_ context.Context, cfg hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
 		got = cfg
 		return hubupgrade.BackupReceipt{Status: "staged", OperationID: strings.Repeat("b", 32)}, nil
-	}
+	})
 	decodeHubBackup(t, b.post(hubBackupPath, url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
 
 	ctx := context.Background()
@@ -195,10 +195,10 @@ func TestHubBackupRouteDoesNotReadTheApprovalBit(t *testing.T) {
 		record.IrreversibleApproved = true
 	})
 	var got hubupgrade.BackupConfig
-	app.hubBackup = func(_ context.Context, cfg hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
+	app.upgradeServer.SetHubBackupForTest(func(_ context.Context, cfg hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
 		got = cfg
 		return hubupgrade.BackupReceipt{Status: "staged", OperationID: strings.Repeat("e", 32), IntegrityOK: true}, nil
-	}
+	})
 	receipt := decodeHubBackup(t, b.post(hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "staged" {

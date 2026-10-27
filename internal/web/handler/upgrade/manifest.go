@@ -1,4 +1,4 @@
-package handler
+package upgrade
 
 import (
 	"encoding/json"
@@ -17,17 +17,17 @@ import (
 // anchor. No query parameter or request field selects an architecture or a
 // version.
 func (s *Server) agentManifest(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.nodeServer.AgentAuth(w, r); !ok {
+	if _, ok := s.nodeAuth.AgentAuth(w, r); !ok {
 		return
 	}
 	set, err := upgrade.ForArchSet()
 	if err != nil {
-		s.nodeServer.AgentFail(w, r, 500, "MANIFEST_UNAVAILABLE", "当前构建没有固定的双架构发行 manifest。", "请在受支持的 Debian 架构上重新构建 Hub。")
+		s.nodeAuth.AgentFail(w, r, 500, "MANIFEST_UNAVAILABLE", "当前构建没有固定的双架构发行 manifest。", "请在受支持的 Debian 架构上重新构建 Hub。")
 		return
 	}
 	body, err := json.Marshal(set)
 	if err != nil {
-		s.nodeServer.AgentFail(w, r, 500, "MANIFEST_UNAVAILABLE", "发行 manifest 无法编码。", "请重新构建 Hub。")
+		s.nodeAuth.AgentFail(w, r, 500, "MANIFEST_UNAVAILABLE", "发行 manifest 无法编码。", "请重新构建 Hub。")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

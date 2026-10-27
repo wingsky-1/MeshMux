@@ -59,13 +59,13 @@ func TestApplyReceipt(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("a", 32)
 	var got hubupgrade.HandoffConfig
-	app.hubApply = func(_ context.Context, cfg hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
+	app.upgradeServer.SetHubApplyForTest(func(_ context.Context, cfg hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 		got = cfg
 		return hubupgrade.HandoffReceipt{
 			Status: "queued", OperationID: cfg.OperationID,
 			TargetVersion: "1.0.1", PackageSHA256: strings.Repeat("b", 64),
 		}, nil
-	}
+	})
 	receipt := decodeHubApply(t, b.post(hubApplyPath,
 		url.Values{"operation_id": {operationID}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "queued" || receipt.OperationID != operationID ||
@@ -98,10 +98,10 @@ func TestApplyReceipt(t *testing.T) {
 func TestApplyRejectsMalformedOperation(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	called := false
-	app.hubApply = func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
+	app.upgradeServer.SetHubApplyForTest(func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 		called = true
 		return hubupgrade.HandoffReceipt{}, nil
-	}
+	})
 	for _, id := range []string{"", "latest", strings.Repeat("A", 32), strings.Repeat("a", 31), "../" + strings.Repeat("a", 29)} {
 		receipt := decodeHubApply(t, b.post(hubApplyPath,
 			url.Values{"operation_id": {id}}), http.StatusBadRequest)
@@ -134,9 +134,9 @@ func TestApplyFailureCodes(t *testing.T) {
 	} {
 		t.Run(tc.code, func(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
-			app.hubApply = func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
+			app.upgradeServer.SetHubApplyForTest(func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 				return hubupgrade.HandoffReceipt{}, &hubApplyError{code: tc.code}
-			}
+			})
 			receipt := decodeHubApply(t, b.post(hubApplyPath,
 				url.Values{"operation_id": {strings.Repeat("a", 32)}}), tc.status)
 			if receipt.OK || receipt.Status == "queued" || receipt.ErrorCode != tc.code {
@@ -240,7 +240,7 @@ func TestNewRunsStartupReconcile(t *testing.T) {
 // stops it.
 func TestReconcileTickerAdvancesJournal(t *testing.T) {
 	app, _ := testApp(t)
-	app.reconcileInterval = time.Millisecond
+	app.upgradeServer.SetReconcileIntervalForTest(time.Millisecond)
 	operationID := strings.Repeat("1", 32)
 	if err := hubupgrade.WriteOp(app.Store.Dir, hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
@@ -250,7 +250,7 @@ func TestReconcileTickerAdvancesJournal(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	app.startHubUpgradeReconcile(t.Context())
+	app.upgradeServer.StartHubUpgradeReconcile(t.Context())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		op, ok, err := hubupgrade.ReadOp(app.Store.Dir, operationID, os.Geteuid())
@@ -262,7 +262,7 @@ func TestReconcileTickerAdvancesJournal(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	app.stopHubUpgradeReconcile()
+	app.upgradeServer.StopHubUpgradeReconcile()
 }
 
 // plantWebVerifiedRecord writes one readable per-operation generation whose
@@ -322,7 +322,7 @@ func TestUpgradeViewMergesJournalReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view, err := app.upgradeView(now)
+	view, err := app.upgradeServer.UpgradeView(now)
 	if err != nil {
 		t.Fatalf("upgradeView: %v", err)
 	}

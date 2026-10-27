@@ -104,7 +104,7 @@ func TestUpgradePageWithoutNodesIsExplicit(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "尚未纳管节点") {
 		t.Fatal("empty Hub did not state that there is nothing to show")
 	}
-	view, err := app.upgradeView(app.Now())
+	view, err := app.upgradeServer.UpgradeView(app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestStagedReadbackIsTheNewestHealthyStage(t *testing.T) {
 // revisions come from the store's active rows, not from the manifest.
 func TestUpgradePolicyRevisionsReadLiveLayers(t *testing.T) {
 	app, _ := testApp(t)
-	view, err := app.upgradeView(app.Now())
+	view, err := app.upgradeServer.UpgradeView(app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

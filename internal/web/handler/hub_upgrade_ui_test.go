@@ -19,7 +19,7 @@ import (
 
 func plantHubUpgradePage(t *testing.T, app *Server, state hubupgrade.State) (string, backup.Record) {
 	t.Helper()
-	app.hubResultsDir = t.TempDir()
+	app.upgradeServer.SetHubResultsDirForTest(t.TempDir())
 	operationID := strings.Repeat("a", 32)
 	_, record := hubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
 		record.IrreversibleApproved = true
@@ -33,7 +33,7 @@ func plantHubUpgradePage(t *testing.T, app *Server, state hubupgrade.State) (str
 	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hubupgrade.WriteResult(app.hubResultsDir, hubupgrade.Result{
+	if _, err := hubupgrade.WriteResult(app.upgradeServer.HubResultsDirValueForTest(), hubupgrade.Result{
 		Schema: hubupgrade.ResultSchema, OperationID: operationID,
 		Phase: hubupgrade.ResultFailed, ErrorCode: "HUB_SHARED_BINARY_REPIN_INCOMPLETE",
 		TargetVersion: "1.0.1", PackageSHA256: strings.Repeat("c", 64),
