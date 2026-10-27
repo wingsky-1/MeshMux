@@ -5,6 +5,7 @@ on:
       - 'internal/cli/install/**'
       - 'internal/core/node/**'
       - 'internal/core/node/protocol/**'
+      - 'internal/core/subscription/**'
       - 'internal/protocol/**'
       - 'internal/web/**'
       - 'cmd/meshmux/**'
@@ -38,6 +39,7 @@ jobs:
           mkdir -p .ci/bin
           go test -c -o .ci/bin/install.test ./internal/cli/install
           go test -c -o .ci/bin/node.test ./internal/core/node
+          go test -c -o .ci/bin/subscription.test ./internal/core/subscription
           go test -c -o .ci/bin/web.test ./internal/web
           go test -c -o .ci/bin/web-handler.test ./internal/web/handler
           go build -o .ci/bin/meshmux-web ./cmd/meshmux-web
