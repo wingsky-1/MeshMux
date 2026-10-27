@@ -18,7 +18,7 @@ func composeFixture(t *testing.T, nodeID, name string, sortOrder int) ComposeLin
 	return ComposeLine{Line: line, Credential: credential}
 }
 
-// composePins is the version-locked artifact set of the composer tests. The
+// composePins is the optional artifact metadata of the composer tests. The
 // URLs use example.invalid on purpose: `sing-box check` validates the document
 // shape, never fetches the artifact.
 func composePins() RuleSetPin {
@@ -29,8 +29,8 @@ func composePins() RuleSetPin {
 	}
 }
 
-// composeRules is a small library selection covering the three actions and the
-// two matcher families that need a pin.
+// composeRules is a small library selection covering the three actions, both
+// pin-carrying matcher families and one bare geo identifier.
 func composeRules() []ComposeRule {
 	pin := composePins()
 	return []ComposeRule{
@@ -48,7 +48,7 @@ func composeRules() []ComposeRule {
 // id, so the artifact can be re-derived on every download.
 func TestComposeSubscriptionIsByteDeterministic(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
-	out := []ComposeOut{{OutID: "22222222222222222222222222222222", DisplayName: "东京 Out", Server: "out.example.invalid", Port: 443}}
+	out := []ComposeOut{{OutID: "22222222222222222222222222222222", DisplayName: "东京 Out", Server: "out.example.invalid", Port: 443, LinkKey: goldenLinkKey}}
 	rules := composeRules()
 	network := []ComposeNetwork{{DeviceID: "33333333333333333333333333333333", DisplayName: "iPad"}}
 
@@ -66,49 +66,60 @@ func TestComposeSubscriptionIsByteDeterministic(t *testing.T) {
 	if string(first.Mihomo) != string(second.Mihomo) {
 		t.Fatal("mihomo document is not byte-identical")
 	}
-	if len(first.LineRoutes) != len(second.LineRoutes) {
-		t.Fatalf("line routes = %d / %d", len(first.LineRoutes), len(second.LineRoutes))
+	// The Line publishes no route for a subscription any more: the Out is a
+	// client-side hop, so the retired field stays empty.
+	if len(first.LineRoutes) != 0 || len(second.LineRoutes) != 0 {
+		t.Fatalf("line routes = %d / %d, want none", len(first.LineRoutes), len(second.LineRoutes))
 	}
-	for index := range first.LineRoutes {
-		if string(first.LineRoutes[index].Fragment) != string(second.LineRoutes[index].Fragment) {
-			t.Fatal("a Line route fragment is not byte-identical")
-		}
-	}
-	if len(network) != 1 || len(first.LineRoutes) != 1 {
+	if len(network) != 1 {
 		t.Fatal("the network selection must not block the artifact")
 	}
 }
 
-// TestComposeSubscriptionOutSelectsServerRoute pins the Out contract: a
-// subscription that selects an Out renders the Line server route with the
-// selected Out tag, so the Line egress can never silently stay direct.
-func TestComposeSubscriptionOutSelectsServerRoute(t *testing.T) {
+// TestComposeSubscriptionRendersOutIntoClientDocuments pins the client-chain
+// contract: a selected Out becomes one egress in both client documents and the
+// egress every proxy rule names, so the client hops Line -> Out itself and the
+// Line publishes no route at all.
+func TestComposeSubscriptionRendersOutIntoClientDocuments(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
-	out := []ComposeOut{{OutID: "22222222222222222222222222222222", DisplayName: "东京 Out", Server: "out.example.invalid", Port: 443}}
+	out := []ComposeOut{{OutID: "22222222222222222222222222222222", DisplayName: "东京 Out", Server: "out.example.invalid", Port: 443, LinkKey: goldenLinkKey}}
 
 	documents, diagnostics := ComposeSubscription(lines, out, composeRules(), nil)
 	if anyBlocking(diagnostics) {
 		t.Fatalf("unexpected blocking diagnostics: %+v", diagnostics)
 	}
-	if len(documents.LineRoutes) != 1 || documents.LineRoutes[0].NodeID != lines[0].Line.NodeID {
-		t.Fatalf("line routes = %+v, want one route for the selected Line", documents.LineRoutes)
+	if len(documents.LineRoutes) != 0 {
+		t.Fatalf("line routes = %+v, want none (the Line no longer forwards)", documents.LineRoutes)
 	}
-	fragment := string(documents.LineRoutes[0].Fragment)
-	// The Out is the egress of the proxy rules only: the final egress stays the
-	// Line, so selecting an Out never silently double-hops all traffic.
-	for _, required := range []string{`"outbound": "out"`, `"outbound": "direct"`, `"outbound": "block"`, `"final": "direct"`} {
-		if !strings.Contains(fragment, required) {
-			t.Fatalf("Line route misses %q:\n%s", required, fragment)
+	client := string(documents.SingBox)
+	// The client document keeps the Line outbound and grows exactly one Out
+	// egress that dials the Out endpoint with the link key.
+	for _, required := range []string{
+		`"tag": "香港 01 [11111111111111111111111111111111]"`,
+		`"type": "shadowsocks"`, `"tag": "out"`, `"server": "out.example.invalid"`,
+		`"method": "2022-blake3-aes-128-gcm"`, `"password": "` + goldenLinkKey + `"`,
+		`"outbound": "out"`,
+	} {
+		if !strings.Contains(client, required) {
+			t.Fatalf("sing-box document misses %q:\n%s", required, client)
 		}
 	}
-	// The client document keeps the Line labels: an Out is a Line egress
-	// decision and never a client outbound.
-	client := string(documents.SingBox)
-	if !strings.Contains(client, `"tag": "香港 01 [11111111111111111111111111111111]"`) {
-		t.Fatalf("client document lost the Line outbound:\n%s", client)
+	// The Out is the egress of the proxy rules only: the final egress stays the
+	// Line selector, so unmatched traffic never silently leaves through the Out.
+	if !strings.Contains(client, `"final": "meshmux-selector"`) {
+		t.Fatalf("the final egress is not the Line selector:\n%s", client)
 	}
-	if strings.Contains(client, "out.example.invalid") {
-		t.Fatal("the client document leaked the Out endpoint")
+	mihomo := string(documents.Mihomo)
+	for _, required := range []string{
+		`- name: "out"`, `type: "ss"`, `cipher: "2022-blake3-aes-128-gcm"`,
+		`password: "` + goldenLinkKey + `"`, `- "RULE-SET,ai@20261026,out"`,
+	} {
+		if !strings.Contains(mihomo, required) {
+			t.Fatalf("mihomo document misses %q:\n%s", required, mihomo)
+		}
+	}
+	if !strings.Contains(mihomo, `- "MATCH,PROXY"`) {
+		t.Fatalf("the mihomo final rule is not the Line group:\n%s", mihomo)
 	}
 }
 
@@ -118,7 +129,7 @@ func TestComposeSubscriptionOutSelectsServerRoute(t *testing.T) {
 // pinned binary is available.
 func TestComposeSubscriptionRulesReachBothDocuments(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
-	out := []ComposeOut{{OutID: "22222222222222222222222222222222", DisplayName: "东京 Out", Server: "out.example.invalid", Port: 443}}
+	out := []ComposeOut{{OutID: "22222222222222222222222222222222", DisplayName: "东京 Out", Server: "out.example.invalid", Port: 443, LinkKey: goldenLinkKey}}
 	documents, diagnostics := ComposeSubscription(lines, out, composeRules(), nil)
 	if anyBlocking(diagnostics) {
 		t.Fatalf("unexpected blocking diagnostics: %+v", diagnostics)
@@ -135,7 +146,7 @@ func TestComposeSubscriptionRulesReachBothDocuments(t *testing.T) {
 	mihomo := string(documents.Mihomo)
 	for _, required := range []string{
 		`- "RULE-SET,geosite-cn@20261026,DIRECT"`,
-		`- "RULE-SET,ai@20261026,PROXY"`,
+		`- "RULE-SET,ai@20261026,out"`,
 		`- "DOMAIN-SUFFIX,ads.example.invalid,REJECT"`,
 		`rule-providers:`, `- "MATCH,PROXY"`,
 	} {
@@ -159,30 +170,97 @@ func TestComposeSubscriptionRulesReachBothDocuments(t *testing.T) {
 	if output, err := exec.Command(binary, "check", "-c", clientPath).CombinedOutput(); err != nil {
 		t.Fatalf("sing-box refused the composed client document: %v\n%s", err, output)
 	}
-	linePath := filepath.Join(dir, "line.json")
-	lineDocument := []byte(`{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"},{"type":"block","tag":"out"},{"type":"block","tag":"block"}],"route":`)
-	lineDocument = append(lineDocument, documents.LineRoutes[0].Fragment...)
-	lineDocument = append(lineDocument, '}')
-	if err := os.WriteFile(linePath, lineDocument, 0o600); err != nil {
-		t.Fatal(err)
+}
+
+// TestComposeSubscriptionRendersBareRuleSetWithoutPin pins the "no pin" model:
+// a geo or rule-set rule without artifact metadata is assembled exactly as the
+// operator configured it. The tag is the bare identifier, no remote artifact is
+// declared, and nothing blocks — the Hub pre-checks shapes, not the artifact.
+func TestComposeSubscriptionRendersBareRuleSetWithoutPin(t *testing.T) {
+	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
+	rules := []ComposeRule{
+		{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet, Values: []string{"ai"}},
+		{StableKey: "custom-cn", Version: 1, Action: ActionDirect, Kind: MatcherGeoSite, Values: []string{"cn"}},
 	}
-	if output, err := exec.Command(binary, "check", "-c", linePath).CombinedOutput(); err != nil {
-		t.Fatalf("sing-box refused the composed Line route: %v\n%s", err, output)
+	documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
+	if anyBlocking(diagnostics) {
+		t.Fatalf("a rule without a pin blocked the artifact: %+v", diagnostics)
+	}
+	singBox := string(documents.SingBox)
+	// The bare identifiers are rendered as configured, with no version suffix
+	// and no rule_set declaration.
+	for _, required := range []string{`"rule_set": [`, `"ai"`, `"geosite-cn"`} {
+		if !strings.Contains(singBox, required) {
+			t.Fatalf("sing-box document misses %q:\n%s", required, singBox)
+		}
+	}
+	if strings.Contains(singBox, "@") {
+		t.Fatalf("an unpinned tag grew a version suffix:\n%s", singBox)
+	}
+	if strings.Contains(singBox, "rulesets.example.invalid") {
+		t.Fatalf("an unpinned rule declared a remote artifact:\n%s", singBox)
+	}
+	mihomo := string(documents.Mihomo)
+	for _, required := range []string{`- "RULE-SET,ai,PROXY"`, `- "RULE-SET,geosite-cn,DIRECT"`} {
+		if !strings.Contains(mihomo, required) {
+			t.Fatalf("mihomo document misses %q:\n%s", required, mihomo)
+		}
+	}
+	if strings.Contains(mihomo, "rule-providers:") {
+		t.Fatalf("an unpinned rule declared a rule provider:\n%s", mihomo)
 	}
 }
 
-// TestComposeSubscriptionRefusesUnpinnedRuleSet pins the version lock: a geo
-// or ruleset rule without a pinned artifact is a blocking diagnostic and no
-// document is emitted.
-func TestComposeSubscriptionRefusesUnpinnedRuleSet(t *testing.T) {
+// TestComposeSubscriptionRendersPinnedRuleSetWithVersion pins the other half:
+// a well-formed pin still adds the version to the tag and declares its source,
+// so an operator who locks a version keeps that lock in the client document.
+func TestComposeSubscriptionRendersPinnedRuleSetWithVersion(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
-	rules := []ComposeRule{{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet, Values: []string{"ai"}}}
-	documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
-	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 {
-		t.Fatal("an unpinned ruleset produced a document")
+	pin := composePins()
+	rules := []ComposeRule{
+		{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet,
+			Values: []string{"ai"}, Pins: map[string]RuleSetPin{"ai": pin}},
 	}
-	if !hasBlocking(diagnostics, "COMPOSE_RULESET_UNPINNED") {
-		t.Fatalf("diagnostics = %+v, want a blocking COMPOSE_RULESET_UNPINNED", diagnostics)
+	documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
+	if anyBlocking(diagnostics) {
+		t.Fatalf("a pinned rule blocked the artifact: %+v", diagnostics)
+	}
+	for _, required := range []string{`"ai@20261026"`, pin.Source} {
+		if !strings.Contains(string(documents.SingBox), required) {
+			t.Fatalf("sing-box document misses %q:\n%s", required, documents.SingBox)
+		}
+	}
+	if !strings.Contains(string(documents.Mihomo), `- "RULE-SET,ai@20261026,PROXY"`) {
+		t.Fatalf("mihomo document lost the versioned tag:\n%s", documents.Mihomo)
+	}
+}
+
+// TestComposeSubscriptionRefusesMalformedPin pins the remaining shape check: a
+// pin that is present but malformed (mutable version, non-HTTPS source,
+// truncated digest) is a configuration defect, so it is refused instead of
+// silently rendering a different tag than the operator asked for.
+func TestComposeSubscriptionRefusesMalformedPin(t *testing.T) {
+	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
+	good := composePins()
+	cases := map[string]RuleSetPin{
+		"mutable version": {Source: good.Source, Version: "latest", SHA256: good.SHA256},
+		"plain http":      {Source: "http://rulesets.example.invalid/a.srs", Version: "1", SHA256: good.SHA256},
+		"query string":    {Source: good.Source + "?x=1", Version: "1", SHA256: good.SHA256},
+		"truncated hash":  {Source: good.Source, Version: "1", SHA256: "abc"},
+		"loopback host":   {Source: "https://127.0.0.1/a.srs", Version: "1", SHA256: good.SHA256},
+	}
+	for name, pin := range cases {
+		t.Run(name, func(t *testing.T) {
+			rules := []ComposeRule{{StableKey: "custom-ai", Version: 1, Action: ActionProxy, Kind: MatcherRuleSet,
+				Values: []string{"ai"}, Pins: map[string]RuleSetPin{"ai": pin}}}
+			documents, diagnostics := ComposeSubscription(lines, nil, rules, nil)
+			if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 {
+				t.Fatal("a malformed pin produced a document")
+			}
+			if !hasBlocking(diagnostics, "COMPOSE_RULE_INVALID") {
+				t.Fatalf("diagnostics = %+v, want a blocking COMPOSE_RULE_INVALID", diagnostics)
+			}
+		})
 	}
 }
 
@@ -191,8 +269,8 @@ func TestComposeSubscriptionRefusesUnpinnedRuleSet(t *testing.T) {
 func TestComposeSubscriptionRefusesSecondOut(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
 	outs := []ComposeOut{
-		{OutID: "22222222222222222222222222222222", Server: "out-a.example.invalid", Port: 443},
-		{OutID: "33333333333333333333333333333333", Server: "out-b.example.invalid", Port: 443},
+		{OutID: "22222222222222222222222222222222", Server: "out-a.example.invalid", Port: 443, LinkKey: goldenLinkKey},
+		{OutID: "33333333333333333333333333333333", Server: "out-b.example.invalid", Port: 443, LinkKey: goldenLinkKey},
 	}
 	documents, diagnostics := ComposeSubscription(lines, outs, nil, nil)
 	if len(documents.SingBox) != 0 {
@@ -210,7 +288,7 @@ func TestComposeSubscriptionRemindsRecordedNetwork(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, "11111111111111111111111111111111", "香港 01", 1)}
 	network := []ComposeNetwork{{DeviceID: "33333333333333333333333333333333", DisplayName: "iPad"}}
 	documents, diagnostics := ComposeSubscription(lines, nil, nil, network)
-	if len(documents.SingBox) == 0 && len(documents.Mihomo) == 0 && len(documents.LineRoutes) == 0 {
+	if len(documents.SingBox) == 0 && len(documents.Mihomo) == 0 {
 		t.Fatal("a recorded network blocked the artifact")
 	}
 	if !hasReminder(diagnostics, "COMPOSE_NETWORK_RECORDED_ONLY") {
@@ -222,7 +300,7 @@ func TestComposeSubscriptionRemindsRecordedNetwork(t *testing.T) {
 // means nothing to assemble.
 func TestComposeSubscriptionRejectsEmptySelection(t *testing.T) {
 	documents, diagnostics := ComposeSubscription(nil, nil, nil, nil)
-	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 || len(documents.LineRoutes) != 0 {
+	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 {
 		t.Fatal("an empty selection produced a document")
 	}
 	if !hasBlocking(diagnostics, "COMPOSE_NO_LINES") {

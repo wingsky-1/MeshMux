@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
@@ -104,18 +103,6 @@ func (v *fixturePublishVerifier) check(gate fixtureGate, run fixtureGateRun, doc
 		return "", errors.New(gate.rejected + ": " + gate.binary + " refused the assembled document")
 	}
 	return gate.binary + " " + gate.version + " accepted the assembled document", nil
-}
-
-// hasSingBoxDocument reports whether one checked document contains needle.
-func (v *fixturePublishVerifier) hasSingBoxDocument(needle string) bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	for _, document := range v.singBoxDocs {
-		if strings.Contains(string(document), needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func (v *fixturePublishVerifier) counts() (int, int) {

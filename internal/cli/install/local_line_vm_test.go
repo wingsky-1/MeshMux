@@ -175,9 +175,12 @@ const (
 )
 
 var (
-	localLineVMCSRFPattern    = regexp.MustCompile(`<input type="hidden" name="csrf" value="([A-Za-z0-9_\-.]+)"`)
-	localLineVMNodeIDPattern  = regexp.MustCompile(`Node ID（不可变）</dt><dd><code[^>]*>([0-9a-f]{32})</code>`)
-	localLineVMPairingPattern = regexp.MustCompile(`一次性配对码</dt><dd><code[^>]*>([A-Za-z0-9_-]{43})</code>`)
+	localLineVMCSRFPattern = regexp.MustCompile(`<input type="hidden" name="csrf" value="([A-Za-z0-9_\-.]+)"`)
+	// The pending Line page is the beginner-facing view: the node ID and the
+	// one-time pairing code are two <dt>/<dd> rows of one details list, and
+	// both values live in a <code> element an operator can copy.
+	localLineVMNodeIDPattern  = regexp.MustCompile(`<dt>Node ID</dt><dd><code[^>]*>([0-9a-f]{32})</code>`)
+	localLineVMPairingPattern = regexp.MustCompile(`<dt>一次性配对码</dt><dd><code[^>]*>([A-Za-z0-9_-]{43})</code>`)
 	localLineVMTokenPattern   = regexp.MustCompile(`<pre class="sub-secret">([A-Za-z0-9_-]{48})</pre>`)
 )
 

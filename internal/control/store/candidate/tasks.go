@@ -10,16 +10,9 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
-// Store is the candidate/task handle. The root store embeds one and wires the
-// Out authorization derivation; a domain that only reads candidates may build
-// one with a nil OutAllowlist.
+// Store is the candidate/task handle. The root store embeds one.
 type Store struct {
 	DB *sql.DB
-
-	// OutAllowlist derives the source authorization of one Out inside the
-	// caller's transaction. Publishing an Out chain without it would enqueue a
-	// task whose guard the Hub cannot prove, so a nil value is a refusal.
-	OutAllowlist func(tx *sql.Tx, outID string) ([]string, error)
 }
 
 // enqueueTaskAt persists a validated task with exact-envelope idempotency and a

@@ -1,5 +1,23 @@
 package node
 
+// The egress facts of one Line.
+//
+// A Line's server-side configuration carries its listener and user set only: the
+// egress lives in the client document the subscriber downloads. These facts are
+// therefore a routing projection, not a publish gate:
+//
+//   - no egress selected: the Line's clients egress directly, which is a
+//     configured state (the Out-free deployment), not a degradation;
+//   - a managed Out selected: available by link-key admission. The Hub publishes
+//     the Out's dial body and key in its own candidate; the client presents the
+//     key, so there is no per-Line authorization to prove;
+//   - an external HTTP proxy selected: available as the operator's declaration,
+//     never as a proven egress (Ruling R11);
+//   - a selected egress without a dial body: unavailable with a stable code,
+//     because the client document could not name an endpoint.
+//
+// This file only reads.
+
 import (
 	"database/sql"
 	"errors"
@@ -9,11 +27,40 @@ import (
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
-// OutEgressFactsTx is the transaction-scoped Out projection of one Line. It is
-// the single derivation both the read-only OutEgressFacts projection and the
-// route resolver use, so the publish gate, the composer and an implicit route
-// publication can never disagree about whether the Out is usable.
+// OutEgressFacts is the read-only Out half of one egress decision. It carries no
+// address, allowlist entry or credential.
+type OutEgressFacts struct {
+	LineID string `json:"line_id"`
+	// OutID is the selected egress, empty when the Line's clients egress
+	// directly.
+	OutID string `json:"out_id,omitempty"`
+	// Configured is true when at least one subscription selects an egress for
+	// this Line. A false value means "direct by configuration", never "the Out
+	// broke".
+	Configured bool `json:"configured"`
+	// Available is true when the client document can name a usable endpoint: a
+	// managed Out with configured transport (link-key admission), or an external
+	// HTTP proxy the operator declared. The external case is a declaration, not
+	// a proof; ExternalDeclared and Code distinguish the two.
+	Available bool `json:"available"`
+	// ExternalDeclared is true only for the external HTTP proxy egress: the Hub
+	// has no Agent and no readback for it, so "available" is the operator's own
+	// endpoint. Code carries CodeLineEgressExternalDeclared in that state.
+	ExternalDeclared bool `json:"external_declared,omitempty"`
+	// Code is the stable reason when Configured is true and Available is false:
+	// OUT_NOT_CONFIGURED (the selected egress has no dial body) or the
+	// declaration code for an external proxy.
+	Code string `json:"code,omitempty"`
+}
+
+// OutEgressFactsTx is the transaction-scoped egress projection of one Line. It
+// is the single derivation both the read-only projection and the policy layer
+// consume, so a projection can never disagree with the client artifact about
+// which egress the selection names.
 func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
+	if !validNodeID(lineID) {
+		return OutEgressFacts{}, common.ErrLineIDInvalid()
+	}
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -23,7 +70,7 @@ func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 		return OutEgressFacts{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if role != string(coredomain.RoleEdge) {
-		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an ai egress")
+		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an egress")
 	}
 	facts := OutEgressFacts{LineID: lineID}
 	selected, err := selectedEgressIDsForLineTx(tx, lineID)
@@ -32,58 +79,50 @@ func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 	}
 	if len(selected) == 0 {
 		// No egress is the configured direct egress. This is the only path that
-		// is allowed to send AI traffic down the Line without an explicit
+		// is allowed to send traffic down the Line without an explicit
 		// administrator decision.
 		return facts, nil
 	}
 	facts.Configured = true
 	facts.OutID = selected[0]
-	outs, err := enabledOutIDsForLineTx(tx, lineID)
+	egressRole, err := nodeRoleTx(tx, selected[0])
 	if err != nil {
 		return OutEgressFacts{}, err
 	}
-	if len(outs) == 0 {
-		// The slot holds an external HTTP proxy (Ruling R11). It has no ACL, no
-		// Agent, no readback and no machine controller that could apply or prove
-		// one, so there is no Hub-side fact to wait for. The out tag stays
-		// available, but only as the operator's declaration: ExternalDeclared is
-		// set and Code names the declaration so no caller can read this as a
-		// proven managed egress. The egress body is the stored http outbound.
+	switch egressRole {
+	case string(common.NodeRoleOut):
+		// The Out admits by link key; the only thing the client document still
+		// needs is a dial body to name.
+		if _, configured, err := outEgressTx(tx, selected[0]); err != nil {
+			return OutEgressFacts{}, err
+		} else if configured {
+			facts.Available = true
+		} else {
+			facts.Code = CodeOutSyncPending
+		}
+	case string(common.NodeRoleHTTP):
+		// The egress is the operator's declared proxy (Ruling R11). There is no
+		// Agent and no readback, so the state is the declaration itself.
 		facts.Available = true
 		facts.ExternalDeclared = true
 		facts.Code = CodeLineEgressExternalDeclared
-		return facts, nil
-	}
-	// An Out that stopped reporting cannot apply or prove the authorization.
-	// The synchronization projection alone would call a confirmed chain
-	// healthy, so the offline window is checked separately and reported as
-	// OUT_OFFLINE instead of a stale healthy.
-	for _, outID := range outs {
-		offline, err := SubscriberLineNodeOfflineTx(tx, outID, now)
-		if err != nil {
-			return OutEgressFacts{}, err
-		}
-		if offline {
-			facts.Code = "OUT_OFFLINE"
-			return facts, nil
-		}
-	}
-	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
-	if err != nil {
-		return OutEgressFacts{}, err
-	}
-	switch state {
-	case LineEgressHealthy:
-		facts.Available = true
-		facts.Code = ""
-	case LineEgressDirect:
-		// The bindings are enabled but the projection reports direct, which
-		// cannot happen for a real enabled binding. Fail closed rather than
-		// claiming a healthy Ai path the Out never confirmed.
-		facts.Code = CodeOutSyncPending
 	default:
-		facts.Available = false
-		facts.Code = firstStableCode(code, CodeOutSyncPending)
+		return OutEgressFacts{}, errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected as an egress")
 	}
 	return facts, nil
+}
+
+// OutEgressFacts projects one Line's egress preconditions at one clock.
+//
+// The Line must exist with the immutable edge role; a wrong role or an unknown
+// id is rejected instead of being reported as "no Out", because silently
+// treating an Out node as a Line would hide an operator mistake behind a
+// healthy-looking direct egress.
+func (s *Store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, error) {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return OutEgressFacts{}, errors.New(common.CodeDatabaseUnavailable)
+	}
+	defer tx.Rollback()
+	return OutEgressFactsTx(tx, lineID, now)
 }

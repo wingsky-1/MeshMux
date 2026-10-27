@@ -47,7 +47,7 @@ templ PoliciesPage(p PageData, v PolicyPageView) {
 							if v.Out == PolicyOutActive {
 								<span class="badge accent">Out 已接入</span>
 							} else if v.Out == PolicyOutDegraded {
-								<span class="badge failure">Out 故障 · fail-closed</span>
+								<span class="badge failure">Out 故障</span>
 							} else if v.Out == PolicyOutExternal {
 								<span class="badge accent">外部声明 · HTTP 代理</span>
 							} else {
@@ -55,11 +55,11 @@ templ PoliciesPage(p PageData, v PolicyPageView) {
 							}
 						</div>
 						if v.Out == PolicyOutActive {
-							<p class="hint">指定分流优先经 Out 直出；Out 不可用时 fail-closed，不会自动改走 Line。</p>
+							<p class="hint">指定分流优先经 Out 直出；Out 不可用时拒绝转发，不会自动改走 Line。</p>
 						} else if v.Out == PolicyOutDegraded {
-							<p class="hint">Out 健康检查未通过：指定到 Out 的分流拒绝转发，不隐式回落 Line；恢复后自动退出该状态。</p>
+							<p class="hint">Out 健康检查未通过：指定到 Out 的流量拒绝转发，不自动改走 Line；恢复后自动退出该状态。</p>
 						} else if v.Out == PolicyOutExternal {
-							<p class="hint" title="Hub 没有它的 ACL、回读或控制器（LINE_EGRESS_EXTERNAL_DECLARED）。链路是否真的通，只能由该代理自己的日志与客户端实测证明。">出口位是外部 HTTP 代理：这是<b>操作员声明</b>，不是已证明可用的出口。</p>
+							<p class="hint" title="这是操作员填写的声明，不是已验证的结果；链路是否真的通，以该代理自己的日志与你的实测为准。">出口是外部 HTTP 代理：是否可用以你的实测为准。</p>
 						} else {
 							<p class="hint">Out 是可选节点，未配置不是错误；指定分流按默认路径走 Line 直出。</p>
 						}
@@ -68,8 +68,8 @@ templ PoliciesPage(p PageData, v PolicyPageView) {
 					<div class="policy-split">
 						<section class="panel">
 							<div class="panel-heading"><h2>客户端层 · 设备侧分流</h2><span class="badge">{ PolicyPreviewLabel(len(v.Client), v.ClientDefault) }</span></div>
-							<p class="muted">客户端层当前<b>没有消费者</b>：标准订阅由固定导出器按 Line 与凭据生成，不读取客户端层，也不包含这些规则。</p>
-							<p class="hint" title="创建/改版/激活/撤销均返回 POLICY_LAYER_RETIRED；既有 revision 只读预览，exceptions/ssids 字段已退役。">客户端层已停写；设备侧分流请在<b>规则库</b>维护（六种匹配器，暂不含 SSID）。</p>
+							<p class="muted">客户端层只是预览：标准订阅下载不包含这些规则；设备侧分流请在<b>规则库</b>维护。</p>
+							<p class="hint" title="客户端层已停写：创建/改版/激活/撤销均返回 POLICY_LAYER_RETIRED；既有 revision 只读预览，exceptions/ssids 字段已退役。">客户端层已停写。</p>
 							<ul class="policy-rules">
 								for _,rule:=range v.Client {
 									<li>

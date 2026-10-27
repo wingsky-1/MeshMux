@@ -3,11 +3,11 @@ package store_test
 // The aggregation invariants that this package owns, proven at the
 // orchestration layer rather than in the composer:
 //
-//   - a rule whose artifact is not pinned by the active server policy is a
-//     blocking finding, so approval (not just rendering) requires the pin;
+//   - a rule is assembled exactly as configured: the Hub performs no artifact
+//     pin or content check, so approval never depends on a server-side pin;
 //   - the download's convergence gate still runs before the approved artifact is
 //     served;
-//   - the pinned artifact digest is never stored as bytes.
+//   - the approved artifact digest is never stored as bytes.
 
 import (
 	"context"
@@ -18,33 +18,38 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
-func TestRuleWithoutAnActivePinBlocksApproval(t *testing.T) {
+func TestRuleAssemblesWithoutAServerSidePin(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
 
-	// A geo matcher needs an artifact pin. No active server policy revision
-	// exists yet, so the pin source is empty and the composer refuses it: the
-	// approval must therefore block and write nothing.
+	// The store no longer reads an artifact lock from the active server policy:
+	// the selected revision is assembled exactly as configured. The rule here is
+	// a plain domain matcher, so the assertion holds for the composer as it is
+	// now; the artifact-pin retirement itself is proven in the composer's own
+	// tests.
+	if _, err := s.DB.Exec(`INSERT INTO policy_rules(stable_key, version, name, action, matcher_kind, matcher_value, origin, created_at, updated_at)
+	  VALUES('custom-domain','1','AI','proxy','domain','["ai.example.invalid"]','custom',?,?)`, now.Unix(), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	// No active policy revision exists at all, and the approval still proceeds:
+	// nothing in the store gates a subscription on a server-side artifact lock.
 	verifier := &selectionVerifier{}
 	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{
 		LineIDs: []string{lineID},
-		Rules:   []store.RuleRevision{{StableKey: "preset-direct-cn", Version: 1}},
+		Rules:   []store.RuleRevision{{StableKey: "custom-domain", Version: 1}},
 	}, verifier, now)
 	if err != nil {
-		t.Fatalf("a missing pin must be a diagnostic, not an error: %v", err)
+		t.Fatalf("approve: %v", err)
 	}
-	if result.Saved || !result.Preview.Blocking() {
-		t.Fatalf("result = %+v, want a blocked unsaved preview", result)
+	if result.Preview.Blocking() {
+		t.Fatalf("preview blocked on a retired pin: %+v", result.Preview.Diagnostics)
 	}
-	if code := result.Preview.Code(); code != "COMPOSE_RULESET_UNPINNED" {
-		t.Fatalf("blocking code = %q, want COMPOSE_RULESET_UNPINNED", code)
+	if !result.Saved {
+		t.Fatal("an approval with no server-side policy revision was not saved")
 	}
-	if verifier.singBoxCalls != 0 || verifier.mihomoCalls != 0 {
-		t.Fatalf("a blocked composer ran the kernel gate: %d/%d", verifier.singBoxCalls, verifier.mihomoCalls)
-	}
-	if countRows(t, s, "subscription_snapshots") != 0 {
-		t.Fatal("a pin-blocked approval wrote a snapshot")
+	if countRows(t, s, "subscription_snapshots") != 1 {
+		t.Fatal("the approval did not write exactly one snapshot")
 	}
 }
 

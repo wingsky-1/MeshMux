@@ -6,10 +6,9 @@ package node
 // edited no longer exists:
 //
 //	POST /nodes/out/bind   — selecting an Out is a subscription edit now. The
-//	                         subscription wizard owns it, and the same-Line
-//	                         consistency rule (SUBSCRIPTION_OUT_CONFLICT) lives
-//	                         there too, so a second write path could only create a
-//	                         way to violate it.
+//	                         subscription wizard owns it as the single write
+//	                         path, so this API could only create a second,
+//	                         conflicting way to edit the same choice.
 //	POST /nodes/out/unbind — a subscription that stops selecting the Out is the
 //	                         unbind, and it republishes the empty guard through
 //	                         the same store drain.
@@ -63,7 +62,7 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 状态。", "请检查数据库与服务日志后重试。"
 	default:
-		return 500, "OUT_MANAGEMENT_FAILED", "Out 操作未完成。", "请凭操作编号检查服务日志。"
+		return 500, "OUT_MANAGEMENT_FAILED", "Out 操作未完成。", "请稍后重试。"
 	}
 }
 

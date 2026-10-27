@@ -54,6 +54,11 @@ const (
 	// VLESSFlow is the only VLESS sub-protocol both the Line listener and the
 	// subscription client may name. sing-box rejects any other spelling.
 	VLESSFlow = "xtls-rprx-vision"
+	// OutLinkMethod is the pinned Shadowsocks method of the Out link. The Out
+	// inbound and the client egress a subscription renders must name the same
+	// method, otherwise the two halves of the link never complete a handshake.
+	// The value is 2022-blake3-aes-128-gcm (Ruling R7), whose key is 16 bytes.
+	OutLinkMethod = "2022-blake3-aes-128-gcm"
 	// MihomoGroupName is the single select group of a subscription document.
 	MihomoGroupName = "PROXY"
 	// MihomoDirect and MihomoReject are the Mihomo built-in egress names the
@@ -65,6 +70,50 @@ const (
 // OutEgressHTTP is the external HTTP-proxy egress kind. It is a wire value of
 // the node candidate and the subscription selection, not a node role.
 const OutEgressHTTP = "http"
+
+// MaxProxyCredentialBytes bounds one HTTP proxy username or password. Basic
+// credentials are short operator strings, never documents. It is a wire fact
+// because the stored URL splitter, the node validator and the subscription
+// composer all bound the same value.
+const MaxProxyCredentialBytes = 256
+
+// ValidProxyCredential reports whether one HTTP Basic credential is renderable:
+// valid UTF-8, at most MaxProxyCredentialBytes, and free of control characters
+// (the value reaches a kernel document and a header). An empty value is legal.
+func ValidProxyCredential(value string) bool {
+	if len(value) > MaxProxyCredentialBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if r == 0 || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// OutLinkKeyBytes is the raw length of one Out link key. The pinned
+// 2022-blake3-aes-128-gcm method requires exactly this many bytes on the dial
+// side: sing-box refuses any other length with "bad key length, required 16".
+// (Ruling R7 names 32 bytes, which the kernel's outbound gate rejects; the
+// method pins the length.) It is a wire grammar fact because the Out inbound and
+// the client egress a subscription renders must agree on it.
+const OutLinkKeyBytes = 16
+
+// ValidOutLinkKey is the link-key spelling every producer validates: canonical
+// base64-std decoding to exactly OutLinkKeyBytes. The Out inbound and the client
+// egress are the two halves of one handshake, so a second copy of this predicate
+// would let one side accept a key the other refuses.
+func ValidOutLinkKey(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(raw) != OutLinkKeyBytes {
+		return false
+	}
+	return base64.StdEncoding.EncodeToString(raw) == value
+}
 
 // Allowlisted task kinds. Anything else — including upgrade/rollback,
 // arbitrary shell, URL or path operations — must be rejected.

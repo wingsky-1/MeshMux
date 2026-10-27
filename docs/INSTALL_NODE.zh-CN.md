@@ -86,7 +86,7 @@ install out
 4. 生成空 `users` 的 VLESS baseline 候选，使用暂存 sing-box 执行 `check`；Out 还执行 `nft -c -f` 配置语法检查。固定 Debian 包安装完成后、身份与配对之前，再次执行 `fail2ban-client -t`；基线仍不合格时以 `FAIL2BAN_BASELINE_INVALID` 停止，不消费配对码。
 5. 完成配对并把节点身份以私有 `0600` 文件持久化。配对码本身不写入 identity、config 或 state。
 6. 备份即将替换的 MeshMux 受管文件，原子写入 Agent、kernel、config、unit 和 Fail2ban jail；执行 `systemd-analyze verify`、`fail2ban-client -t` 和 `systemctl daemon-reload`。
-7. Out 先应用并回读 ACL；然后启动/重启 sing-box，执行严格本机 readback，最后才启动或保持 Agent。
+7. Out 先应用并回读空 `meshmux_out` 表（清理历史 allowlist）；然后启动/重启 sing-box，执行严格本机 readback，最后才启动或保持 Agent。
 
 任何失败都以结构化 `InstallResult` 返回 `operation_id`、`stage`、`status`、稳定 `error_code` 和 recovery；`partial` 或 `failed` 返回非零。plan 成功不会被解释为安装成功。
 
@@ -130,10 +130,10 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 | `/var/lib/meshmux-agent/active-candidate.json` | 当前 active candidate 元数据 |
 | `/var/lib/meshmux-agent/staged/` | runtime 暂存目录（按 revision 保留 candidate/config；健康 apply+readback 后只保留当前 revision、上一 revision 与最近窗口，失败/回退的暂存不回收） |
 | `/var/lib/meshmux-singbox/config.json` | active sing-box 配置 |
-| `/var/lib/meshmux-agent/out.nft` | Out ACL 脚本 |
+| `/var/lib/meshmux-agent/out.nft` | Out 空表脚本（历史 allowlist 已退役） |
 | `/etc/systemd/system/meshmux-agent.service` | Agent 服务 |
 | `/etc/systemd/system/meshmux-sing-box.service` | 独立 non-root kernel 服务 |
-| `/etc/systemd/system/meshmux-out-acl.service` | Out ACL oneshot |
+| `/etc/systemd/system/meshmux-out-acl.service` | Out 空表 oneshot |
 | `/etc/fail2ban/jail.d/meshmux-node-ssh.local` | MeshMux 专属 SSH jail |
 | `/etc/systemd/journald.conf.d/99-meshmux.conf` | 宿主级 journald 配额 drop-in（`SystemMaxUse=1G`、`RuntimeMaxUse=512M`、`MaxFileSec=30day`）；共置 Line 复用 Hub 的同一副本，不重复写入 |
 | `/var/lib/meshmux-installer/state.json` | installer state 与 owned paths 台账 |
@@ -187,7 +187,7 @@ Agent 的心跳与任务拉取共用同一个 1s ticker（`defaultAgentPollInter
 
 因此 v1 baseline **没有 TLS/REALITY、没有代理用户、没有客户端凭据、没有订阅**；#7 Phase 3A 已合入（PR #19/#21/#22），v2 REALITY 候选与订阅另行交付。不得从本地 listener、plan 或 readback 推导公网端口可达、真实 VLESS/REALITY 握手成功或客户端可连接。
 
-Out 是可选组件。设计目标要求 Out 空授权默认全拒绝且仅目标端口可用；#8-B 已据此重写受管 ACL：`inet meshmux_out` 的 `input` chain 保留 `policy accept` 仅覆盖主机 SSH/回环/回程，VLESS 目标端口的 TCP/UDP drop 默认丢弃，只有 Hub 授权的 Line 源地址在 drop 之前 `accept`；`nft -j` 回读按已应用集合精确比对，任何差异为 `OUT_ACL_SOURCE_MISMATCH`。#8-D 的 `internal/route` 交付 AI 规则集版本锁与 Out 不可用 fail-closed，`DeleteOut` 单事务删路由并清 ACL。这些是源码与隔离测试证据；真实 nft readback 与 AI 双跳流量仍待隔离 Debian 13 VM 实测。`#9` 和 `#11` 不在本轮实现范围内；#11 仍是 v1.0.0 P0，需要独立实现和验收。
+Out 是可选组件。客户端链式重构后，Out 入站只认订阅随发的 link key，来源 allowlist 已退役；`inet meshmux_out` 仅保留空表，`nft -j` 只校验表存在且无规则。真实 Out/HTTP 双跳与 Mesh 流量仍待隔离环境实测；`#11` 仍是 v1.0.0 P0。
 
 ## 验收状态
 

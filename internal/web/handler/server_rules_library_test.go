@@ -146,7 +146,7 @@ func TestRulesLibraryDeleteProtectionListsSubscribers(t *testing.T) {
 	// Step one names the revision and re-renders the impacted subscriptions.
 	w := b.post("/rules/delete", url.Values{"stable_key": {"proxy-ai"}, "version": {"1"}})
 	requireStatus(t, w, http.StatusOK)
-	for _, want := range []string{"爱丽丝", "鲍勃", "确认删除", "正被 2 个订阅引用"} {
+	for _, want := range []string{"爱丽丝", "鲍勃", "删除被拒绝", "正被 2 个订阅引用"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("delete protection missing %q: %.600s", want, w.Body.String())
 		}

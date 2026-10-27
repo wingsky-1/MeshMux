@@ -138,7 +138,7 @@ func (app *Server) failPolicyWrite(w http.ResponseWriter, r *http.Request, err e
 	case store.CodePolicyPayloadRetired:
 		app.Fail(w, r, status, code, "payload 仍携带已退役的 exceptions 或 ssids 字段。", "请改为 rules 表达同一意图后重试。")
 	default:
-		app.Fail(w, r, status, code, "策略写操作未完成。", "请凭操作编号检查服务日志后重试。")
+		app.Fail(w, r, status, code, "策略写操作未完成。", "请稍后重试。")
 	}
 }
 

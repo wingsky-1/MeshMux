@@ -226,10 +226,12 @@ func NormalizeSSID(raw string) string {
 	}, raw)
 }
 
-// PinDetail validates the shape of one rule-set version lock and returns a
-// human-readable reason when it is unusable, or "" when it is valid. It never
-// performs I/O. Callers wrap the detail with their layer's stable code:
-// policy uses RULESET_PIN_INVALID, the composer uses COMPOSE_RULESET_UNPINNED.
+// PinDetail validates the shape of one rule-set artifact descriptor and
+// returns a human-readable reason when it is unusable, or "" when it is valid.
+// It never performs I/O and it is a shape check only: a layer decides what a
+// missing or malformed descriptor means. The composer treats the descriptor as
+// optional metadata (it renders the bare identifier when absent), while the
+// server policy layer refuses a reference it cannot resolve.
 func PinDetail(source, version, digest string) string {
 	if source == "" || len(source) > 512 || strings.TrimSpace(source) != source {
 		return "the source must be one exact URL"

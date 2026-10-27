@@ -131,7 +131,7 @@ templ MeshPage(p PageData, v MeshPageView) {
 							</form>
 							<dl class="details">
 								<dt>注册证据</dt><dd>只来自观测到的 Headscale Node ID。</dd>
-								<dt title="本次页面渲染的 Headscale 快照，不持久化；读取失败显示“未核对”">在线列</dt><dd>本次渲染的快照，不持久化。</dd>
+								<dt title="以本次页面查询的 Headscale 状态为准；读取失败显示“未核对”。">在线状态</dt><dd>以本次查询为准</dd>
 								<dt>最后观察</dt><dd>最近一次成功核对写入的时间。</dd>
 								<dt>客户端配置</dt><dd class="muted">代理 + Mesh 设备可生成一次性 sing-box 单 VPN 配置；真机可用性属于后续验收。</dd>
 							</dl>
@@ -236,11 +236,11 @@ templ MeshPage(p PageData, v MeshPageView) {
 									if len(d.Routes) == 0 {
 										<p class="hint">该设备尚未声明子网前缀。只有“子网路由”用途的设备可以在创建时声明前缀；没有声明就没有可批准的路由。</p>
 									} else {
-										<p class="hint" title="“已批准 / 已通告 / 已服务”来自本次渲染的同一 nodes list 快照，不持久化；意图与 operation_id 来自 Hub 记录。批准只改变 Headscale 的 approved 集合，不表示客户端已实际转发。">三列证据来自本次渲染的 Headscale 快照；批准只改变 approved 集合。</p>
+										<p class="hint" title="“已批准 / 已通告 / 已服务”来自本次渲染的同一 nodes list 快照，不持久化；意图与 operation_id 来自 Hub 记录。批准只改变 Headscale 的 approved 集合，不表示客户端已实际转发。">批准只改变路由的批准状态，不表示流量已实际转发。</p>
 										<div class="route-table-wrap">
 											<table class="route-table">
 												<thead>
-													<tr><th>前缀</th><th>MeshMux 意图</th><th>已批准 <span class="muted">approved</span></th><th>已通告 <span class="muted">available</span></th><th>已服务 <span class="muted">served</span></th><th>最后观测 / 记录</th><th>operation_id</th><th>操作</th></tr>
+													<tr><th>前缀</th><th>MeshMux 意图</th><th title=" Headscale 侧的 approved 集合">已批准</th><th title="Headscale 侧已通告（available）的路由">已通告</th><th title="Headscale 侧已服务（served）的路由">已服务</th><th>最后观测 / 记录</th><th>操作</th></tr>
 												</thead>
 												<tbody>
 													for i,rt:=range d.Routes {
@@ -274,14 +274,7 @@ templ MeshPage(p PageData, v MeshPageView) {
 																	<span class="muted">—</span>
 																}
 															</td>
-															<td><span class="badge">{ rt.ObservedLabel }</span><br/><span class="muted">{ rt.ObservedAt }</span></td>
-															<td>
-																if rt.OperationID == "" {
-																	<span class="muted">—</span>
-																} else {
-																	<code>{ rt.OperationID }</code>
-																}
-															</td>
+															<td><span class="badge" title={ "记录编号：" + rt.OperationID }>{ rt.ObservedLabel }</span><br/><span class="muted">{ rt.ObservedAt }</span></td>
 															<td>
 																<div class="route-actions">
 																	if rt.CanApprove {

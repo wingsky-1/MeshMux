@@ -1,0 +1,84 @@
+package view
+
+// OpsPage renders the 日志与诊断 page: the one page where operational detail
+// lives. Business pages (nodes, subscribers, wizard) stay beginner-readable and
+// keep every revision, readback, task-chain and error-code concept off their
+// cards; this page collects that detail as read-only diagnostics for support.
+
+import (
+	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+)
+
+templ OpsPage(p PageData, nodes []store.Node, artifact *InstallArtifact) {
+	@Document(p.Title) {
+		<a class="skip" href="#main">跳到内容</a>
+		<div class="shell">
+			<aside class="sidebar">
+				@Brand()
+				<div class="nav-label">工作空间</div>
+				<nav aria-label="主导航">
+					for _,item:=range Navigation {
+						if item.Path==p.Path {
+							<a class="active" href={ templ.SafeURL(item.Path) } aria-current="page"><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						} else {
+							<a href={ templ.SafeURL(item.Path) }><span aria-hidden="true">{ item.Icon }</span>{ item.Title }</a>
+						}
+					}
+				</nav>
+				<div class="sidebar-foot"><span class="dot"></span> 日志与诊断<small>只读 · 运维细节集中在这里</small></div>
+			</aside>
+			<div class="workspace">
+				<header class="topbar"><span>控制台 <span class="crumb">/ { p.Title }</span></span><div class="account"><span class="avatar">A</span><span>管理员</span><form action="/logout" method="post"><input type="hidden" name="csrf" value={ p.CSRF }/><button class="text-button" type="submit">退出</button></form></div></header>
+				<main id="main" class="content">
+					<div class="page-heading"><div><p class="eyebrow">MESHMUX CONSOLE</p><h1>{ p.Title }</h1></div><span class="pill">只读诊断</span></div>
+					if p.Dev {
+						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
+					}
+					<p class="subtitle">这里集中展示各节点的运维细节（版本、配置修订、任务与错误码）；业务页面不再显示这些内容。</p>
+					<section class="panel"><div class="panel-heading"><h2>节点运维细节</h2><span class="badge">{ len(nodes) } 个节点</span></div>
+					if len(nodes) == 0 {
+						<p class="muted">尚未纳管节点。</p>
+					}
+					for _, n := range nodes {
+						{{ heartbeatAt := "尚未收到" }}
+						{{ if n.LastHeartbeat != 0 { heartbeatAt = time.Unix(n.LastHeartbeat, 0).Format("2006-01-02 15:04:05") } }}
+						<article class="node-card">
+							<div class="panel-heading">
+								<h3>{ n.DisplayName }</h3>
+								if n.Offline {
+									<span class="badge failure">离线</span>
+								} else {
+									<span class="badge accent">在线</span>
+								}
+							</div>
+							<dl class="details">
+								<dt>Node ID</dt><dd><code data-copy>{ n.ID }</code></dd>
+								if n.Role != "http" {
+									<dt>声明心跳版本</dt><dd>Agent { n.AgentVersion } · kernel { n.KernelVersion }</dd>
+									<dt>回读版本</dt><dd>Agent { n.ObservedAgentVersion } · kernel { n.ObservedKernelVersion }</dd>
+									<dt>Agent SHA-256</dt><dd><code data-copy>{ n.ObservedAgentSHA256 }</code></dd>
+									<dt>内核 SHA-256</dt><dd><code data-copy>{ n.ObservedKernelSHA256 }</code></dd>
+									<dt>最新配置 / 任务</dt><dd>candidate rev { n.LatestConfigRevision } · task { n.LastTaskRevision }</dd>
+									<dt>最近回读</dt><dd>observed rev { n.ObservedRevision } · task <code>{ n.ObservedTaskOperationID }</code> · { n.ObservedAtString() }</dd>
+									<dt>最近任务</dt><dd>{ n.LastTaskKind } · { n.LastTaskStatus } · <code>{ n.LastTaskOperationID }</code></dd>
+									if n.LastTaskErrorCode != "" {
+										<dt>错误码</dt><dd><code>{ n.LastTaskErrorCode }</code></dd>
+									}
+									if n.LastFailureTaskErrorCode != "" {
+										<dt>最近失败</dt><dd>{ n.LastFailureTaskKind } · task { n.LastFailureTaskRevision } · <code>{ n.LastFailureTaskOperationID }</code> · <code>{ n.LastFailureTaskErrorCode }</code></dd>
+									}
+								}
+								<dt>最近联系</dt><dd>{ heartbeatAt }</dd>
+							</dl>
+						</article>
+					}
+					</section>
+					<section class="panel"><div class="panel-heading"><h2>SSH 监听端口预检 · 示例</h2><span class="badge failure">模拟失败</span></div><dl class="details"><dt>原因</dt><dd>示例中 SSH 实际监听端口与 jail 覆盖不一致。</dd><dt>如何恢复</dt><dd>在安装时核对 SSH 实际监听端口，与 Fail2ban 配置保持一致后重试。</dd></dl><p class="hint">本阶段不读取系统配置、不执行命令；真实任务与日志查询尚未实现。</p></section>
+					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>日志与诊断 · 开发预览</span></footer>
+				</main>
+			</div>
+		</div>
+	}
+}

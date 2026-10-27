@@ -79,37 +79,60 @@ func TestBuildClientRoutePlanMapsActions(t *testing.T) {
 	}
 }
 
-func TestBuildLineRoutePlanMapsOutDoubleHop(t *testing.T) {
+// TestBuildClientRoutePlanMapsProxyToOut pins the client-chain mapping: with a
+// selected egress every proxy rule names the Out tag, so the client hops
+// Line -> Out itself; the final egress stays the Line selector, so unmatched
+// traffic is never silently sent through the Out.
+func TestBuildClientRoutePlanMapsProxyToOut(t *testing.T) {
 	rendered, diagnostics := renderComposeRules(composeRules())
 	if hasBlockingDiagnostics(diagnostics) {
 		t.Fatalf("rules blocked: %+v", diagnostics)
 	}
-	plan := buildLineRoutePlan(rendered)
-	if plan.Final != composeEgressDirect {
-		t.Fatalf("final = %q, want the Line (direct)", plan.Final)
+	plan := buildClientRoutePlan(rendered)
+	if plan.Final != composeEgressProxy {
+		t.Fatalf("final = %q, want the Line selector", plan.Final)
 	}
-	for _, rule := range plan.Rules {
-		switch rule.Egress {
-		case composeEgressDirect, composeEgressLineOut, composeEgressBlock:
-		default:
-			t.Fatalf("line plan carries the client-only egress %q", rule.Egress)
-		}
+	line := goldenLine(goldenLineOneNodeID, "香港 01", 1)
+	block := buildLineBlock([]exportNode{{Line: line, UUID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", Label: line.DisplayName}})
+	out := buildOutEgress(&ComposeOut{OutID: goldenOutID, Server: "out.example.invalid", Port: 443, LinkKey: goldenLinkKey})
+	if out == nil {
+		t.Fatal("a selected Out built no egress")
 	}
-	fragment, err := makeLineRouteFragment(plan)
+	// Without an Out the proxy rules keep naming the selector; that is the
+	// frozen direct-subscription shape.
+	direct, err := makeStandardSingBoxDocument(composeRouterPlan{Lines: block.Outbounds, Selector: block.Selector, Route: plan})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"outbound": "out"`, `"outbound": "block"`, `"outbound": "direct"`, `"final": "direct"`} {
-		if !strings.Contains(string(fragment), want) {
-			t.Fatalf("line route fragment is missing %s:\n%s", want, fragment)
-		}
+	if !strings.Contains(string(direct), `"outbound": "meshmux-selector"`) {
+		t.Fatalf("a direct subscription lost its selector route:\n%s", direct)
 	}
-	again, err := makeLineRouteFragment(plan)
+	if strings.Contains(string(direct), `"tag": "out"`) {
+		t.Fatalf("a direct subscription grew an Out egress:\n%s", direct)
+	}
+	singBox, err := makeStandardSingBoxDocument(composeRouterPlan{
+		Lines: block.Outbounds, Selector: block.Selector, Out: out, Route: plan,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(fragment) != string(again) {
-		t.Fatal("the line route fragment is not byte-deterministic")
+	for _, want := range []string{`"outbound": "out"`, `"outbound": "direct"`, `"action": "reject"`, `"final": "meshmux-selector"`} {
+		if !strings.Contains(string(singBox), want) {
+			t.Fatalf("client document is missing %s:\n%s", want, singBox)
+		}
+	}
+	if strings.Contains(string(singBox), `"outbound": "meshmux-selector"`) {
+		t.Fatalf("a proxy rule still names the selector while an Out is selected:\n%s", singBox)
+	}
+	// Byte determinism of the whole document, not just of one fragment.
+	again, err := makeStandardSingBoxDocument(composeRouterPlan{
+		Lines: block.Outbounds, Selector: block.Selector, Out: out, Route: plan,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(singBox) != string(again) {
+		t.Fatal("the client document is not byte-deterministic")
 	}
 }
 
@@ -135,14 +158,6 @@ func TestMakersRefuseForeignMaterial(t *testing.T) {
 		code string
 	}{
 		{"mihomo endpoint", composeRouterPlan{Lines: block.Outbounds, Selector: block.Selector, Route: meshRoute, Endpoints: []composeEndpoint{endpoint}}, CodeComposeMihomoUnsupported},
-		{"mihomo line-out", composeRouterPlan{Lines: block.Outbounds, Selector: block.Selector, Route: composeRoutePlan{
-			Rules: []composeRouteRule{{Matcher: composeMatcher{Kind: MatcherDomain, Values: []string{"ai.example.invalid"}}, Egress: composeEgressLineOut}},
-			Final: composeEgressProxy,
-		}}, CodeComposeMihomoUnsupported},
-		{"mihomo block", composeRouterPlan{Lines: block.Outbounds, Selector: block.Selector, Route: composeRoutePlan{
-			Rules: []composeRouteRule{{Matcher: composeMatcher{Kind: MatcherDomain, Values: []string{"ads.example.invalid"}}, Egress: composeEgressBlock}},
-			Final: composeEgressProxy,
-		}}, CodeComposeMihomoUnsupported},
 		{"standard endpoint", composeRouterPlan{Lines: block.Outbounds, Selector: block.Selector, Route: meshRoute}, "COMPOSE_ROUTE_RENDER_FAILED"},
 	}
 	for _, tc := range cases {
@@ -173,13 +188,13 @@ func TestMakersRefuseForeignMaterial(t *testing.T) {
 
 func TestComposeSubscriptionRefusesOutWithoutProxyRule(t *testing.T) {
 	lines := []ComposeLine{composeFixture(t, goldenLineOneNodeID, "香港 01", 1)}
-	outs := []ComposeOut{{OutID: goldenOutID, Server: "out.example.invalid", Port: 443}}
+	outs := []ComposeOut{{OutID: goldenOutID, Server: "out.example.invalid", Port: 443, LinkKey: goldenLinkKey}}
 	rules := []ComposeRule{{
 		StableKey: "preset-direct-cn", Version: 1, Action: ActionDirect, Kind: MatcherGeoSite,
 		Values: []string{"cn"}, Pins: map[string]RuleSetPin{"cn": composePins()},
 	}}
 	documents, diagnostics := ComposeSubscription(lines, outs, rules, nil)
-	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 || len(documents.LineRoutes) != 0 {
+	if len(documents.SingBox) != 0 || len(documents.Mihomo) != 0 {
 		t.Fatal("an Out without a proxy rule produced an artifact")
 	}
 	if !hasBlockingCode(diagnostics, CodeComposeOutUnused) {

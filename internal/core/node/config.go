@@ -30,9 +30,10 @@ const (
 	RuntimeStatePath    = AgentDataDir + "/state.json"
 	ActiveCandidatePath = AgentDataDir + "/active-candidate.json"
 	ActiveConfigPath    = ActiveConfigDir + "/config.json"
-	// ACLPath is the managed Out VLESS guard script: the exact table
-	// replacement including the Hub-authorized source accept rules. It is
-	// applied as one nft -f transaction and read back through nft -j.
+	// ACLPath is the retired Out guard script: the exact, rule-free table
+	// replacement. It is still applied as one nft -f transaction so a host
+	// upgraded from an allowlist release flushes its stale rules; the readback
+	// only asserts that the table exists and carries no rule.
 	ACLPath = AgentDataDir + "/out.nft"
 
 	AgentUnit   = "meshmux-agent.service"
@@ -90,12 +91,21 @@ type Identity struct {
 	IdentityToken string `json:"identity_token"`
 }
 
-// Metadata binds a node's immutable enrollment identity to its listener ports.
+// Metadata binds a node's immutable enrollment identity to its listener ports
+// and the newest published candidate revision.
+//
+// The revision is part of the binding so a fresh install applies the document
+// the Hub currently publishes instead of assuming revision 1: an Out configured
+// with its dial address before pairing carries the SS link key in a later
+// candidate, and the first boot must run the guard that same candidate names.
+// Zero means the caller did not report one (an older fixture); the installer
+// falls back to the initial revision in that case.
 type Metadata struct {
-	NodeID    string `json:"node_id"`
-	Role      Role   `json:"role"`
-	VLESSPort int    `json:"vless_port"`
-	SSHPort   int    `json:"ssh_port"`
+	NodeID         string `json:"node_id"`
+	Role           Role   `json:"role"`
+	VLESSPort      int    `json:"vless_port"`
+	SSHPort        int    `json:"ssh_port"`
+	ConfigRevision int64  `json:"config_revision"`
 }
 
 // Candidate is the complete dynamic configuration input. The first five
@@ -354,12 +364,12 @@ func (c Candidate) Equal(other Candidate) bool {
 // Readback contains only local evidence. Its fields deliberately cannot claim
 // public reachability, a real protocol handshake or client usability.
 //
-// OutDefaultDeny is the observed_out_default_deny the Hub persists for an Out
-// node. It means the live inet meshmux_out table was read back and proven to
-// be the exact VLESS guard: the MeshMux table, the input chain at priority
-// -10, both VLESS drops, and an accept set exactly equal to the applied
-// source allowlist. An empty allowlist is still a passing guard — that is the
-// fail-closed data plane. It never means "policy accept was seen".
+// OutDefaultDeny is the observed_out_default_deny field the Hub persists for
+// an Out node. The name is historical: with the source allowlist retired it
+// means the live inet meshmux_out table was read back and proven to be the
+// neutral MeshMux table (the input chain at priority -10 with no rule), which
+// is what flushes a legacy allowlist. It never claims a source was filtered
+// or that public reachability was proven.
 type Readback struct {
 	Architecture   string `json:"architecture"`
 	AgentVersion   string `json:"agent_version"`
@@ -514,10 +524,15 @@ func (m Metadata) Validate() error {
 	if err := validatePorts(m.VLESSPort, m.SSHPort); err != nil {
 		return errors.New("METADATA_INVALID: node metadata does not match")
 	}
+	if m.ConfigRevision < 0 {
+		return errors.New("METADATA_INVALID: node metadata does not match")
+	}
 	return nil
 }
 
 // ValidateFor rejects metadata for any node, role or port other than Config.
+// The candidate revision is an observation, not part of the identity binding,
+// so it never makes metadata from the right node invalid.
 func (m Metadata) ValidateFor(c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -525,7 +540,7 @@ func (m Metadata) ValidateFor(c Config) error {
 	if err := m.Validate(); err != nil {
 		return err
 	}
-	if m != c.Metadata() {
+	if m.NodeID != c.NodeID || m.Role != c.Role || m.VLESSPort != c.VLESSPort || m.SSHPort != c.SSHPort {
 		return errors.New("METADATA_MISMATCH: node metadata does not match")
 	}
 	return nil

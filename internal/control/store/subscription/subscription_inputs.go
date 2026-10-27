@@ -23,9 +23,7 @@ import (
 	"errors"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
-	storepolicy "github.com/wingsky-1/MeshMux/internal/control/store/policy"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
-	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -95,21 +93,28 @@ func assembleSelectionTx(tx *sql.Tx, lineIDs []string, credentials []coredomain.
 	return assembly, nil
 }
 
-// selectionOutTx resolves one selected egress into its operator-visible dial
-// parameters. The link credential and the HTTP proxy credentials stay in the
-// private tables: a subscription never carries them. An HTTP proxy egress is
-// reported with ComposeOutHTTP so the composer, the UI and the selection
-// identity can tell the two shapes apart.
+// selectionOutTx resolves one selected egress into the material the client
+// documents carry.
+//
+// Under client-chain egress the subscriber's client dials the egress itself, so
+// the artifact needs the dial body plus the bearer credential: the SS link key
+// of a managed Out, or the Basic pair of an external HTTP proxy. Both are
+// secrets of the same class as the per-Line VLESS UUID — protected by the
+// subscription bearer URL and never logged. An HTTP proxy is reported with
+// ComposeOutHTTP so the composer, the UI and the selection identity can tell the
+// two shapes apart.
 func selectionOutTx(tx *sql.Tx, outID string) (coredomain.ComposeOut, error) {
-	var role, displayName, server, proxyURL string
+	var role, displayName, server, linkKey, proxyURL string
+	var username, password sql.NullString
 	var port int
 	err := tx.QueryRow(`SELECT n.role, n.display_name,
-	  COALESCE(s.server,''), COALESCE(s.port,0), COALESCE(h.url,'')
+	  COALESCE(s.server,''), COALESCE(s.port,0), COALESCE(s.link_key,''), COALESCE(h.url,''),
+	  h.username, h.password
 	  FROM nodes n
 	  LEFT JOIN out_settings s ON s.node_id=n.id
 	  LEFT JOIN node_http_proxy h ON h.node_id=n.id
 	  WHERE n.id=?`, outID).
-		Scan(&role, &displayName, &server, &port, &proxyURL)
+		Scan(&role, &displayName, &server, &port, &linkKey, &proxyURL, &username, &password)
 	if errors.Is(err, sql.ErrNoRows) {
 		return coredomain.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the egress does not exist")
 	}
@@ -121,7 +126,10 @@ func selectionOutTx(tx *sql.Tx, outID string) (coredomain.ComposeOut, error) {
 		if server == "" || port == 0 {
 			return coredomain.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the out has no transport")
 		}
-		return coredomain.ComposeOut{OutID: outID, DisplayName: displayName, Server: server, Port: port}, nil
+		if linkKey == "" {
+			return coredomain.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the out has no link key")
+		}
+		return coredomain.ComposeOut{OutID: outID, DisplayName: displayName, Server: server, Port: port, LinkKey: linkKey}, nil
 	case "http":
 		if proxyURL == "" {
 			return coredomain.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the http proxy has no URL")
@@ -133,26 +141,22 @@ func selectionOutTx(tx *sql.Tx, outID string) (coredomain.ComposeOut, error) {
 		return coredomain.ComposeOut{
 			OutID: outID, DisplayName: displayName,
 			Server: egress.Server, Port: egress.Port, Kind: coredomain.ComposeOutHTTP,
+			Username: username.String, Password: password.String,
 		}, nil
 	default:
 		return coredomain.ComposeOut{}, errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected")
 	}
 }
 
-// selectionRulesTx resolves the pinned rule revisions into composer rules with
-// their pinned artifacts.
+// selectionRulesTx resolves the selected rule revisions into composer rules.
 //
-// The pin source comes from the active server policy revision, which is the
-// deployment's single artifact lock. A rule that needs an artifact the active
-// revision does not pin is refused by the composer with
-// COMPOSE_RULESET_UNPINNED, so a subscription can never fetch an unpinned file.
+// A rule is assembled exactly as configured: the Hub performs no artifact check
+// here. The pinned-artifact model is gone, so a selected geo/ruleset rule is
+// rendered from its stored values and the client kernel resolves the artifact;
+// the rule library's own write path already validated the matcher shape.
 func selectionRulesTx(tx *sql.Tx, revisions []RuleRevision) ([]coredomain.ComposeRule, error) {
 	if len(revisions) == 0 {
 		return []coredomain.ComposeRule{}, nil
-	}
-	pins, err := activePolicyPinsTx(tx)
-	if err != nil {
-		return nil, err
 	}
 	out := make([]coredomain.ComposeRule, 0, len(revisions))
 	for _, revision := range revisions {
@@ -175,47 +179,7 @@ func selectionRulesTx(tx *sql.Tx, revisions []RuleRevision) ([]coredomain.Compos
 			Action:    coredomain.Action(action),
 			Kind:      coredomain.MatcherKind(kind),
 			Values:    values,
-			Pins:      pinsForRule(coredomain.MatcherKind(kind), values, pins),
 		})
 	}
 	return out, nil
-}
-
-// activePolicyPinsTx reads the pinned artifacts of the active server policy
-// revision. No active revision means no pins, so a geo/ruleset rule is refused
-// instead of rendering an unversioned reference.
-func activePolicyPinsTx(tx *sql.Tx) (policy.RuleSetPins, error) {
-	record, _, err := storepolicy.ActivePolicyIntentTx(tx, storepolicy.LayerServer)
-	if err != nil {
-		if storepolicy.IsNotFound(err) {
-			return policy.RuleSetPins{}, nil
-		}
-		return policy.RuleSetPins{}, err
-	}
-	return storepolicy.DecodePins(record.Pins)
-}
-
-// pinsForRule maps the artifact pins of the active revision onto one composer
-// rule, keyed by the geo code or the remote tag the rule names.
-func pinsForRule(kind coredomain.MatcherKind, values []string, pins policy.RuleSetPins) map[string]coredomain.RuleSetPin {
-	out := make(map[string]coredomain.RuleSetPin, len(values))
-	for _, value := range values {
-		var pin policy.RulesetPin
-		var ok bool
-		switch kind {
-		case coredomain.MatcherGeoSite:
-			pin, ok = pins.GeoSite[value]
-		case coredomain.MatcherGeoIP:
-			pin, ok = pins.GeoIP[value]
-		case coredomain.MatcherRuleSet:
-			pin, ok = pins.Remote[value]
-		default:
-			continue
-		}
-		if !ok {
-			continue
-		}
-		out[value] = coredomain.RuleSetPin{Source: pin.Source, Version: pin.Version, SHA256: pin.SHA256}
-	}
-	return out
 }

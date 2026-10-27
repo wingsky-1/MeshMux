@@ -181,53 +181,27 @@ func (s *Store) LatestCandidate(nodeID string) (Stored, error) {
 // PublishTx stores one immutable candidate revision and the fixed
 // four task chain in the caller's transaction.
 //
-// It is the single publication path of the control plane: the manual reconcile
-// and the subscriber synchronization both use it, so one Line never carries
-// two chains at the same time. The caller owns the transaction, so a failure
-// rolls the candidate and the chain back together.
+// It is the single publication path of the control plane and handles every
+// role: the manual reconcile, the subscriber synchronization and the Out
+// lifecycle all use it, so one node never carries two chains at the same time.
+// The caller owns the transaction, so a failure rolls the candidate and the
+// chain back together.
 //
-// Every config task of an Out candidate carries allowed_sources, and an Out
-// without an authorized source carries an explicit empty array rather than an
-// omitted key. The Agent treats a missing key as "no Hub expectation" and
-// degrades its readback to a shape-only check; omitting the key would therefore
-// hide a missing authorization behind a healthy-looking guard. An empty array
-// means "authorized for nothing", which is exactly the fail-closed state the
-// Hub wants when no Line is bound.
-//
-// An Edge candidate never carries the key: its allowlist is meaningless there
-// and the Agent renders no Out table.
+// The task envelope carries only the revision. The retired source allowlist is
+// not republished: an Out admits clients by the link key its own candidate
+// carries, so there is no `allowed_sources` key to send and the Agent's guard is
+// no longer an authorization input.
 func PublishTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time) ([]protocol.Task, error) {
-	if candidate.Role == node.RoleOut {
-		return nil, errors.New("CANDIDATE_INVALID: an out candidate must publish its source authorization")
-	}
-	return publishChainTx(tx, nodeID, candidate, now, nil)
-}
-
-// PublishOutTx publishes one Out candidate whose chain carries exactly the
-// supplied source authorization.
-//
-// The allowlist is not derived here: the Out domain owns that derivation, and a
-// caller that cannot name the set explicitly must not publish an Out at all.
-// Publishing the empty set is how the delete path expresses "this host must end
-// in default-deny"; publishing a nil set is refused, because the Agent reads an
-// omitted key as "no Hub expectation".
-func PublishOutTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time, allowed []string) ([]protocol.Task, error) {
-	if candidate.Role != node.RoleOut {
-		return nil, errors.New("CANDIDATE_INVALID: only an out candidate carries a source authorization")
-	}
-	if allowed == nil {
-		return nil, errors.New("CANDIDATE_INVALID: an out chain must name its authorization, empty or not")
-	}
-	return publishChainTx(tx, nodeID, candidate, now, allowed)
+	return publishChainTx(tx, nodeID, candidate, now)
 }
 
 // publishChainTx stores one immutable revision and enqueues the fixed four-task
 // chain in the caller's transaction.
-func publishChainTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time, allowed []string) ([]protocol.Task, error) {
+func publishChainTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now time.Time) ([]protocol.Task, error) {
 	if err := InsertTx(tx, candidate, now.Unix()); err != nil {
 		return nil, err
 	}
-	params, err := taskParams(candidate, allowed)
+	params, err := taskParams(candidate)
 	if err != nil {
 		return nil, err
 	}
@@ -250,21 +224,12 @@ func publishChainTx(tx *sql.Tx, nodeID string, candidate node.Candidate, now tim
 	return tasks, nil
 }
 
-// TaskParamsTx builds the params envelope of one candidate chain.
-//
-// An Out candidate always names its source authorization, including the empty
-// one, because the Agent distinguishes "no expectation" (omitted) from
-// "authorized for nothing" (explicit empty array). Anything that fails to derive
-// the Out authorization aborts the publication: publishing a chain whose guard
-// cannot be verified would report a health the Hub does not have.
-func taskParams(candidate node.Candidate, allowed []string) (json.RawMessage, error) {
-	if candidate.Role != node.RoleOut {
-		return json.Marshal(map[string]int64{"revision": candidate.Revision})
-	}
-	return json.Marshal(struct {
-		Revision       int64    `json:"revision"`
-		AllowedSources []string `json:"allowed_sources"`
-	}{Revision: candidate.Revision, AllowedSources: allowed})
+// taskParams builds the params envelope of one candidate chain: the revision,
+// and nothing else. The retired `allowed_sources` key is deliberately absent for
+// every role; an old Agent degrades its readback to a shape-only check instead
+// of comparing an authorization the Hub no longer maintains.
+func taskParams(candidate node.Candidate) (json.RawMessage, error) {
+	return json.Marshal(map[string]int64{"revision": candidate.Revision})
 }
 
 // NextCandidateRevisionTx returns the next immutable revision of one node.
@@ -310,9 +275,10 @@ func NewFixedTask(nodeID, kind string, params json.RawMessage, revision int64) (
 // candidate. Pairing calls this only after identity insertion succeeds. The
 // caller's clock is the same one that stamped the pairing identity.
 //
-// The Out authorization is derived by the caller and passed in: this package
-// sits below the Out domain, so it cannot read that derivation itself.
-func SeedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time, outAllowlist func(tx *sql.Tx, outID string) ([]string, error)) error {
+// The chain carries the same params envelope as any later publication (the
+// revision only), so a freshly paired node starts on exactly the contract the
+// rest of the control plane uses.
+func SeedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time) error {
 	candidate, err := LatestTx(tx, nodeID)
 	if err != nil {
 		return err
@@ -325,24 +291,7 @@ func SeedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time, outAllowlist f
 	if unfinished != 0 {
 		return nil
 	}
-	// The seeded chain uses the same params envelope as any later publication,
-	// so an Out that was paired before its binding existed still starts with an
-	// explicit empty authorization instead of an omitted key.
-	stored := candidate.Document.Candidate()
-	var allowed []string
-	if stored.Role == node.RoleOut {
-		if outAllowlist == nil {
-			return errors.New("CANDIDATE_INVALID: no out authorization derivation is wired")
-		}
-		allowed, err = outAllowlist(tx, nodeID)
-		if err != nil {
-			return err
-		}
-		if allowed == nil {
-			allowed = []string{}
-		}
-	}
-	params, err := taskParams(stored, allowed)
+	params, err := taskParams(candidate.Document.Candidate())
 	if err != nil {
 		return err
 	}

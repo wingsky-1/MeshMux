@@ -273,9 +273,6 @@ func SubscriptionStoreError(err error) error { return storesubscription.Subscrip
 // SanitizeSubscriberSyncCode keeps only the stable code part of a sync error.
 func SanitizeSubscriberSyncCode(raw string) string { return common.SanitizeSyncCode(raw) }
 
-// OutAllowlistSource validates one stored allowlist source.
-func OutAllowlistSource(raw string) (string, error) { return storenode.OutAllowlistSource(raw) }
-
 // ParsePolicyPublishRequest decodes and validates the publish body.
 func ParsePolicyPublishRequest(raw []byte) (PolicyPublishRequest, error) {
 	return storepolicy.ParsePolicyPublishRequest(raw)
@@ -325,7 +322,7 @@ func NewFixedTask(nodeID, kind string, params json.RawMessage, revision int64) (
 
 // SeedInitialTasksTx enqueues the fixed reconcile chain of a freshly paired node.
 func SeedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time) error {
-	return storecandidate.SeedInitialTasksTx(tx, nodeID, now, storenode.OutAuthorizationTx)
+	return storecandidate.SeedInitialTasksTx(tx, nodeID, now)
 }
 
 // LatestPublishedCandidateTx reads the latest immutable candidate of one node.
@@ -352,11 +349,6 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 	return storenode.BuildLineCandidateTx(tx, nodeID, revision)
 }
 
-// LineServerRouteTx returns the route fragment a Line must publish now.
-func LineServerRouteTx(tx *sql.Tx, nodeID string, now time.Time) (json.RawMessage, error) {
-	return storepolicy.LineServerRouteTx(tx, nodeID, now)
-}
-
 // LineOutEgressStatusTx reports whether a Line may use its selected Out path.
 func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
 	return storenode.LineOutEgressStatusTx(tx, lineID, now)
@@ -365,12 +357,6 @@ func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, st
 // OutEgressFactsTx is the transaction-scoped Out projection of one Line.
 func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
 	return storenode.OutEgressFactsTx(tx, lineID, now)
-}
-
-// OutReadbackAllowlistTx reads the allowlist the newest chain of one Out
-// carried.
-func OutReadbackAllowlistTx(tx *sql.Tx, outID string, revision int64) ([]string, bool, error) {
-	return storenode.OutReadbackAllowlistTx(tx, outID, revision)
 }
 
 // DrainOutNodeIntentTx publishes one Out's persisted authorization intent. The

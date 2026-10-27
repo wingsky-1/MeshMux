@@ -217,6 +217,15 @@ func loadOrCreateNodeFixtureMetadata(app *Server, path string, role node.Role, c
 	if err != nil {
 		return metadata, err
 	}
+	// An Out admits clients by the SS link key its own candidate publishes, not
+	// by an nft allowlist. Configure the dial body here so the paired candidate
+	// is the v4 SS guard the VM test asserts against: a transport-free Out would
+	// keep the frozen VLESS baseline and prove nothing about the link.
+	if role == node.RoleOut {
+		if _, err := app.Store.SetOutTransport(created.ID, "127.0.0.1", created.VlessPort, app.Now()); err != nil {
+			return metadata, err
+		}
+	}
 	return nodeFixtureMetadata{
 		HubURL:      origin,
 		NodeID:      created.ID,

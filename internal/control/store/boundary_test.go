@@ -21,19 +21,18 @@ import (
 //
 // common and candidate are leaves. node is above them; policy above node (it
 // also renders the gated client documents through clientdoc, a leaf);
-// subscription above node and policy; upgrade at the top. mesh is an
-// independent leaf beside candidate. Two real edges point the other way and are
-// inverted instead: node declares the node.Subscribers port for the subscriber
-// facts it needs, and the Out allowlist is passed into candidate by its caller.
+// subscription above node; upgrade at the top. mesh is an independent leaf
+// beside candidate. One real edge points the other way and is inverted instead:
+// node declares the node.Subscribers port for the subscriber facts it needs.
 func TestStorePackageBoundaries(t *testing.T) {
 	cases := map[string][]string{
 		"common":       {},
 		"candidate":    {"common"},
 		"mesh":         {"common"},
 		"node":         {"candidate", "common"},
-		"policy":       {"candidate", "clientdoc", "common", "node"},
-		"subscription": {"candidate", "common", "node", "policy"},
-		"upgrade":      {"candidate", "common", "node", "policy"},
+		"policy":       {"clientdoc", "common", "node"},
+		"subscription": {"candidate", "common", "node"},
+		"upgrade":      {"candidate", "common", "node"},
 	}
 	depguard.AssertSubpackages(t, "github.com/wingsky-1/MeshMux/internal/control/store", cases, "store")
 }

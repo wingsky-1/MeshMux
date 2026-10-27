@@ -211,7 +211,7 @@ func (c *Client) Metadata(ctx context.Context) (Metadata, error) {
 		return Metadata{}, err
 	}
 	var metadata Metadata
-	if err := decodeResponseObject(response.body, &metadata, "node_id", "role", "vless_port", "ssh_port"); err != nil {
+	if err := decodeResponseObject(response.body, &metadata, "node_id", "role", "vless_port", "ssh_port", "config_revision"); err != nil {
 		return Metadata{}, &ClientError{Code: "SERVER_RESPONSE_INVALID", StatusCode: response.status}
 	}
 	if err := metadata.ValidateFor(c.config); err != nil {

@@ -112,7 +112,7 @@ func (app *Server) failDatabaseMigration(w http.ResponseWriter, r *http.Request,
 			"Hub 数据库备份记录不可信。", "请检查记录文件的所有者、0600 权限、JSON 形状与 operation_id；未写入任何确认。")
 	default:
 		app.writeDatabaseMigrationFailure(w, r, http.StatusServiceUnavailable, "DB_BACKUP_APPROVAL_FAILED",
-			"确认未完成。", "请凭操作编号检查服务日志；未声称确认已写入。")
+			"确认未完成。", "请稍后重试；未声称确认已写入。")
 	}
 }
 

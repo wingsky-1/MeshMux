@@ -67,7 +67,7 @@ func (s *Server) httpProxySet(w http.ResponseWriter, r *http.Request, sess infra
 	}
 	s.Event(r, "HTTP_PROXY_UPDATED")
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{
-		Notice: "HTTP 代理已更新为 " + proxyAddress(proxy.Server, proxy.Port) + "（外部声明，无回读；引用它的 Line 已重新收敛）。",
+		Notice: "HTTP 代理已更新为 " + proxyAddress(proxy.Server, proxy.Port) + "（外部声明）。",
 	})
 }
 
@@ -82,7 +82,8 @@ func proxyAddress(server string, port int) string {
 // This is the HTML twin of the retired JSON unbind endpoint, but it does not silently
 // mutate subscriptions: an Out with a live reference has to be migrated by the operator,
 // and the page names the subscriptions so the action is explicit. Under Ruling R10 the
-// release changes only which egress the client document names — the ACL is node
+// release changes only which egress the client document names — the Out admits
+// by link key and has no source allowlist to rewrite.
 // membership and is untouched — so an Out no subscription selects is already unbound and
 // this call is an idempotent no-op that publishes nothing.
 func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
@@ -98,16 +99,15 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infr
 		s.Event(r, store.CodeOutReferenced)
 		s.Fail(w, r, 409, store.CodeOutReferenced,
 			"该 Out 仍被订阅选中："+strings.Join(usedBy, "、")+"。",
-			"请在订阅向导中取消这些订阅的 Out 选择后重试。ACL 由节点成员制决定（纳管即互通），订阅变更不会重算 ACL。")
+			"请在订阅向导中取消这些订阅的 Out 选择后重试。Out 按订阅下发的 link key 接入，订阅选择变化不会改变 Out 本身的凭据。")
 		return
 	}
-	// Nothing selects it. This action does NOT empty the Out's allowlist: under
-	// Ruling R10 the authorization is node membership, so publishing here re-derives
-	// the member set (which is non-empty as long as any Line is enrolled). All this
-	// call can do is republish the current authorization, which is a no-op when the
-	// newest chain already carries it; a chain still in flight defers the republish —
-	// the intent is durable and the next Out event completes it, so the page reports
-	// the pending state instead of an error the operator cannot fix.
+	// Nothing selects it. The source allowlist is retired, so this action cannot
+	// revoke access: the Out still admits any client that presents the link key
+	// its own candidate publishes. All this call can do is reconcile that chain,
+	// which is a no-op when the newest revision already matches; a chain still in
+	// flight defers the republish, so the page reports the pending state instead
+	// of an error the operator cannot fix.
 	//
 	// An external HTTP proxy has no chain, no ACL and no readback at all (Ruling
 	// R11): the drain answers OUT_SYNC_NOT_APPLICABLE, which is an explicit no-op
@@ -116,7 +116,7 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infr
 	if retryErr != nil && strings.HasPrefix(retryErr.Error(), store.CodeOutSyncNotApplicable) {
 		s.Event(r, store.CodeOutSyncNotApplicable)
 		s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{
-			Notice: "已解除：没有任何订阅选中该 HTTP 代理。外部代理没有 Agent、ACL 或回读（OUT_SYNC_NOT_APPLICABLE），本次未下发任何任务。",
+			Notice: "已解除：还没有订阅使用这个 HTTP 代理（OUT_SYNC_NOT_APPLICABLE）；本次未下发任何任务。",
 		})
 		return
 	}
@@ -126,10 +126,10 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infr
 		return
 	}
 	s.Event(r, "OUT_UNBOUND")
-	notice := "已解除：没有任何订阅选中该 Out。Out 的 ACL 由节点成员制决定（纳管即互通），订阅变更不会重算 ACL；本次已按当前成员集重新下发。"
+	notice := "已解除：还没有订阅使用这个出口。Out 仍按 link key 接受订阅者；本次只重新下发 Out 自身配置。"
 	if retryErr != nil {
 		s.Event(r, store.CodeOutSyncPending)
-		notice = "已解除：没有任何订阅选中该 Out。Out 的 ACL 由节点成员制决定，订阅变更不会重算 ACL；本次下发的确认待同步（OUT_SYNC_PENDING），Out 上线后自动完成。"
+		notice = "已解除：还没有订阅使用这个出口。Out 仍按 link key 接受订阅者；本次下发待同步，Out 上线后自动完成。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }
@@ -187,9 +187,9 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess infr
 		return
 	}
 	s.Event(r, "OUT_DELETED")
-	notice := "出口已彻底删除：节点行、出口地址与 link key 均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
+	notice := "出口已删除：节点、出口地址与签发的 key 一并清除；使用它的订阅在下次下载时拿到新配置。"
 	if role == infra.NodeRoleHTTP {
-		notice = "HTTP 代理节点已彻底删除：节点行与存储的 URL/凭据均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
+		notice = "HTTP 代理节点已删除：节点与保存的 URL/凭据一并清除；使用它的订阅在下次下载时拿到新配置。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }
@@ -230,7 +230,7 @@ func outTransportFailure(err error) (status int, code, message, next string) {
 	case strings.HasPrefix(err.Error(), "OUT_PORT_MISMATCH"):
 		return 409, "OUT_PORT_MISMATCH", "出口端口与节点 VLESS 端口不一致。", "请确认 Out 节点的 VLESS 端口后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_TRANSPORT_FAILED"):
-		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请凭操作编号检查服务日志后重试。"
+		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请稍后重试。"
 	case strings.HasPrefix(err.Error(), infra.CodeOutNotFound):
 		return 404, infra.CodeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
 	case strings.HasPrefix(err.Error(), infra.CodeOutRoleInvalid):
@@ -240,7 +240,7 @@ func outTransportFailure(err error) (status int, code, message, next string) {
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 传输参数。", "请检查数据库与服务日志后重试。"
 	default:
-		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请凭操作编号检查服务日志后重试。"
+		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请稍后重试。"
 	}
 }
 
@@ -252,7 +252,7 @@ func httpProxyUpdateFailure(err error) (status int, code, message, next string) 
 	case strings.HasPrefix(err.Error(), "HTTP_PROXY_INVALID"):
 		return 400, "HTTP_PROXY_INVALID", "HTTP 代理 URL 不正确。", "请填写一个 http://主机:端口 的 URL，可带用户名与密码，不要带路径或查询参数。"
 	case strings.HasPrefix(err.Error(), "HTTP_PROXY_UPDATE_FAILED"):
-		return 500, "HTTP_PROXY_UPDATE_FAILED", "HTTP 代理 URL 未保存。", "请凭操作编号检查服务日志后重试。"
+		return 500, "HTTP_PROXY_UPDATE_FAILED", "HTTP 代理 URL 未保存。", "请稍后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_NOT_FOUND"):
 		return 404, "OUT_NOT_FOUND", "出口节点不存在。", "请先在节点页纳管该 HTTP 代理后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_ROLE_INVALID"):
@@ -262,6 +262,6 @@ func httpProxyUpdateFailure(err error) (status int, code, message, next string) 
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "无法读写 HTTP 代理参数。", "请检查数据库与服务日志后重试。"
 	default:
-		return 500, "HTTP_PROXY_UPDATE_FAILED", "HTTP 代理 URL 未保存。", "请凭操作编号检查服务日志后重试。"
+		return 500, "HTTP_PROXY_UPDATE_FAILED", "HTTP 代理 URL 未保存。", "请稍后重试。"
 	}
 }

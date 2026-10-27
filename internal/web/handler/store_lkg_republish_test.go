@@ -199,8 +199,8 @@ func TestLkgRollbackFailureMessages(t *testing.T) {
 	if committed.Code != "LKG_ROLLBACK_READBACK_FAILED" || committed.Status != 503 {
 		t.Fatalf("committed failure = %+v", committed)
 	}
-	if !strings.Contains(committed.Message, "已发布") || strings.Contains(committed.Message, "未发布") {
-		t.Fatalf("committed message = %q, want a published-but-unreadable message", committed.Message)
+	if !strings.Contains(committed.Message, "回退已开始") || strings.Contains(committed.Message, "未发布") {
+		t.Fatalf("committed message = %q, want a started-but-unconfirmed message", committed.Message)
 	}
 	for _, tc := range []struct{ err, code string }{
 		{"TASKS_IN_PROGRESS: busy", "TASKS_IN_PROGRESS"},
@@ -209,8 +209,8 @@ func TestLkgRollbackFailureMessages(t *testing.T) {
 		{"DATABASE_UNAVAILABLE", "LKG_ROLLBACK_FAILED"},
 	} {
 		failure := node.LKGRollbackFailure(fmt.Errorf("%s", tc.err))
-		if failure.Code != tc.code || !strings.Contains(failure.Message, "未发布") {
-			t.Fatalf("%q => %+v, want %s / not-published", tc.err, failure, tc.code)
+		if failure.Code != tc.code || !strings.Contains(failure.Message, "回退未完成") {
+			t.Fatalf("%q => %+v, want %s / not-started", tc.err, failure, tc.code)
 		}
 	}
 	if failure := node.LKGRollbackFailure(nil); failure.Code != "LKG_ROLLBACK_FAILED" {

@@ -78,7 +78,7 @@ func TestWizardPageRendersFourGroupsAndExecutionBoundary(t *testing.T) {
 	}
 	// The mesh group is still recorded-only; the egress group is executable
 	// (the Line route renders it and passes the kernel gate).
-	if strings.Count(body, "已记录，执行待 1.1") < 1 {
+	if strings.Count(body, "已记录 · 暂不执行") < 1 {
 		t.Fatal("the recorded-only execution status is not stated for the mesh group")
 	}
 	// The wizard is admin-only like every other management surface.
@@ -220,7 +220,7 @@ func TestWizardSaveRefusesGateFailure(t *testing.T) {
 	}
 }
 
-func TestWizardSaveRefusesOutConflictWithExistingSubscription(t *testing.T) {
+func TestWizardSaveAllowsIndependentOutSelection(t *testing.T) {
 	app, b, _ := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
 	outID := wizardOut(t, app, "out-01")
@@ -233,23 +233,17 @@ func TestWizardSaveRefusesOutConflictWithExistingSubscription(t *testing.T) {
 	})
 	require2xx(t, w)
 
-	// A second subscription on the same Line cannot add an Out: the Line
-	// publishes one route, so the choices must agree.
+	// A second subscription on the same Line may choose an Out: the egress is a
+	// per-subscription client choice now, not a shared server route.
 	w = b.post("/subscribers/wizard/save", url.Values{
 		"display_name":           {"bob"},
 		"line_" + lineID:         {"1"},
 		"out_id":                 {outID},
 		"rule_preset-proxy-ai@1": {"1"},
 	})
-	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), store.CodeOutSelectionConflict) {
-		t.Fatalf("conflict code missing: %.600s", w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "alice") {
-		t.Fatal("conflict does not name the existing subscription")
-	}
-	if subs, _ := app.Store.ListSubscribers(); len(subs) != 1 {
-		t.Fatalf("a refused conflicting save created a subscriber: %d", len(subs))
+	require2xx(t, w)
+	if subs, _ := app.Store.ListSubscribers(); len(subs) != 2 {
+		t.Fatalf("independent saves created %d subscribers, want 2", len(subs))
 	}
 }
 

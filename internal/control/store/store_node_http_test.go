@@ -107,7 +107,7 @@ func TestHTTPProxyNodeIsExternalAndHasNoAgentState(t *testing.T) {
 	}
 }
 
-func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
+func TestHTTPProxySelectionStaysOutOfTheLineCandidate(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
@@ -126,13 +126,21 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Out == nil || candidate.Out.Type != nodedomain.OutEgressHTTP ||
-		candidate.Out.Server != "proxy.example.invalid" || candidate.Out.Port != 8080 ||
-		candidate.Out.Username != "alice" || candidate.Out.Password != "s3cret" {
-		t.Fatalf("line candidate egress = %+v", candidate.Out)
+	// The Line candidate is the proxy port and user set only: the egress lives
+	// in the client document the subscriber downloads, never in the server
+	// snapshot.
+	if candidate.Out != nil {
+		t.Fatalf("line candidate carries an egress: %+v", candidate.Out)
 	}
-	if candidate.Out.Key != "" || candidate.Out.UUID != "" {
-		t.Fatal("http egress carries an SS key or the void UUID")
+	if candidate.Route != nil {
+		t.Fatalf("line candidate carries a route: %s", candidate.Route)
+	}
+	document, err := json.Marshal(nodedomain.NewCandidateDocument(candidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(document), "proxy.example.invalid") {
+		t.Fatalf("candidate document carries the external egress: %s", document)
 	}
 	// The selection is the only egress slot row (MAX_OUTS = 1).
 	var rows int
@@ -141,22 +149,6 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("egress slot rows = %d, want 1", rows)
-	}
-	// The rendered candidate is a v3 document carrying the http egress, not a
-	// route-free or link-key shape.
-	document, err := json.Marshal(nodedomain.NewCandidateDocument(candidate))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(document), `"type":"http"`) {
-		t.Fatalf("candidate document carries no http egress: %s", document)
-	}
-	var decoded nodedomain.CandidateDocument
-	if err := json.Unmarshal(document, &decoded); err != nil {
-		t.Fatalf("rendered candidate does not decode: %v", err)
-	}
-	if decoded.Out == nil || decoded.Out.Username != "alice" {
-		t.Fatalf("decoded candidate egress = %+v", decoded.Out)
 	}
 }
 
@@ -384,16 +376,14 @@ func TestHTTPProxyReadbackReportsTheDeclaration(t *testing.T) {
 	}
 }
 
-// TestHTTPProxyURLUpdateConvergesTheBoundLines pins the post-commit drain: a
-// changed proxy URL must republish every Line that renders it, exactly like
-// SetOutTransport does for a managed Out. Without it, a Line keeps dialing the
-// previous endpoint from its last candidate until some unrelated event.
-func TestHTTPProxyURLUpdateConvergesTheBoundLines(t *testing.T) {
+// TestHTTPProxyURLUpdateDoesNotRepublishTheBoundLines pins the client-chain
+// split: the egress endpoint is composed into the subscriber's document at
+// download time, so changing it converges nothing on the server side. A Line
+// publishes its listener and user set only.
+func TestHTTPProxyURLUpdateDoesNotRepublishTheBoundLines(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
-	// The Line has to be reachable for the post-commit drain to publish it: an
-	// offline Line keeps the durable intent and receives no task.
 	if _, err := s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=? WHERE id=?`, now.Unix(), lineID); err != nil {
 		t.Fatal(err)
 	}
@@ -409,8 +399,11 @@ func TestHTTPProxyURLUpdateConvergesTheBoundLines(t *testing.T) {
 	if proxy.Server != "edge.example.invalid" || proxy.Port != 3128 {
 		t.Fatalf("stored proxy projection = %+v, want only host:port", proxy)
 	}
-	if got := candidateCount(t, s, lineID); got <= before {
-		t.Fatalf("proxy URL update did not republish the bound line: %d -> %d", before, got)
+	// A Line publishes its listener and user set only, so a changed egress
+	// endpoint converges nothing on the server: the next download composes the
+	// new dial body from the stored row.
+	if got := candidateCount(t, s, lineID); got != before {
+		t.Fatalf("proxy URL update republished the line: %d -> %d", before, got)
 	}
 	var username, password, rawURL string
 	if err := s.DB.QueryRow(`SELECT url, username, password FROM node_http_proxy WHERE node_id=?`, proxyID).
@@ -433,34 +426,6 @@ func TestHTTPProxyURLUpdateConvergesTheBoundLines(t *testing.T) {
 	if nullUser.Valid || nullPassword.Valid {
 		t.Fatalf("credential-free update kept credentials: %+v/%+v", nullUser, nullPassword)
 	}
-	// The latest published candidate carries the new dial body, which is the
-	// only proof that the Line actually converged on it.
-	tx := mustTx(t, s)
-	revision, _, _, found, err := store.LatestPublishedCandidateTx(tx, lineID)
-	if err != nil || !found {
-		t.Fatalf("latest line candidate: found=%v err=%v", found, err)
-	}
-	candidate, err := store.BuildLineCandidateTx(tx, lineID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate.Out == nil || candidate.Out.Type != nodedomain.OutEgressHTTP ||
-		candidate.Out.Server != "edge.example.invalid" || candidate.Out.Port != 3128 ||
-		candidate.Out.Username != "" || candidate.Out.Password != "" {
-		t.Fatalf("republished line egress = %+v, want the updated credential-free proxy", candidate.Out)
-	}
-}
-
-// mustTx opens one transaction for a read helper and rolls it back when the
-// test ends, so a store test can reuse the transaction-scoped readers.
-func mustTx(t *testing.T, s *store.Store) *sql.Tx {
-	t.Helper()
-	tx, err := s.DB.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = tx.Rollback() })
-	return tx
 }
 
 // candidateCount reads how many immutable revisions a node has.
@@ -536,7 +501,9 @@ func TestHTTPProxyEgressComposesAndSurvivesArtifact(t *testing.T) {
 	if artifactID == "" || documents.ContentID != artifactID {
 		t.Fatalf("artifact id = %q content = %q", artifactID, documents.ContentID)
 	}
-	if strings.Contains(string(documents.SingBox), "proxy.example.invalid") {
-		t.Fatal("the external http proxy leaked into the client document")
+	// The client chains itself to the egress, so the external proxy endpoint is
+	// part of the artifact; it must never be missing from it.
+	if !strings.Contains(string(documents.SingBox), "proxy.example.invalid") {
+		t.Fatalf("the client document does not name the external proxy: %s", documents.SingBox)
 	}
 }

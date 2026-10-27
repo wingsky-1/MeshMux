@@ -118,7 +118,7 @@ func hubBackupNextAction(code string) string {
 	case "HUB_BACKUP_STORE_UNSAFE":
 		return "请检查 database-backup 及其操作目录的属主与 0700 权限；本次没有写入任何备份。"
 	default:
-		return "请凭操作编号检查服务日志；旧备份保持不变，本次没有可交接的备份。"
+		return "请稍后重试；旧备份保持不变，本次没有可交接的备份。"
 	}
 }
 
@@ -217,7 +217,7 @@ func hubApplyNextAction(code string) string {
 	case "HUB_BACKUP_STAGE_FAILED":
 		return "目标包未能校验或落盘；备份仍然有效，请核对 root manifest 的包来源与摘要后重试同一操作。"
 	default:
-		return "请凭操作编号检查服务日志；journal 未交接，本次没有可执行的请求。"
+		return "请稍后重试，本次没有可执行的请求。"
 	}
 }
 
@@ -470,7 +470,7 @@ func hubRestoreNextAction(code string) string {
 	case "UPDATE_BACKUP_MISSING", "UPDATE_BACKUP_MISMATCH", "UPDATE_BACKUP_CORRUPT":
 		return "该操作的备份记录不存在或不再可信；恢复必须使用带 integrity_ok 的 staged/confirmed per-op 副本。"
 	default:
-		return "请凭操作编号检查服务日志；未声称恢复已排队或已完成。"
+		return "请稍后重试。"
 	}
 }
 

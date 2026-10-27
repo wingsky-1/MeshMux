@@ -30,14 +30,8 @@ const (
 	// document validation. Delete this once internal/node exports its bound.
 	MaxLineCandidateUsers = 1024
 
-	// MaxOutAllowlistSources mirrors the frozen protocol and Agent bound
-	// (internal/node/protocol, maxAllowedSources). One Out may be selected by
-	// several subscriptions, so this is a defensive ceiling that keeps the
-	// derived list inside the envelope the Agent accepts.
-	MaxOutAllowlistSources = 256
-
 	// MaxSelectionRules bounds how many rule revisions one wizard save may
-	// pin. It exists so one save cannot produce an unbounded document.
+	// select. It exists so one save cannot produce an unbounded document.
 	MaxSelectionRules = 64
 
 	// MaxSelectionDevices bounds how many mesh devices one wizard save may

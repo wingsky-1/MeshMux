@@ -130,7 +130,7 @@ func httpProxyCreateFailure(err error) (status int, code, message, next string) 
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "暂时无法创建节点。", "请检查数据库与服务日志后重试。"
 	default:
-		return 500, "NODE_CREATE_FAILED", "无法创建 HTTP 代理节点。", "请凭操作编号检查服务日志后重试。"
+		return 500, "NODE_CREATE_FAILED", "无法创建 HTTP 代理节点。", "请稍后重试。"
 	}
 }
 
@@ -190,13 +190,13 @@ type LKGFailure struct {
 // wording. It keeps "committed but unreadable" distinct from "not published".
 func LKGRollbackFailure(err error) LKGFailure {
 	if err == nil {
-		return LKGFailure{Status: 500, Code: "LKG_ROLLBACK_FAILED", Message: "LKG 回退链未发布。",
-			Action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
+		return LKGFailure{Status: 500, Code: "LKG_ROLLBACK_FAILED", Message: "回退未完成。",
+			Action: "确认节点空闲后重试。"}
 	}
 	if strings.HasPrefix(err.Error(), "LKG_ROLLBACK_READBACK_FAILED") {
 		return LKGFailure{Status: 503, Code: "LKG_ROLLBACK_READBACK_FAILED",
-			Message: "LKG 回退链已发布，但修订读取失败。",
-			Action:  "链已提交；刷新节点页确认修订，不要重复提交。"}
+			Message: "回退已开始，但还没有得到节点确认。",
+			Action:  "稍后刷新节点页确认，不要重复提交。"}
 	}
 	code := "LKG_ROLLBACK_FAILED"
 	switch {
@@ -207,8 +207,8 @@ func LKGRollbackFailure(err error) LKGFailure {
 	case strings.HasPrefix(err.Error(), infra.CodeNodeNotFound):
 		code = infra.CodeNodeNotFound
 	}
-	return LKGFailure{Status: 409, Code: code, Message: "LKG 回退链未发布。",
-		Action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
+	return LKGFailure{Status: 409, Code: code, Message: "回退未完成。",
+		Action: "确认节点空闲后重试。"}
 }
 
 func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess infra.Session) {
@@ -288,6 +288,7 @@ func (s *Server) agentMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	metadata := nodedomain.Metadata{
 		NodeID: n.ID, Role: nodedomain.Role(n.Role), VLESSPort: n.VlessPort, SSHPort: n.SSHPort,
+		ConfigRevision: n.LatestConfigRevision,
 	}
 	if err := metadata.Validate(); err != nil {
 		s.agentFail(w, r, 500, "METADATA_INVALID", "节点身份绑定无效。", "请在 Web 重签身份。")
@@ -397,7 +398,7 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 			message, next = "暂时无法验证配对。", "请检查数据库与服务日志，稍后重试。"
 		case strings.HasPrefix(msg, infra.CodeIdentityIssueFailed):
 			code, status, reason = infra.CodeIdentityIssueFailed, 500, infra.CodeIdentityIssueFailed
-			message, next = "无法签发节点身份。", "请凭操作编号检查服务日志后重试；配对码未被消费。"
+			message, next = "无法签发节点身份。", "请稍后重试；配对码未被消费。"
 		}
 		// Never echo node IDs, roles or secrets in the error body beyond the code.
 		s.agentFailWithReason(w, r, status, code, reason, message, next)

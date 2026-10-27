@@ -8,6 +8,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // configureOut stores the dial address of one Out node for tests. The port
@@ -145,40 +146,21 @@ func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
 		t.Fatal("migration carried the void UUID over as the key")
 	}
 
-	// End to end: the migrated key reaches the published Line candidate and
-	// renders the SS out body (migration -> store -> kernel bytes).
+	// End to end: the migrated key reaches the Out's published candidate, which
+	// is the document the Agent renders as the SS guard listener.
+	markLineOnline(t, s, out, now)
 	configureOut(t, s, out, now)
-	enableOutForLine(t, s, out, line, now)
-	target, err := s.PublishTarget(line,
-		json.RawMessage(`{"rules":[{"domain":["chat.example.invalid"],"outbound":"out"}],"final":"direct"}`),
-		true, "healthy", "")
+	latest, err := s.LatestCandidate(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rendered struct {
-		Outbounds []struct {
-			Type       string `json:"type"`
-			Tag        string `json:"tag"`
-			Server     string `json:"server,omitempty"`
-			ServerPort int    `json:"server_port,omitempty"`
-			Method     string `json:"method,omitempty"`
-			Password   string `json:"password,omitempty"`
-		} `json:"outbounds"`
+	if latest.Document.Role != nodedomain.RoleOut || latest.Document.Out == nil {
+		t.Fatalf("out candidate carries no dial body: %+v", latest.Document)
 	}
-	if err := json.Unmarshal(target.Config, &rendered); err != nil {
-		t.Fatal(err)
+	if latest.Document.Out.Key != key || latest.Document.Out.Server != "out.example.invalid" ||
+		latest.Document.Out.Port != 8443 {
+		t.Fatalf("migrated out candidate = %+v, want the reissued key and stored dial address", latest.Document.Out)
 	}
-	for _, outbound := range rendered.Outbounds {
-		if outbound.Tag != "out" {
-			continue
-		}
-		if outbound.Type != "shadowsocks" || outbound.Method != "2022-blake3-aes-128-gcm" ||
-			outbound.Server != "out.example.invalid" || outbound.ServerPort != 8443 || outbound.Password != key {
-			t.Fatalf("migrated out body = %+v, want the SS egress with the reissued key", outbound)
-		}
-		return
-	}
-	t.Fatal("published Line candidate declares no out outbound")
 }
 
 // TestOutPoolListsTransportAndSelection is the pool datasource: every enrolled Out
@@ -220,6 +202,84 @@ func TestOutPoolListsTransportAndSelection(t *testing.T) {
 	unselected := byID[outB]
 	if unselected.TransportConfigured || len(unselected.LineIDs) != 0 || unselected.Enabled {
 		t.Fatalf("unselected out entry wrong: %+v", unselected)
+	}
+}
+
+// TestSetOutTransportBeforePairingPublishesTheLinkKeyCandidate pins the Node
+// L3 regression: the Web-first order is create the Out, save its dial address,
+// then install. SetOutTransport cannot publish while the node is pending, so
+// pairing has to commit the v4 link-key candidate before it seeds the initial
+// chain. Otherwise the only candidate a fresh install knows about is the
+// transport-free baseline, and the Out boots without its SS guard.
+func TestSetOutTransportBeforePairingPublishesTheLinkKeyCandidate(t *testing.T) {
+	s, now := subscriberStoreFixture(t)
+	created, code, err := s.CreateNode("out", "out-pending", 8443, 2222, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetOutTransport(created.ID, "out.example.invalid", created.VlessPort, now); err != nil {
+		t.Fatal(err)
+	}
+	// The pending host cannot receive a state-changing chain yet: revision 1 is
+	// still the frozen baseline the node was created with.
+	baseline, err := s.LatestCandidate(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.Document.Out != nil {
+		t.Fatalf("a pending out published %s before pairing", baseline.Document.Schema)
+	}
+
+	if _, err := s.ConsumePairing(created.ID, "out", code, "meshmux-agent test", "6.1-test", now); err != nil {
+		t.Fatal(err)
+	}
+	var linkKey string
+	if err := s.DB.QueryRow(`SELECT link_key FROM out_settings WHERE node_id=?`, created.ID).Scan(&linkKey); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := s.LatestCandidate(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pairing published a new revision: the baseline is immutable history,
+	// not a document anyone may rewrite.
+	if latest.Revision != baseline.Revision+1 {
+		t.Fatalf("pairing published revision %d, want %d", latest.Revision, baseline.Revision+1)
+	}
+	if latest.Document.Out == nil || latest.Document.Out.Key != linkKey {
+		t.Fatal("Out candidate carries no Hub-issued SS link key")
+	}
+	// The seeded chain targets that exact revision, so the first apply an
+	// installing Agent receives is the v4 guard, not the baseline.
+	rows, err := s.DB.Query(`SELECT params FROM agent_tasks WHERE node_id=? ORDER BY revision`, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var targets []int64
+	for rows.Next() {
+		var params []byte
+		if err := rows.Scan(&params); err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			Revision int64 `json:"revision"`
+		}
+		if err := json.Unmarshal(params, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, envelope.Revision)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != len(protocol.PublicationKinds) {
+		t.Fatalf("pairing seeded %d tasks, want %d", len(targets), len(protocol.PublicationKinds))
+	}
+	for _, target := range targets {
+		if target != latest.Revision {
+			t.Fatalf("pairing seeded candidate revisions %v, want only %d", targets, latest.Revision)
+		}
 	}
 }
 

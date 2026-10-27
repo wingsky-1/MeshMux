@@ -74,6 +74,14 @@
       "default": "香港 01 [11111111111111111111111111111111]"
     },
     {
+      "type": "shadowsocks",
+      "tag": "out",
+      "server": "out.example.invalid",
+      "server_port": 443,
+      "method": "2022-blake3-aes-128-gcm",
+      "password": "AQIDBAUGBwgJCgsMDQ4PEA=="
+    },
+    {
       "type": "direct",
       "tag": "direct"
     }
@@ -87,7 +95,7 @@
         ]
       },
       {
-        "outbound": "meshmux-selector",
+        "outbound": "out",
         "rule_set": [
           "ai@20261026"
         ]

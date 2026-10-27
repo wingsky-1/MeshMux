@@ -37,14 +37,14 @@ templ RulesLibraryPage(p PageData, v RulesLibraryView) {
 						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
 					}
 					<link rel="stylesheet" href="/assets/policies.css"/>
-					<p class="subtitle">规则库是订阅分流的唯一真相源：预置规则随版本迁移替换、不可写；自定义规则按稳定键 + 版本不可变保存，修改只产生新版本。</p>
+					<p class="subtitle">规则库管理订阅分流规则：预置规则不可修改；自定义规则修改时产生新版本，旧版本订阅不受影响。</p>
 					if v.Notice != "" {
 						<div class="notice">{ v.Notice }</div>
 					}
 					if v.HasPending {
 						<section class="panel">
 							<div class="panel-heading"><h2>删除确认 · { v.Pending.Name }</h2><span class="badge failure">待确认</span></div>
-							<p class="hint">待删除：{ v.Pending.StableKey } v{ strconv.Itoa(v.Pending.Version) }。确认删除前请核对版本：同一稳定键的其他版本不受影响。</p>
+							<p class="hint">待删除：{ v.Pending.Name } v{ strconv.Itoa(v.Pending.Version) }。同一规则的其他版本不受影响。<span class="info" title={ "规则标识：" + v.Pending.StableKey }>!</span></p>
 							if len(v.Pending.UsedBy) == 0 {
 								<p class="hint">该版本没有订阅引用，确认后删除，不影响任何订阅。</p>
 								<form method="post" action="/rules/delete"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="stable_key" value={ v.Pending.StableKey }/><input type="hidden" name="version" value={ strconv.Itoa(v.Pending.Version) }/><input type="hidden" name="confirm" value="1"/><button class="secondary-button" type="submit">确认删除</button> <a class="text-button" href="/rules">取消</a></form>
@@ -66,7 +66,7 @@ templ RulesLibraryPage(p PageData, v RulesLibraryView) {
 							for _,row:=range v.Presets {
 								<li>
 									<div class="rule-line"><strong>{ row.Name }</strong><span class="rule-action">{ row.Action }</span><span class="badge">预置</span><a class="text-button" href={ templ.SafeURL("#rule-view-" + row.StableKey + "-v" + strconv.Itoa(row.Version)) }>查看</a></div>
-									<p class="rule-note">{ row.Matcher } · { row.StableKey } v{ strconv.Itoa(row.Version) } · { ruleUsedByLabel(row.UsedBy) }</p>
+									<p class="rule-note">{ row.Matcher } · { ruleUsedByLabel(row.UsedBy) }<span class="info" title={ "规则标识：" + row.StableKey + " v" + strconv.Itoa(row.Version) }>!</span></p>
 								</li>
 							}
 						</ul>
@@ -74,7 +74,7 @@ templ RulesLibraryPage(p PageData, v RulesLibraryView) {
 
 					<section class="panel">
 						<div class="panel-heading"><h2>自定义规则</h2><span class="badge">{ strconv.Itoa(len(v.Customs)) } 条</span><a class="text-button" href="#rule-new">新建规则</a></div>
-						<p class="muted">自定义规则按“稳定键 + 版本”不可变保存：修改只产生新版本，旧版本订阅的下载字节不变。</p>
+						<p class="muted">自定义规则修改时产生新版本，旧版本订阅的下载内容不变。</p>
 						<p class="hint" title="一条规则只能有一种匹配器（域名 / 域名后缀 / IP 网段 / GeoSite / GeoIP / 规则集）；非法值在保存时被拒绝，不静默修正。">！ 一条规则只能有一种匹配器。</p>
 						if len(v.Customs) == 0 {
 							<p class="muted">暂无自定义规则；点右上“新建规则”创建第一条。</p>
@@ -83,7 +83,7 @@ templ RulesLibraryPage(p PageData, v RulesLibraryView) {
 							for _,row:=range v.Customs {
 								<li>
 									<div class="rule-line"><strong>{ row.Name }</strong><span class="rule-action">{ row.Action }</span><span class="badge">自定义</span><a class="text-button" href={ templ.SafeURL("#rule-view-" + row.StableKey + "-v" + strconv.Itoa(row.Version)) }>查看</a></div>
-									<p class="rule-note">{ row.Matcher } · { row.StableKey } v{ strconv.Itoa(row.Version) } · { ruleUsedByLabel(row.UsedBy) }</p>
+									<p class="rule-note">{ row.Matcher } · { ruleUsedByLabel(row.UsedBy) }<span class="info" title={ "规则标识：" + row.StableKey + " v" + strconv.Itoa(row.Version) }>!</span></p>
 								</li>
 							}
 						</ul>
@@ -98,7 +98,7 @@ templ RulesLibraryPage(p PageData, v RulesLibraryView) {
 
 					<div id="rule-new" class="modal" role="dialog" aria-label="新建规则"><div class="modal-card"><section class="panel"><div class="panel-heading"><h2>新建规则</h2><a class="text-button" href="#">关闭 ✕</a></div>
 						<form method="post" action="/rules"><input type="hidden" name="csrf" value={ p.CSRF }/>
-							<label for="rule-new-key">稳定键</label>
+							<label for="rule-new-key">规则标识</label>
 							<input id="rule-new-key" name="stable_key" type="text" required maxlength="64" placeholder="例如 proxy-ai" pattern="[a-z0-9][a-z0-9-]*"/>
 							<p class="hint">小写字母、数字、连字符；以 preset- 开头为预置保留，会被拒绝。</p>
 							<label for="rule-new-name">展示名</label>

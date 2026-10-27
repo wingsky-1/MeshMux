@@ -1,22 +1,22 @@
 package subscription
 
 // The subscription composer is the single renderer of one subscription's client
-// documents and of the Line route fragments the subscription asks for. It is a
-// pure function: no I/O, no clock, no database. The same selection always
-// produces byte-identical documents and one stable content id, so a download
-// can be re-derived and compared instead of being trusted from a cached copy.
+// documents. It is a pure function: no I/O, no clock, no database. The same
+// selection always produces byte-identical documents and one stable content id,
+// so a download can be re-derived and compared instead of being trusted from a
+// cached copy.
 //
 // The composer and the policy generators share one vocabulary from
-// internal/core/subscription/ir (six matcher kinds, three actions, the pin and
-// CIDR predicates). The IR package is the subscription layer's own definition,
-// so the composer imports downward only and policy imports it without a cycle:
-// there is
-// no second copy left to drift.
+// internal/core/subscription/ir (six matcher kinds, three actions, the artifact
+// descriptor and CIDR predicates). The IR package is the subscription layer's
+// own definition, so the composer imports downward only and policy imports it
+// without a cycle: there is no second copy left to drift.
 //
-// Composition never executes anything. A selected Out is recorded and rendered into
-// the Line route fragment (the double-hop egress the Line publishes); it is a routing
-// choice for the client document, not an authorization (Ruling R10: the Out allowlist
-// is node membership, and a subscription edit never touches it). A selected mesh device
+// Composition never executes anything and publishes no server route. The
+// selected Out is rendered into both client documents as one egress the client
+// dials itself (client-chain egress): the Line only ever serves its own VLESS
+// inbound, and every proxy rule in the document names the Out tag, so a client
+// hops Line -> Out without the Line forwarding anything. A selected mesh device
 // is recorded only: the standard subscription never grows a Tailscale endpoint.
 
 import (
@@ -57,7 +57,6 @@ const (
 	CodeComposeRuleInvalid       = "COMPOSE_RULE_INVALID"
 	CodeComposeRuleDuplicate     = "COMPOSE_RULE_DUPLICATE"
 	CodeComposeRuleConflict      = "COMPOSE_RULE_CONFLICT"
-	CodeComposeRulesetUnpinned   = "COMPOSE_RULESET_UNPINNED"
 	CodeComposeMihomoUnsupported = "COMPOSE_MIHOMO_UNSUPPORTED"
 	CodeComposeNetworkRecorded   = "COMPOSE_NETWORK_RECORDED_ONLY"
 	CodeComposeOutRecorded       = "COMPOSE_OUT_RECORDED_PENDING"
@@ -88,21 +87,27 @@ const (
 	MatcherRuleSet      = ir.MatcherRuleSet
 )
 
-// RuleSetPin is the version lock of one external rule-set artifact. The shape
-// and the shared predicates live in the subscription IR; policy's identically
-// shaped RulesetPin maps the same detail to its own stable code, so the two
-// gates cannot drift.
+// RuleSetPin is the optional version metadata of one external rule-set
+// artifact: a source URL, a version label and a digest. The composer treats it
+// as data, never as a gate: the Hub pre-checks shapes (URL, matcher), not the
+// content an operator configures. A rule with a well-formed pin renders the
+// versioned tag and the artifact URL; a rule without one renders exactly the
+// tag the operator configured and declares no remote artifact. The shape and
+// the shared predicates live in the subscription IR, so this method and
+// policy's identically shaped RulesetPin cannot drift.
 type RuleSetPin struct {
 	Source  string
 	Version string
 	SHA256  string
 }
 
-// Validate rejects a mutable or malformed artifact pin before any document is
-// rendered, so a client configuration can never name an unpinned file.
+// Validate reports whether the pin is one well-formed, immutable artifact
+// lock. It is a shape predicate only: the composer never refuses an artifact
+// because a pin is absent or malformed, it just renders without the fields the
+// pin would have supplied.
 func (p RuleSetPin) Validate() error {
 	if detail := ir.PinDetail(p.Source, p.Version, p.SHA256); detail != "" {
-		return errors.New(CodeComposeRulesetUnpinned + ": " + detail)
+		return errors.New(CodeComposeRuleInvalid + ": " + detail)
 	}
 	return nil
 }
@@ -124,17 +129,22 @@ type ComposeLine struct {
 }
 
 // ComposeOutHTTP marks one egress slot entry whose endpoint is an external
-// HTTP proxy (Ruling R11) instead of a MeshMux Out node. The composer only
-// needs the fact: the proxy credentials never enter a client document, they
-// stay in the Line candidate's private egress. The value is the node wire
-// contract's; this is a re-export, not a second source.
+// HTTP proxy (Ruling R11) instead of a MeshMux Out node. The composer renders
+// it as a client-side `http` outbound, so the client dials the proxy itself.
+// The value is the node wire contract's; this is a re-export, not a second
+// source.
 const ComposeOutHTTP = protocol.OutEgressHTTP
 
 // ComposeOut is one selected egress: an Out node or an external HTTP proxy.
 // The 1.0 slot always holds at most one entry; Kind distinguishes the two
-// shapes for the UI, the selection identity and validation. It carries no
-// credential: the Line presents the Hub-issued link credential on its own
-// candidate path, never in a subscription document.
+// shapes for the UI, the selection identity and validation.
+//
+// Under client-chain egress the composer renders this material into both client
+// documents, so the subscriber's client dials the egress itself and the Line
+// only serves its own VLESS inbound. LinkKey (SS Out) and Username/Password
+// (external HTTP proxy) are therefore part of the artifact: they are bearer
+// secrets of the same class as the per-Line VLESS UUID, protected by the
+// subscription bearer URL and never logged.
 type ComposeOut struct {
 	OutID       string
 	DisplayName string
@@ -143,10 +153,19 @@ type ComposeOut struct {
 	// Kind is "" (or "out") for a MeshMux Out node and ComposeOutHTTP for an
 	// external HTTP proxy.
 	Kind string
+	// LinkKey is the Hub-issued Shadowsocks link key of an Out node: the
+	// password half of the pinned 2022-blake3-aes-128-gcm link. It is empty
+	// for an HTTP proxy.
+	LinkKey string
+	// Username and Password are the optional Basic credentials of an external
+	// HTTP proxy. Both are empty for an Out node.
+	Username string
+	Password string
 }
 
-// ComposeRule is one pinned library revision in the subscription's order.
-// Pins is keyed by the geo code or the remote rule-set tag the rule names.
+// ComposeRule is one library revision in the subscription's order. Pins is
+// optional artifact metadata keyed by the geo code or the remote rule-set tag
+// the rule names; a rule without an entry is rendered from its bare identifier.
 type ComposeRule struct {
 	StableKey string
 	Version   int
@@ -163,19 +182,29 @@ type ComposeNetwork struct {
 	DisplayName string
 }
 
-// LineRoute is the server route fragment one selected Line has to publish for
-// this subscription. It names the Out tag; the Out body and its authorization
-// stay on the existing Out path.
+// LineRoute is the server route fragment one selected Line had to publish for
+// this subscription.
+//
+// Deprecated: retired by client-chain egress (docs/superpowers/plans/
+// 2026-10-27-client-chain-egress.md). The Line no longer forwards: the selected
+// Out is rendered into the client documents themselves, so the composer emits
+// no server route and ComposeDocuments.LineRoutes stays empty. The type and the
+// field are kept only so existing callers keep compiling; both are removed in a
+// later v1 release.
 type LineRoute struct {
 	NodeID   string
 	Fragment []byte
 }
 
 // ComposeDocuments is the assembled artifact: the two client documents, the
-// per-Line route fragments, the selection identity and the content id.
+// selection identity and the content id.
 type ComposeDocuments struct {
-	SingBox     []byte
-	Mihomo      []byte
+	SingBox []byte
+	Mihomo  []byte
+	// LineRoutes is always empty.
+	//
+	// Deprecated: retired by client-chain egress; the Line publishes no route
+	// for a subscription any more. Kept so callers compile; removed later.
 	LineRoutes  []LineRoute
 	SelectionID string
 	ContentID   string
@@ -185,16 +214,17 @@ type ComposeDocuments struct {
 //
 // Input: the four wizard groups (Lines with their credentials, at most one Out,
 // the pinned rule revisions, the recorded mesh devices).
-// Validation: every Line/credential pair, the single-Out bound, the rule pins
-// and overlaps, and the "an Out nobody routes to" case are checked before any
-// byte exists; each refusal is one blocking Diagnostic with a stable code.
+// Validation: every Line/credential pair, the single-Out bound, the rule
+// shapes and overlaps, and the "an Out nobody routes to" case are checked
+// before any byte exists; each refusal is one blocking Diagnostic with a stable
+// code. Artifact content is never validated: the Hub pre-checks shapes, not the
+// quality of what an operator configured.
 // Assembly: buildComposeSelection returns the ordered selection, then
-// composeDocuments runs the four stages and the makers.
+// composeDocuments builds the plan and runs the two client makers.
 // Effect: none — this function writes nothing and reads nothing.
-// Return: the two client documents, the per-Line route fragments, the selection
-// identity and the ContentID that an approval is recorded against. A blocking
-// diagnostic always yields zero documents, so a caller can never publish half an
-// artifact.
+// Return: the two client documents, the selection identity and the ContentID
+// that an approval is recorded against. A blocking diagnostic always yields zero
+// documents, so a caller can never publish half an artifact.
 func ComposeSubscription(lines []ComposeLine, outs []ComposeOut, rules []ComposeRule, network []ComposeNetwork) (ComposeDocuments, []Diagnostic) {
 	selection, diagnostics := buildComposeSelection(lines, outs, rules, network)
 	if hasBlockingDiagnostics(diagnostics) {
@@ -204,10 +234,11 @@ func ComposeSubscription(lines []ComposeLine, outs []ComposeOut, rules []Compose
 	return documents, append(diagnostics, documentDiagnostics...)
 }
 
-// validateComposeOut checks the operator-visible half of one egress. The
-// endpoint is required: an egress without a configured dial address would
-// render a route that names an egress nobody can reach. The kind is either the
-// MeshMux Out ("out" or empty) or an external HTTP proxy ("http").
+// validateComposeOut checks the dial half of one egress. The endpoint is
+// required: an egress without a configured dial address would render a client
+// outbound nobody can reach. The kind is either the MeshMux Out ("out" or
+// empty) or an external HTTP proxy ("http"), and each kind carries exactly its
+// own credential shape.
 func validateComposeOut(out ComposeOut) error {
 	if err := ValidateID(out.OutID); err != nil {
 		return errors.New(CodeComposeOutInvalid + ": out_id must be 32 lowercase hex characters")
@@ -223,6 +254,35 @@ func validateComposeOut(out ComposeOut) error {
 	if out.Port < 1 || out.Port > 65535 {
 		return errors.New(CodeComposeOutInvalid + ": the out port must be 1-65535")
 	}
+	if out.Kind == ComposeOutHTTP {
+		// An HTTP proxy carries Basic credentials, never a link key; the two
+		// shapes never mix, so a value of the other shape is refused instead of
+		// silently dropped from the document.
+		if out.LinkKey != "" {
+			return errors.New(CodeComposeOutInvalid + ": an http proxy carries no link key")
+		}
+		if out.Username == "" && out.Password != "" {
+			return errors.New(CodeComposeOutInvalid + ": an http password requires a username")
+		}
+		return validateProxyCredential(out.Username, out.Password)
+	}
+	if out.Username != "" || out.Password != "" {
+		return errors.New(CodeComposeOutInvalid + ": an out node carries no proxy credentials")
+	}
+	if !protocol.ValidOutLinkKey(out.LinkKey) {
+		return errors.New(CodeComposeOutInvalid + ": the out link key must be 16 random bytes in base64-std")
+	}
+	return nil
+}
+
+// validateProxyCredential bounds the optional Basic pair of an external HTTP
+// proxy. An empty value is legal (no auth or an empty password); a password
+// without a username is refused by the caller. The shape is the wire
+// contract's, so a credential the Hub accepts is one the client can render.
+func validateProxyCredential(username, password string) error {
+	if !protocol.ValidProxyCredential(username) || !protocol.ValidProxyCredential(password) {
+		return errors.New(CodeComposeOutInvalid + ": http proxy credentials must be valid UTF-8 up to 256 bytes without control characters")
+	}
 	return nil
 }
 
@@ -237,8 +297,10 @@ type composeRenderedRule struct {
 }
 
 // renderComposeRules validates the rule selection and returns the renderable
-// order. It reports the duplicate, conflict, invalid-value and unpinned cases
-// as blocking findings.
+// order. It reports the duplicate, conflict and invalid-value cases as blocking
+// findings. A missing or malformed artifact pin is not one of them: the Hub
+// pre-checks the shape of what the operator configured, and the rule renders
+// from the values that are there.
 func renderComposeRules(rules []ComposeRule) ([]composeRenderedRule, []Diagnostic) {
 	diagnostics := []Diagnostic{}
 	block := func(code, detail string) {
@@ -265,11 +327,7 @@ func renderComposeRules(rules []ComposeRule) ([]composeRenderedRule, []Diagnosti
 		}
 		values, tags, sources, err := composeRuleTargets(rule)
 		if err != nil {
-			if strings.HasPrefix(err.Error(), CodeComposeRulesetUnpinned) {
-				block(CodeComposeRulesetUnpinned, "规则 "+identity+"："+strings.TrimPrefix(err.Error(), CodeComposeRulesetUnpinned+": "))
-			} else {
-				block(CodeComposeRuleInvalid, "规则 "+identity+"："+err.Error())
-			}
+			block(CodeComposeRuleInvalid, "规则 "+identity+"："+strings.TrimPrefix(err.Error(), CodeComposeRuleInvalid+": "))
 			continue
 		}
 		rendered = append(rendered, composeRenderedRule{action: rule.Action, kind: rule.Kind, values: values, tags: tags, sources: sources})
@@ -285,7 +343,14 @@ func renderComposeRules(rules []ComposeRule) ([]composeRenderedRule, []Diagnosti
 }
 
 // composeRuleTargets validates one matcher family and returns its canonical
-// values plus the rendered rule-set tags and their pinned sources.
+// values plus the rendered rule-set tags and their artifact sources.
+//
+// The pin is optional metadata, not a precondition. A well-formed pin adds the
+// version to the tag ("ai@20261026") and declares its source URL, so the client
+// fetches exactly the version the operator locked; without one the tag is
+// exactly the identifier the operator configured and no remote artifact is
+// declared. Either way the rule is assembled as configured: the Hub guarantees
+// shapes, not the quality or existence of the artifact behind them.
 func composeRuleTargets(rule ComposeRule) ([]string, []string, []string, error) {
 	if len(rule.Values) == 0 || len(rule.Values) > ir.MaxRuleValues {
 		return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": a rule needs 1-64 matcher values")
@@ -316,22 +381,24 @@ func composeRuleTargets(rule ComposeRule) ([]string, []string, []string, error) 
 			if !ir.ValidTag(value) {
 				return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": geo and rule-set identifiers must be lowercase")
 			}
-			pin, ok := rule.Pins[value]
-			if !ok {
-				return nil, nil, nil, errors.New(CodeComposeRulesetUnpinned + ": " + value + " 没有版本锁定的规则集")
+			code, source := value, ""
+			if pin, ok := rule.Pins[value]; ok {
+				if err := pin.Validate(); err != nil {
+					// A malformed pin is a shape defect in what the operator
+					// configured, so it is refused; an absent one is not.
+					return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": " + strings.TrimPrefix(err.Error(), CodeComposeRuleInvalid+": "))
+				}
+				code, source = value+"@"+pin.Version, pin.Source
 			}
-			if err := pin.Validate(); err != nil {
-				return nil, nil, nil, err
-			}
-			tag := value + "@" + pin.Version
+			tag := code
 			switch rule.Kind {
 			case MatcherGeoSite:
-				tag = ir.GeoSiteTag(tag)
+				tag = ir.GeoSiteTag(code)
 			case MatcherGeoIP:
-				tag = ir.GeoIPTag(tag)
+				tag = ir.GeoIPTag(code)
 			}
 			tags = append(tags, tag)
-			sources = append(sources, pin.Source)
+			sources = append(sources, source)
 		default:
 			return nil, nil, nil, errors.New(CodeComposeRuleInvalid + ": unknown matcher kind")
 		}
@@ -404,7 +471,7 @@ func composeMatches(rule composeRenderedRule, probe string) bool {
 }
 
 // composeSelectionID hashes only the selection: the ordered Line identities,
-// the Out, the pinned rule revisions and the recorded devices. A rename or a
+// the Out, the rule revisions and the recorded devices. A rename or a
 // rendered byte change never alters it, so it can key the snapshot.
 func composeSelectionID(lines []Line, out *ComposeOut, rules []ComposeRule, network []ComposeNetwork) string {
 	var builder strings.Builder
@@ -430,14 +497,15 @@ func composeSelectionID(lines []Line, out *ComposeOut, rules []ComposeRule, netw
 // snapshot identity is deliberately not part of it: two snapshots of the same
 // choice must produce the same artifact id, otherwise every re-save would look
 // like drift.
+//
+// Only the two client documents enter the digest: the retired LineRoutes field
+// is always empty, and hashing it would keep a dead shape in the approval
+// identity.
 func composeContentID(documents ComposeDocuments) string {
 	var builder strings.Builder
 	builder.WriteString("meshmux-subscription-artifact/1\n")
 	builder.WriteString(composeDigest(documents.SingBox) + "\n")
 	builder.WriteString(composeDigest(documents.Mihomo) + "\n")
-	for _, route := range documents.LineRoutes {
-		builder.WriteString("route\t" + route.NodeID + "\t" + composeDigest(route.Fragment) + "\n")
-	}
 	sum := sha256.Sum256([]byte(builder.String()))
 	return hex.EncodeToString(sum[:])
 }

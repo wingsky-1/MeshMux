@@ -22,12 +22,10 @@ import (
 // with the REALITY listener and the desired user set: every active credential
 // of every active subscriber of this Line, ordered by credential ID.
 //
-// A Line with an enabled Out binding additionally carries the Out egress: the
-// selected Out node's dial address/port plus the Hub-issued SS link key.
-// The endpoint comes from the Out's own configured transport and the first
-// enabled binding in node-id order, so the candidate is deterministic while
-// the 1.0 model binds one Out at a time. A bound Out without transport leaves
-// the egress unattached and the route renders the fail-closed block stub.
+// A Line candidate carries the listener and that user set only. It never carries
+// a route fragment, an Out egress or a policy: every routing decision is made by
+// the client from the document it downloads, so nothing server-side ever
+// forwards to an Out.
 //
 // The function is read-only. It never commits, mutates subscribers or
 // publishes tasks; the caller owns the transaction and the candidate revision.
@@ -65,8 +63,8 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain
 	}
 	if coredomain.Role(role) == coredomain.RoleHTTP {
 		// An external HTTP proxy has no Agent and therefore no candidate. Every
-		// caller that reaches this branch (reconcile, ACL cleanup) is an Agent
-		// action that a proxy node must never receive.
+		// caller that reaches this branch (reconcile, retry) is an Agent action
+		// that a proxy node must never receive.
 		return coredomain.Candidate{}, errors.New("NODE_ROLE_INVALID: an external http proxy has no candidate")
 	}
 	if coredomain.Role(role) != coredomain.RoleEdge {
@@ -104,9 +102,6 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain
 		PrivateKey:      line.PrivateKey,
 		ShortID:         line.ShortID,
 	}
-	if err := attachLineOutEgressTx(tx, nodeID, &candidate); err != nil {
-		return coredomain.Candidate{}, err
-	}
 	return validateLineCandidate(candidate)
 }
 
@@ -140,36 +135,6 @@ func lineCandidateUsersTx(tx *sql.Tx, nodeID string) ([]coredomain.VLESSUser, er
 		return nil, errors.New("CANDIDATE_INVALID: at most " + strconv.Itoa(common.MaxLineCandidateUsers) + " users are allowed")
 	}
 	return users, nil
-}
-
-// attachLineOutEgressTx attaches the Hub-issued egress dial body to a configured
-// Line candidate when a subscription selected an egress for that Line (Task 5: the
-// edge is the authorization, there is no binding row). The selected egress may be a
-// MeshMux Out (SS link key) or an external HTTP proxy (Ruling R11: address/port
-// plus optional Basic credentials). The first egress in node-id order wins, so one
-// Line never renders two endpoints while the 1.0 same-Line rule carries a single
-// "out" tag. An egress without a configured dial body leaves the egress
-// unattached: the route still renders the fail-closed block stub, and selecting
-// such an egress is refused by validateSelectionOutTx, so this only happens for
-// an egress whose endpoint was removed after it was selected (SetOutTransport
-// never deletes; an HTTP proxy row is deleted with its node).
-func attachLineOutEgressTx(tx *sql.Tx, nodeID string, candidate *coredomain.Candidate) error {
-	outs, err := selectedEgressIDsForLineTx(tx, nodeID)
-	if err != nil {
-		return err
-	}
-	if len(outs) == 0 {
-		return nil
-	}
-	egress, configured, err := lineEgressBodyTx(tx, outs[0])
-	if err != nil {
-		return err
-	}
-	if !configured {
-		return nil
-	}
-	candidate.Out = &egress
-	return nil
 }
 
 // validateLineCandidate validates the assembled candidate and replaces every

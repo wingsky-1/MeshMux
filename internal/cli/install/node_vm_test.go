@@ -189,23 +189,72 @@ func requireNodeUnits(t *testing.T, ctx context.Context, runner ExecRunner, role
 	}
 }
 
+// requireNodeListeners proves the listeners and the retired-guard evidence a
+// node must carry. The Out source allowlist is retired: the live
+// inet meshmux_out table must be the rule-free MeshMux shell and the managed
+// script must be its canonical render, so no legacy accept/drop rule survives
+// to filter clients the link key now admits. An Out with configured transport
+// admits clients by that link key only, so the SS guard must listen on the node
+// port and the running kernel document must carry exactly the link key the
+// active candidate publishes.
 func requireNodeListeners(t *testing.T, ctx context.Context, runner ExecRunner, cfg node.Config) {
 	t.Helper()
 	out, err := runner.Run(ctx, "ss", "-H", "-lnt")
 	if err != nil || !strings.Contains(string(out), ":"+strconv.Itoa(cfg.VLESSPort)) {
-		t.Fatal("VLESS TCP listener missing")
+		t.Fatal("node TCP listener missing (Out SS guard or Line VLESS)")
 	}
 	out, err = runner.Run(ctx, "fail2ban-client", "get", "meshmux-node-sshd", "action", "nftables-multiport", "port")
 	if err != nil || !strings.Contains(string(out), strconv.Itoa(cfg.SSHPort)) {
 		t.Fatalf("SSH jail does not cover %d", cfg.SSHPort)
 	}
-	out, err = runner.Run(ctx, "nft", "list", "table", "inet", node.ACLTable)
-	if cfg.Role == node.RoleOut {
-		if err != nil || !strings.Contains(string(out), "tcp dport "+strconv.Itoa(cfg.VLESSPort)+" drop") {
-			t.Fatal("Out ACL table missing or not default-deny")
+	if cfg.Role != node.RoleOut {
+		if _, err := runner.Run(ctx, "nft", "list", "table", "inet", node.ACLTable); err == nil {
+			t.Fatal("edge node unexpectedly owns an Out table")
 		}
-	} else if err == nil {
-		t.Fatal("edge node unexpectedly owns an Out table")
+		return
+	}
+	documentData := mustReadVM(t, node.ActiveCandidatePath)
+	var document node.CandidateDocument
+	if err := json.Unmarshal(documentData, &document); err != nil {
+		t.Fatal("active candidate is not a node document")
+	}
+	if document.Out == nil || node.ValidateOutLinkKey(document.Out.Key) != nil {
+		t.Fatal("Out candidate carries no Hub-issued SS link key")
+	}
+	// Live evidence: the retired table exists, carries the neutral input chain
+	// and must have zero rules. A surviving accept or dport/drop rule would be
+	// the old source allowlist, which the link key replaced.
+	table, err := runner.Run(ctx, "nft", "-j", "list", "table", "inet", node.ACLTable)
+	if err != nil {
+		t.Fatal("retired Out ACL table is not live")
+	}
+	if err := node.VerifyOutACLDocument(table, cfg.VLESSPort, nil); err != nil {
+		t.Fatalf("Out ACL is not the retired rule-free table: %v", err)
+	}
+	// File evidence: the managed script is the canonical render, so a repair or
+	// hand edit cannot preserve an allowlist the live table no longer needs.
+	acl := mustReadVM(t, node.ACLPath)
+	expectedACL, err := node.CompileACL(document.Candidate(), nil)
+	if err != nil || !bytes.Equal(acl, expectedACL) {
+		t.Fatal("managed Out ACL is not the canonical rule-free render")
+	}
+	// The SS guard is the ingress authorization now: one shadowsocks inbound on
+	// the node port whose password is exactly the active candidate's link key.
+	var active struct {
+		Inbounds []struct {
+			Type       string `json:"type"`
+			ListenPort int    `json:"listen_port"`
+			Method     string `json:"method"`
+			Password   string `json:"password"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(mustReadVM(t, node.ActiveConfigPath), &active); err != nil || len(active.Inbounds) != 1 {
+		t.Fatal("active kernel config is not exactly one guard inbound")
+	}
+	guard := active.Inbounds[0]
+	if guard.Type != "shadowsocks" || guard.ListenPort != cfg.VLESSPort ||
+		guard.Method != node.OutLinkMethod || guard.Password != document.Out.Key {
+		t.Fatal("SS guard does not admit the active candidate link key on the node port")
 	}
 }
 

@@ -144,7 +144,7 @@ func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
 	clearOutForLine(t, app.Store, lineNode.ID, app.Now())
 	w = browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, 200)
-	if !strings.Contains(w.Body.String(), "HTTP 代理节点已彻底删除") {
+	if !strings.Contains(w.Body.String(), "HTTP 代理节点已删除") {
 		t.Fatalf("http proxy delete notice = %.300s", w.Body.String())
 	}
 	if _, err := app.Store.GetNodeAt(proxy.ID, app.Now()); err == nil {

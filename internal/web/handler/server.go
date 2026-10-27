@@ -119,7 +119,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	app.policyServer.RegisterRoutes(r, infra.JSONAPI, app.Authenticated, app.Mutation)
 	app.upgradeServer.RegisterRoutes(r, infra.JSONAPI, app.Authenticated, app.Mutation)
 	for _, page := range view.Navigation {
-		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" || page.Path == "/rules" || page.Path == "/tasks" {
+		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" || page.Path == "/rules" || page.Path == "/tasks" || page.Path == "/logs" {
 			continue
 		}
 		p := page

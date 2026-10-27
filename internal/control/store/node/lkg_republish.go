@@ -78,17 +78,8 @@ func (s *Store) RepublishLKG(nodeID string, now time.Time) (candidatepkg.Stored,
 	}
 	// The fixed publication path: one immutable revision plus the four tasks,
 	// committed together. No stampUpgradeTargetTx call: the stage row stays a
-	// plain config stage.
-	var tasks []protocol.Task
-	if candidate.Role == coredomain.RoleOut {
-		allowed, authErr := OutAuthorizationTx(tx, nodeID)
-		if authErr != nil {
-			return candidatepkg.Stored{}, nil, authErr
-		}
-		tasks, err = candidatepkg.PublishOutTx(tx, nodeID, candidate, now, allowed)
-	} else {
-		tasks, err = candidatepkg.PublishTx(tx, nodeID, candidate, now)
-	}
+	// plain config stage. Every role uses the same envelope (revision only).
+	tasks, err := candidatepkg.PublishTx(tx, nodeID, candidate, now)
 	if err != nil {
 		return candidatepkg.Stored{}, nil, err
 	}

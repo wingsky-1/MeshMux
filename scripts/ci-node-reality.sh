@@ -226,16 +226,18 @@ if ! grep -Fxq 'PASS' "${TEST_LOG}"; then
   fail "the test binary did not report an overall PASS"
 fi
 
-# --- The Line candidate and the publish gate on the same pinned kernel ------
-# The rendered Line document is what the node runs and what the Hub gates, so
-# the same verified binary checks both: the candidate renderer with and without
-# an Out, and the publish gate over a stored Out-selecting candidate. Both tests
-# skip without MESHMUX_SINGBOX_TEST_BINARY, so the variable is set here and a
-# SKIP is treated as a failure.
+# --- The Line candidate and the client chain on the same pinned kernel ------
+# The rendered Line document is what the node runs, and the client document is
+# what the Hub now serves: the selected Out egress travels in the subscription
+# itself, so there is no server-side publish gate any more. The same verified
+# binary checks the node candidates and the composed client document, and the
+# data-path fixture proves the real SS guard admits the Hub-issued link key.
+# Both tests skip without MESHMUX_SINGBOX_TEST_BINARY, so the variable is set
+# here and a SKIP is treated as a failure.
 export MESHMUX_SINGBOX_TEST_BINARY="${SINGBOX_BIN}"
-WEB_TEST="${REPO_ROOT}/.ci/bin/web-handler.test"
-if [[ ! -x "${WEB_TEST}" ]]; then
-  fail "prebuilt test binary not found or not executable: ${WEB_TEST}; the CI workflow must build it before running this script"
+SUBSCRIPTION_TEST="${REPO_ROOT}/.ci/bin/subscription.test"
+if [[ ! -x "${SUBSCRIPTION_TEST}" ]]; then
+  fail "prebuilt test binary not found or not executable: ${SUBSCRIPTION_TEST}; the CI workflow must build it before running this script"
 fi
 
 run_route_gate() {
@@ -264,6 +266,6 @@ run_route_gate() {
 }
 
 run_route_gate node "${TEST_BINARY}" '^TestCompileCandidateRouteNativeCheck$'
-run_route_gate web "${WEB_TEST}" '^TestPublishGateRealKernelOutCandidate$'
+run_route_gate client "${SUBSCRIPTION_TEST}" '^TestComposeSubscriptionOutClientChainDataPath$'
 
-printf 'PASS: the pinned sing-box %s accepted the compiled candidate, the Out-selecting Line candidate and the publish gate, and served a real isolated VLESS/REALITY handshake.\n' "${PIN_VERSION}"
+printf 'PASS: the pinned sing-box %s accepted the compiled candidate and the client-chain document with its Out egress, the real SS guard admitted the Hub-issued link key, and the fixture served a real isolated VLESS/REALITY handshake.\n' "${PIN_VERSION}"

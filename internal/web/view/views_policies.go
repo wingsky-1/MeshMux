@@ -166,13 +166,13 @@ func PolicyClientRows(clientPolicy policy.ClientPolicy) []PolicyRuleView {
 func PolicyServerRows(serverIntent policy.ServerPolicy, out PolicyOutState) []PolicyRuleView {
 	action, note := "Line 直出", "未配置 Out 不是错误：AI 与指定分流按 Line 直出，不生成指向 Out 的规则。"
 	if out == PolicyOutActive {
-		action, note = "Out 直出（可选）", "经 Out 直出；Out 不可用时按 fail-closed 处理，不会自动改走 Line。"
+		action, note = "Out 直出（可选）", "经 Out 直出；Out 不可用时拒绝转发，不会自动改走 Line。"
 	}
 	if out == PolicyOutDegraded {
-		action, note = "Out 故障 · fail-closed", "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
+		action, note = "Out 故障", "Out 故障：指定到 Out 的流量拒绝转发，且不自动改走 Line。"
 	}
 	if out == PolicyOutExternal {
-		action, note = "外部 HTTP 代理直出（声明）", "出口位是外部 HTTP 代理：Hub 无 ACL、无回读、无控制器，可用性是操作员的声明而不是已证明的结论。"
+		action, note = "外部 HTTP 代理直出（声明）", "出口是外部 HTTP 代理：是否可用以你的实测为准。"
 	}
 	rows := make([]PolicyRuleView, 0, len(serverIntent.Rules)+1)
 	for _, rule := range serverIntent.Rules {
@@ -272,8 +272,8 @@ func PoliciesDraftView() PolicyPageView {
 			{Match: "兜底（未命中任何规则）", Action: "走 Line", Note: "客户端层兜底固定为 Line，规则停用后流量回到兜底而不是断网。", State: "启用"},
 		},
 		Server: []PolicyRuleView{
-			{Match: "AI 域名与服务（按域名规则集）", Action: "Out 直出（可选）", Note: "命中后经 Out 直出；未配置 Out 时走 Line，Out 故障时 fail-closed，不隐式直出。", State: "启用"},
-			{Match: "指定 CIDR 段", Action: "Out 直出（可选）", Note: "与 AI 分流同一三态：无 Out 走 Line，Out 故障 fail-closed。", State: "启用"},
+			{Match: "AI 域名与服务（按域名规则集）", Action: "Out 直出（可选）", Note: "命中后经 Out 直出；未配置 Out 时走 Line，Out 故障时拒绝转发。", State: "启用"},
+			{Match: "指定 CIDR 段", Action: "Out 直出（可选）", Note: "与 AI 分流同一处理：无 Out 走 Line，Out 故障拒绝转发。", State: "启用"},
 			{Match: "指定规则集", Action: "Line 直出", Note: "固定经已纳管的 Line 转发，不依赖 Out。", State: "启用"},
 			{Match: "兜底（默认出口）", Action: "Line 直出", Note: "服务端层兜底固定为 Line；Out 故障只影响指定到 Out 的流量，不改变兜底路径。", State: "启用"},
 		},

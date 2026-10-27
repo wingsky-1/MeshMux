@@ -239,37 +239,6 @@ func checkSingBox(ctx context.Context, runner CommandRunner, binary, configPath 
 	return err
 }
 
-func checkOutACL(ctx context.Context, runner CommandRunner, root string, candidate Candidate, allowed []string) error {
-	data, err := CompileACL(candidate, allowed)
-	if err != nil {
-		return err
-	}
-	if candidate.Role == RoleEdge {
-		return nil
-	}
-	dir := rooted(root, agentDataDir)
-	if err := ensurePrivateDir(dir); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, ".acl-check-*")
-	if err != nil {
-		return errors.New("ACL_CHECK_FILE_CREATE_FAILED")
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(data)
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return errors.New("ACL_CHECK_FILE_WRITE_FAILED")
-	}
-	_, err = runner.Run(ctx, nftPath, "-c", "-f", name)
-	return err
-}
-
 // RunOption is one CLI-wired dependency of the installed Agent. The node
 // package cannot import the updater (the updater imports node), so the
 // outside-sandbox convergence writer is injected here instead of constructed.

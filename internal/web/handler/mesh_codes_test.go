@@ -100,15 +100,21 @@ func TestMeshStatusIsChosenFromCodesOnly(t *testing.T) {
 // that grows a code is a Hub-side contract defect, so the page reports the
 // fixed internal code and a 500, never the new value.
 func TestMeshControlPlaneFailRefusesForeignCodes(t *testing.T) {
-	_, b, fake, _ := meshTestApp(t)
+	_, b, fake, logs := meshTestApp(t)
 	fake.failWith["nodes.list"] = "HEADSCALE_SOMETHING_NEW"
 	w := b.post("/mesh/reconcile", nil)
 	requireStatus(t, w, http.StatusInternalServerError)
 	if strings.Contains(w.Body.String(), "HEADSCALE_SOMETHING_NEW") {
 		t.Fatalf("unregistered adapter code reached the page: %.300s", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), meshh.CodeMeshInternalError) {
-		t.Fatalf("refusal lost its sanitized code: %.300s", w.Body.String())
+	// The beginner-facing page no longer prints stable codes; the sanitized
+	// code stays in the audit log, where an operator can find it.
+	body := w.Body.String()
+	if strings.Contains(body, "HEADSCALE_SOMETHING_NEW") {
+		t.Fatalf("the page printed the foreign code: %.300s", body)
+	}
+	if !strings.Contains(logs.String(), meshh.CodeMeshInternalError) {
+		t.Fatalf("refusal lost its sanitized code in the log: %.600s", logs.String())
 	}
 }
 
@@ -132,8 +138,12 @@ func TestMeshPageNoticeNeverRendersFreeFormText(t *testing.T) {
 	// page, and it must never quote the row.
 	requireStatus(t, w, http.StatusInternalServerError)
 	body := w.Body.String()
-	if !strings.Contains(body, store.CodeMeshDeviceCorrupt) {
-		t.Fatalf("page lost %s: %.400s", store.CodeMeshDeviceCorrupt, body)
+	// Stable codes live in the audit log after the beginner-first copy pass;
+	// the page must not quote the stored row or the store detail.
+	for _, leak := range []string{"the stored mesh device record is invalid", "Not A Name"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("page quoted %q: %.400s", leak, body)
+		}
 	}
 	for _, leak := range []string{"the stored mesh device record is invalid", "Not A Name"} {
 		if strings.Contains(body, leak) {

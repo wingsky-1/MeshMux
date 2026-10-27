@@ -95,11 +95,12 @@ func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 	activateViaAPI(t, b, "server",
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"direct"}]}`)
 	mixed := publishReceipt(t, postPublish(t, b, `{"operation_id":"op-publish-both"}`), http.StatusOK)
-	if !mixed.OK || mixed.Status != "queued" || mixed.Candidate == nil {
+	if !mixed.OK || mixed.Status != "gated" || mixed.Candidate != nil {
 		t.Fatalf("mixed receipt = %+v", mixed)
 	}
-	if !strings.Contains(mixed.NextAction, "客户端层不写节点候选") {
-		t.Fatalf("mixed next_action hides the client preview: %q", mixed.NextAction)
+	if !strings.Contains(mixed.NextAction, "服务端不再下发路由规则") ||
+		!strings.Contains(mixed.NextAction, "失败不会写入任何修订") {
+		t.Fatalf("mixed next_action hides the retired server layer: %q", mixed.NextAction)
 	}
 	// The queued server candidate needs its own readback before the download
 	// gate reopens; the client layer is not what unblocks it.
@@ -123,7 +124,7 @@ func TestPoliciesPageMarksClientLayerAsPreview(t *testing.T) {
 	w := b.req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
-	for _, want := range []string{"预览 · 不改变订阅", "没有消费者", "不读取客户端层", "不包含这些规则"} {
+	for _, want := range []string{"预览 · 不改变订阅", "客户端层只是预览", "标准订阅下载不包含这些规则", "客户端层已停写"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("client preview is not labelled on /policies (%q missing): %.600s", want, body)
 		}

@@ -1,8 +1,8 @@
 // Package node is the persistence boundary of nodes, Lines and the optional Out.
 //
 // A node row is the host identity; a Line is an edge node with stored transport
-// and the VLESS users its subscribers hold; an Out is an optional managed egress
-// with its own authorization and readback. All three share the immutable
+// and the VLESS users its subscribers hold; an Out is an optional Shadowsocks
+// egress that admits clients by its link key. All three share the immutable
 // candidate chain, so they live in one domain.
 //
 // # Dependency direction
@@ -19,7 +19,7 @@
 //
 // "The Hub published this candidate" is proven by the immutable revision and the
 // task envelope. "The Agent applied it" is proven only by a healthy readback of
-// that revision with the same compiled digest. "This address really is the
-// Line's egress on the wire" is not proven by any readback, which is why the
-// allowlist derivation refuses anything that is not a literal IP.
+// that revision with the same compiled digest. "A client really reached the Out"
+// is not proven by any readback: the Out admits by link key, and the download is
+// where a subscriber chooses that hop.
 package node

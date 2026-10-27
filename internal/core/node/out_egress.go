@@ -8,14 +8,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // OutLinkMethod is the pinned Shadowsocks method of the Line→Out double-hop.
-// Under Ruling R7 the path is never bare VLESS on the public internet.
-const OutLinkMethod = "2022-blake3-aes-128-gcm"
+// Under Ruling R7 the path is never bare VLESS on the public internet. The value
+// is owned by the wire contract so the Out inbound and the client egress a
+// subscription renders cannot drift apart.
+const OutLinkMethod = protocol.OutLinkMethod
 
 // OutEgressHTTP marks an egress whose dial body is an external HTTP proxy
 // instead of a MeshMux Out node (Ruling R11). The type field is omitted on the
@@ -24,15 +25,13 @@ const OutLinkMethod = "2022-blake3-aes-128-gcm"
 // second literal.
 const OutEgressHTTP = protocol.OutEgressHTTP
 
-// maxProxyCredentialBytes bounds one HTTP proxy username or password. Basic
-// credentials are short operator strings, never documents.
-const maxProxyCredentialBytes = 256
-
 // outLinkKeyBytes is the raw length of one link key. The 128-gcm method
 // requires exactly 16 bytes on the dial side: `sing-box check` refuses any
 // other length with "bad key length, required 16". (Ruling R7 names 32 bytes,
-// which the kernel's outbound gate rejects; the method pins the length.)
-const outLinkKeyBytes = 16
+// which the kernel's outbound gate rejects; the method pins the length.) The
+// value lives in the wire contract so the client egress a subscription renders
+// uses the same length.
+const outLinkKeyBytes = protocol.OutLinkKeyBytes
 
 // OutEgress is the Hub-issued dial body of one Line's "out" outbound: either
 // the selected Out node's address/port plus the SS link key (Ruling R7), or an
@@ -80,13 +79,8 @@ func NewOutLinkKey() (string, error) {
 // ValidateOutLinkKey checks the encoded shape of one link key: canonical
 // base64-std decoding to exactly the method's 16 bytes.
 func ValidateOutLinkKey(key string) error {
-	const invalid = "OUT_EGRESS_INVALID: out link key must be 16 random bytes in base64-std"
-	if len(key) == 0 || len(key) > 64 {
-		return errors.New(invalid)
-	}
-	raw, err := base64.StdEncoding.DecodeString(key)
-	if err != nil || len(raw) != outLinkKeyBytes || base64.StdEncoding.EncodeToString(raw) != key {
-		return errors.New(invalid)
+	if !protocol.ValidOutLinkKey(key) {
+		return errors.New("OUT_EGRESS_INVALID: out link key must be 16 random bytes in base64-std")
 	}
 	return nil
 }
@@ -194,13 +188,8 @@ func (e OutEgress) Validate() error {
 // characters and NUL are rejected because the value reaches a kernel document
 // and a header.
 func validateProxyCredential(value string) error {
-	if len(value) > maxProxyCredentialBytes || !utf8.ValidString(value) {
+	if !protocol.ValidProxyCredential(value) {
 		return errors.New("OUT_EGRESS_INVALID: http proxy credentials must be valid UTF-8 up to 256 bytes")
-	}
-	for _, r := range value {
-		if r == 0 || r < 0x20 || r == 0x7f {
-			return errors.New("OUT_EGRESS_INVALID: http proxy credentials must not contain control characters")
-		}
 	}
 	return nil
 }

@@ -11,15 +11,14 @@ package node
 //     subscription still selects is refused with the subscription names (the
 //     operator migrates those first), and an Out with a chain in flight is refused
 //     so no task is left pointing at a node that no longer exists;
-//   - the ACL is brought back to default-deny before the row disappears. The empty
-//     authorization is published and read back in the same transaction, so the host
-//     that is about to be forgotten cannot keep accepting the old sources. Only
-//     then is the node deleted, which also drops out_settings (dial address + link
-//     key) and every candidate/task row through the schema's cascades.
+//   - the deletion itself is total: out_settings (dial address + link key),
+//     candidates, tasks, identities and pairing rows go with the row through the
+//     schema's cascades. There is no source allowlist to clear any more: an Out
+//     admitted clients by link key, and the key is deleted with the node.
 //
 // Lines that used to egress through the deleted Out are NOT silently turned into
-// direct egress. Their route is re-derived by the existing drain chain, and the
-// policy package's own fail-closed rule refuses a policy that names an Out the Hub no
+// direct egress. Their client document is recomposed on the next download, and the
+// policy layer's own fail-closed rule refuses a policy that names an Out the Hub no
 // longer has (OUT_BINDING_INVALID; a requirement of an unavailable Out is
 // OUT_OFFLINE_FAIL_CLOSED). See RepublishLineAuthorizations.
 
@@ -35,18 +34,18 @@ import (
 )
 
 // DeleteOutAt is the request-clock variant used by the Web handler, so the
-// refusal check, the ACL publication and the readback share one timestamp.
+// refusal check and the delete share one timestamp.
 //
 // Order of operations (all in one transaction):
 //
-//  1. Validate the node is an Out, so a Line or a typo can never reach the delete.
+//  1. Validate the node is an Out or an HTTP proxy, so a Line or a typo can never
+//     reach the delete.
 //  2. Refuse a live subscription reference, naming the subscriptions.
 //  3. Refuse an Out with an unfinished chain: a task addressed to a node that is
-//     about to be deleted could never be reported, and the Agent would keep the
-//     guard of a Host the Hub has forgotten.
-//  4. Publish the explicit empty authorization and read it back.
-//  5. Delete the node row; out_settings, candidates, tasks, identities and pairing
-//     rows go with it through ON DELETE CASCADE.
+//     about to be deleted could never be reported, and the Agent would keep
+//     applying a configuration the Hub has forgotten.
+//  4. Delete the node row; out_settings, candidates, tasks, identities, pairing
+//     rows and the private proxy row go with it through ON DELETE CASCADE.
 //
 // A failure at any step rolls the whole thing back: there is no half-deleted Out.
 func (s *Store) DeleteOutAt(outID string, now time.Time) error {
@@ -84,37 +83,20 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	if len(usedBy) > 0 {
 		return errors.New(s.Subscribers.OutReferencedCode() + ": out " + outID + " is still selected by " + strings.Join(usedBy, "、") + "; migrate those subscriptions first")
 	}
-	// An unfinished chain is a host that has not finished applying the guard. Deleting
-	// the node now would strand that chain: no result could be recorded for it, and the
-	// host would keep whatever ACL it last applied. The operator retries after it
-	// settles (the same bounded rule the rest of the Out synchronization uses).
+	// An unfinished chain is a host that has not finished applying its link-key
+	// listener. Deleting the node now would strand that chain: no result could be
+	// recorded for it, and the host would keep whatever configuration it last
+	// applied. The operator retries after it settles (the same bounded rule the
+	// rest of the Out synchronization uses).
 	//
-	// The refusal is joined with ErrOutCleanupPending so every caller classifies it the
-	// same way as the offline/deferred case: a refusal that deleted nothing, never a
-	// half-success. Without the sentinel the handler fell through to the generic mapping,
-	// which used to answer 202 "route cleaned" for a delete that destroyed nothing.
+	// The refusal is joined with ErrOutCleanupPending so every caller classifies
+	// it the same way: a refusal that deleted nothing, never a half-success.
 	unfinished, err := candidatepkg.LineUnfinishedTasksTx(tx, outID)
 	if err != nil {
 		return err
 	}
 	if unfinished != 0 {
 		return errors.Join(errors.New(CodeOutSyncPending+": the out still has an unfinished chain; retry after it settles"), ErrOutCleanupPending)
-	}
-	// Publish the explicit empty authorization before the node is gone. An Out that
-	// never published a chain has no host state to clear, and an external HTTP proxy
-	// has no Agent, no candidate and no ACL at all (Ruling R11): its delete must not
-	// walk the Out chain, so it is branched by kind instead of being fed to the
-	// candidate builder.
-	if role == string(common.NodeRoleOut) {
-		deferred, deferredErr := s.clearOutACLBeforeDeleteTx(tx, outID, now)
-		if deferred {
-			// The host cannot drop its guard yet: a chain is still applying, or it stopped
-			// reporting. Deleting anyway would leave a host accepting the old sources with no
-			// node row left to retry from, so nothing is destroyed and the caller sees the
-			// deferral. The intent is durable, so the next Out event completes the cleanup and
-			// the operator can delete again.
-			return errors.Join(deferredErr, ErrOutCleanupPending)
-		}
 	}
 	// Delete the node. Everything keyed to it (out_settings with the dial address and
 	// link key, node_candidates, agent_tasks, node_identities, node_pairing) cascades.
@@ -136,78 +118,7 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	return nil
 }
 
-// clearOutACLBeforeDeleteTx publishes the explicit empty authorization of one Out and
-// verifies the newest chain carries it.
-//
-// The boolean reports a deferral: the chain could not be published (offline Out or a
-// competing in-flight chain) or the readback does not show the empty set. A caller
-// that is about to delete the node must treat that as a refusal, not as a reason to
-// continue.
-func (s *Store) clearOutACLBeforeDeleteTx(tx *sql.Tx, outID string, now time.Time) (bool, error) {
-	revision, digest, _, published, err := candidatepkg.LatestPublishedTx(tx, outID)
-	if err != nil {
-		return false, err
-	}
-	if !published {
-		// Nothing was ever published: no host state exists to clear.
-		return false, nil
-	}
-	clean, confirmed, err := s.OutACLCleanTx(tx, outID, revision, digest)
-	if err != nil {
-		return false, err
-	}
-	if !clean || !confirmed {
-		// A host that is not reporting cannot apply or prove the cleanup. Publishing the
-		// chain anyway would leave an unreachable host on the old allowlist while the node
-		// row disappears, so the delete defers instead.
-		offline, offlineErr := SubscriberLineNodeOfflineTx(tx, outID, now)
-		if offlineErr != nil {
-			return false, offlineErr
-		}
-		if offline {
-			return true, errors.New("OUT_OFFLINE: out is offline; the acl cleanup stays pending")
-		}
-		// The delete must publish an EMPTY authorization, and the ordinary drain would
-		// publish the current membership set instead (the Out is still enrolled at this
-		// point). So the cleanup chain is published here explicitly, with an empty
-		// allowlist, through the same fixed four-task publication as every other revision.
-		if unfinished, countErr := candidatepkg.LineUnfinishedTasksTx(tx, outID); countErr != nil {
-			return false, countErr
-		} else if unfinished != 0 {
-			return true, errors.New(CodeOutSyncPending + ": the out still has an unfinished chain")
-		}
-		revision, nextErr := candidatepkg.NextCandidateRevisionTx(tx, outID)
-		if nextErr != nil {
-			return false, nextErr
-		}
-		candidate, buildErr := BuildLineCandidateTx(tx, outID, revision)
-		if buildErr != nil {
-			return false, buildErr
-		}
-		if _, err := candidatepkg.PublishOutTx(tx, outID, candidate, now, []string{}); err != nil {
-			return false, err
-		}
-	}
-	// Read the cleanup back. Publishing happened in this transaction, so the anchor is
-	// exact: the newest chain must name the empty set explicitly.
-	revision, digest, _, found, err := candidatepkg.LatestPublishedTx(tx, outID)
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return false, nil
-	}
-	clean, _, err = s.OutACLCleanTx(tx, outID, revision, digest)
-	if err != nil {
-		return false, err
-	}
-	if !clean {
-		return true, errors.New(CodeOutSyncPending + ": the out acl cleanup was not published")
-	}
-	return false, nil
-}
-
-// ErrOutCleanupPending is retained for the callers that classify a deferred cleanup.
-// A successful delete no longer returns it: under Ruling R9 an Out that cannot be
-// cleaned up is refused instead of reported as "route gone, host pending".
-var ErrOutCleanupPending = errors.New(CodeOutSyncPending + ": the out acl cleanup is queued behind an in-flight or offline out; retry the out synchronization")
+// ErrOutCleanupPending is the refusal sentinel of a delete that destroyed
+// nothing because the Out still has an unfinished chain. The name is kept for
+// the Web handler's 409 mapping; there is no ACL cleanup left to wait for.
+var ErrOutCleanupPending = errors.New(CodeOutSyncPending + ": the out still has an unfinished chain; retry the out synchronization")

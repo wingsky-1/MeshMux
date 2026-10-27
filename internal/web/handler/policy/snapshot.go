@@ -147,6 +147,15 @@ func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 		if !facts.Available {
 			return view.PolicyOutDegraded
 		}
+		// A managed Out whose own chain ended in a terminal failure is the
+		// state that fails closed: report it instead of the transport-only
+		// "configured" answer.
+		if facts.OutID != "" {
+			if readback, rbErr := app.Store.NodeCoordinationReadback(facts.OutID, now); rbErr == nil &&
+				readback.FinalEgress == store.OutSyncPartial {
+				return view.PolicyOutDegraded
+			}
+		}
 		state = view.PolicyOutActive
 	}
 	// A degraded managed Out still wins over a declared proxy: it is the state

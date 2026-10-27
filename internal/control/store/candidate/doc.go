@@ -8,8 +8,9 @@
 //
 // Two things this package deliberately does not do:
 //
-//   - it does not derive the Out source authorization a chain carries. The Out
-//     domain owns that derivation, so the caller passes the exact allowlist in;
+//   - it does not derive an Out source authorization. The retired allowlist is
+//     not published at all any more: an Out admits clients by the link key its
+//     own candidate carries;
 //   - it does not build a Line snapshot. The node domain composes one and hands
 //     it over.
 //

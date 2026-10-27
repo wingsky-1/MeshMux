@@ -55,11 +55,6 @@ type runtimeTestRunner struct {
 	restartCount int
 	// aclApplied records the ACL script text the Agent pushed with nft -f.
 	aclApplied string
-	// unauthorizedAccept is one source injected into the live table for the
-	// next readback only, emulating a table tampered with during the
-	// verification window. The rollback's nft -f restores the canonical LKG,
-	// so the injected accept does not survive it.
-	unauthorizedAccept string
 }
 
 func (r *runtimeTestRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -114,20 +109,7 @@ func (r *runtimeTestRunner) Run(_ context.Context, name string, args ...string) 
 			if len(r.nftRules) == 0 {
 				r.nftRules = validNFTRules(r.listenPort)
 			}
-			rules := r.nftRules
-			if r.unauthorizedAccept != "" {
-				// Inject the out-of-band accept after the table and chain
-				// entries, before the first drop. It is one-shot: the
-				// rollback re-applies the canonical LKG, and that apply
-				// must be able to prove itself again.
-				injected := make([]string, 0, len(rules)+1)
-				injected = append(injected, rules[:2]...)
-				injected = append(injected, nftAcceptRule("ip", r.unauthorizedAccept, r.listenPort))
-				injected = append(injected, rules[2:]...)
-				rules = injected
-				r.unauthorizedAccept = ""
-			}
-			return []byte("{\"nftables\":[" + strings.Join(rules, ",") + "]}"), nil
+			return []byte("{\"nftables\":[" + strings.Join(r.nftRules, ",") + "]}"), nil
 		}
 		return nil, nil
 	default:
@@ -135,57 +117,20 @@ func (r *runtimeTestRunner) Run(_ context.Context, name string, args ...string) 
 	}
 }
 
-// nftRulesFromScript translates one rendered ACL script into the nft -j shape
-// the kernel would print for it.
+// nftRulesFromScript translates the retired ACL script into the nft -j shape
+// the kernel would print for it. The guard is rule-free now, so the script
+// text carries no rules and a legacy rule in it is never converted.
 func nftRulesFromScript(script string, port int) []string {
-	rules := []string{
-		`{"table":{"family":"inet","name":"meshmux_out"}}`,
-		`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`,
-	}
-	for _, line := range strings.Split(script, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 7 && (fields[0] == "ip" || fields[0] == "ip6") && fields[1] == "saddr" &&
-			fields[3] == "tcp" && fields[4] == "dport" && fields[6] == "accept" {
-			rules = append(rules, nftAcceptRule(fields[0], fields[2], port))
-			continue
-		}
-		if len(fields) == 4 && fields[1] == "dport" && fields[3] == "drop" &&
-			(fields[0] == "tcp" || fields[0] == "udp") {
-			rules = append(rules, nftPortRule(fields[0], port))
-		}
-	}
-	return rules
+	return validNFTRules(port)
 }
 
-func nftPortRule(proto string, port int) string {
-	return `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[` +
-		`{"match":{"op":"==","left":{"payload":{"protocol":"` + proto + `","field":"dport"}},` +
-		`"right":` + strconv.Itoa(port) + `}},{"drop":null}]}}`
-}
-
-// nftAcceptRule renders one accept rule the way nft prints a source prefix:
-// a bare address for a host prefix and a prefix object for a network.
-func nftAcceptRule(family, source string, port int) string {
-	right := `"` + source + `"`
-	if address, bits, ok := strings.Cut(source, "/"); ok {
-		if hostBits := map[string]string{"ip": "32", "ip6": "128"}[family]; bits == hostBits {
-			right = `"` + address + `"`
-		} else {
-			right = `{"prefix":{"addr":"` + address + `","len":` + bits + `}}`
-		}
-	}
-	return `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[` +
-		`{"match":{"op":"==","left":{"payload":{"protocol":"` + family + `","field":"saddr"}},"right":` + right + `}},` +
-		`{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":` + strconv.Itoa(port) + `}},` +
-		`{"accept":null}]}}`
-}
-
+// validNFTRules is the neutral, rule-free inet meshmux_out table: the only
+// shape the Agent and the installer accept after the source allowlist is
+// retired.
 func validNFTRules(port int) []string {
 	return []string{
 		`{"table":{"family":"inet","name":"meshmux_out"}}`,
 		`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`,
-		nftPortRule("tcp", port),
-		nftPortRule("udp", port),
 	}
 }
 
@@ -351,7 +296,7 @@ func TestReadbackStartupConfigMismatchRejected(t *testing.T) {
 	}
 	runtime := &Runtime{cfg: cfg, root: root, runner: runner, procRoot: filepath.Join(root, "proc"), enforceProcArgs: true}
 	candidate := testCandidate(7).Candidate()
-	if _, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, "", aclExpectation{}); err == nil {
+	if _, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, ""); err == nil {
 		t.Fatal("same binary started with another config accepted")
 	}
 }
@@ -409,41 +354,28 @@ func TestReadbackSupervisorStartingIsDistinct(t *testing.T) {
 	}
 }
 
-func TestOutACLRequiresExactRulePairs(t *testing.T) {
+func TestOutACLTableIsRetiredAndRuleFree(t *testing.T) {
 	root, cfg, _, runner := createRuntimeFixture(t, RoleOut, 7)
 	cfg.Role = RoleOut
 	cfg.VLESSPort = 8443
 	runner.listenPort = 8443
 	runner.nftRules = validNFTRules(8443)
 	if _, err := ReadbackLocal(context.Background(), cfg, root, runner); err != nil {
-		t.Fatal(err)
+		t.Fatalf("neutral out table rejected: %v", err)
 	}
-	cases := [][]string{
-		{
-			runner.nftRules[0], runner.nftRules[1],
-			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"accept":null}]}}`,
-			runner.nftRules[2], runner.nftRules[3],
-		},
-		{
-			runner.nftRules[0], runner.nftRules[1],
-			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}}]}}`,
-			runner.nftRules[3],
-		},
-		{
-			runner.nftRules[0], runner.nftRules[1],
-			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}},{"drop":null},{"accept":null}]}}`,
-			runner.nftRules[3],
-		},
-		{
-			runner.nftRules[0],
-			strings.Replace(runner.nftRules[1], `"policy":"accept"`, `"policy":"drop"`, 1),
-			runner.nftRules[2], runner.nftRules[3],
-		},
+	// A surviving accept or dport drop is the legacy guard: it filters clients
+	// the link key now admits, so the readback must fail instead of passing.
+	legacy := [][]string{
+		append(append([]string{}, runner.nftRules...),
+			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"ip","field":"saddr"}},"right":"203.0.113.7"}},{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}},{"accept":null}]}}`),
+		append(append([]string{}, runner.nftRules...),
+			`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}},{"drop":null}]}}`),
 	}
-	for i, rules := range cases {
+	for i, rules := range legacy {
 		runner.nftRules = rules
-		if _, err := ReadbackLocal(context.Background(), cfg, root, runner); err == nil {
-			t.Fatalf("mutated ACL %d accepted", i)
+		if _, err := ReadbackLocal(context.Background(), cfg, root, runner); err == nil ||
+			!strings.Contains(err.Error(), "OUT_ACL_RULE_INVALID") {
+			t.Fatalf("legacy ACL %d = %v, want OUT_ACL_RULE_INVALID", i, err)
 		}
 	}
 }

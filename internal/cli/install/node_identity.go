@@ -34,6 +34,16 @@ type nodeIdentityResolved struct {
 	pairingPending bool
 }
 
+// candidateRevision returns the candidate revision a fresh install must apply:
+// the newest document the Hub reports in metadata. A fixture or older Hub that
+// does not report one keeps the initial-revision behavior.
+func candidateRevision(metadata node.Metadata) int64 {
+	if metadata.ConfigRevision >= 1 {
+		return metadata.ConfigRevision
+	}
+	return 1
+}
+
 // nodeResolveIdentityAndCandidate loads the recorded Agent identity or pairs a
 // fresh one, fetches the Hub metadata and candidate document, and validates
 // both. A missing pairing code ends the operation as a pending pairing request
@@ -67,7 +77,7 @@ func nodeResolveIdentityAndCandidate(ctx context.Context, result *InstallResult,
 			}
 			metadata, err = opts.Metadata(ctx, installedCfg, identity)
 			if err == nil {
-				candidate, err = opts.Candidate(ctx, installedCfg, identity, 1)
+				candidate, err = opts.Candidate(ctx, installedCfg, identity, candidateRevision(metadata))
 			}
 			if err == nil && metadata.NodeID != "" {
 				err = metadata.ValidateFor(installedCfg)
@@ -115,7 +125,7 @@ func nodeResolveIdentityAndCandidate(ctx context.Context, result *InstallResult,
 		}
 		metadata, err = opts.Metadata(ctx, installedCfg, identity)
 		if err == nil {
-			candidate, err = opts.Candidate(ctx, installedCfg, identity, 1)
+			candidate, err = opts.Candidate(ctx, installedCfg, identity, candidateRevision(metadata))
 		}
 		if err == nil && metadata.NodeID != "" {
 			err = metadata.ValidateFor(installedCfg)

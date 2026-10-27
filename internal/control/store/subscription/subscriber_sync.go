@@ -21,7 +21,6 @@ import (
 	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 	storenode "github.com/wingsky-1/MeshMux/internal/control/store/node"
-	storepolicy "github.com/wingsky-1/MeshMux/internal/control/store/policy"
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
@@ -63,12 +62,9 @@ func HistoricalLineIDsTx(tx *sql.Tx, subscriberID string) ([]string, error) {
 // The builder returns the full active user set, so publishing it can never
 // remove the credentials of another subscriber.
 //
-// The route is derived from the live intent, never copied from the previous
-// candidate: a Line keeps the server policy that is active now, and an Out that
-// was unbound, deleted or went offline invalidates the old route instead of
-// being republished from a stale copy (see policy.LineServerRouteTx). A credential
-// change therefore cannot keep a route alive that the current policy and Out
-// facts no longer justify.
+// The candidate carries the listener and that user set only: the server-side
+// split is retired, so no route fragment and no Out egress are attached. Every
+// routing decision lives in the client document the subscriber downloads.
 func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64, now time.Time) (nodedomain.Candidate, error) {
 	candidate, err := storenode.BuildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
@@ -77,11 +73,6 @@ func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64, now time.Tim
 	if candidate.Role != nodedomain.RoleEdge || candidate.Reality == nil {
 		return nodedomain.Candidate{}, errors.New("LINE_NOT_CONFIGURED: line transport is not configured")
 	}
-	route, err := storepolicy.LineServerRouteTx(tx, nodeID, now)
-	if err != nil {
-		return nodedomain.Candidate{}, err
-	}
-	candidate.Route = route
 	return candidate, nil
 }
 
@@ -190,13 +181,6 @@ func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 		// Do not enqueue state-changing work for a Line that cannot receive
 		// it. The subscriber tables keep the intent for a later drain.
 		return errors.New("LINE_OFFLINE: line is offline; synchronization stays pending")
-	}
-	// The Line's own Out path has to be authorized and confirmed before the
-	// Line may publish: a published snapshot would make clients use an egress
-	// the Out guard still drops. A Line without an enabled binding is not
-	// affected, so an Out-free deployment is unchanged.
-	if err := storenode.LineOutPublishGateTx(tx, nodeID, now); err != nil {
-		return err
 	}
 
 	var nextRevision int64
@@ -350,11 +334,9 @@ func (s *Store) reconcileSubscriberSync(subscriberID string, now time.Time, allo
 	if err := coredomain.ValidateID(subscriberID); err != nil {
 		return common.ErrSubscriberIDInvalid()
 	}
-	// The Out direction is deliberately not drained here. A Line may only
-	// publish after the Out that serves it confirmed the authorization, so an
-	// explicit subscriber publication that races the Out chain fails the gate
-	// with OUT_NOT_AUTHORIZED instead of publishing an egress the Out would
-	// drop. The Out's own result event releases the Line (drainLinesForOut).
+	// The Out direction is deliberately not drained here: a subscription change
+	// never republishes an Out, and a Line publication no longer waits on one.
+	// The Out follows its own lifecycle events.
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
@@ -443,10 +425,11 @@ func subscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time,
 	if offline {
 		return common.SubscriberSyncPartial, "NODE_OFFLINE", nil
 	}
-	// A Line that egresses through an Out is only converged when the pair is:
-	// the Out allowlist must authorize this Line and prove it. Reporting a
-	// confirmed inbound as healthy while the Out drops the traffic would be a
-	// false success.
+	// The egress slot is reported independently of the Line's own snapshot: the
+	// client document, not the Line, carries the Out. A Line with no resolvable
+	// egress is reported partial because its download would be incomplete; a
+	// managed Out is healthy by link-key admission and an HTTP proxy is the
+	// operator's declaration, so neither keeps the Line pending.
 	egress, egressCode, err := egressOf(tx, nodeID, now)
 	if err != nil {
 		return common.SubscriberSyncPartial, common.CodeDatabaseUnavailable, err

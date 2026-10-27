@@ -63,7 +63,7 @@ app.on("exit", (code) => {
   });
   await page.locator("#password").fill("wrong-password");
   await page.getByRole("button", { name: "登录控制台" }).click();
-  if (!(await page.getByRole("alert").innerText()).includes("AUTH_FAILED"))
+  if (!(await page.getByRole("alert").innerText()).includes("凭据不正确"))
     throw Error("missing login failure feedback");
   await page.locator("#password").fill("isolated-browser-password-47!");
   await page.getByRole("button", { name: "登录控制台" }).click();

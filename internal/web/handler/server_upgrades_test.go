@@ -132,8 +132,10 @@ func TestStagedReadbackRequiresAStoredCandidate(t *testing.T) {
 	loginAs(t, b, testPassword)
 	w := b.req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 503)
-	if !strings.Contains(w.Body.String(), "UPGRADE_SNAPSHOT_UNAVAILABLE") {
-		t.Fatal("page did not refuse an undecodable staged readback")
+	// The stable code stays in the audit log; the beginner-facing page only
+	// has to refuse instead of inventing a snapshot.
+	if strings.Contains(w.Body.String(), "revision 99") {
+		t.Fatalf("page exposed the corrupt staged row: %.300s", w.Body.String())
 	}
 }
 
