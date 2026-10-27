@@ -1,43 +1,73 @@
-// Package store is the persistence layer of the Hub control plane: the SQLite
-// store, schema migrations, session/authentication records, node, mesh,
-// subscriber, subscription, route-policy, Out-sync and upgrade-task state, plus
-// the publish-gate inputs that validate assembled candidates.
+// Package store is the persistence layer of the Hub control plane.
+//
+// The package is the assembly point of seven domain packages. Each one owns its
+// tables, its schema legs and its rules; this package owns the SQLite
+// connection, the data directory, the process lock, the migration chain, the
+// single-administrator session/auth state and the wiring that joins the domains.
+//
+// # The domains
+//
+//	common        stable codes, sentinel refusals, role/status/limit vocabulary,
+//	              transport lifetimes, Argon2id/token helpers, the kernel gate
+//	candidate     the immutable candidate revision and the fixed Agent task chain
+//	node          nodes, Lines, the optional Out, egress facts and readback
+//	mesh          Mesh devices, enrollment keys and subnet routes
+//	policy        route policies, the rule library, the gated publication
+//	subscription  subscribers, credentials, the selection workspace, download
+//	upgrade       approved release targets and the Agent upgrade channel
+//
+// # Dependency order (compiler-enforced)
+//
+//	common, candidate
+//	    ↑
+//	  node
+//	    ↑
+//	policy
+//	    ↑
+//	subscription
+//	    ↑
+//	upgrade
+//
+// A domain imports only the packages below it. Two edges of the real data model
+// point the other way, and both are inverted rather than imported:
+//
+//   - node needs the subscriber convergence view, the delete finalization, the
+//     selection used-by projections and the drain. It declares them as
+//     node.Subscribers and subscription satisfies the port.
+//   - candidate must not know how an Out source authorization is derived, so the
+//     caller that owns it passes the allowlist in.
+//
+// wire.go is the only place those two are joined, once, after the database
+// opens. boundary_test.go pins the import graph, so a package that reaches
+// sideways is a failing test rather than a review comment.
 //
 // # Orchestration, not assembly
 //
-// The control plane is split by responsibility, and this package is the
-// orchestration layer only:
+// The control plane is split by responsibility, and every domain is an
+// orchestration layer over its own tables:
 //
-//	read    (SQL in one transaction) -> call a pure core function -> persist ->
+//	read (SQL in one transaction) -> call a pure core function -> persist ->
 //	enqueue a task -> record a stable code
 //
 // Byte assembly does not happen here. Client documents for the publish gate live
 // in the child package clientdoc; routing fragments, rule-set pins and selection
-// identity live in internal/core/policy and internal/core/subscription. store
-// calls them and persists the outcome.
+// identity live in internal/core/policy and internal/core/subscription.
 //
 // # Subscription aggregation (ADR-0008)
 //
 // The four reference edge tables (subscription_lines/outs/rules/networks) plus
 // subscription_snapshots are the subscription's side of every reference. The
-// flow is one order, and every step is a separate public function so a caller can
-// stop earlier:
+// flow is one order, and every step is a separate public function:
 //
-//	store_subscription_spec.go     SelectionSpec.Normalize — the input boundary
-//	                               (shape, dedupe, canonical identities)
-//	store_subscription_refs.go     reference validation: existence, egress role
-//	                               whitelist, same-Line Out agreement
-//	store_subscription_inputs.go   the one composer-input builder (draft and
-//	                               download share it, so the digest means something)
-//	store_subscription_compose.go  draft -> preview -> approve -> save, and the
-//	                               selection-snapshot read-back
-//	store_subscription_selection.go persistence only: the edge tables, the
-//	                               snapshot row and the used-by projections
-//	store_subscription_artifact.go download: re-derive from the stored selection
-//	                               and compare the approved digest
-//	store_subscription_impact.go   read-only impact preview (reserved extension)
-//	store_subscription_batch.go    per-subscriber batch re-approval, partial
-//	                               success (reserved extension)
+//	spec           SelectionSpec.Normalize — the input boundary
+//	refs           reference validation: existence, egress role whitelist,
+//	               same-Line Out agreement
+//	inputs         the one composer-input builder (draft and download share it)
+//	compose        draft -> preview -> approve -> save, snapshot read-back
+//	selection      persistence only: the edge tables, the snapshot row, used-by
+//	artifact       download: re-derive from the stored selection and compare
+//	impact         read-only impact preview (reserved extension)
+//	batch          per-subscriber batch re-approval, partial success
 //
 // The invariants that must not regress: a preview or a blocked save writes
 // nothing at all; only an approved digest is stored, and the snapshot never
@@ -45,44 +75,29 @@
 // subscriptions must agree on the Out; the convergence gate runs before an
 // approved artifact is served.
 //
-// proxy_credentials keeps its role as the materialized VLESS identity.
-//
 // # Out authorization (ADR-0008 §3, Ruling R10)
 //
 // The Out allowlist is node membership — every Line that holds a current pairing
-// identity — never a stored binding and never a subscription.
-// store_out_sync.go owns the derivation (outAuthorizationTx), the
-// publication/readback chain and the publish gate;
-// store_out_authorization_view.go owns the read-only projection;
-// store_out_lifecycle.go owns the delete (Ruling R9: delete is total);
-// store_out_migration.go owns the schema legs (5 created out_bindings, 14 dropped
-// it, 15 narrowed the candidate immutability trigger so a node can be deleted).
-// There is no second authorization source.
-//
-// # Dependency direction (compiler-enforced)
-//
-// store imports no Hub web package. Shared record types (Node, RoutePolicy,
-// MeshDeviceRecord, OutAuthorizationPreview, subscriber snapshots, upgrade
-// targets) and their stable error codes are defined here and consumed by handler
-// and view. store never imports handler, view or web.
+// identity — never a stored binding and never a subscription. The node domain
+// owns the derivation, the publication/readback chain and the publish gate; the
+// delete path is total (Ruling R9). There is no second authorization source: a
+// subscription selects which egress a client document names, and creating,
+// editing, pausing or deleting one never republishes an Out.
 //
 // # Single source of shared literals
 //
 // Repeated values are defined once and referenced, never re-typed at a call
-// site:
+// site. Within a domain the rule is unchanged; across domains a value lives in
+// common, or is exported by the domain that owns it and referenced from there.
+// A value this package must also emit while its owner keeps it unexported is
+// declared once as an explicit mirror naming the owner, and deleted the moment
+// the owner exports it.
 //
-//	store_codes.go           stable codes this package owns or mirrors
-//	store_limits.go          the bounds this package enforces
-//	store_roles.go           node roles and gate kernel names
-//	store_status.go          task/node status names and the terminal predicate
-//	store_sentinels.go       the missing/corrupt refusals of every read path
-//	store_write_errors.go    write refusals several writers emit
-//	store_identity_errors.go canonical identity refusals
-//	store_transport.go       session/auth lifetimes, offline window, DSN pragmas
-//
-// A value a lower layer already exports is referenced from that layer; a value
-// this package must also emit while its owner keeps it unexported is declared
-// here once as an explicit mirror naming the owner.
+// The error-code golden (internal/cli/upgrade/codes_golden_test.go) freezes the
+// VALUES of every exported Code* constant under internal/control/store, whether
+// the literal lives in a domain package or in common. The package is matched by
+// path as well as by name, because three of the domain package names also exist
+// under internal/core.
 //
 // # Policy layers
 //

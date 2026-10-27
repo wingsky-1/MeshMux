@@ -13,6 +13,10 @@ import (
 	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 	storemesh "github.com/wingsky-1/MeshMux/internal/control/store/mesh"
+	storenode "github.com/wingsky-1/MeshMux/internal/control/store/node"
+	storepolicy "github.com/wingsky-1/MeshMux/internal/control/store/policy"
+	storesubscription "github.com/wingsky-1/MeshMux/internal/control/store/subscription"
+	storeupgrade "github.com/wingsky-1/MeshMux/internal/control/store/upgrade"
 
 	_ "modernc.org/sqlite"
 )
@@ -30,28 +34,42 @@ const (
 
 // The durable global authentication budget (ten attempts per rolling ten
 // minutes) is shared by setup, login and password change. Its window and budget
-// live in store_transport.go with the other fixed lifetimes.
+// live in common/store_transport.go with the other fixed lifetimes.
 
-// Store is the assembled persistence handle. Each domain contributes one
-// embedded handle, so a caller reads the same methods it always has while every
-// implementation lives in its own package. The fields here are the ones the
-// root owns: the connection, the data directory and the process lock.
-// The embedded handles, aliased so each field has a distinct name.
+// Store is the assembled persistence handle.
+//
+// Each domain contributes one embedded handle and shares this connection, so a
+// caller keeps writing s.CreateMeshDevice, s.SetLine or s.SaveSubscriptionSelection
+// and never sees the split. The aliases below exist only because two embedded
+// fields of the same named type would collide.
+//
+// The fields here are the ones the root owns: the connection, the data
+// directory, the process lock and the session/auth state. The root also wires
+// the domain handles together after the database opens: the ports that would
+// otherwise be import cycles (node.Subscribers, candidate's Out authorization)
+// are satisfied here, and nowhere else.
 type (
-	candidateHandle = storecandidate.Store
-	meshHandle      = storemesh.Store
+	candidateHandle    = storecandidate.Store
+	meshHandle         = storemesh.Store
+	nodeHandle         = storenode.Store
+	policyHandle       = storepolicy.Store
+	subscriptionHandle = storesubscription.Store
+	upgradeHandle      = storeupgrade.Store
 )
 
+// Store is the assembled handle. It is the only place the domains meet.
 type Store struct {
 	DB   *sql.DB
 	lock *os.File
 	Dir  string
 
-	// The domain handles. Each one owns the methods of its package and shares
-	// this connection, so a caller keeps calling s.CreateMeshDevice and never
-	// sees the split. The aliases give every embedded field a distinct name.
+	// The domain handles, embedded so their methods are promoted.
 	*candidateHandle
 	*meshHandle
+	*nodeHandle
+	*policyHandle
+	*subscriptionHandle
+	*upgradeHandle
 }
 type Session struct {
 	Hash    []byte
@@ -105,7 +123,16 @@ func OpenStore(dir string) (*Store, error) {
 		lock.Close()
 		return nil, errors.New("DATA_LOCKED: another Web process uses this directory")
 	}
-	s := &Store{lock: lock, Dir: abs, candidateHandle: &storecandidate.Store{}, meshHandle: &storemesh.Store{}}
+	s := &Store{
+		lock:               lock,
+		Dir:                abs,
+		candidateHandle:    &storecandidate.Store{},
+		meshHandle:         &storemesh.Store{},
+		nodeHandle:         &storenode.Store{},
+		policyHandle:       &storepolicy.Store{},
+		subscriptionHandle: &storesubscription.Store{},
+		upgradeHandle:      &storeupgrade.Store{},
+	}
 	f, err := os.OpenFile(filepath.Join(abs, databaseFileName), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		s.Close()
@@ -119,8 +146,7 @@ func OpenStore(dir string) (*Store, error) {
 		return nil, err
 	}
 	s.DB.SetMaxOpenConns(1)
-	s.candidateHandle.DB = s.DB
-	s.meshHandle.DB = s.DB
+	s.wire()
 	if err = s.Migrate(); err != nil {
 		s.Close()
 		return nil, err
@@ -171,10 +197,10 @@ func (s *Store) Migrate() error {
 	if err := s.migrateSchemaChain(); err != nil {
 		return err
 	}
-	if err := migrateSchema16(s); err != nil {
+	if err := storenode.MigrateSchema16(s.DB); err != nil {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
-	if err := migrateSchema17(s); err != nil {
+	if err := storepolicy.MigrateSchema17(s.DB, DatabaseSchemaVersion); err != nil {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
 	return nil
@@ -245,7 +271,7 @@ func (s *Store) migrateSchemaChain() error {
 		version = 4
 	}
 	if version == 4 {
-		if err = migrateSchema5(tx); err != nil {
+		if err = storenode.MigrateSchema5(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 5
@@ -263,13 +289,13 @@ func (s *Store) migrateSchemaChain() error {
 		version = 7
 	}
 	if version == 7 {
-		if err = migrateSchema8(tx); err != nil {
+		if err = storepolicy.MigrateSchema8(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 8
 	}
 	if version == 8 {
-		if err = migrateSchema9(tx); err != nil {
+		if err = storeupgrade.MigrateSchema9(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 9
@@ -281,25 +307,25 @@ func (s *Store) migrateSchemaChain() error {
 		version = 10
 	}
 	if version == 10 || version == 11 {
-		if err = migrateSchema12(tx); err != nil {
+		if err = storepolicy.MigrateSchema12(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 12
 	}
 	if version == 12 {
-		if err = migrateSchema13(tx); err != nil {
+		if err = storesubscription.MigrateSchema13(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 13
 	}
 	if version == 13 {
-		if err = migrateSchema14(tx); err != nil {
+		if err = storenode.MigrateSchema14(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 14
 	}
 	if version == 14 {
-		if err = migrateSchema15(tx); err != nil {
+		if err = storenode.MigrateSchema15(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 15
@@ -309,7 +335,7 @@ func (s *Store) migrateSchemaChain() error {
 	// 12/13/14 for Tasks 3/4/5), so Task 2 takes no number. The table is
 	// purely additive and referenced by nothing older, so an older binary
 	// keeps working against a database that already carries it.
-	if err = ensureOutTransportTable(tx); err != nil {
+	if err = storenode.EnsureOutTransportTable(tx); err != nil {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
 	return tx.Commit()
