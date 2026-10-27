@@ -46,5 +46,5 @@ func seedLegacyClientPolicyStore(t *testing.T, s *store.Store, payload json.RawM
 // page tests.
 func seedLegacyClientPolicy(t *testing.T, b *browser, payload string) string {
 	t.Helper()
-	return seedLegacyClientPolicyStore(t, b.app.store, json.RawMessage(payload), b.app.now())
+	return seedLegacyClientPolicyStore(t, b.app.Store, json.RawMessage(payload), b.app.Now())
 }

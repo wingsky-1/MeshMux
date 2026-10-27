@@ -202,7 +202,7 @@ func loadOrCreateNodeFixtureMetadata(app *Server, path string, role node.Role, c
 		if err := json.Unmarshal(data, &metadata); err != nil {
 			return metadata, errors.New("Node fixture metadata is invalid")
 		}
-		existing, err := app.store.GetNodeAt(metadata.NodeID, app.now())
+		existing, err := app.Store.GetNodeAt(metadata.NodeID, app.Now())
 		if err != nil {
 			return metadata, errors.New("persistent Node fixture database has no matching node")
 		}
@@ -213,7 +213,7 @@ func loadOrCreateNodeFixtureMetadata(app *Server, path string, role node.Role, c
 	} else if !os.IsNotExist(err) {
 		return metadata, err
 	}
-	created, code, err := app.store.CreateNode(string(role), "vm-fixture-"+string(role), 8443, sshPort, app.now())
+	created, code, err := app.Store.CreateNode(string(role), "vm-fixture-"+string(role), 8443, sshPort, app.Now())
 	if err != nil {
 		return metadata, err
 	}

@@ -15,7 +15,7 @@ func (app *Server) upgradeView(now time.Time) (view.UpgradeSnapshot, error) {
 		"client": 0,
 		"server": 0}}
 	for _, layer := range []store.PolicyLayer{store.PolicyLayerClient, store.PolicyLayerServer} {
-		if record, err := app.store.ActiveRoutePolicy(layer); err == nil {
+		if record, err := app.Store.ActiveRoutePolicy(layer); err == nil {
 			snap.LivePolicyRevisions[string(layer)] = record.Revision
 		}
 	}
@@ -24,15 +24,15 @@ func (app *Server) upgradeView(now time.Time) (view.UpgradeSnapshot, error) {
 	} else {
 		snap.Manifest = manifest
 	}
-	nodes, err := app.store.ListNodesAt(now)
+	nodes, err := app.Store.ListNodesAt(now)
 	if err != nil {
 		return view.UpgradeSnapshot{}, err
 	}
 	snap.Nodes = nodes
-	if snap.Staged, err = app.store.StagedReadbacks(); err != nil {
+	if snap.Staged, err = app.Store.StagedReadbacks(); err != nil {
 		return view.UpgradeSnapshot{}, err
 	}
-	if snap.Approved, err = app.store.ApprovedTargets(); err != nil {
+	if snap.Approved, err = app.Store.ApprovedTargets(); err != nil {
 		return view.UpgradeSnapshot{}, err
 	}
 	snap.Hub = app.hubUpgradeView(now)
@@ -40,13 +40,13 @@ func (app *Server) upgradeView(now time.Time) (view.UpgradeSnapshot, error) {
 }
 
 func (app *Server) tasksPage(w http.ResponseWriter, r *http.Request, sess session) {
-	snap, err := app.upgradeView(app.now())
+	snap, err := app.upgradeView(app.Now())
 	if err != nil {
-		app.fail(w, r, 503,
+		app.Fail(w, r, 503,
 			"UPGRADE_SNAPSHOT_UNAVAILABLE",
 			"无法读取升级只读快照。",
 			"请检查数据库后重试。")
 		return
 	}
-	app.render(w, r, 200, view.UpgradePage(view.PageData{Title: "任务与升级", Path: "/tasks", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, snap))
+	app.Render(w, r, 200, view.UpgradePage(view.PageData{Title: "任务与升级", Path: "/tasks", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP}, snap))
 }

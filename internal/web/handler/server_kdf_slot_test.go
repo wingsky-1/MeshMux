@@ -74,8 +74,8 @@ func TestPublishDoesNotHoldThePasswordSlot(t *testing.T) {
 	// The slot itself is free: a publication must not be holding it while its
 	// kernel gate waits.
 	select {
-	case app.kdfSlot <- struct{}{}:
-		<-app.kdfSlot
+	case app.kdfSlotOf() <- struct{}{}:
+		<-app.kdfSlotOf()
 	default:
 		t.Fatal("a publication in its kernel gate still holds the password KDF slot")
 	}
@@ -101,7 +101,7 @@ func TestPasswordSlotOnlyRefusesPasswordRoutes(t *testing.T) {
 	anon := &browser{app: app}
 	requireStatus(t, anon.req("GET", "/login", nil, nil), 200)
 
-	app.kdfSlot <- struct{}{}
+	app.kdfSlotOf() <- struct{}{}
 	busy := anon.post("/login", url.Values{"password": {testPassword}})
 	requireStatus(t, busy, 429)
 	if !strings.Contains(busy.Body.String(), "AUTH_KDF_BUSY") {
@@ -113,7 +113,7 @@ func TestPasswordSlotOnlyRefusesPasswordRoutes(t *testing.T) {
 	// A node creation is not a password operation, so the held slot does not
 	// refuse it.
 	requireStatus(t, b.post("/nodes", url.Values{"role": {"edge"}, "display_name": {"line-slot-01"}, "vless_port": {"8443"}, "ssh_port": {"2222"}}), 200)
-	<-app.kdfSlot
+	<-app.kdfSlotOf()
 	// Once released, the same login form works again.
 	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 303)
 }

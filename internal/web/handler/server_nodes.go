@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io"
 	"net/http"
@@ -31,10 +32,10 @@ func (s *Server) agentFail(w http.ResponseWriter, r *http.Request, status int, c
 // the log may: an unauthenticated caller must not be able to tell two refusals
 // apart by their status or body, but an operator reading the operation_id must.
 func (s *Server) agentFailWithReason(w http.ResponseWriter, r *http.Request, status int, code, reason, message, next string) {
-	s.event(r, reason)
+	s.Event(r, reason)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "operation_id": operation(r), "stage": "agent", "message": message, "next_action": next})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error_code": code, "operation_id": infra.Operation(r), "stage": "agent", "message": message, "next_action": next})
 }
 
 func bearerToken(r *http.Request) string {
@@ -68,16 +69,16 @@ func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess session,
 }
 
 func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
-	nodes, err := s.store.ListNodesAt(s.now())
+	nodes, err := s.Store.ListNodesAt(s.Now())
 	if err != nil {
-		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
+		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
 		return
 	}
 	if nodes == nil {
 		nodes = []store.Node{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"nodes": nodes, "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"nodes": nodes, "operation_id": infra.Operation(r)})
 }
 
 func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess session) {
@@ -88,29 +89,29 @@ func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess sessio
 		// no ports, no pairing code, no Agent and no candidate: only its URL
 		// is validated and stored.
 		proxyURL := strings.TrimSpace(r.PostForm.Get("proxy_url"))
-		if _, err := s.store.CreateHTTPProxyNode(displayName, proxyURL, s.now()); err != nil {
-			s.event(r, "NODE_CREATE_FAILED")
+		if _, err := s.Store.CreateHTTPProxyNode(displayName, proxyURL, s.Now()); err != nil {
+			s.Event(r, "NODE_CREATE_FAILED")
 			status, code, message, next := httpProxyCreateFailure(err)
-			s.fail(w, r, status, code, message, next)
+			s.Fail(w, r, status, code, message, next)
 			return
 		}
-		s.event(r, "HTTP_PROXY_CREATED")
+		s.Event(r, "HTTP_PROXY_CREATED")
 		s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "HTTP 代理节点已创建：外部出口无需配对或安装，可直接在订阅向导中选择。"})
 		return
 	}
 	vless, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("vless_port")))
 	ssh, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("ssh_port")))
 	if err := protocol.ValidateNodeInputs(role, displayName, vless, ssh); err != nil {
-		s.fail(w, r, 400, "NODE_INVALID", "节点参数不正确。", "请检查角色、名称与端口后重试。")
+		s.Fail(w, r, 400, "NODE_INVALID", "节点参数不正确。", "请检查角色、名称与端口后重试。")
 		return
 	}
-	node, code, err := s.store.CreateNode(role, displayName, vless, ssh, s.now())
+	node, code, err := s.Store.CreateNode(role, displayName, vless, ssh, s.Now())
 	if err != nil {
-		s.event(r, "NODE_CREATE_FAILED")
-		s.fail(w, r, 400, "NODE_CREATE_FAILED", "无法创建待纳管节点。", "请检查输入并重试。")
+		s.Event(r, "NODE_CREATE_FAILED")
+		s.Fail(w, r, 400, "NODE_CREATE_FAILED", "无法创建待纳管节点。", "请检查输入并重试。")
 		return
 	}
-	s.event(r, "NODE_CREATED")
+	s.Event(r, "NODE_CREATED")
 	created := node
 	s.nodesPageWithCode(w, r, sess, &created, "created", code)
 }
@@ -132,22 +133,22 @@ func httpProxyCreateFailure(err error) (status int, code, message, next string) 
 
 func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess session) {
 	nodeID := nodeIDFromRequest(r)
-	candidate, tasks, err := s.store.ReconcileNode(nodeID, s.now())
+	candidate, tasks, err := s.Store.ReconcileNode(nodeID, s.Now())
 	if err != nil {
-		if strings.HasPrefix(err.Error(), codeTasksInProgress) {
-			s.fail(w, r, 409, codeTasksInProgress, "当前复核任务尚未结束。", "完成或失败后再次提交固定复核。")
+		if strings.HasPrefix(err.Error(), infra.CodeTasksInProgress) {
+			s.Fail(w, r, 409, infra.CodeTasksInProgress, "当前复核任务尚未结束。", "完成或失败后再次提交固定复核。")
 			return
 		}
 		code := "RECONCILE_FAILED"
-		if strings.HasPrefix(err.Error(), codeNodeNotFound) {
-			code = codeNodeNotFound
+		if strings.HasPrefix(err.Error(), infra.CodeNodeNotFound) {
+			code = infra.CodeNodeNotFound
 		}
-		s.event(r, code)
-		s.fail(w, r, 409, code, "配置复核未发布。", "确认节点仍存在后重试。")
+		s.Event(r, code)
+		s.Fail(w, r, 409, code, "配置复核未发布。", "确认节点仍存在后重试。")
 		return
 	}
-	s.event(r, "CONFIG_RECONCILE_QUEUED")
-	s.render(w, r, 200, view.NodeActionPage(view.PageData{Title: "配置复核已排队", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP},
+	s.Event(r, "CONFIG_RECONCILE_QUEUED")
+	s.Render(w, r, 200, view.NodeActionPage(view.PageData{Title: "配置复核已排队", Path: "/nodes", CSRF: sess.CSRF, Dev: s.Cfg.DevHTTP},
 		nodeID, candidate.Revision, candidate.ConfigSHA256, len(tasks)))
 }
 
@@ -157,15 +158,15 @@ func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess ses
 // revision; the Hub uses the node's own readback.
 func (s *Server) nodesRollbackLKG(w http.ResponseWriter, r *http.Request, sess session) {
 	nodeID := nodeIDFromRequest(r)
-	candidate, tasks, err := s.store.RepublishLKG(nodeID, s.now())
+	candidate, tasks, err := s.Store.RepublishLKG(nodeID, s.Now())
 	if err != nil {
 		failure := lkgRollbackFailure(err)
-		s.event(r, failure.code)
-		s.fail(w, r, failure.status, failure.code, failure.message, failure.action)
+		s.Event(r, failure.code)
+		s.Fail(w, r, failure.status, failure.code, failure.message, failure.action)
 		return
 	}
-	s.event(r, "LKG_ROLLBACK_QUEUED")
-	s.render(w, r, 200, view.NodeActionPage(view.PageData{Title: "LKG 回退已排队", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP},
+	s.Event(r, "LKG_ROLLBACK_QUEUED")
+	s.Render(w, r, 200, view.NodeActionPage(view.PageData{Title: "LKG 回退已排队", Path: "/nodes", CSRF: sess.CSRF, Dev: s.Cfg.DevHTTP},
 		nodeID, candidate.Revision, candidate.ConfigSHA256, len(tasks)))
 }
 
@@ -191,12 +192,12 @@ func lkgRollbackFailure(err error) lkgFailure {
 	}
 	code := "LKG_ROLLBACK_FAILED"
 	switch {
-	case strings.HasPrefix(err.Error(), codeTasksInProgress):
-		code = codeTasksInProgress
+	case strings.HasPrefix(err.Error(), infra.CodeTasksInProgress):
+		code = infra.CodeTasksInProgress
 	case strings.HasPrefix(err.Error(), "LKG_UNAVAILABLE"):
 		code = "LKG_UNAVAILABLE"
-	case strings.HasPrefix(err.Error(), codeNodeNotFound):
-		code = codeNodeNotFound
+	case strings.HasPrefix(err.Error(), infra.CodeNodeNotFound):
+		code = infra.CodeNodeNotFound
 	}
 	return lkgFailure{status: 409, code: code, message: "LKG 回退链未发布。",
 		action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
@@ -204,34 +205,34 @@ func lkgRollbackFailure(err error) lkgFailure {
 
 func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess session) {
 	nodeID := nodeIDFromRequest(r)
-	code, err := s.store.ReissuePairing(nodeID, s.now())
+	code, err := s.Store.ReissuePairing(nodeID, s.Now())
 	if err != nil {
-		s.event(r, "IDENTITY_REISSUE_FAILED")
-		s.fail(w, r, 409, "IDENTITY_REISSUE_FAILED", "无法重签节点身份。", "确认节点存在后重试。")
+		s.Event(r, "IDENTITY_REISSUE_FAILED")
+		s.Fail(w, r, 409, "IDENTITY_REISSUE_FAILED", "无法重签节点身份。", "确认节点存在后重试。")
 		return
 	}
-	existing, err := s.store.GetNodeAt(nodeID, s.now())
+	existing, err := s.Store.GetNodeAt(nodeID, s.Now())
 	if err != nil {
-		s.event(r, "IDENTITY_REISSUE_READBACK_FAILED")
-		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "身份已重签，但页面读取失败。", "配对码不会再次显示；如未保存请重新签发。")
+		s.Event(r, "IDENTITY_REISSUE_READBACK_FAILED")
+		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "身份已重签，但页面读取失败。", "配对码不会再次显示；如未保存请重新签发。")
 		return
 	}
-	s.event(r, "IDENTITY_REISSUED")
+	s.Event(r, "IDENTITY_REISSUED")
 	s.nodesPageWithCode(w, r, sess, &existing, "reissued", code)
 }
 
 func (s *Server) nodesRevoke(w http.ResponseWriter, r *http.Request, sess session) {
 	nodeID := nodeIDFromRequest(r)
-	if err := s.store.RevokeIdentity(nodeID, s.now()); err != nil {
+	if err := s.Store.RevokeIdentity(nodeID, s.Now()); err != nil {
 		code := "IDENTITY_REVOKE_FAILED"
-		if strings.HasPrefix(err.Error(), codeNodeNotFound) {
-			code = codeNodeNotFound
+		if strings.HasPrefix(err.Error(), infra.CodeNodeNotFound) {
+			code = infra.CodeNodeNotFound
 		}
-		s.event(r, code)
-		s.fail(w, r, 409, code, "身份未吊销。", "确认节点存在后重试。")
+		s.Event(r, code)
+		s.Fail(w, r, 409, code, "身份未吊销。", "确认节点存在后重试。")
 		return
 	}
-	s.event(r, "IDENTITY_REVOKED")
+	s.Event(r, "IDENTITY_REVOKED")
 	s.nodesPage(w, r, sess, nil, "")
 }
 
@@ -250,14 +251,14 @@ func (s *Server) nodesPageWithCode(w http.ResponseWriter, r *http.Request, sess 
 // Out pool strip, the per-card transport and binding state, an optional
 // one-shot notice and an optional pending delete confirm.
 func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, action, code string, data view.NodesData) {
-	nodes, err := s.store.ListNodesAt(s.now())
+	nodes, err := s.Store.ListNodesAt(s.Now())
 	if err != nil {
-		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
+		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
 		return
 	}
-	pool, err := s.store.OutPool(s.now())
+	pool, err := s.Store.OutPool(s.Now())
 	if err != nil {
-		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Out 池。", "请检查数据库。")
+		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Out 池。", "请检查数据库。")
 		return
 	}
 	data.Pool = pool
@@ -269,7 +270,7 @@ func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess sess
 			data.ByLine[lineID] = append(data.ByLine[lineID], entry)
 		}
 	}
-	s.render(w, r, 200, view.NodesPage(view.PageData{Title: "代理节点", Path: "/nodes", CSRF: sess.CSRF, Dev: s.cfg.DevHTTP}, nodes, data, created, action, code, s.cfg.Origin, s.cfg.InstallArtifact))
+	s.Render(w, r, 200, view.NodesPage(view.PageData{Title: "代理节点", Path: "/nodes", CSRF: sess.CSRF, Dev: s.Cfg.DevHTTP}, nodes, data, created, action, code, s.Cfg.Origin, s.Cfg.InstallArtifact))
 }
 
 func (s *Server) agentMetadata(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +304,7 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 400, "REVISION_INVALID", "配置修订不正确。", "请先拉取固定任务。")
 		return
 	}
-	candidate, err := s.store.Candidate(n.ID, revision)
+	candidate, err := s.Store.Candidate(n.ID, revision)
 	if err != nil {
 		code := "CANDIDATE_NOT_FOUND"
 		status := 404
@@ -349,7 +350,7 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 //     because it is a fact about the caller's own configuration, not about a
 //     secret, and an operator needs it to fix a wrong-role install.
 func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, mutationFormMaxBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, infra.MutationFormMaxBytes)
 	var req protocol.PairingRequest
 	if err := decodeAgentJSON(r, &req); err != nil {
 		s.agentFail(w, r, 400, "PAIRING_INVALID", "配对请求不正确。", "请使用 Web 显示的一次性配对指令重试。")
@@ -358,14 +359,14 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 	// Charge the budget before the store is touched. A malformed body costs no
 	// budget (it never reaches the database either), while every well-formed
 	// attempt is bounded before it can hash a code or open a transaction.
-	if ok, retry := s.pairing.spend(s.now()); !ok {
+	if ok, retry := s.SpendPairing(s.Now()); !ok {
 		seconds := int((retry + time.Second - 1) / time.Second)
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 		s.agentFail(w, r, 429, "PAIRING_RATE_LIMITED", "配对尝试过于频繁。",
-			"配对预算为 "+strconv.Itoa(pairBudget)+" 次 / 分钟，约 "+retryText(seconds)+"后可再试；已配对身份、心跳与任务不受影响，请勿反复重试。")
+			"配对预算为 "+strconv.Itoa(infra.PairBudget)+" 次 / 分钟，约 "+infra.RetryText(seconds)+"后可再试；已配对身份、心跳与任务不受影响，请勿反复重试。")
 		return
 	}
-	token, err := s.store.ConsumePairing(req.NodeID, req.Role, req.PairingCode, req.AgentVersion, req.KernelVersion, s.now())
+	token, err := s.Store.ConsumePairing(req.NodeID, req.Role, req.PairingCode, req.AgentVersion, req.KernelVersion, s.Now())
 	if err != nil {
 		msg := err.Error()
 		// Default: one neutral refusal, whatever the code's history. The log
@@ -373,21 +374,21 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 		code, status, reason := "PAIRING_INVALID", 401, "PAIRING_INVALID"
 		message, next := "配对被拒绝。", "请确认 Node ID、角色与未过期的一次性配对码。"
 		switch {
-		case strings.HasPrefix(msg, codeRoleMismatch):
-			code, status, reason = codeRoleMismatch, 403, codeRoleMismatch
-		case strings.HasPrefix(msg, codePairingExpired):
-			reason = codePairingExpired
-		case strings.HasPrefix(msg, codePairingConsumed):
-			reason = codePairingConsumed
-		case strings.HasPrefix(msg, codeVersionInvalid):
-			code, status, reason = codeVersionInvalid, 400, codeVersionInvalid
+		case strings.HasPrefix(msg, infra.CodeRoleMismatch):
+			code, status, reason = infra.CodeRoleMismatch, 403, infra.CodeRoleMismatch
+		case strings.HasPrefix(msg, infra.CodePairingExpired):
+			reason = infra.CodePairingExpired
+		case strings.HasPrefix(msg, infra.CodePairingConsumed):
+			reason = infra.CodePairingConsumed
+		case strings.HasPrefix(msg, infra.CodeVersionInvalid):
+			code, status, reason = infra.CodeVersionInvalid, 400, infra.CodeVersionInvalid
 		case strings.HasPrefix(msg, store.CodeDatabaseUnavailable):
 			// A database outage is not a rejected credential. Reporting it as one
 			// would send an operator to reissue a code that was never the problem.
 			code, status, reason = store.CodeDatabaseUnavailable, 503, store.CodeDatabaseUnavailable
 			message, next = "暂时无法验证配对。", "请检查数据库与服务日志，稍后重试。"
-		case strings.HasPrefix(msg, codeIdentityIssueFailed):
-			code, status, reason = codeIdentityIssueFailed, 500, codeIdentityIssueFailed
+		case strings.HasPrefix(msg, infra.CodeIdentityIssueFailed):
+			code, status, reason = infra.CodeIdentityIssueFailed, 500, infra.CodeIdentityIssueFailed
 			message, next = "无法签发节点身份。", "请凭操作编号检查服务日志后重试；配对码未被消费。"
 		}
 		// Never echo node IDs, roles or secrets in the error body beyond the code.
@@ -396,10 +397,10 @@ func (s *Server) pairAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	// A spent code is the pairing analogue of a proven password: the exchange
 	// succeeded, so the failures a flood produced no longer hold the budget.
-	s.pairing.clear()
-	s.event(r, "AGENT_PAIRED")
+	s.ClearPairing()
+	s.Event(r, "AGENT_PAIRED")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"node_id": req.NodeID, "identity_token": token, "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]string{"node_id": req.NodeID, "identity_token": token, "operation_id": infra.Operation(r)})
 }
 
 func (s *Server) agentTasks(w http.ResponseWriter, r *http.Request) {
@@ -409,10 +410,10 @@ func (s *Server) agentTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	if node.Offline {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{}, "operation_id": operation(r)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"tasks": []protocol.Task{}, "operation_id": infra.Operation(r)})
 		return
 	}
-	tasks, err := s.store.PendingTasksAt(node.ID, 8, s.now())
+	tasks, err := s.Store.PendingTasksAt(node.ID, 8, s.Now())
 	if err != nil {
 		s.agentFail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取任务。", "请稍后重试。")
 		return
@@ -421,7 +422,7 @@ func (s *Server) agentTasks(w http.ResponseWriter, r *http.Request) {
 		tasks = []protocol.Task{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks, "operation_id": infra.Operation(r)})
 }
 
 func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -429,7 +430,7 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, heartbeatBodyMaxBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, infra.HeartbeatBodyMaxBytes)
 	var body protocol.HeartbeatRequest
 	if err := decodeAgentJSON(r, &body); err != nil {
 		s.agentFail(w, r, 400, "HEARTBEAT_INVALID", "心跳格式不正确。", "请上报 agent 与内核版本。")
@@ -439,7 +440,7 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 400, "HEARTBEAT_INVALID", "心跳缺少版本信息。", "请上报 agent 与内核版本。")
 		return
 	}
-	if err := s.store.Heartbeat(node.ID, body.AgentVersion, body.KernelVersion, s.now()); err != nil {
+	if err := s.Store.Heartbeat(node.ID, body.AgentVersion, body.KernelVersion, s.Now()); err != nil {
 		s.agentFail(w, r, 503, store.CodeDatabaseUnavailable, "无法记录心跳。", "请稍后重试。")
 		return
 	}
@@ -448,9 +449,9 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// logged with stable codes only and never echoes an address, an allowlist
 	// entry or a node identifier.
 	s.logCoordinationReadback(r, node.ID)
-	s.event(r, "AGENT_HEARTBEAT")
+	s.Event(r, "AGENT_HEARTBEAT")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "paired", "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "paired", "operation_id": infra.Operation(r)})
 }
 
 // The install artifact is served in fixed-size chunks, so one download holds a
@@ -497,24 +498,24 @@ func copyArtifactVerified(w io.Writer, r io.Reader, size int64, want string, chu
 }
 
 func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request, _ session) {
-	artifact := s.cfg.InstallArtifact
+	artifact := s.Cfg.InstallArtifact
 	if artifact == nil {
-		s.fail(w, r, 404, "INSTALL_ARTIFACT_UNAVAILABLE", "当前 Web 没有同源 CLI 安装制品。", "请通过已安装的 meshmux __internal-web 打开节点管理。")
+		s.Fail(w, r, 404, "INSTALL_ARTIFACT_UNAVAILABLE", "当前 Web 没有同源 CLI 安装制品。", "请通过已安装的 meshmux __internal-web 打开节点管理。")
 		return
 	}
 	if r.URL.RawQuery != "" {
-		s.fail(w, r, 400, "QUERY_REJECTED", "下载端点不接受查询参数。", "请使用固定下载入口。")
+		s.Fail(w, r, 400, "QUERY_REJECTED", "下载端点不接受查询参数。", "请使用固定下载入口。")
 		return
 	}
 	f, err := os.Open(artifact.Path)
 	if err != nil {
-		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品暂时不可读。", "请检查服务安装文件。")
+		s.Fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品暂时不可读。", "请检查服务安装文件。")
 		return
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > InstallArtifactMaxBytes {
-		s.fail(w, r, 503, "INSTALL_ARTIFACT_INVALID", "安装制品大小或类型不安全。", "请重新安装匹配版本。")
+		s.Fail(w, r, 503, "INSTALL_ARTIFACT_INVALID", "安装制品大小或类型不安全。", "请重新安装匹配版本。")
 		return
 	}
 	// The size observed on the open descriptor bounds both passes: bytes
@@ -523,14 +524,14 @@ func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request,
 	chunk := make([]byte, installArtifactChunkBytes)
 	if _, err := copyArtifactVerified(io.Discard, f, size, artifact.SHA256, chunk); err != nil {
 		if errors.Is(err, errInstallArtifactChanged) {
-			s.fail(w, r, 503, "INSTALL_ARTIFACT_CHANGED", "安装制品校验和不匹配。", "请重新安装匹配版本。")
+			s.Fail(w, r, 503, "INSTALL_ARTIFACT_CHANGED", "安装制品校验和不匹配。", "请重新安装匹配版本。")
 			return
 		}
-		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品读取不完整。", "请重新安装匹配版本。")
+		s.Fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品读取不完整。", "请重新安装匹配版本。")
 		return
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		s.fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品暂时不可读。", "请检查服务安装文件。")
+		s.Fail(w, r, 503, "INSTALL_ARTIFACT_UNAVAILABLE", "安装制品暂时不可读。", "请检查服务安装文件。")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -544,7 +545,7 @@ func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request,
 			// rewrite that also shortened the file cannot look like a complete
 			// download, and record INSTALL_ARTIFACT_CHANGED for the operator instead
 			// of letting the response end as if it were the pinned artifact.
-			s.event(r, "INSTALL_ARTIFACT_CHANGED")
+			s.Event(r, "INSTALL_ARTIFACT_CHANGED")
 			panic(http.ErrAbortHandler)
 		}
 		// A read error or a client that stopped reading leaves the declared
@@ -559,31 +560,31 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, mutationFormMaxBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, infra.MutationFormMaxBytes)
 	var res protocol.TaskResult
 	if err := decodeAgentJSON(r, &res); err != nil {
 		s.agentFail(w, r, 400, "RESULT_INVALID", "任务结果格式不正确。", "请按固定 task schema 上报。")
 		return
 	}
-	changed, err := s.store.ReportResultAudited(node.ID, res, s.now())
+	changed, err := s.Store.ReportResultAudited(node.ID, res, s.Now())
 	if err != nil {
 		msg := err.Error()
 		code := "RESULT_REJECTED"
 		status := 400
-		if strings.HasPrefix(msg, codeTaskNotFound) {
-			code = codeTaskNotFound
+		if strings.HasPrefix(msg, infra.CodeTaskNotFound) {
+			code = infra.CodeTaskNotFound
 			status = 404
-		} else if strings.HasPrefix(msg, codeTaskAlreadyFinal) {
-			code = codeTaskAlreadyFinal
+		} else if strings.HasPrefix(msg, infra.CodeTaskAlreadyFinal) {
+			code = infra.CodeTaskAlreadyFinal
 			status = 409
-		} else if strings.HasPrefix(msg, codeTaskStateInvalid) {
-			code = codeTaskStateInvalid
+		} else if strings.HasPrefix(msg, infra.CodeTaskStateInvalid) {
+			code = infra.CodeTaskStateInvalid
 			status = 409
 		} else if strings.HasPrefix(msg, "READBACK_") {
 			code = strings.SplitN(msg, ":", 2)[0]
 			status = 400
-		} else if strings.HasPrefix(msg, codeTaskParamsInvalid) {
-			code = codeTaskParamsInvalid
+		} else if strings.HasPrefix(msg, infra.CodeTaskParamsInvalid) {
+			code = infra.CodeTaskParamsInvalid
 			status = 400
 		} else if strings.HasPrefix(msg, store.CodeDatabaseUnavailable) {
 			code = store.CodeDatabaseUnavailable
@@ -595,8 +596,8 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		// The request operation is deliberately separate from the task
 		// operation. Only stable, already-validated fields are logged.
-		s.log.Info("agent_task_result", "operation_id", res.OperationID,
-			"request_operation_id", operation(r), "stage", "agent",
+		s.Log.Info("agent_task_result", "operation_id", res.OperationID,
+			"request_operation_id", infra.Operation(r), "stage", "agent",
 			"status", res.Status, "error_code", res.ErrorCode)
 		// A recorded result is the readback event of the node: the Out side
 		// proves its allowlist and releases the Lines it serves, while the Line
@@ -605,7 +606,7 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 		s.logCoordinationReadback(r, node.ID)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded", "operation_id": operation(r)})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded", "operation_id": infra.Operation(r)})
 }
 
 // logCoordinationReadback writes the per-fact readback of one node as an audit
@@ -622,13 +623,13 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 // A readback failure never fails the request that triggered it: the evidence is
 // informational, and the next heartbeat, poll or result recomputes it.
 func (s *Server) logCoordinationReadback(r *http.Request, nodeID string) {
-	readback, err := s.store.NodeCoordinationReadback(nodeID, s.now())
+	readback, err := s.Store.NodeCoordinationReadback(nodeID, s.Now())
 	if err != nil {
-		s.log.Warn("out_readback_unavailable", "request_operation_id", operation(r),
+		s.Log.Warn("out_readback_unavailable", "request_operation_id", infra.Operation(r),
 			"stage", "web", "error_code", store.CodeDatabaseUnavailable)
 		return
 	}
-	s.log.Info("out_readback", "request_operation_id", operation(r), "stage", "web",
+	s.Log.Info("out_readback", "request_operation_id", infra.Operation(r), "stage", "web",
 		"allowlist", readback.Allowlist, "allowlist_code", readback.AllowlistCode,
 		"inbound", readback.Inbound, "inbound_code", readback.InboundCode,
 		"reality", readback.Reality,
@@ -639,7 +640,7 @@ func (s *Server) logCoordinationReadback(r *http.Request, nodeID string) {
 
 func (s *Server) agentAuth(w http.ResponseWriter, r *http.Request) (store.Node, bool) {
 	token := bearerToken(r)
-	node, err := s.store.AuthenticateAgentAt(token, s.now())
+	node, err := s.Store.AuthenticateAgentAt(token, s.Now())
 	if err != nil {
 		s.agentFail(w, r, 401, "AGENT_UNAUTHORIZED", "节点身份无效或已撤销。", "请使用配对时配发的节点专属身份重试。")
 		return store.Node{}, false

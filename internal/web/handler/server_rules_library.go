@@ -18,7 +18,7 @@ import (
 // stable code (RULE_PRESET_IMMUTABLE and friends) always reaches the log and
 // the page.
 
-func (app *Server) rulesLib() *policy.Store { return policy.New(app.store.DB, store.RuleUsageSource()) }
+func (app *Server) rulesLib() *policy.Store { return policy.New(app.Store.DB, store.RuleUsageSource()) }
 
 // rulesLibraryModel builds the page from the latest revision of every key,
 // each with the subscribers pinning exactly that revision. History comes from
@@ -65,7 +65,7 @@ func (app *Server) rulesLibraryModel(notice string, pending view.PendingRuleDele
 }
 
 func (app *Server) renderRulesLibrary(w http.ResponseWriter, r *http.Request, sess session, model view.RulesLibraryView) {
-	app.render(w, r, http.StatusOK, view.RulesLibraryPage(view.PageData{Title: "规则库", Path: "/rules", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP, DirectProxy: app.cfg.DirectProxy}, model))
+	app.Render(w, r, http.StatusOK, view.RulesLibraryPage(view.PageData{Title: "规则库", Path: "/rules", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP, DirectProxy: app.Cfg.DirectProxy}, model))
 }
 
 // rulesLibraryPage renders the read-only list. A store failure is a 503; it
@@ -73,7 +73,7 @@ func (app *Server) renderRulesLibrary(w http.ResponseWriter, r *http.Request, se
 func (app *Server) rulesLibraryPage(w http.ResponseWriter, r *http.Request, sess session) {
 	model, err := app.rulesLibraryModel("", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库与服务日志后重试。")
+		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库与服务日志后重试。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -99,15 +99,15 @@ func readLibraryForm(r *http.Request) (key, name string, action policy.Action, k
 // list with the receipt. Preset keys are refused, never squatted.
 func (app *Server) rulesLibraryCreate(w http.ResponseWriter, r *http.Request, sess session) {
 	key, name, action, kind, values := readLibraryForm(r)
-	created, err := app.rulesLib().CreateCustomRule(key, name, action, kind, values, app.now())
+	created, err := app.rulesLib().CreateCustomRule(key, name, action, kind, values, app.Now())
 	if err != nil {
 		app.failRulesLibrary(w, r, err)
 		return
 	}
-	app.event(r, "RULE_CREATED")
+	app.Event(r, "RULE_CREATED")
 	model, err := app.rulesLibraryModel("自定义规则已创建："+created.StableKey+" v1。预置规则不受影响。", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已写入但列表读取失败。", "请刷新页面后确认。")
+		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已写入但列表读取失败。", "请刷新页面后确认。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -118,15 +118,15 @@ func (app *Server) rulesLibraryCreate(w http.ResponseWriter, r *http.Request, se
 // them explicitly; the notice says so.
 func (app *Server) rulesLibraryRevise(w http.ResponseWriter, r *http.Request, sess session) {
 	key, name, action, kind, values := readLibraryForm(r)
-	revised, err := app.rulesLib().ReviseCustomRule(key, name, action, kind, values, app.now())
+	revised, err := app.rulesLib().ReviseCustomRule(key, name, action, kind, values, app.Now())
 	if err != nil {
 		app.failRulesLibrary(w, r, err)
 		return
 	}
-	app.event(r, "RULE_REVISED")
+	app.Event(r, "RULE_REVISED")
 	model, err := app.rulesLibraryModel("已生成新版本 v"+strconv.Itoa(revised.Version)+"（"+revised.StableKey+"），旧版本订阅不受影响。", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已写入但列表读取失败。", "请刷新页面后确认。")
+		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已写入但列表读取失败。", "请刷新页面后确认。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -140,7 +140,7 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 	key := strings.TrimSpace(r.PostForm.Get("stable_key"))
 	version, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("version")))
 	if version < 1 {
-		app.fail(w, r, http.StatusNotFound, "RULE_NOT_FOUND", "规则版本不存在。", "请从规则库列表中选择一个版本后重试。")
+		app.Fail(w, r, http.StatusNotFound, "RULE_NOT_FOUND", "规则版本不存在。", "请从规则库列表中选择一个版本后重试。")
 		return
 	}
 	if r.PostForm.Get("confirm") != "1" {
@@ -158,17 +158,17 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 		}
 		used, err := app.rulesLib().RuleUsedBy(key, version)
 		if err != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "引用关系读取失败。", "请检查数据库后重试；未删除任何规则。")
+			app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "引用关系读取失败。", "请检查数据库后重试；未删除任何规则。")
 			return
 		}
 		names := make([]string, 0, len(used))
 		for _, u := range used {
 			names = append(names, u.DisplayName())
 		}
-		app.event(r, "RULE_DELETE_PENDING")
+		app.Event(r, "RULE_DELETE_PENDING")
 		model, err := app.rulesLibraryModel("", view.PendingRuleDelete{StableKey: rule.StableKey, Version: rule.Version, Name: rule.Name, UsedBy: names}, true)
 		if err != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库后重试；未删除任何规则。")
+			app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库后重试；未删除任何规则。")
 			return
 		}
 		app.renderRulesLibrary(w, r, sess, model)
@@ -178,10 +178,10 @@ func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, se
 		app.failRulesLibrary(w, r, err)
 		return
 	}
-	app.event(r, "RULE_DELETED")
+	app.Event(r, "RULE_DELETED")
 	model, err := app.rulesLibraryModel("规则已删除："+key+" v"+strconv.Itoa(version)+"。", view.PendingRuleDelete{}, false)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已删除但列表读取失败。", "请刷新页面后确认。")
+		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则已删除但列表读取失败。", "请刷新页面后确认。")
 		return
 	}
 	app.renderRulesLibrary(w, r, sess, model)
@@ -219,5 +219,5 @@ func (app *Server) failRulesLibrary(w http.ResponseWriter, r *http.Request, err 
 	if _, after, found := strings.Cut(detail, ": "); found {
 		detail = after
 	}
-	app.fail(w, r, status, code, "规则库写操作未完成："+detail, "请修正后重试；预置规则不可写，被订阅引用的规则请先迁移订阅。")
+	app.Fail(w, r, status, code, "规则库写操作未完成："+detail, "请修正后重试；预置规则不可写，被订阅引用的规则请先迁移订阅。")
 }

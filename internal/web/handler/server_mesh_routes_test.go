@@ -24,7 +24,7 @@ func meshCreateRouter(t *testing.T, b *browser, displayName string, prefixes ...
 		"declared_prefixes": {strings.Join(prefixes, "\n")},
 	})
 	requireStatus(t, w, http.StatusOK)
-	devices, err := b.app.store.ListMeshDevices()
+	devices, err := b.app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +56,12 @@ func routeCallIndex(calls []string, name string) int {
 // not set. The exporter's own purpose table is pinned in internal/core/subscription.
 func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
-	line := createEdgeNode(t, app.store, now)
-	configureLine(t, app.store, line, "line-a", now)
+	now := app.Now()
+	line := createEdgeNode(t, app.Store, now)
+	configureLine(t, app.Store, line, "line-a", now)
 	// A subnet_router may be bound to a subscriber; the binding must not turn
 	// it into a proxy+mesh device.
-	sub, _, err := app.store.CreateSubscriber("alice", []string{line}, now)
+	sub, _, err := app.Store.CreateSubscriber("alice", []string{line}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 	}
 	// The config endpoint refuses the same purpose with a stable code, so an
 	// explicit POST cannot reach the renderer either.
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestMeshCreateSubnetRouterRequiresPrefix(t *testing.T) {
 	if !strings.Contains(w.Body.String(), mesh.CodeRouteDeclarationInvalid) {
 		t.Fatalf("missing declaration lost its code: %.300s", w.Body.String())
 	}
-	if devices, err := b.app.store.ListMeshDevices(); err != nil || len(devices) != 0 {
+	if devices, err := b.app.Store.ListMeshDevices(); err != nil || len(devices) != 0 {
 		t.Fatalf("a refused router stored %d devices (err=%v)", len(devices), err)
 	}
 }
@@ -189,7 +189,7 @@ func TestMeshRouteApprovalSetDropsUnsendableEntries(t *testing.T) {
 func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{
@@ -214,14 +214,14 @@ func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 	if !got["192.168.1.0/24"] || !got["10.5.0.0/16"] {
 		t.Fatalf("approved set = %v, want the new prefix and the untracked one", fake.nodes[0].ApprovedRoutes)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stored.Desired != mesh.RouteDesiredApproved || stored.Observed != mesh.RouteObservedApproved {
 		t.Fatalf("stored route = %+v", stored)
 	}
-	if got := routeEventKinds(t, app.store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got := routeEventKinds(t, app.Store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("untracked approval events = %v", got)
 	}
 	body := w.Body.String()
@@ -286,7 +286,7 @@ func TestMeshRouteApproveSurvivesAnUnsendableApprovedPrefix(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	app.mesh = &routeRefusingSendableOnlyHeadscale{fake}
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{
@@ -301,7 +301,7 @@ func TestMeshRouteApproveSurvivesAnUnsendableApprovedPrefix(t *testing.T) {
 	if fake.callsOf("nodes.approve-routes") != 1 {
 		t.Fatalf("approval calls = %v", fake.calls)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestMeshRouteApproveSurvivesAnUnsendableApprovedPrefix(t *testing.T) {
 func TestMeshRouteApproveReadbackMismatchLeavesAdvertised(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, AvailableRoutes: []string{"192.168.1.0/24"}}}
@@ -324,7 +324,7 @@ func TestMeshRouteApproveReadbackMismatchLeavesAdvertised(t *testing.T) {
 	if !strings.Contains(w.Body.String(), codeMeshRouteApprovalUnconfirmed) {
 		t.Fatalf("unconfirmed readback lost its code: %.400s", w.Body.String())
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,10 +336,10 @@ func TestMeshRouteApproveReadbackMismatchLeavesAdvertised(t *testing.T) {
 func TestMeshRouteRevokeSendsDifference(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
@@ -355,7 +355,7 @@ func TestMeshRouteRevokeSendsDifference(t *testing.T) {
 	if len(fake.nodes[0].ApprovedRoutes) != 1 || fake.nodes[0].ApprovedRoutes[0] != "10.5.0.0/16" {
 		t.Fatalf("withdrawal did not send the difference set: %v", fake.nodes[0].ApprovedRoutes)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,10 +367,10 @@ func TestMeshRouteRevokeSendsDifference(t *testing.T) {
 func TestMeshRouteRevokeClearsWhenNothingRemains(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
@@ -389,7 +389,7 @@ func TestMeshRouteRevokeClearsWhenNothingRemains(t *testing.T) {
 func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{
@@ -400,7 +400,7 @@ func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 	}}
 	w := b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, http.StatusOK)
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 	if stored.Desired != mesh.RouteDesiredAdvertised {
 		t.Fatalf("reconcile approved a prefix: %+v", stored)
 	}
-	if got := routeEventKinds(t, app.store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
+	if got := routeEventKinds(t, app.Store, router.ID, "10.5.0.0/16"); len(got) != 1 || got[0] != store.CodeMeshRouteUntracked {
 		t.Fatalf("untracked advertisement events = %v", got)
 	}
 }
@@ -420,10 +420,10 @@ func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 func TestMeshRevokeClearsApprovedRoutesBeforeDelete(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
@@ -437,7 +437,7 @@ func TestMeshRevokeClearsApprovedRoutesBeforeDelete(t *testing.T) {
 	if clearAt < 0 || deleteAt < 0 || clearAt > deleteAt {
 		t.Fatalf("remote calls = %v, want clear-routes before nodes.delete", calls)
 	}
-	revoked, err := app.store.GetMeshDevice(router.ID)
+	revoked, err := app.Store.GetMeshDevice(router.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,7 @@ func TestMeshRevokeClearsApprovedRoutesBeforeDelete(t *testing.T) {
 func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{
@@ -473,7 +473,7 @@ func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 	if got := fake.nodes[0].ApprovedRoutes; len(got) != 2 || got[0] != "10.5.0.0/16" || got[1] != "192.168.1.0/24" {
 		t.Fatalf("approved set = %v, want the sendable prefixes only", got)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,10 +502,10 @@ func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 func TestMeshRouteWithdrawDropsUnsendableApprovedPrefix(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
@@ -522,7 +522,7 @@ func TestMeshRouteWithdrawDropsUnsendableApprovedPrefix(t *testing.T) {
 	if got := fake.nodes[0].ApprovedRoutes; len(got) != 1 || got[0] != "10.5.0.0/16" {
 		t.Fatalf("withdrawal sent %v, want the sendable difference set", got)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,10 +543,10 @@ func TestMeshRouteWithdrawDropsUnsendableApprovedPrefix(t *testing.T) {
 func TestMeshRouteWithdrawClearsWhenOnlyUnsendableRemains(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,

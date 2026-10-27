@@ -22,7 +22,7 @@ import (
 // reuses the subscription fixture verbatim and returns the Line and bearer.
 func previewSeed(t *testing.T, app *Server) (string, string) {
 	t.Helper()
-	lineID, _, _, bearer, _ := downloadFixture(t, app, app.now())
+	lineID, _, _, bearer, _ := downloadFixture(t, app, app.Now())
 	return lineID, bearer
 }
 
@@ -101,8 +101,8 @@ func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 	}
 	// The queued server candidate needs its own readback before the download
 	// gate reopens; the client layer is not what unblocks it.
-	settleTasks(t, b.app.store, line)
-	confirmChain(t, b.app.store, line, b.app.now())
+	settleTasks(t, b.app.Store, line)
+	confirmChain(t, b.app.Store, line, b.app.Now())
 	if got := subscriptionBytes(t, b.app, bearer, subscriptionSingBoxFormat); got != singBoxBefore {
 		t.Fatal("the applied server publication changed the sing-box download")
 	}

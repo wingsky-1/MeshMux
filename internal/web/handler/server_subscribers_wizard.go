@@ -153,15 +153,15 @@ func (m subscriptionWizardView) toView() view.SubscriptionWizardView {
 // duplicate-field and size checks), so the wizard inherits the same request
 // contract as every other management action.
 func (app *Server) registerSubscriptionWizardRoutes(r chi.Router) {
-	r.Post("/subscribers/wizard/preview", app.mutation(app.subscriptionWizardPreview, true))
-	r.Post("/subscribers/wizard/save", app.mutation(app.subscriptionWizardSave, true))
+	r.Post("/subscribers/wizard/preview", app.Mutation(app.subscriptionWizardPreview, true))
+	r.Post("/subscribers/wizard/save", app.Mutation(app.subscriptionWizardSave, true))
 }
 
 // subscriptionWizardPage renders the wizard for one subscriber (or the create
 // form when subscriber_id is empty).
 func (app *Server) subscriptionWizardPage(w http.ResponseWriter, r *http.Request, sess session, model subscriptionWizardView) {
-	app.render(w, r, http.StatusOK, view.SubscriptionWizardPage(
-		view.PageData{Title: "订阅向导", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP},
+	app.Render(w, r, http.StatusOK, view.SubscriptionWizardPage(
+		view.PageData{Title: "订阅向导", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP},
 		model.toView(),
 	))
 }
@@ -173,7 +173,7 @@ func (app *Server) subscribersWizard(w http.ResponseWriter, r *http.Request, ses
 	// The query string is not a mutation input, but it still must be a
 	// canonical identity before it reaches a store read.
 	if subscriberID != "" && subscription.ValidateID(subscriberID) != nil {
-		app.fail(w, r, http.StatusBadRequest, "SUBSCRIBER_ID_INVALID", "订阅用户标识不正确。", "请从订阅用户页打开向导。")
+		app.Fail(w, r, http.StatusBadRequest, "SUBSCRIBER_ID_INVALID", "订阅用户标识不正确。", "请从订阅用户页打开向导。")
 		return
 	}
 	model, err := app.subscriptionWizardModel(subscriberID)
@@ -193,12 +193,12 @@ func (app *Server) subscriptionWizardModel(subscriberID string) (subscriptionWiz
 // selection that overrides the saved checkboxes.
 func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *store.SelectionSpec) (subscriptionWizardView, error) {
 	model := subscriptionWizardView{SubscriberID: subscriberID, Outs: []store.OutPoolEntry{}, Rules: []policy.Rule{}, Devices: []store.MeshDeviceRecord{}, Submitted: submitted}
-	now := app.now()
-	lines, err := app.store.ListLines()
+	now := app.Now()
+	lines, err := app.Store.ListLines()
 	if err != nil {
 		return model, err
 	}
-	outs, err := app.store.OutPool(now)
+	outs, err := app.Store.OutPool(now)
 	if err != nil {
 		return model, err
 	}
@@ -208,7 +208,7 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 		return model, err
 	}
 	model.Rules = rules
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		return model, err
 	}
@@ -249,16 +249,16 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 		}
 	}
 	if subscriberID != "" {
-		sub, err := app.store.GetSubscriber(subscriberID)
+		sub, err := app.Store.GetSubscriber(subscriberID)
 		if err != nil {
 			return model, err
 		}
 		model.SubscriberName, model.State = sub.DisplayName, string(sub.State)
-		selection, _, err = app.store.SubscriptionSelection(subscriberID)
+		selection, _, err = app.Store.SubscriptionSelection(subscriberID)
 		if err != nil {
 			return model, err
 		}
-		evidence, err := app.store.SubscriberSyncView(subscriberID, now)
+		evidence, err := app.Store.SubscriberSyncView(subscriberID, now)
 		if err != nil {
 			return model, err
 		}
@@ -266,7 +266,7 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 		for _, line := range evidence.Lines {
 			lineEvidence[line.NodeID] = line
 		}
-		credentials, err := app.store.ListSubscriberCredentials(subscriberID)
+		credentials, err := app.Store.ListSubscriberCredentials(subscriberID)
 		if err != nil {
 			return model, err
 		}
@@ -405,7 +405,7 @@ func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Requ
 	subscriberID := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	spec, _, err := readWizardSelection(r)
 	if err != nil {
-		app.fail(w, r, http.StatusBadRequest, "SUBSCRIPTION_SELECTION_INVALID", "所选内容不正确。", "请重新勾选线路、Out、规则与组网设备后重试。")
+		app.Fail(w, r, http.StatusBadRequest, "SUBSCRIPTION_SELECTION_INVALID", "所选内容不正确。", "请重新勾选线路、Out、规则与组网设备后重试。")
 		return
 	}
 	verifier, err := app.publishVerifier()
@@ -413,16 +413,16 @@ func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Requ
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	draft, err := app.store.DraftSubscriptionSelection(subscriberID, strings.TrimSpace(r.PostForm.Get("display_name")), spec)
+	draft, err := app.Store.DraftSubscriptionSelection(subscriberID, strings.TrimSpace(r.PostForm.Get("display_name")), spec)
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	preview := app.store.PreviewDraftSelection(r.Context(), draft, verifier)
-	app.event(r, "SUBSCRIPTION_PREVIEWED")
+	preview := app.Store.PreviewDraftSelection(r.Context(), draft, verifier)
+	app.Event(r, "SUBSCRIPTION_PREVIEWED")
 	model, err := app.subscriptionWizardModelWith(subscriberID, &spec)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "预览已生成但页面数据读取失败。", "请刷新页面后重试。")
+		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "预览已生成但页面数据读取失败。", "请刷新页面后重试。")
 		return
 	}
 	model.Diagnostics = preview.Diagnostics
@@ -441,16 +441,16 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 	subscriberID := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	spec, displayName, err := readWizardSelection(r)
 	if err != nil {
-		app.fail(w, r, http.StatusBadRequest, "SUBSCRIPTION_SELECTION_INVALID", "所选内容不正确。", "请重新勾选线路、Out、规则与组网设备后重试。")
+		app.Fail(w, r, http.StatusBadRequest, "SUBSCRIPTION_SELECTION_INVALID", "所选内容不正确。", "请重新勾选线路、Out、规则与组网设备后重试。")
 		return
 	}
-	now := app.now()
+	now := app.Now()
 	verifier, err := app.publishVerifier()
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	result, err := app.store.ApproveSubscriptionSelection(r.Context(), subscriberID, displayName, spec, verifier, now)
+	result, err := app.Store.ApproveSubscriptionSelection(r.Context(), subscriberID, displayName, spec, verifier, now)
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return
@@ -464,10 +464,10 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		subscriberID = result.SubscriberID
 	}
 	if preview.Blocking() {
-		app.event(r, preview.Code())
+		app.Event(r, preview.Code())
 		model, modelErr := app.subscriptionWizardModelWith(pageSubscriberID, &spec)
 		if modelErr != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "保存被拒绝但页面数据读取失败。", "请刷新页面后重试。")
+			app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "保存被拒绝但页面数据读取失败。", "请刷新页面后重试。")
 			return
 		}
 		model.Diagnostics = preview.Diagnostics
@@ -477,16 +477,16 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	app.event(r, "SUBSCRIPTION_SAVED")
+	app.Event(r, "SUBSCRIPTION_SAVED")
 	// The selection is durable and approved; the Line publication follows
 	// immediately. A failed publication leaves the page pending instead of
 	// claiming a convergence that did not happen.
-	if err := app.store.PrepareSubscriberSync(subscriberID, now); err != nil {
-		app.event(r, store.SanitizeSubscriberSyncCode(err.Error()))
+	if err := app.Store.PrepareSubscriberSync(subscriberID, now); err != nil {
+		app.Event(r, store.SanitizeSubscriberSyncCode(err.Error()))
 	}
 	model, err := app.subscriptionWizardModel(subscriberID)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "选择已保存但页面数据读取失败。", "请刷新页面后重试。")
+		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "选择已保存但页面数据读取失败。", "请刷新页面后重试。")
 		return
 	}
 	model.Diagnostics = preview.Diagnostics
@@ -528,9 +528,9 @@ func (app *Server) subscriptionWizardFail(w http.ResponseWriter, r *http.Request
 	if _, after, found := strings.Cut(detail, ": "); found {
 		detail = after
 	}
-	app.event(r, code)
+	app.Event(r, code)
 	// The detail names the offending subscription or Line, which the operator
 	// needs to resolve a reference conflict. It carries no credential, token or
 	// document byte: every store refusal is built from identities and names.
-	app.fail(w, r, status, code, "订阅向导操作未完成："+detail, "请按页面提示修正选择或检查服务日志后重试。")
+	app.Fail(w, r, status, code, "订阅向导操作未完成："+detail, "请按页面提示修正选择或检查服务日志后重试。")
 }

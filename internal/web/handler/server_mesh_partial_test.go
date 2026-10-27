@@ -21,7 +21,7 @@ import (
 // of failing before the mutation.
 func refuseMeshRouteIntentUpdates(t *testing.T, app *Server) {
 	t.Helper()
-	if _, err := app.store.DB.Exec(`CREATE TRIGGER mesh_route_desired_refused
+	if _, err := app.Store.DB.Exec(`CREATE TRIGGER mesh_route_desired_refused
  BEFORE UPDATE OF desired ON mesh_routes
  BEGIN
    SELECT RAISE(ABORT, 'MESH_ROUTE_TEST_REFUSED');
@@ -29,7 +29,7 @@ func refuseMeshRouteIntentUpdates(t *testing.T, app *Server) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := app.store.DB.Exec(`DROP TRIGGER IF EXISTS mesh_route_desired_refused`); err != nil {
+		if _, err := app.Store.DB.Exec(`DROP TRIGGER IF EXISTS mesh_route_desired_refused`); err != nil {
 			t.Errorf("drop trigger: %v", err)
 		}
 	})
@@ -75,7 +75,7 @@ func (f *routeCompensationRefusingHeadscale) ClearApprovedRoutes(ctx context.Con
 func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{
@@ -103,7 +103,7 @@ func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 	if got := fake.callsOf("nodes.approve-routes"); got != 2 {
 		t.Fatalf("approve-routes calls = %d, want the mutation and its revert (%v)", got, fake.calls)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{
@@ -155,7 +155,7 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 	if !meshRoutePrefixIn(fake.nodes[0].ApprovedRoutes, "192.168.1.0/24") {
 		t.Fatalf("partial was reported without the remote change: %v", fake.nodes[0].ApprovedRoutes)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +170,11 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	now := app.now()
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, now); err != nil {
+	now := app.Now()
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
@@ -197,7 +197,7 @@ func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 	if got := fake.callsOf("nodes.approve-routes"); got != 2 {
 		t.Fatalf("approve-routes calls = %d, want the mutation and its revert (%v)", got, fake.calls)
 	}
-	stored, err := app.store.GetMeshRoute(router.ID, "192.168.1.0/24")
+	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,11 +215,11 @@ func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 func TestMeshRouteRevokePartialWhenClearRevertFails(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	now := app.now()
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, now); err != nil {
+	now := app.Now()
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
@@ -252,14 +252,14 @@ func TestMeshRouteRevokePartialWhenClearRevertFails(t *testing.T) {
 func TestMeshRoutePartialWhenTheHubRecordCannotBeRead(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	now := app.now()
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, now); err != nil {
+	now := app.Now()
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, now); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
 		AvailableRoutes: []string{"192.168.1.0/24"}}}
-	if _, err := app.store.DB.Exec(`DROP TABLE mesh_routes`); err != nil {
+	if _, err := app.Store.DB.Exec(`DROP TABLE mesh_routes`); err != nil {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
@@ -301,11 +301,11 @@ func TestMeshRoutePartialWhenTheHubRecordCannotBeRead(t *testing.T) {
 func TestMeshRouteLocalFailureDoesNotRevertACommittedWrite(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
-	now := app.now()
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, now); err != nil {
+	now := app.Now()
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
+	if _, err := app.Store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,

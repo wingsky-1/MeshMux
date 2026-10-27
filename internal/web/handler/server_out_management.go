@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 )
@@ -37,14 +38,14 @@ const CodeBindingAPIRetired = "OUT_BINDING_API_RETIRED"
 // echoes database text or node identifiers beyond the code.
 func outBindingFailure(err error) (status int, code, message, next string) {
 	switch {
-	case strings.HasPrefix(err.Error(), codeOutNotFound):
-		return 404, codeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
-	case strings.HasPrefix(err.Error(), codeOutRoleInvalid):
-		return 409, codeOutRoleInvalid, "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
-	case strings.HasPrefix(err.Error(), codeLineNotFound):
-		return 404, codeLineNotFound, "Line 节点不存在。", "请先在节点页纳管该 Line 后重试。"
-	case strings.HasPrefix(err.Error(), codeLineRoleInvalid):
-		return 409, codeLineRoleInvalid, "所选节点不是 Line 角色。", "请选择角色为 Edge 的 Line。"
+	case strings.HasPrefix(err.Error(), infra.CodeOutNotFound):
+		return 404, infra.CodeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
+	case strings.HasPrefix(err.Error(), infra.CodeOutRoleInvalid):
+		return 409, infra.CodeOutRoleInvalid, "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
+	case strings.HasPrefix(err.Error(), infra.CodeLineNotFound):
+		return 404, infra.CodeLineNotFound, "Line 节点不存在。", "请先在节点页纳管该 Line 后重试。"
+	case strings.HasPrefix(err.Error(), infra.CodeLineRoleInvalid):
+		return 409, infra.CodeLineRoleInvalid, "所选节点不是 Line 角色。", "请选择角色为 Edge 的 Line。"
 	case strings.HasPrefix(err.Error(), store.CodeOutReferenced):
 		return 409, store.CodeOutReferenced, "该 Out 仍被订阅选中。", "请在订阅向导中先解除这些订阅的 Out 选择，再删除出口。"
 	case strings.HasPrefix(err.Error(), store.CodeOutSyncPending):
@@ -57,8 +58,8 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 		// only that the hub-side publication is still unconfirmed — under Ruling R10 the
 		// set being published is the node membership, not an empty authorization.
 		return 202, store.CodeOutSyncPending, "该 Out 授权的下发待同步。", "Out 上线后会自动完成；也可在节点页重试。"
-	case strings.HasPrefix(err.Error(), codeOutBindingInvalid):
-		return 400, codeOutBindingInvalid, "Out 参数不正确。", "请检查 Out 标识后重试。"
+	case strings.HasPrefix(err.Error(), infra.CodeOutBindingInvalid):
+		return 400, infra.CodeOutBindingInvalid, "Out 参数不正确。", "请检查 Out 标识后重试。"
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 状态。", "请检查数据库与服务日志后重试。"
 	default:
@@ -73,7 +74,7 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 // node membership (Ruling R10), which no request can edit; what the operator configures
 // through the wizard is which egress a client document names.
 func (s *Server) outBindingAPIRetired(w http.ResponseWriter, r *http.Request, _ session) {
-	s.fail(w, r, http.StatusGone, CodeBindingAPIRetired,
+	s.Fail(w, r, http.StatusGone, CodeBindingAPIRetired,
 		"该接口已移除：Out 授权来自节点成员（纳管即互通），不再由绑定或订阅写入。",
 		"若要让客户端走该 Out，请在订阅向导中选择它；若要让某条 Line 不再被 Out 接受，请吊销该 Line 身份。")
 }
@@ -87,15 +88,15 @@ func (s *Server) outBindingAPIRetired(w http.ResponseWriter, r *http.Request, _ 
 // never reported as a partial success, because once the row disappears there is nothing
 // left to retry from.
 func (s *Server) outDelete(w http.ResponseWriter, r *http.Request, _ session) {
-	now := s.now()
+	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
-	if err := s.store.DeleteOutAt(outID, now); err != nil {
+	if err := s.Store.DeleteOutAt(outID, now); err != nil {
 		if errors.Is(err, store.ErrOutCleanupPending) {
 			// Nothing was destroyed (Ruling R9): the host has not proved the empty guard
 			// yet, so the delete is a refusal, not a partial success. Reporting 202 here
 			// would let an operator believe the Out is gone while its row still exists.
-			s.event(r, store.CodeOutSyncPending)
-			s.fail(w, r, 409, store.CodeOutSyncPending,
+			s.Event(r, store.CodeOutSyncPending)
+			s.Fail(w, r, 409, store.CodeOutSyncPending,
 				"删除未执行：Out 尚未确认清空授权（Out 离线或仍有未完成的链）。",
 				"请确认 Out 在线并等待当前链结束后重试；本次未删除任何内容。")
 			return
@@ -109,16 +110,16 @@ func (s *Server) outDelete(w http.ResponseWriter, r *http.Request, _ session) {
 				message = "该 Out 仍被订阅选中：" + names + "。"
 			}
 		}
-		s.fail(w, r, status, code, message, next)
+		s.Fail(w, r, status, code, message, next)
 		return
 	}
-	s.event(r, "OUT_DELETED")
+	s.Event(r, "OUT_DELETED")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Status      string `json:"status"`
 		OutID       string `json:"out_id"`
 		OperationID string `json:"operation_id"`
-	}{Status: "deleted", OutID: outID, OperationID: operation(r)})
+	}{Status: "deleted", OutID: outID, OperationID: infra.Operation(r)})
 }
 
 // outReferencedSubscribers extracts the subscription names from the store's

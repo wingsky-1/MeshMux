@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io"
 	"net/http"
@@ -49,7 +50,7 @@ const (
 	// codeUpgradeManifestUnavailable: no pinned manifest describes the
 	// requested release, so the operator's tag is still only a suggestion. The
 	// Hub never falls back to a cached or newer release.
-	codeUpgradeManifestUnavailable = codeManifestUnavailable
+	codeUpgradeManifestUnavailable = infra.CodeManifestUnavailable
 	// codeUpgradeTargetInvalid: the requested version is not a SemVer release.
 	codeUpgradeTargetInvalid = "UPGRADE_TARGET_INVALID"
 	// codeUpgradeSchemaIncompatible: the target names another stored policy
@@ -91,9 +92,9 @@ type upgradeApproveReceipt struct {
 // is the page with the unverified suggestion, and a failed query is shown as
 // unknown rather than as a version.
 func (app *Server) tasksCheck(w http.ResponseWriter, r *http.Request, sess session) {
-	page, err := app.upgradeView(app.now())
+	page, err := app.upgradeView(app.Now())
 	if err != nil {
-		app.fail(w, r, 503, "UPGRADE_SNAPSHOT_UNAVAILABLE", "无法读取升级只读快照。", "请检查数据库后重试。")
+		app.Fail(w, r, 503, "UPGRADE_SNAPSHOT_UNAVAILABLE", "无法读取升级只读快照。", "请检查数据库后重试。")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -104,7 +105,7 @@ func (app *Server) tasksCheck(w http.ResponseWriter, r *http.Request, sess sessi
 	} else {
 		page.Checked = strings.TrimPrefix(release, "v")
 	}
-	app.render(w, r, 200, view.UpgradePage(view.PageData{Title: "任务与升级", Path: "/tasks", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, page))
+	app.Render(w, r, 200, view.UpgradePage(view.PageData{Title: "任务与升级", Path: "/tasks", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP}, page))
 }
 
 // latestRelease reads the newest published release tag. It is a seam so the
@@ -140,7 +141,7 @@ func githubLatestRelease(ctx context.Context) (string, error) {
 		return "", errors.New("RELEASE_QUERY_FAILED")
 	}
 	tag := strings.TrimPrefix(strings.TrimSpace(body.TagName), "v")
-	if !isValidReleaseVersion(tag) {
+	if !infra.IsValidReleaseVersion(tag) {
 		return "", errors.New("RELEASE_QUERY_FAILED")
 	}
 	return tag, nil
@@ -152,17 +153,17 @@ func githubLatestRelease(ctx context.Context) (string, error) {
 func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ session) {
 	nodeID := strings.TrimSpace(r.PostForm.Get("node_id"))
 	version := strings.TrimPrefix(strings.TrimSpace(r.PostForm.Get("version")), "v")
-	if !isValidNodeID(nodeID) {
+	if !infra.IsValidNodeID(nodeID) {
 		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
 			"节点标识不正确。", "请从任务页面的节点行重新提交批准。")
 		return
 	}
-	if !isValidReleaseVersion(version) {
+	if !infra.IsValidReleaseVersion(version) {
 		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
 			"目标版本不是 SemVer 发行版。", "请重新检查新版本后再批准。")
 		return
 	}
-	architecture, err := app.store.ObservedArchitecture(nodeID)
+	architecture, err := app.Store.ObservedArchitecture(nodeID)
 	if err != nil {
 		app.failUpgradeApprove(w, r, err)
 		return
@@ -199,17 +200,17 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ sessio
 			"目标发行声明了另一套策略 schema。", "升级会破坏现有策略，已拒绝；当前修订保持不变。")
 		return
 	}
-	target, err := app.store.ApproveUpgrade(nodeID, manifest, manifestSHA, app.now())
+	target, err := app.Store.ApproveUpgrade(nodeID, manifest, manifestSHA, app.Now())
 	if err != nil {
 		app.failUpgradeApprove(w, r, err)
 		return
 	}
-	app.event(r, "UPGRADE_APPROVED")
+	app.Event(r, "UPGRADE_APPROVED")
 	app.writeJSON(w, http.StatusOK, upgradeApproveReceipt{
 		OK: true, Status: "queued", Target: target.Version, ManifestSHA256: target.ManifestSHA256,
 		PolicySchema: manifest.PolicySchema, RoutePolicyRevisions: routePolicySlots(manifest),
 		Revision: target.CandidateRevision, StageOperationID: target.StageOperationID,
-		Tasks: target.Tasks, OperationID: operation(r),
+		Tasks: target.Tasks, OperationID: infra.Operation(r),
 		NextAction: "已排队：候选与四任务链已同事务写入，stage 行带有固定目标；节点下次轮询才执行，queued 不等于已生效。",
 	})
 }
@@ -241,10 +242,10 @@ func routePolicySlots(manifest upgrade.Manifest) map[string]int64 {
 
 // writeUpgradeFailure writes the approval refusal in the management JSON shape.
 func (app *Server) writeUpgradeFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
-	app.event(r, code)
+	app.Event(r, code)
 	app.writeJSON(w, status, upgradeApproveReceipt{
 		Status: "failed", PolicySchema: upgrade.PolicySchema, RoutePolicyRevisions: map[string]int64{},
-		ErrorCode: code, Detail: message, NextAction: next, OperationID: operation(r),
+		ErrorCode: code, Detail: message, NextAction: next, OperationID: infra.Operation(r),
 	})
 }
 
@@ -254,8 +255,8 @@ func (app *Server) writeUpgradeFailure(w http.ResponseWriter, r *http.Request, s
 func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, err error) {
 	code := store.ErrorCodeOf(err)
 	switch {
-	case code == codeTasksInProgress:
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeTasksInProgress,
+	case code == infra.CodeTasksInProgress:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeTasksInProgress,
 			"该节点仍有未结束的任务链。", "等待当前链结束或失败后再批准；已应用修订保持不变。")
 	case code == store.CodeUpgradeNotAdjacent:
 		app.writeUpgradeFailure(w, r, http.StatusConflict, store.CodeUpgradeNotAdjacent,
@@ -263,32 +264,32 @@ func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, er
 	case code == store.CodeUpgradeAgentIncompatible:
 		app.writeUpgradeFailure(w, r, http.StatusConflict, store.CodeUpgradeAgentIncompatible,
 			"节点回读的 Agent 版本无法消费该候选。", "请先升级该节点到理解该候选的版本；未下发任何内容。")
-	case code == codeNodeNotFound:
-		app.writeUpgradeFailure(w, r, http.StatusNotFound, codeNodeNotFound,
+	case code == infra.CodeNodeNotFound:
+		app.writeUpgradeFailure(w, r, http.StatusNotFound, infra.CodeNodeNotFound,
 			"节点不存在。", "请刷新任务页面后重试。")
-	case code == codeUpgradeAlreadyCurrent:
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeAlreadyCurrent,
+	case code == infra.CodeUpgradeAlreadyCurrent:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeUpgradeAlreadyCurrent,
 			"该节点已运行该发行版本。", "无需重复升级；如需重装，请走重新复核流程。")
-	case code == codeUpgradeAgentUnobserved:
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeAgentUnobserved,
+	case code == infra.CodeUpgradeAgentUnobserved:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeUpgradeAgentUnobserved,
 			"该节点尚未回读 Agent 版本。", "请先完成一次成功的配置回读，再批准升级。")
-	case code == codeUpgradeChainInvalid, code == codeCandidateInvalid, code == codeCandidateMismatch:
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeChainInvalid,
+	case code == infra.CodeUpgradeChainInvalid, code == infra.CodeCandidateInvalid, code == infra.CodeCandidateMismatch:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeUpgradeChainInvalid,
 			"当前快照无法生成合法的升级链。", "请先复核该节点配置；未写入任何升级记录。")
 	// The approval re-derives the Line route from the live policy, so it can
 	// meet the same Out contract a publication does. The refusal is reported
 	// with the policy package's own stable code and the operator's next step (fix the
 	// Out, or publish a direct server policy) instead of a generic retry hint.
-	case code == codeOutBindingInvalid:
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeOutBindingInvalid,
+	case code == infra.CodeOutBindingInvalid:
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeOutBindingInvalid,
 			"当前服务端策略指向一个该线路没有的 Out。", "请先绑定 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
 	case code == policy.CodeOutOfflineFailClosed:
 		app.writeUpgradeFailure(w, r, http.StatusConflict, policy.CodeOutOfflineFailClosed,
 			"当前服务端策略指向的 Out 不可用。", "请恢复 Out 或发布不含 Out 的服务端策略；未写入任何升级记录。")
-	case code == codePolicyCorrupt, code == codePolicyPinsInvalid,
+	case code == infra.CodePolicyCorrupt, code == infra.CodePolicyPinsInvalid,
 		code == policy.CodePolicyInvalid, code == policy.CodePolicyConflict,
 		code == policy.CodeRulesetUnpinned:
-		app.writeUpgradeFailure(w, r, http.StatusConflict, codeUpgradeChainInvalid,
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeUpgradeChainInvalid,
 			"当前 active 服务端策略无法解析出线路路由。", "请先修复并重新发布服务端策略；未写入任何升级记录。")
 	default:
 		app.writeUpgradeFailure(w, r, http.StatusServiceUnavailable, "UPGRADE_APPROVAL_FAILED",

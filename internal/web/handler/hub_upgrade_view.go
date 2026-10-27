@@ -22,7 +22,7 @@ import (
 func (app *Server) hubUpgradeView(now time.Time) view.HubUpgradeView {
 	block := view.HubUpgradeView{Identity: app.hubIdentity(now)}
 	owner := os.Geteuid()
-	ops, err := hubupgrade.ListOps(app.store.Dir, owner)
+	ops, err := hubupgrade.ListOps(app.Store.Dir, owner)
 	if err != nil {
 		block.Err = store.ErrorCodeOf(err)
 		return block
@@ -40,12 +40,12 @@ func (app *Server) hubUpgradeView(now time.Time) view.HubUpgradeView {
 			block.Result, block.HasResult = result, true
 		}
 	}
-	if _, record, ok, err := hubupgrade.LatestBackup(app.store.Dir, owner); err == nil && ok {
+	if _, record, ok, err := hubupgrade.LatestBackup(app.Store.Dir, owner); err == nil && ok {
 		block.Record, block.HasRecord = record, true
 	} else if err != nil && block.Err == "" {
 		block.Err = store.ErrorCodeOf(err)
 	}
-	if marker, ok, err := hubupgrade.ReadRestoredMarker(app.store.Dir); err == nil && ok {
+	if marker, ok, err := hubupgrade.ReadRestoredMarker(app.Store.Dir); err == nil && ok {
 		block.Restored, block.HasRestored = marker, true
 	} else if err != nil && block.Err == "" {
 		block.Err = store.ErrorCodeOf(err)

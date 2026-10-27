@@ -72,7 +72,7 @@ func TestApplyReceipt(t *testing.T) {
 		receipt.TargetVersion != "1.0.1" || receipt.PackageSHA256 != strings.Repeat("b", 64) {
 		t.Fatalf("receipt: %+v", receipt)
 	}
-	if got.DataDir != app.store.Dir || got.OperationID != operationID ||
+	if got.DataDir != app.Store.Dir || got.OperationID != operationID ||
 		got.ManifestDir != hubupgrade.RootManifestDir || got.RequestDir != hubupgrade.RequestDir {
 		t.Fatalf("handoff config: %+v", got)
 	}
@@ -161,7 +161,7 @@ func (e *hubApplyError) Error() string { return e.code + ": injected refusal" }
 func TestNoSchema11(t *testing.T) {
 	app, _ := testApp(t)
 	var version int
-	if err := app.store.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+	if err := app.Store.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if version != store.DatabaseSchemaVersion {
@@ -169,7 +169,7 @@ func TestNoSchema11(t *testing.T) {
 	}
 	mirrorTable := "hub_upgrade_" + "operations"
 	var tables int
-	if err := app.store.DB.QueryRow(
+	if err := app.Store.DB.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, mirrorTable).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestReconcileTickerAdvancesJournal(t *testing.T) {
 	app, _ := testApp(t)
 	app.reconcileInterval = time.Millisecond
 	operationID := strings.Repeat("1", 32)
-	if err := hubupgrade.WriteOp(app.store.Dir, hubupgrade.Op{
+	if err := hubupgrade.WriteOp(app.Store.Dir, hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: hubupgrade.StateBackingUp, TargetVersion: "1.0.1", FromVersion: "1.0.0-dev",
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("c", 64),
@@ -253,7 +253,7 @@ func TestReconcileTickerAdvancesJournal(t *testing.T) {
 	app.startHubUpgradeReconcile(t.Context())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		op, ok, err := hubupgrade.ReadOp(app.store.Dir, operationID, os.Geteuid())
+		op, ok, err := hubupgrade.ReadOp(app.Store.Dir, operationID, os.Geteuid())
 		if err == nil && ok && op.State == hubupgrade.StateFailed && op.ErrorCode == "HUB_BACKUP_ORPHANED" {
 			break
 		}
@@ -301,9 +301,9 @@ func TestUpgradeViewMergesJournalReadOnly(t *testing.T) {
 	app, _ := testApp(t)
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	operationID := strings.Repeat("d", 32)
-	plantWebVerifiedRecord(t, app.store.Dir, operationID, "1.0.1", strings.Repeat("c", 64))
+	plantWebVerifiedRecord(t, app.Store.Dir, operationID, "1.0.1", strings.Repeat("c", 64))
 	updated := now.Add(-time.Minute)
-	if err := hubupgrade.WriteOp(app.store.Dir, hubupgrade.Op{
+	if err := hubupgrade.WriteOp(app.Store.Dir, hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: hubupgrade.StateBackedUp, TargetVersion: "1.0.1", FromVersion: "1.0.0-dev",
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("c", 64),
@@ -311,8 +311,8 @@ func TestUpgradeViewMergesJournalReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	journalPath := filepath.Join(app.store.Dir, hubupgrade.OpsDir, operationID+".json")
-	recordPath := filepath.Join(app.store.Dir, store.DatabaseBackupDirName, operationID, backup.RecordName)
+	journalPath := filepath.Join(app.Store.Dir, hubupgrade.OpsDir, operationID+".json")
+	recordPath := filepath.Join(app.Store.Dir, store.DatabaseBackupDirName, operationID, backup.RecordName)
 	journalBefore, err := os.ReadFile(journalPath)
 	if err != nil {
 		t.Fatal(err)

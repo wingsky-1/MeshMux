@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"context"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,16 +32,16 @@ func (s *Server) subscriptionHost() string {
 
 // managementHost returns the Host value that serves the operator console.
 func (s *Server) managementHost() string {
-	return originHost(s.cfg.Origin)
+	return originHost(s.Cfg.Origin)
 }
 
 // subscriptionOrigin returns the configured download origin. An empty
 // SubscriptionOrigin falls back to the management origin.
 func (s *Server) subscriptionOrigin() string {
-	if s.cfg.SubscriptionOrigin != "" {
-		return s.cfg.SubscriptionOrigin
+	if s.Cfg.SubscriptionOrigin != "" {
+		return s.Cfg.SubscriptionOrigin
 	}
-	return s.cfg.Origin
+	return s.Cfg.Origin
 }
 
 // originHost returns the host of one exact origin.
@@ -99,11 +99,7 @@ func (s *Server) route(next http.Handler) http.Handler {
 // identifier is the only per-request value that may appear in a log line and
 // in a response header; it never carries the path or the bearer.
 func (s *Server) subscriptionOperation(r *http.Request) *http.Request {
-	if operation(r) != "" {
-		return r
-	}
-	op := store.RandomToken()[:22]
-	return r.WithContext(context.WithValue(r.Context(), operationKey, op))
+	return infra.AssignOperation(r)
 }
 
 // subscriptionNamespace reports whether the raw request path belongs to the
@@ -136,7 +132,7 @@ func rawRequestPath(r *http.Request) string {
 // document must never be cached, indexed, referenced or sniffed.
 func (s *Server) subscriptionHeader(w http.ResponseWriter, r *http.Request) {
 	header := w.Header()
-	header.Set("X-Operation-ID", operation(r))
+	header.Set("X-Operation-ID", infra.Operation(r))
 	header.Set("Cache-Control", "private, no-store")
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Robots-Tag", "noindex")
@@ -173,7 +169,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 			if recovered == http.ErrAbortHandler {
 				panic(recovered)
 			}
-			s.event(r, "SUBSCRIPTION_DOWNLOAD_FAILED")
+			s.Event(r, "SUBSCRIPTION_DOWNLOAD_FAILED")
 			if !written {
 				s.subscriptionHeader(w, r)
 				s.subscriptionNotFound(w, r)
@@ -205,16 +201,16 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	// through the wizard: the bytes are re-derived from the saved selection and
 	// must match the digest that passed the kernel gate. A subscription without
 	// a snapshot keeps the historical export.
-	approved, artifactErr := s.store.SubscriptionArtifactDownload(token, s.now())
+	approved, artifactErr := s.Store.SubscriptionArtifactDownload(token, s.Now())
 	if artifactErr != nil {
 		if errors.Is(artifactErr, store.ErrSubscriptionStoreUnavailable) {
-			s.event(r, store.CodeDatabaseUnavailable)
+			s.Event(r, store.CodeDatabaseUnavailable)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			written = true
 			return
 		}
-		s.event(r, "SUBSCRIPTION_DOWNLOAD_REJECTED")
+		s.Event(r, "SUBSCRIPTION_DOWNLOAD_REJECTED")
 		s.subscriptionNotFound(w, r)
 		written = true
 		return
@@ -240,7 +236,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		renderErr = errors.New("SUBSCRIPTION_ARTIFACT_EMPTY")
 	}
 	if renderErr != nil {
-		s.event(r, "SUBSCRIPTION_EXPORT_INVALID")
+		s.Event(r, "SUBSCRIPTION_EXPORT_INVALID")
 		s.subscriptionNotFound(w, r)
 		written = true
 		return
@@ -250,7 +246,7 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	written = true
-	s.event(r, "SUBSCRIPTION_DOWNLOAD_SUCCEEDED")
+	s.Event(r, "SUBSCRIPTION_DOWNLOAD_SUCCEEDED")
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
 	}

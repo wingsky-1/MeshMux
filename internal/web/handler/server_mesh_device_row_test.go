@@ -126,7 +126,7 @@ func TestMeshDeviceRowActions(t *testing.T) {
 func TestMeshApproveModalRendersForObservedDevice(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	router := meshCreateRouter(t, b, "nas-approve", "192.168.20.0/24")
-	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{

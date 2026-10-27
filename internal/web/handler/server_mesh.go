@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"sort"
@@ -76,14 +77,14 @@ const (
 // navigation loop in newServer must skip "/mesh", otherwise the placeholder page
 // competes with the real page for the same path.
 func (app *Server) registerMeshRoutes(r chi.Router) {
-	r.Get("/mesh", app.authenticated(app.meshPage))
-	r.Post("/mesh", app.mutation(app.meshCreate, true))
-	r.Post("/mesh/config", app.mutation(app.meshConfigPage, true))
-	r.Post("/mesh/claim", app.mutation(app.meshClaim, true))
-	r.Post("/mesh/rekey", app.mutation(app.meshRekey, true))
-	r.Post("/mesh/reconcile", app.mutation(app.meshReconcile, true))
-	r.Post("/mesh/revoke", app.mutation(app.meshRevoke, true))
-	r.Post("/mesh/retry", app.mutation(app.meshRevoke, true))
+	r.Get("/mesh", app.Authenticated(app.meshPage))
+	r.Post("/mesh", app.Mutation(app.meshCreate, true))
+	r.Post("/mesh/config", app.Mutation(app.meshConfigPage, true))
+	r.Post("/mesh/claim", app.Mutation(app.meshClaim, true))
+	r.Post("/mesh/rekey", app.Mutation(app.meshRekey, true))
+	r.Post("/mesh/reconcile", app.Mutation(app.meshReconcile, true))
+	r.Post("/mesh/revoke", app.Mutation(app.meshRevoke, true))
+	r.Post("/mesh/retry", app.Mutation(app.meshRevoke, true))
 }
 
 // meshPage renders the device list. It performs a read-only Headscale snapshot
@@ -128,7 +129,7 @@ func (app *Server) meshCreate(w http.ResponseWriter, r *http.Request, sess sessi
 		return
 	}
 	if purpose == mesh.PurposeSubnetRouter && len(declared) == 0 {
-		app.fail(w, r, http.StatusBadRequest, mesh.CodeRouteDeclarationInvalid,
+		app.Fail(w, r, http.StatusBadRequest, mesh.CodeRouteDeclarationInvalid,
 			"子网路由至少需要一个前缀。", "请在创建表单中填写至少一个规范 CIDR 前缀；只创建广告意图，批准仍需单独操作。")
 		return
 	}
@@ -148,7 +149,7 @@ func (app *Server) meshCreate(w http.ResponseWriter, r *http.Request, sess sessi
 		app.meshControlPlaneFail(w, r, err, codeMeshDeviceCreateFailed, "无法确认 Headscale 用户。", "请检查 Headscale 服务与 Web 服务组权限后重试。")
 		return
 	}
-	now := app.now()
+	now := app.Now()
 	record, err := app.CreateMeshDevice(mesh.DeviceSpec{
 		DisplayName:    displayName,
 		Purpose:        purpose,
@@ -161,24 +162,24 @@ func (app *Server) meshCreate(w http.ResponseWriter, r *http.Request, sess sessi
 		app.meshFail(w, r, err, codeMeshDeviceCreateFailed, "无法创建 Mesh 设备。", "请检查名称、用途与所选订阅用户后重试。")
 		return
 	}
-	app.event(r, "MESH_DEVICE_CREATED")
+	app.Event(r, "MESH_DEVICE_CREATED")
 	// The device is durable at this point. A key that cannot be minted is
 	// reported as its own failure with the device kept: the operator can re-sign
 	// from the list, and hiding the created device would misstate the audit
 	// trail.
 	disclosure, configNotice, err := app.meshCreateDisclosure(ctx, record, headscaleUser, now)
 	if err != nil {
-		app.event(r, "MESH_DEVICE_KEY_ISSUE_FAILED")
+		app.Event(r, "MESH_DEVICE_KEY_ISSUE_FAILED")
 		app.meshFail(w, r, err, codeMeshDeviceKeyIssue, "设备已创建，但一次性 Key 未签发。", "请在设备列表中重新签发 Key。")
 		return
 	}
 	if disclosure.Config != "" {
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
-		app.event(r, "MESH_DEVICE_CONFIG_ISSUED")
+		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
+		app.Event(r, "MESH_DEVICE_CONFIG_ISSUED")
 		app.renderMesh(w, r, sess, disclosure, "设备已创建。配置与一次性 Key 只在本次响应中显示。", "notice")
 		return
 	}
-	app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
+	app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
 	message := "设备已创建。一次性 Key 只在本次响应中显示。"
 	if configNotice != "" {
 		message += " 设备配置未生成（" + configNotice + "）；Key 仍可用于后续操作。"
@@ -218,17 +219,17 @@ func (app *Server) meshCreate(w http.ResponseWriter, r *http.Request, sess sessi
 // subnet-router devices keep the 9a behaviour and only refresh the Hub key.
 func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
-	record, err := app.store.GetMeshDevice(deviceID)
+	record, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法读取 Mesh 设备。", "请刷新页面后重试。")
 		return
 	}
-	now := app.now()
+	now := app.Now()
 	if record.Status != mesh.StatusPending && record.Status != mesh.StatusExpired {
-		app.fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable, "当前状态不能签发一次性 Key。", "只有待注册或已过期设备可以重新签发。")
+		app.Fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable, "当前状态不能签发一次性 Key。", "只有待注册或已过期设备可以重新签发。")
 		return
 	}
-	if _, err = app.store.ListMeshEnrollmentKeys(deviceID); err != nil {
+	if _, err = app.Store.ListMeshEnrollmentKeys(deviceID); err != nil {
 		// A key history that cannot be read is a database failure, not an
 		// authorisation to write a key the swap might not be able to retire.
 		app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法读取 Key 记录。", "请检查数据库后重试。")
@@ -246,7 +247,7 @@ func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess sessio
 		app.meshFail(w, r, err, codeMeshDeviceRekeyFailed, "无法签发新的一次性 Key。", "请确认设备仍为待注册状态。")
 		return
 	}
-	apply, err := app.store.ApplyMeshRekey(deviceID, stage.Key, now)
+	apply, err := app.Store.ApplyMeshRekey(deviceID, stage.Key, now)
 	if err != nil {
 		// The staged Headscale key was never handed out, so it is withdrawn
 		// instead of left live. This operation neither installed the new key nor
@@ -258,19 +259,19 @@ func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	if apply.Reenrolled {
-		app.event(r, "MESH_DEVICE_REENROLLED")
+		app.Event(r, "MESH_DEVICE_REENROLLED")
 	}
 	if apply.Lapsed > 0 {
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_EXPIRED")
+		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_EXPIRED")
 	}
 	if apply.Withdrawn > 0 {
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
+		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
 	}
 	// Readback: the page states that the old key is withdrawn only after the
 	// committed row proves the new key is the live one.
-	keys, err := app.store.ListMeshEnrollmentKeys(deviceID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(deviceID)
 	if err != nil || !meshEnrollmentKeyLive(keys, stage.Key.ID, now) {
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REISSUED")
+		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_REISSUED")
 		app.renderMesh(w, r, sess, stage.Disclosure,
 			"新 Key 已签发，但旧 Key 状态未能在本次读取中确认；请刷新页面核对 Key 列。", "error")
 		return
@@ -282,12 +283,12 @@ func (app *Server) meshRekey(w http.ResponseWriter, r *http.Request, sess sessio
 		converted = "过期的旧 Key 已归档，"
 	}
 	if stage.Disclosure.Config != "" {
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
-		app.event(r, "MESH_DEVICE_CONFIG_ISSUED")
+		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
+		app.Event(r, "MESH_DEVICE_CONFIG_ISSUED")
 		app.renderMesh(w, r, sess, stage.Disclosure, converted+"新配置与一次性 Key 只在本次响应中显示。", "notice")
 		return
 	}
-	app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REISSUED")
+	app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_REISSUED")
 	message := converted + "新 Key 只在本次响应中显示。"
 	if stage.ConfigNotice != "" {
 		message += " 设备配置未生成（" + stage.ConfigNotice + "）。"
@@ -334,12 +335,12 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	if route.Desired == mesh.RouteDesiredRevoked {
-		app.fail(w, r, http.StatusConflict, mesh.CodeRouteTransitionInvalid,
+		app.Fail(w, r, http.StatusConflict, mesh.CodeRouteTransitionInvalid,
 			"已撤销的前缀不能直接批准。", "请重新声明该前缀，再执行一次单独的批准。")
 		return
 	}
 	if device.HeadscaleNodeID == 0 {
-		app.fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
+		app.Fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
 			"设备尚未观测到 Headscale Node ID，无法批准子网路由。",
 			"请先完成设备注册并“重新核对全部设备”，再批准前缀。")
 		return
@@ -352,7 +353,7 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	if !found {
-		app.fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
+		app.Fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
 			"Headscale 未报告该设备的节点，无法批准子网路由。", "请重新核对；设备可能已离线或过期。")
 		return
 	}
@@ -372,13 +373,13 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 	// mutation itself was accepted.
 	droppedCount := app.logDroppedApprovedRoutes(r, dropped)
 	if readback.ID != device.HeadscaleNodeID || !meshRoutePrefixIn(readback.ApprovedRoutes, route.Prefix) {
-		app.fail(w, r, http.StatusConflict, codeMeshRouteApprovalUnconfirmed,
+		app.Fail(w, r, http.StatusConflict, codeMeshRouteApprovalUnconfirmed,
 			"Headscale 未在 readback 中确认该前缀已批准。",
 			"请重新核对；Hub 未写入批准意图，前缀仍为待批准。")
 		return
 	}
-	now := app.now()
-	if err = app.recordUntrackedApprovedRoutes(device.ID, readback, operation(r), now); err != nil {
+	now := app.Now()
+	if err = app.recordUntrackedApprovedRoutes(device.ID, readback, infra.Operation(r), now); err != nil {
 		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
 			Fallback: codeMeshRouteApproval,
 			Partial:  codeMeshRouteApprovalPartial,
@@ -392,7 +393,7 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 		})
 		return
 	}
-	if _, err = app.store.SetMeshRouteDesired(device.ID, route.Prefix, mesh.RouteDesiredApproved, operation(r), now); err != nil {
+	if _, err = app.Store.SetMeshRouteDesired(device.ID, route.Prefix, mesh.RouteDesiredApproved, infra.Operation(r), now); err != nil {
 		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
 			Fallback: codeMeshRouteApproval,
 			Partial:  codeMeshRouteApprovalPartial,
@@ -410,11 +411,11 @@ func (app *Server) meshRouteApprove(w http.ResponseWriter, r *http.Request, sess
 	// already stored and matches Headscale, so reverting the control plane here
 	// would create the disagreement this handler avoids: only the evidence is
 	// stale, and the message says so.
-	if _, _, err = app.store.RecordMeshRouteObservation(device.ID, route.Prefix, meshRouteObservedFromNode(readback, route.Prefix), operation(r), now); err != nil {
+	if _, _, err = app.Store.RecordMeshRouteObservation(device.ID, route.Prefix, meshRouteObservedFromNode(readback, route.Prefix), infra.Operation(r), now); err != nil {
 		app.meshFail(w, r, err, codeMeshRouteApproval, "批准意图已保存，但路由观测未写入。", "请重新核对以刷新证据。")
 		return
 	}
-	app.event(r, store.RouteEventApproved)
+	app.Event(r, store.RouteEventApproved)
 	app.renderMesh(w, r, sess, nil,
 		"已批准前缀 "+route.Prefix+"；Headscale readback 已确认。approved 集合已更新，但这不表示客户端已实际转发流量。"+meshRouteDroppedNotice(droppedCount, false), "notice")
 }
@@ -433,12 +434,12 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 		return
 	}
 	if route.Desired == mesh.RouteDesiredRevoked {
-		app.fail(w, r, http.StatusConflict, mesh.CodeRouteTransitionInvalid,
+		app.Fail(w, r, http.StatusConflict, mesh.CodeRouteTransitionInvalid,
 			"已撤销的前缀不能再次撤销批准。", "请刷新页面确认路由状态。")
 		return
 	}
 	if device.HeadscaleNodeID == 0 {
-		app.fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
+		app.Fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
 			"设备尚未观测到 Headscale Node ID，无法撤销路由批准。",
 			"请先完成设备注册并“重新核对全部设备”。")
 		return
@@ -451,7 +452,7 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 		return
 	}
 	if !found {
-		app.fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
+		app.Fail(w, r, http.StatusConflict, codeMeshRouteNodeUnobserved,
 			"Headscale 未报告该设备的节点，无法撤销路由批准。", "请重新核对；设备可能已离线或过期。")
 		return
 	}
@@ -474,13 +475,13 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 	}
 	droppedCount := app.logDroppedApprovedRoutes(r, dropped)
 	if readback.ID != device.HeadscaleNodeID || meshRoutePrefixIn(readback.ApprovedRoutes, route.Prefix) {
-		app.fail(w, r, http.StatusConflict, codeMeshRouteApprovalUnconfirmed,
+		app.Fail(w, r, http.StatusConflict, codeMeshRouteApprovalUnconfirmed,
 			"Headscale readback 中该前缀仍为已批准。",
 			"请重新核对；Hub 保留已批准意图，未声称撤销成功。")
 		return
 	}
-	now := app.now()
-	if err = app.recordUntrackedApprovedRoutes(device.ID, readback, operation(r), now); err != nil {
+	now := app.Now()
+	if err = app.recordUntrackedApprovedRoutes(device.ID, readback, infra.Operation(r), now); err != nil {
 		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
 			Fallback: codeMeshRouteWithdraw,
 			Partial:  codeMeshRouteWithdrawPartial,
@@ -494,7 +495,7 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 		})
 		return
 	}
-	if _, err = app.store.SetMeshRouteDesired(device.ID, route.Prefix, mesh.RouteDesiredAdvertised, operation(r), now); err != nil {
+	if _, err = app.Store.SetMeshRouteDesired(device.ID, route.Prefix, mesh.RouteDesiredAdvertised, infra.Operation(r), now); err != nil {
 		app.meshRouteLocalFail(w, r, sess, err, meshRouteLocalFailure{
 			Fallback: codeMeshRouteWithdraw,
 			Partial:  codeMeshRouteWithdrawPartial,
@@ -508,11 +509,11 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 		})
 		return
 	}
-	if _, _, err = app.store.RecordMeshRouteObservation(device.ID, route.Prefix, meshRouteObservedFromNode(readback, route.Prefix), operation(r), now); err != nil {
+	if _, _, err = app.Store.RecordMeshRouteObservation(device.ID, route.Prefix, meshRouteObservedFromNode(readback, route.Prefix), infra.Operation(r), now); err != nil {
 		app.meshFail(w, r, err, codeMeshRouteWithdraw, "撤销意图已保存，但路由观测未写入。", "请重新核对以刷新证据。")
 		return
 	}
-	app.event(r, store.RouteEventWithdrawn)
+	app.Event(r, store.RouteEventWithdrawn)
 	app.renderMesh(w, r, sess, nil,
 		"已撤销前缀 "+route.Prefix+" 的批准；声明仍保留，可再次批准。已批准集合的其余前缀未被清除。"+meshRouteDroppedNotice(droppedCount, len(prefixes) == 0), "notice")
 }
@@ -572,9 +573,9 @@ func (app *Server) meshRouteLocalFail(w http.ResponseWriter, r *http.Request, se
 	// Readback: a row that already carries the intended state means the local
 	// write committed and only its response (or a later evidence write) failed.
 	// Reverting the control plane then would manufacture the disagreement.
-	stored, readErr := app.store.GetMeshRoute(f.DeviceID, f.Prefix)
+	stored, readErr := app.Store.GetMeshRoute(f.DeviceID, f.Prefix)
 	if readErr == nil && stored.Desired == f.Intended {
-		app.event(r, code)
+		app.Event(r, code)
 		app.renderMesh(w, r, sess, nil,
 			f.Applied+"，Hub 也已记录该状态（"+code+"）；但本次响应未能确认全部证据，请“重新核对全部设备”刷新观测。", "error")
 		return
@@ -589,7 +590,7 @@ func (app *Server) meshRouteLocalFail(w http.ResponseWriter, r *http.Request, se
 	}
 	restored, compensateErr := app.compensateMeshRouteApproval(r, f.NodeID, f.Previous)
 	if restored {
-		app.event(r, codeMeshRouteCompensated)
+		app.Event(r, codeMeshRouteCompensated)
 		revert := "已将 Headscale 的批准集合回退到操作前的状态"
 		if f.Dropped > 0 {
 			// The revert can only carry sendable prefixes: the ones the request
@@ -606,7 +607,7 @@ func (app *Server) meshRouteLocalFail(w http.ResponseWriter, r *http.Request, se
 	if compensateErr != nil {
 		// The refused revert keeps its own stable code, so an operator can tell
 		// "Headscale is unreachable" from "Headscale answered with another set".
-		app.event(r, meshErrorCode(compensateErr))
+		app.Event(r, meshErrorCode(compensateErr))
 		detail = "回退请求被拒绝（" + meshErrorCode(compensateErr) + "）"
 	}
 	app.meshRoutePartial(w, r, f, detail)
@@ -615,8 +616,8 @@ func (app *Server) meshRouteLocalFail(w http.ResponseWriter, r *http.Request, se
 // meshRoutePartial reports the one outcome that must never be softened: the
 // control plane accepted a change the Hub could not record or revert.
 func (app *Server) meshRoutePartial(w http.ResponseWriter, r *http.Request, f meshRouteLocalFailure, detail string) {
-	app.event(r, f.Partial)
-	app.fail(w, r, meshStatus(f.Partial), f.Partial,
+	app.Event(r, f.Partial)
+	app.Fail(w, r, meshStatus(f.Partial), f.Partial,
 		f.Applied+"，但 Hub 未能记录该变更，"+detail+"。Headscale 与 Hub 当前不一致。"+meshRouteDroppedNotice(f.Dropped, len(f.Previous) == 0),
 		"请“重新核对全部设备”确认 Headscale 现状，再重新执行一次批准或撤销；在两者一致前不要依赖页面的意图列。")
 }
@@ -686,12 +687,12 @@ func meshRouteCanonicalOrRaw(raw string) string {
 // meshRouteTarget resolves the device and one declared prefix of a route action.
 func (app *Server) meshRouteTarget(w http.ResponseWriter, r *http.Request) (store.MeshDeviceRecord, store.MeshRouteRecord, bool) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
-	device, err := app.store.GetMeshDevice(deviceID)
+	device, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshRouteApproval, "无法读取 Mesh 设备。", "请刷新页面后重试。")
 		return store.MeshDeviceRecord{}, store.MeshRouteRecord{}, false
 	}
-	route, err := app.store.GetMeshRoute(deviceID, strings.TrimSpace(r.PostForm.Get("prefix")))
+	route, err := app.Store.GetMeshRoute(deviceID, strings.TrimSpace(r.PostForm.Get("prefix")))
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshRouteApproval, "无法读取子网路由。", "请刷新页面后重试。")
 		return store.MeshDeviceRecord{}, store.MeshRouteRecord{}, false
@@ -772,7 +773,7 @@ func meshRouteApprovalSet(existing []string, add, remove string) (set, dropped [
 // operation_id are logged, so the network values stay out of the log.
 func (app *Server) logDroppedApprovedRoutes(r *http.Request, dropped []string) int {
 	for range dropped {
-		app.event(r, codeMeshRouteUntrackedDropped)
+		app.Event(r, codeMeshRouteUntrackedDropped)
 	}
 	return len(dropped)
 }
@@ -830,7 +831,7 @@ func meshRouteObservedFromNode(node meshnet.Node, prefix string) mesh.RouteObser
 // node no longer reports is recorded as "nothing reported" so stale evidence
 // does not survive a read.
 func (app *Server) meshRouteObservations(deviceID string, node meshnet.Node) ([]store.MeshRouteObservation, error) {
-	tracked, err := app.store.ListMeshRoutes(deviceID)
+	tracked, err := app.Store.ListMeshRoutes(deviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -889,7 +890,7 @@ func meshRouteObservedRank(state mesh.RouteObserved) int {
 // in the approved set; only an audit event records that the Hub saw it without
 // adopting or approving it.
 func (app *Server) recordUntrackedApprovedRoutes(deviceID string, node meshnet.Node, operationID string, now time.Time) error {
-	tracked, err := app.store.ListMeshRoutes(deviceID)
+	tracked, err := app.Store.ListMeshRoutes(deviceID)
 	if err != nil {
 		return err
 	}
@@ -906,7 +907,7 @@ func (app *Server) recordUntrackedApprovedRoutes(deviceID string, node meshnet.N
 		if _, ok := known[prefix]; ok {
 			continue
 		}
-		if _, _, err = app.store.RecordMeshRouteObservation(deviceID, prefix, mesh.RouteObservedApproved, operationID, now); err != nil {
+		if _, _, err = app.Store.RecordMeshRouteObservation(deviceID, prefix, mesh.RouteObservedApproved, operationID, now); err != nil {
 			return err
 		}
 	}
@@ -942,12 +943,12 @@ func (app *Server) meshReconcile(w http.ResponseWriter, r *http.Request, sess se
 	for _, node := range nodes {
 		present[node.ID] = node
 	}
-	records, err := app.store.ListMeshDevices()
+	records, err := app.Store.ListMeshDevices()
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshReconcileFailed, "无法读取 Mesh 设备。", "请检查数据库后重试。")
 		return
 	}
-	now := app.now()
+	now := app.Now()
 	var checked, changed, failed, routesChecked, routesUntracked, routesFailed int
 	for _, record := range records {
 		if record.Status == mesh.StatusRevoked {
@@ -962,12 +963,12 @@ func (app *Server) meshReconcile(w http.ResponseWriter, r *http.Request, sess se
 				node, hasNode = found, true
 			}
 		}
-		next, observeErr := app.store.RecordMeshObservation(record.ID, observed, now)
+		next, observeErr := app.Store.RecordMeshObservation(record.ID, observed, now)
 		if observeErr != nil {
 			// One hand-edited or contradictory row must not hide the rest of the
 			// inventory. The stable code is logged; the summary reports partial.
 			failed++
-			app.event(r, meshErrorCode(observeErr))
+			app.Event(r, meshErrorCode(observeErr))
 			continue
 		}
 		checked++
@@ -984,19 +985,19 @@ func (app *Server) meshReconcile(w http.ResponseWriter, r *http.Request, sess se
 		observations, buildErr := app.meshRouteObservations(record.ID, node)
 		if buildErr != nil {
 			routesFailed++
-			app.event(r, meshErrorCode(buildErr))
+			app.Event(r, meshErrorCode(buildErr))
 			continue
 		}
-		result, routeErr := app.store.ReconcileMeshRoutes(record.ID, observations, operation(r), now)
+		result, routeErr := app.Store.ReconcileMeshRoutes(record.ID, observations, infra.Operation(r), now)
 		if routeErr != nil {
 			routesFailed++
-			app.event(r, meshErrorCode(routeErr))
+			app.Event(r, meshErrorCode(routeErr))
 			continue
 		}
 		routesChecked += result.Tracked
 		routesUntracked += result.Untracked
 	}
-	app.event(r, "MESH_DEVICES_RECONCILED")
+	app.Event(r, "MESH_DEVICES_RECONCILED")
 	message := fmt.Sprintf("已核对 %d 台设备，%d 台状态更新。在线与 Tailnet IP 来自本次 Headscale 读取。", checked, changed)
 	if routesChecked > 0 || routesUntracked > 0 {
 		message += fmt.Sprintf(" 已记录 %d 条路由观测；%d 条未声明前缀只写入审计事件，不会被自动批准。", routesChecked, routesUntracked)
@@ -1023,26 +1024,26 @@ func (app *Server) meshReconcile(w http.ResponseWriter, r *http.Request, sess se
 // registered has no node to remove, so its intent alone settles it.
 func (app *Server) meshRevoke(w http.ResponseWriter, r *http.Request, sess session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
-	now := app.now()
+	now := app.Now()
 	// Read the declarations before the revocation transaction settles them:
 	// after it, every route is already revoked and the handler could not tell
 	// whether the node ever carried an approved prefix. A routing device has
 	// its approvals withdrawn before the node is removed, so the control plane
 	// never keeps a route approved through a half-finished deletion.
-	routes, routeErr := app.store.ListMeshRoutes(deviceID)
+	routes, routeErr := app.Store.ListMeshRoutes(deviceID)
 	if routeErr != nil {
 		app.meshFail(w, r, routeErr, codeMeshDeviceRevokeFailed, "无法读取子网路由记录。", "请刷新页面确认设备后重试。")
 		return
 	}
-	record, _, err := app.store.RequestMeshDeviceRevocation(deviceID, "USER_DELETE", now)
+	record, _, err := app.Store.RequestMeshDeviceRevocation(deviceID, "USER_DELETE", now)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshDeviceRevokeFailed, "无法记录注销意图。", "请刷新页面确认设备存在后重试。")
 		return
 	}
-	app.event(r, "MESH_DEVICE_REVOCATION_REQUESTED")
+	app.Event(r, "MESH_DEVICE_REVOCATION_REQUESTED")
 	if record.Status == mesh.StatusRevoked {
 		// Idempotent repeat: nothing is left to remove.
-		app.event(r, "MESH_DEVICE_REVOKED")
+		app.Event(r, "MESH_DEVICE_REVOKED")
 		app.renderMesh(w, r, sess, nil, "设备已注销，无需再次操作。", "notice")
 		return
 	}
@@ -1051,33 +1052,33 @@ func (app *Server) meshRevoke(w http.ResponseWriter, r *http.Request, sess sessi
 		if len(routes) > 0 {
 			if _, clearErr := app.mesh.ClearApprovedRoutes(ctx, record.HeadscaleNodeID); clearErr != nil && meshnet.CodeOf(clearErr) != meshnet.CodeNotFound {
 				cancel()
-				app.event(r, meshErrorCode(clearErr))
+				app.Event(r, meshErrorCode(clearErr))
 				app.renderMesh(w, r, sess, nil,
 					"注销意图已保存，但撤销路由批准未完成（"+meshErrorCode(clearErr)+"）。设备保持“注销中”，可重试远端删除。", "error")
 				return
 			}
-			app.event(r, store.RouteEventWithdrawn)
+			app.Event(r, store.RouteEventWithdrawn)
 		}
 		removeErr := app.removeMeshNode(ctx, record.HeadscaleNodeID)
 		cancel()
 		if removeErr != nil {
-			app.event(r, "MESH_DEVICE_REVOCATION_PENDING")
+			app.Event(r, "MESH_DEVICE_REVOCATION_PENDING")
 			app.renderMesh(w, r, sess, nil,
 				"注销意图已保存，但 Headscale 删除未完成（"+meshErrorCode(removeErr)+"）。设备保持“注销中”，可重试远端删除。", "error")
 			return
 		}
 	}
-	settled, err := app.store.RecordMeshObservation(deviceID, 0, now)
+	settled, err := app.Store.RecordMeshObservation(deviceID, 0, now)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshDeviceRevokeFailed, "注销意图已保存，但状态未确认。", "请稍后重试注销，或检查服务日志。")
 		return
 	}
 	if settled.Status == mesh.StatusRevoked {
-		app.event(r, "MESH_DEVICE_REVOKED")
+		app.Event(r, "MESH_DEVICE_REVOKED")
 		app.renderMesh(w, r, sess, nil, "设备已注销；其他订阅用户、凭据与订阅 Token 不受影响。", "notice")
 		return
 	}
-	app.event(r, "MESH_DEVICE_REVOCATION_PENDING")
+	app.Event(r, "MESH_DEVICE_REVOCATION_PENDING")
 	app.renderMesh(w, r, sess, nil, "注销意图已保存，远端删除尚未确认。", "notice")
 }
 
@@ -1145,7 +1146,7 @@ func (app *Server) ensureMeshUser(ctx context.Context, user string) (meshnet.Use
 // collision with a device of the same Headscale user that still occupies a name.
 func (app *Server) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (store.MeshDeviceRecord, error) {
 	spec.NodeName = meshNodeName(spec.DisplayName)
-	record, err := app.store.CreateMeshDevice(spec, now)
+	record, err := app.Store.CreateMeshDevice(spec, now)
 	if err == nil || meshErrorCode(err) != mesh.CodeNodeNameDuplicate {
 		return record, err
 	}
@@ -1155,7 +1156,7 @@ func (app *Server) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (store.
 			return store.MeshDeviceRecord{}, idErr
 		}
 		spec.NodeName = meshNodeNameWithSuffix(spec.DisplayName, suffix[:6])
-		record, err = app.store.CreateMeshDevice(spec, now)
+		record, err = app.Store.CreateMeshDevice(spec, now)
 		if err == nil || meshErrorCode(err) != mesh.CodeNodeNameDuplicate {
 			return record, err
 		}
@@ -1212,24 +1213,24 @@ func meshNodeSlug(displayName string) string {
 func (app *Server) renderMesh(w http.ResponseWriter, r *http.Request, sess session, disclosure *view.MeshKeyDisclosure, notice, noticeClass string) {
 	page, err := app.meshViewModel(r)
 	if err != nil {
-		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Mesh 设备。", "请检查数据库和服务日志。")
+		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Mesh 设备。", "请检查数据库和服务日志。")
 		return
 	}
 	page.Disclosure = disclosure
 	page.Notice = notice
 	page.NoticeClass = noticeClass
 	w.Header().Set("Cache-Control", "private, no-store")
-	app.render(w, r, 200, view.MeshPage(view.PageData{Title: "Mesh 设备", Path: "/mesh", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, page))
+	app.Render(w, r, 200, view.MeshPage(view.PageData{Title: "Mesh 设备", Path: "/mesh", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP}, page))
 }
 
 func (app *Server) meshDisclosure(record store.MeshDeviceRecord, secret string, expires time.Time) *view.MeshKeyDisclosure {
 	d := &view.MeshKeyDisclosure{Device: record.DisplayName, Secret: secret, Expires: expires.UTC().Format("2006-01-02 15:04:05 UTC")}
-	d.LoginConfigured = app.cfg.HeadscaleOrigin != ""
+	d.LoginConfigured = app.Cfg.HeadscaleOrigin != ""
 	if !d.LoginConfigured {
 		return d
 	}
-	cmd := "tailscale up --login-server=" + app.cfg.HeadscaleOrigin + " --auth-key=<上方 Key>"
-	if routes, err := app.store.ListMeshRoutes(record.ID); err == nil {
+	cmd := "tailscale up --login-server=" + app.Cfg.HeadscaleOrigin + " --auth-key=<上方 Key>"
+	if routes, err := app.Store.ListMeshRoutes(record.ID); err == nil {
 		var advertised []string
 		for _, rt := range routes {
 			if rt.Desired == mesh.RouteDesiredAdvertised || rt.Desired == mesh.RouteDesiredApproved {
@@ -1252,11 +1253,11 @@ func (app *Server) meshViewModel(r *http.Request) (view.MeshPageView, error) {
 		Devices: []view.MeshDeviceView{}, Users: []view.MeshUserView{}, Subscribers: []view.MeshSubscriberView{},
 		DefaultUser: mesh.DefaultHeadscaleUser,
 	}
-	records, err := app.store.ListMeshDevices()
+	records, err := app.Store.ListMeshDevices()
 	if err != nil {
 		return page, err
 	}
-	subscribers, err := app.store.ListSubscribers()
+	subscribers, err := app.Store.ListSubscribers()
 	if err != nil {
 		return page, err
 	}
@@ -1311,12 +1312,12 @@ func (app *Server) meshViewModel(r *http.Request) (view.MeshPageView, error) {
 			entry.ObservedAt = time.Unix(record.ObservedAt, 0).UTC().Format("2006-01-02 15:04:05 UTC")
 		}
 		entry.Online, entry.OnlineClass, entry.TailnetIP = meshOnlineState(record, present, page.NodesNotice)
-		keys, keyErr := app.store.ListMeshEnrollmentKeys(record.ID)
+		keys, keyErr := app.Store.ListMeshEnrollmentKeys(record.ID)
 		if keyErr != nil {
 			return page, keyErr
 		}
-		entry.KeyLabel, entry.KeyClass, entry.KeyExpires = meshKeyState(keys, app.now())
-		routes, routeErr := app.store.ListMeshRoutes(record.ID)
+		entry.KeyLabel, entry.KeyClass, entry.KeyExpires = meshKeyState(keys, app.Now())
+		routes, routeErr := app.Store.ListMeshRoutes(record.ID)
 		if routeErr != nil {
 			return page, routeErr
 		}
@@ -1610,7 +1611,7 @@ func (app *Server) meshFail(w http.ResponseWriter, r *http.Request, err error, f
 	if code == "" {
 		code = meshCodeOrInternal(fallback)
 	}
-	app.fail(w, r, meshStatus(code), code, message, next)
+	app.Fail(w, r, meshStatus(code), code, message, next)
 }
 
 // meshStatus is the HTTP class of one Mesh failure code. Everything not listed
@@ -1656,5 +1657,5 @@ func (app *Server) meshControlPlaneFail(w http.ResponseWriter, r *http.Request, 
 		app.meshFail(w, r, err, fallback, message, next)
 		return
 	}
-	app.fail(w, r, http.StatusServiceUnavailable, code, message, next)
+	app.Fail(w, r, http.StatusServiceUnavailable, code, message, next)
 }

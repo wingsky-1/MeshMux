@@ -14,6 +14,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 
@@ -40,11 +41,11 @@ func (s *Server) agentUpgradeTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	operationID := strings.TrimSpace(chi.URLParam(r, "operationID"))
-	if !isValidOperationID(operationID) {
+	if !infra.IsValidOperationID(operationID) {
 		s.agentFail(w, r, 400, "OPERATION_ID_INVALID", "操作编号不正确。", "请从固定任务获取 operation_id。")
 		return
 	}
-	target, found, err := s.store.StampedStageTarget(n.ID, operationID)
+	target, found, err := s.Store.StampedStageTarget(n.ID, operationID)
 	if err != nil {
 		s.agentFail(w, r, 500, "UPGRADE_TARGET_UNAVAILABLE", "升级目标无法读取。", "请检查数据库后重试。")
 		return

@@ -57,20 +57,20 @@ func publishReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) stor
 // running app's store, so a publication has a real target.
 func seedPublishLine(t *testing.T, app *Server) string {
 	t.Helper()
-	now := app.now()
-	line := pairedStoreNode(t, app.store, "edge", now)
+	now := app.Now()
+	line := pairedStoreNode(t, app.Store, "edge", now)
 	settings := testLine(line, "line-a")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.store, line, now)
-	if _, _, err := app.store.CreateSubscriber("alice", []string{line}, now); err != nil {
+	markLineOnline(t, app.Store, line, now)
+	if _, _, err := app.Store.CreateSubscriber("alice", []string{line}, now); err != nil {
 		t.Fatal(err)
 	}
-	seedInitialChain(t, app.store, line, now)
-	confirmChain(t, app.store, line, now)
+	seedInitialChain(t, app.Store, line, now)
+	confirmChain(t, app.Store, line, now)
 	return line
 }
 
@@ -129,7 +129,7 @@ func TestPublishEndpointStoresCandidate(t *testing.T) {
 		t.Fatalf("sing-box gate calls = %d, want 1", singBox)
 	}
 	// Exactly one new candidate revision carrying the route is stored.
-	stored, err := b.app.store.LatestCandidate(line)
+	stored, err := b.app.Store.LatestCandidate(line)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,11 +160,11 @@ func TestPublishEndpointRefusals(t *testing.T) {
 
 	activateViaAPI(t, b, "server",
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`)
-	out := pairedStoreNode(t, b.app.store, "out", b.app.now())
-	markLineOnline(t, b.app.store, out, b.app.now())
-	configureOut(t, b.app.store, out, b.app.now())
-	enableOutForLine(t, b.app.store, out, line, b.app.now())
-	if _, err := b.app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
+	out := pairedStoreNode(t, b.app.Store, "out", b.app.Now())
+	markLineOnline(t, b.app.Store, out, b.app.Now())
+	configureOut(t, b.app.Store, out, b.app.Now())
+	enableOutForLine(t, b.app.Store, out, line, b.app.Now())
+	if _, err := b.app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
 	// An unhealthy Out fails closed with 409 and stores nothing.
@@ -180,7 +180,7 @@ func TestPublishEndpointRefusals(t *testing.T) {
 func TestPublishEndpointClientOnlyIsGatedNotStored(t *testing.T) {
 	b, verifier := publishApp(t)
 	line := seedPublishLine(t, b.app)
-	candidatesBefore := candidateCount(t, b.app.store, line)
+	candidatesBefore := candidateCount(t, b.app.Store, line)
 	activateViaAPI(t, b, "client",
 		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`)
 
@@ -197,7 +197,7 @@ func TestPublishEndpointClientOnlyIsGatedNotStored(t *testing.T) {
 	if receipt.NextAction == "" {
 		t.Fatal("client-only receipt does not explain that no candidate is pushed")
 	}
-	if got := candidateCount(t, b.app.store, line); got != candidatesBefore {
+	if got := candidateCount(t, b.app.Store, line); got != candidatesBefore {
 		t.Fatalf("client-only publication stored %d candidates", got-candidatesBefore)
 	}
 	if singBox, mihomo := verifier.counts(); singBox != 1 || mihomo != 1 {
@@ -215,7 +215,7 @@ func TestPublishEndpointRequiresAdminSession(t *testing.T) {
 		t.Fatalf("unauthenticated publish = %d, want 401", w.Code)
 	}
 	var candidates int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM node_candidates`).Scan(&candidates); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM node_candidates`).Scan(&candidates); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal(err)
 	}
 	if candidates != 0 {
@@ -243,8 +243,8 @@ func TestPublishEndpointRefusesMissingKernel(t *testing.T) {
 	// is never executed.
 	b.app.publishGate = nil
 	b.app.publishRunner = gateFixtureRunner{}
-	b.app.cfg.SingBoxPath = os.Args[0]
-	b.app.cfg.MihomoPath = ""
+	b.app.Cfg.SingBoxPath = os.Args[0]
+	b.app.Cfg.MihomoPath = ""
 	refusal := publishReceipt(t, postPublish(t, b, `{"operation_id":"op-publish"}`), http.StatusServiceUnavailable)
 	if refusal.ErrorCode != node.CodePublishMihomoMissing {
 		t.Fatalf("missing mihomo = %+v", refusal)
@@ -252,7 +252,7 @@ func TestPublishEndpointRefusesMissingKernel(t *testing.T) {
 
 	// The same publication with a Mihomo path that does not exist is also a
 	// refusal, named after the missing kernel.
-	b.app.cfg.MihomoPath = filepath.Join(t.TempDir(), "absent-mihomo")
+	b.app.Cfg.MihomoPath = filepath.Join(t.TempDir(), "absent-mihomo")
 	refusal = publishReceipt(t, postPublish(t, b, `{"operation_id":"op-publish"}`), http.StatusServiceUnavailable)
 	if refusal.ErrorCode != node.CodePublishMihomoMissing {
 		t.Fatalf("absent mihomo = %+v", refusal)
@@ -263,7 +263,7 @@ func TestPublishEndpointRefusesMissingKernel(t *testing.T) {
 	if err := os.WriteFile(mihomo, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b.app.cfg.MihomoPath = mihomo
+	b.app.Cfg.MihomoPath = mihomo
 	receipt := publishReceipt(t, postPublish(t, b, `{"operation_id":"op-publish"}`), http.StatusOK)
 	if !receipt.OK {
 		t.Fatalf("publication with both kernels = %+v", receipt)

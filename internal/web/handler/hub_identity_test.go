@@ -34,15 +34,15 @@ type identityState struct {
 func observeIdentity(t *testing.T, app *Server) identityState {
 	t.Helper()
 	var state identityState
-	if err := app.store.DB.QueryRow(`SELECT total_changes()`).Scan(&state.Changes); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT total_changes()`).Scan(&state.Changes); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.DB.QueryRow(`PRAGMA user_version`).Scan(&state.UserVersion); err != nil {
+	if err := app.Store.DB.QueryRow(`PRAGMA user_version`).Scan(&state.UserVersion); err != nil {
 		t.Fatal(err)
 	}
 	var version, confirmed string
 	var schema int
-	err := app.store.DB.QueryRow(`SELECT quote(last_good_version), last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
+	err := app.Store.DB.QueryRow(`SELECT quote(last_good_version), last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
 		Scan(&version, &schema, &confirmed)
 	if errors.Is(err, sql.ErrNoRows) {
 		state.Row = "absent"
@@ -86,23 +86,23 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 
 	check(t, "", 200)
 
-	if _, err := app.store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
 	check(t, codeDatabaseVersionMismatch, 200)
 
-	if _, err := app.store.DB.Exec(`DELETE FROM database_versions`); err != nil {
+	if _, err := app.Store.DB.Exec(`DELETE FROM database_versions`); err != nil {
 		t.Fatal(err)
 	}
 	check(t, codeDatabaseUnconfirmed, 200)
 
-	if _, err := app.store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
+	if _, err := app.Store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
 	check(t, codeSchemaReadbackFailed, 200)
 
 	// Only a database that cannot answer SELECT 1 is a health failure.
-	if err := app.store.DB.Close(); err != nil {
+	if err := app.Store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
 	requireStatus(t, b.req("GET", "/healthz", nil, nil), 503)
@@ -152,7 +152,7 @@ func TestReadbackNeverWrites(t *testing.T) {
 	// Strongest form of "zero writes": SQLite itself refuses writes on this
 	// connection. A readback and a tick that still succeed under query_only
 	// cannot have executed a writing statement.
-	if _, err := app.store.DB.Exec(`PRAGMA query_only=ON`); err != nil {
+	if _, err := app.Store.DB.Exec(`PRAGMA query_only=ON`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := app.readDatabaseIdentity(); err != nil {
@@ -161,12 +161,12 @@ func TestReadbackNeverWrites(t *testing.T) {
 	if snapshot := app.publishHubIdentity(now, nil); !snapshot.Confirmed() {
 		t.Fatalf("snapshot under query_only = %+v", snapshot)
 	}
-	if _, err := app.store.DB.Exec(`PRAGMA query_only=OFF`); err != nil {
+	if _, err := app.Store.DB.Exec(`PRAGMA query_only=OFF`); err != nil {
 		t.Fatal(err)
 	}
 	requireIdentityUntouched(t, app, before, "a readback under query_only")
 
-	readOnly, err := sql.Open("sqlite", "file:"+filepath.Join(app.store.Dir, "meshmux.db")+"?mode=ro")
+	readOnly, err := sql.Open("sqlite", "file:"+filepath.Join(app.Store.Dir, "meshmux.db")+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,17 +195,17 @@ func TestReadbackMatrix(t *testing.T) {
 			// One above the schema this build owns, never a literal: Task 5
 			// moves store.DatabaseSchemaVersion to 11, and the assertion must stay
 			// "a newer schema", not "the next release's schema".
-			if _, err := app.store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
+			if _, err := app.Store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
 				t.Fatal(err)
 			}
 		}, codeSchemaReadbackFailed},
 		{"database unconfirmed", func(t *testing.T, app *Server) {
-			if _, err := app.store.DB.Exec(`DELETE FROM database_versions`); err != nil {
+			if _, err := app.Store.DB.Exec(`DELETE FROM database_versions`); err != nil {
 				t.Fatal(err)
 			}
 		}, codeDatabaseUnconfirmed},
 		{"database version mismatch", func(t *testing.T, app *Server) {
-			if _, err := app.store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
+			if _, err := app.Store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
 				t.Fatal(err)
 			}
 		}, codeDatabaseVersionMismatch},
@@ -347,7 +347,7 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: digest,
 		DBSchema: 10, BackupGeneration: 1, UpdatedAt: now,
 	}
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
 	if version, pkg, ok := app.opTarget(strings.Repeat("b", 32)); ok || version != "" || pkg != "" {
@@ -361,7 +361,7 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 	// The row still names this build, so only the journal target comparison can
 	// catch a release the Hub is not actually running.
 	op.TargetVersion = "1.0.1"
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot := app.hubIdentity(now); snapshot.Code != codeDatabaseVersionMismatch {
@@ -372,7 +372,7 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 	// A non-verifying operation is never the seam's input: the build's own
 	// identity stands.
 	op.State, op.TargetVersion = hubupgrade.StateBackedUp, buildinfo.Version
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {

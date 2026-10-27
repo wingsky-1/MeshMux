@@ -67,7 +67,7 @@ func TestHubBackupReceipt(t *testing.T) {
 		receipt.FromVersion != "1.0.0" || receipt.DBSchema != 10 || !receipt.IntegrityOK {
 		t.Fatalf("receipt: %+v", receipt)
 	}
-	if got.DataDir != app.store.Dir || got.Target != "1.0.1" ||
+	if got.DataDir != app.Store.Dir || got.Target != "1.0.1" ||
 		got.ManifestDir != hubupgrade.RootManifestDir {
 		t.Fatalf("producer config: %+v", got)
 	}
@@ -191,7 +191,7 @@ func TestHubBackupCallbacksUseTheStore(t *testing.T) {
 func TestHubBackupRouteDoesNotReadTheApprovalBit(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("d", 32)
-	hubDatabaseRecord(t, app.store.Dir, operationID, func(record *backup.Record) {
+	hubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
 		record.IrreversibleApproved = true
 	})
 	var got hubupgrade.BackupConfig

@@ -18,9 +18,9 @@ func policiesLiveApp(t *testing.T) (*Server, *browser) {
 	t.Helper()
 	app, b, _, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	if _, err := app.store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, sub.ID), now); err != nil {
+	if _, err := app.Store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, sub.ID), now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b
@@ -65,23 +65,23 @@ func policiesOutFixture(t *testing.T) (*Server, *browser, outSyncFixture) {
 	t.Helper()
 	f := newOutSyncFixture(t)
 	app, _ := testApp(t)
-	if err := app.store.Close(); err != nil {
+	if err := app.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	app.store = f.store
-	app.cfg.HeadscaleOrigin = testHeadscaleOrigin
-	app.now = func() time.Time { return f.now }
-	if err := app.store.PrepareBootstrap(f.now); err != nil {
+	app.Store = f.store
+	app.Cfg.HeadscaleOrigin = testHeadscaleOrigin
+	app.Now = func() time.Time { return f.now }
+	if err := app.Store.PrepareBootstrap(f.now); err != nil {
 		t.Fatal(err)
 	}
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	subscribers, err := app.store.ListSubscribers()
+	subscribers, err := app.Store.ListSubscribers()
 	if err != nil || len(subscribers) == 0 {
 		t.Fatalf("subscribers = %v err=%v", subscribers, err)
 	}
-	if _, err = app.store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, subscribers[0].ID), f.now); err != nil {
+	if _, err = app.Store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, subscribers[0].ID), f.now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b, f
@@ -108,7 +108,7 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 		t.Fatalf("active state missing: %.400s", w.Body.String())
 	}
 
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.out); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.out); err != nil {
 		t.Fatal(err)
 	}
 	w = b.req("GET", "/policies", nil, nil)

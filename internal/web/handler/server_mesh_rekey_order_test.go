@@ -27,7 +27,7 @@ import (
 // state.
 func meshIOLiveKey(t *testing.T, app *Server, deviceID string, now time.Time) store.MeshEnrollmentKeyRecord {
 	t.Helper()
-	keys, err := app.store.ListMeshEnrollmentKeys(deviceID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(deviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func meshIOLiveKey(t *testing.T, app *Server, deviceID string, now time.Time) st
 func TestMeshRekeyHeadscaleFailureKeepsOldKey(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, firstSecret := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	now := app.now()
+	now := app.Now()
 	before := meshIOLiveKey(t, app, device.ID, now)
 
 	fake.failWith["users.list"] = meshnet.CodeUnavailable
@@ -69,10 +69,10 @@ func TestMeshRekeyHeadscaleFailureKeepsOldKey(t *testing.T) {
 	}
 	// The old key is still usable: registration spends it, which proves the
 	// failed attempt left a working secret rather than a dead row.
-	if _, err := app.store.RecordMeshObservation(device.ID, 9, now.Add(time.Minute)); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 9, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,14 +91,14 @@ func TestMeshRekeyHeadscaleFailureKeepsOldKey(t *testing.T) {
 func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
 	w := b.post("/mesh", url.Values{
 		"display_name": {"phone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
 	requireStatus(t, w, http.StatusOK)
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil || len(devices) != 1 {
 		t.Fatalf("devices = %d err=%v", len(devices), err)
 	}
@@ -107,7 +107,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 
 	// A trigger refuses only the install write, so every read and every stage
 	// step before it succeeds: this is the apply failure, not an early refusal.
-	if _, err = app.store.DB.Exec(`CREATE TRIGGER mesh_rekey_install_refused
+	if _, err = app.Store.DB.Exec(`CREATE TRIGGER mesh_rekey_install_refused
  BEFORE INSERT ON mesh_enrollment_keys
  WHEN NEW.state='issued'
  BEGIN
@@ -124,7 +124,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "本次操作未启用新 Key，设备与已有 Key 保持原状") {
 		t.Fatalf("apply failure misstates what it did: %.400s", w.Body.String())
 	}
-	if _, err = app.store.DB.Exec(`DROP TRIGGER mesh_rekey_install_refused`); err != nil {
+	if _, err = app.Store.DB.Exec(`DROP TRIGGER mesh_rekey_install_refused`); err != nil {
 		t.Fatal(err)
 	}
 	after := meshIOLiveKey(t, app, device.ID, now)
@@ -138,7 +138,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 	}
 	// Nothing from the failed attempt was stored: the history is the one row
 	// the device already had.
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 	// And the device is still usable: the next attempt succeeds.
 	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
-	meshIOLiveKey(t, app, device.ID, app.now())
+	meshIOLiveKey(t, app, device.ID, app.Now())
 }
 
 // TestMeshRekeyRenderFailureAfterHeadscaleKeyKeepsOldKey covers the proxy+mesh
@@ -158,14 +158,14 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
 	w := b.post("/mesh", url.Values{
 		"display_name": {"phone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
 	requireStatus(t, w, http.StatusOK)
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil || len(devices) != 1 {
 		t.Fatalf("devices = %d err=%v", len(devices), err)
 	}
@@ -174,7 +174,7 @@ func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 	// Pausing the bound subscriber makes the preflight refuse: no Headscale key
 	// is minted, the Hub key still is, and the response discloses it because
 	// losing the ability to enroll would be worse than losing the document.
-	if _, err = app.store.SetSubscriberState(sub.ID, "paused", now); err != nil {
+	if _, err = app.Store.SetSubscriberState(sub.ID, "paused", now); err != nil {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
@@ -197,7 +197,7 @@ func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 	if live.State != mesh.KeyIssued {
 		t.Fatalf("the new key is not live: %+v", live)
 	}
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,15 +222,15 @@ func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "nas", "mesh_only", "nas", "")
-	now := app.now()
+	now := app.Now()
 	// Register, then observe the node disappear: registered → expired.
-	if _, err := app.store.RecordMeshObservation(device.ID, 31, now); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 31, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.RecordMeshObservation(device.ID, 0, now.Add(time.Minute)); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	expired, err := app.store.GetMeshDevice(device.ID)
+	expired, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,21 +242,21 @@ func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 	fake.resetCalls()
 	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
-	still, err := app.store.GetMeshDevice(device.ID)
+	still, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if still.Status != mesh.StatusExpired {
 		t.Fatalf("failed rekey moved the device to %s", still.Status)
 	}
-	if _, err := app.store.ListMeshEnrollmentKeys(device.ID); err != nil {
+	if _, err := app.Store.ListMeshEnrollmentKeys(device.ID); err != nil {
 		t.Fatal(err)
 	}
 
 	delete(fake.failWith, "users.list")
 	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
-	reenrolled, err := app.store.GetMeshDevice(device.ID)
+	reenrolled, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,13 +264,13 @@ func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 		t.Fatalf("re-enrollment wrong: %+v", reenrolled)
 	}
 	// The status and the key landed together, so the device can enroll now.
-	live := meshIOLiveKey(t, app, reenrolled.ID, app.now())
+	live := meshIOLiveKey(t, app, reenrolled.ID, app.Now())
 	if live.State != mesh.KeyIssued {
 		t.Fatalf("re-enrolled device has no usable key: %+v", live)
 	}
 	// The retired key belongs to the previous registration attempt and was
 	// already spent there, so the history holds exactly one live row.
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,10 +291,10 @@ func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 func TestMeshRekeyLapsesOldKeyWithoutClaimingAWithdrawal(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	base := app.now()
+	base := app.Now()
 	// Move the clock past the first key's window without touching its row: that
 	// is exactly the "lapsed but still issued" state the issue path retires.
-	app.now = func() time.Time { return base.Add(mesh.KeyTTL + time.Minute) }
+	app.Now = func() time.Time { return base.Add(mesh.KeyTTL + time.Minute) }
 	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
@@ -304,7 +304,7 @@ func TestMeshRekeyLapsesOldKeyWithoutClaimingAWithdrawal(t *testing.T) {
 	if !strings.Contains(body, "过期的旧 Key 已归档") {
 		t.Fatalf("the lapsed key was not described: %.400s", body)
 	}
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestMeshRekeyLapsesOldKeyWithoutClaimingAWithdrawal(t *testing.T) {
 func TestMeshRekeyNeverLeavesTwoLiveKeys(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	now := app.now()
+	now := app.Now()
 	for attempt := 0; attempt < 3; attempt++ {
 		w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 		requireStatus(t, w, http.StatusOK)
@@ -341,7 +341,7 @@ func TestMeshRekeyNeverLeavesTwoLiveKeys(t *testing.T) {
 	}
 	// The partial unique index is the storage-level guarantee behind the swap:
 	// a direct second issued row for the same device is refused.
-	if _, err := app.store.DB.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
+	if _, err := app.Store.DB.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
  VALUES('cccccccccccccccccccccccccccccccc',?,x'0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20','issued',?,?,0)`,
 		device.ID, now.Unix(), now.Add(mesh.KeyTTL).Unix()); err == nil {
 		t.Fatal("the single-active index accepted a second live key")
@@ -355,20 +355,20 @@ func TestMeshRekeyNeverLeavesTwoLiveKeys(t *testing.T) {
 func TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "nas", "mesh_only", "nas", "")
-	now := app.now()
-	if _, err := app.store.RecordMeshObservation(device.ID, 41, now); err != nil {
+	now := app.Now()
+	if _, err := app.Store.RecordMeshObservation(device.ID, 41, now); err != nil {
 		t.Fatal(err)
 	}
 	// The registration consumed the key; the disappearance expires the device
 	// and releases its name.
-	if _, err := app.store.RecordMeshObservation(device.ID, 0, now.Add(time.Minute)); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 0, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	// A second device takes the released name. The page derives a node name from
 	// the label, so the collision is built from the expired device's own name.
 	taker := meshSpec("nas2", mesh.PurposeMeshOnly, "")
 	taker.NodeName = device.NodeName
-	if _, err := app.store.CreateMeshDevice(taker, now.Add(2*time.Minute)); err != nil {
+	if _, err := app.Store.CreateMeshDevice(taker, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
@@ -377,14 +377,14 @@ func TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict(t *testing.T) {
 	if !strings.Contains(w.Body.String(), mesh.CodeNodeNameDuplicate) {
 		t.Fatalf("name conflict lost its code: %.400s", w.Body.String())
 	}
-	after, err := app.store.GetMeshDevice(device.ID)
+	after, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if after.Status != mesh.StatusExpired {
 		t.Fatalf("a refused rekey moved the device to %s", after.Status)
 	}
-	if keys, err := app.store.ListMeshEnrollmentKeys(device.ID); err != nil || len(keys) != 1 || keys[0].State != mesh.KeyConsumed {
+	if keys, err := app.Store.ListMeshEnrollmentKeys(device.ID); err != nil || len(keys) != 1 || keys[0].State != mesh.KeyConsumed {
 		t.Fatalf("a refused rekey rewrote the key history: %+v err=%v", keys, err)
 	}
 }
@@ -395,7 +395,7 @@ func TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict(t *testing.T) {
 func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, firstSecret := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	now := app.now()
+	now := app.Now()
 	fake.failWith["users.list"] = meshnet.CodeUnavailable
 	requireStatus(t, b.post("/mesh/rekey", url.Values{"device_id": {device.ID}}), http.StatusServiceUnavailable)
 	delete(fake.failWith, "users.list")
@@ -406,7 +406,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	if len(firstSecret) != 43 {
 		t.Fatalf("first secret has %d characters", len(firstSecret))
 	}
-	if _, err := app.store.RecordMeshObservation(device.ID, 5, now.Add(time.Minute)); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 5, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	// Registration consumed the surviving key, so the next attempt starts from
@@ -417,7 +417,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 		t.Fatalf("registered device accepted a rekey: %.300s", w.Body.String())
 	}
 	// Bring it back to pending the only legal way, then rekey for real.
-	if _, err := app.store.RecordMeshObservation(device.ID, 0, now.Add(2*time.Minute)); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 0, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
@@ -426,7 +426,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	if len(match) != 2 || match[1] == firstSecret {
 		t.Fatal("recovery rekey did not disclose a fresh key")
 	}
-	meshIOLiveKey(t, app, device.ID, app.now())
+	meshIOLiveKey(t, app, device.ID, app.Now())
 }
 
 // TestMeshRekeyAuditEventsFollowWhatHappened pins the two audit facts apart: a
@@ -447,8 +447,8 @@ func TestMeshRekeyAuditEventsFollowWhatHappened(t *testing.T) {
 
 	// The same device, now past its window: the swap retires the lapsed row as
 	// expired and the page says so instead of claiming a withdrawal.
-	base := app.now()
-	app.now = func() time.Time { return base.Add(mesh.KeyTTL + time.Minute) }
+	base := app.Now()
+	app.Now = func() time.Time { return base.Add(mesh.KeyTTL + time.Minute) }
 	logs.Reset()
 	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
@@ -490,17 +490,17 @@ func TestMeshRekeyStagedKeyBelongsToItsDevice(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	first, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
 	second, _ := meshCreateDevice(t, b, fake, "tablet", "mesh_only", "android", "")
-	key, _, err := mesh.NewEnrollmentKey(second.ID, app.now())
+	key, _, err := mesh.NewEnrollmentKey(second.ID, app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ApplyMeshRekey(first.ID, key, app.now()); err == nil ||
+	if _, err := app.Store.ApplyMeshRekey(first.ID, key, app.Now()); err == nil ||
 		!hasErrorCode(err, mesh.CodeKeyDeviceMismatch) {
 		t.Fatalf("cross-device key accepted: %v", err)
 	}
 	// Neither device changed.
-	meshIOLiveKey(t, app, first.ID, app.now())
-	meshIOLiveKey(t, app, second.ID, app.now())
+	meshIOLiveKey(t, app, first.ID, app.Now())
+	meshIOLiveKey(t, app, second.ID, app.Now())
 }
 
 // TestMeshRekeyApplyRefusesNonIssuedKey keeps the staging contract: only an
@@ -508,13 +508,13 @@ func TestMeshRekeyStagedKeyBelongsToItsDevice(t *testing.T) {
 func TestMeshRekeyApplyRefusesNonIssuedKey(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	now := app.now()
+	now := app.Now()
 	key, _, err := mesh.NewEnrollmentKey(device.ID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	key.State = mesh.KeyRevoked
-	if _, err := app.store.ApplyMeshRekey(device.ID, key, now); err == nil ||
+	if _, err := app.Store.ApplyMeshRekey(device.ID, key, now); err == nil ||
 		!hasErrorCode(err, mesh.CodeKeyTransitionInvalid) {
 		t.Fatalf("a revoked key was installed: %v", err)
 	}

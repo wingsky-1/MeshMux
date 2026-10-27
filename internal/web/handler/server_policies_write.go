@@ -8,6 +8,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 	"time"
@@ -50,11 +51,11 @@ func (app *Server) readPolicyWrite(w http.ResponseWriter, r *http.Request) (poli
 	decoder := json.NewDecoder(strings.NewReader(r.PostForm.Get("policy")))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&in); err != nil {
-		app.fail(w, r, http.StatusBadRequest, codePolicyPayloadInvalid, "策略 JSON 缺失或格式不正确。", "请检查 payload 后重试。")
+		app.Fail(w, r, http.StatusBadRequest, infra.CodePolicyPayloadInvalid, "策略 JSON 缺失或格式不正确。", "请检查 payload 后重试。")
 		return in, false
 	}
 	if strings.TrimSpace(in.OperationID) == "" {
-		app.fail(w, r, http.StatusBadRequest, codePolicyOperationRequired, "策略写操作缺少 operation_id。", "请携带非空 operation_id 后重试。")
+		app.Fail(w, r, http.StatusBadRequest, infra.CodePolicyOperationRequired, "策略写操作缺少 operation_id。", "请携带非空 operation_id 后重试。")
 		return in, false
 	}
 	return in, true
@@ -65,7 +66,7 @@ func (app *Server) policiesCreate(w http.ResponseWriter, r *http.Request, _ sess
 	if !ok {
 		return
 	}
-	stored, err := app.store.CreateRoutePolicy(store.PolicyLayer(strings.TrimSpace(in.Layer)), in.Name, in.Payload, in.Pins, in.OperationID, app.now())
+	stored, err := app.Store.CreateRoutePolicy(store.PolicyLayer(strings.TrimSpace(in.Layer)), in.Name, in.Payload, in.Pins, in.OperationID, app.Now())
 	if err != nil {
 		app.failPolicyWrite(w, r, err)
 		return
@@ -78,7 +79,7 @@ func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ sess
 	if !ok {
 		return
 	}
-	stored, err := app.store.ReviseRoutePolicy(strings.TrimSpace(in.ID), in.Payload, in.Pins, in.OperationID, app.now())
+	stored, err := app.Store.ReviseRoutePolicy(strings.TrimSpace(in.ID), in.Payload, in.Pins, in.OperationID, app.Now())
 	if err != nil {
 		app.failPolicyWrite(w, r, err)
 		return
@@ -87,11 +88,11 @@ func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ sess
 }
 
 func (app *Server) policiesActivate(w http.ResponseWriter, r *http.Request, _ session) {
-	app.policyTransition(w, r, app.store.ActivateRoutePolicy)
+	app.policyTransition(w, r, app.Store.ActivateRoutePolicy)
 }
 
 func (app *Server) policiesRevoke(w http.ResponseWriter, r *http.Request, _ session) {
-	app.policyTransition(w, r, app.store.RevokeRoutePolicy)
+	app.policyTransition(w, r, app.Store.RevokeRoutePolicy)
 }
 
 func (app *Server) policyTransition(w http.ResponseWriter, r *http.Request, transition func(string, int64, string, time.Time) (store.RoutePolicy, error)) {
@@ -99,7 +100,7 @@ func (app *Server) policyTransition(w http.ResponseWriter, r *http.Request, tran
 	if !ok {
 		return
 	}
-	stored, err := transition(strings.TrimSpace(in.ID), in.Revision, in.OperationID, app.now())
+	stored, err := transition(strings.TrimSpace(in.ID), in.Revision, in.OperationID, app.Now())
 	if err != nil {
 		app.failPolicyWrite(w, r, err)
 		return
@@ -113,13 +114,13 @@ func (app *Server) policyTransition(w http.ResponseWriter, r *http.Request, tran
 func policyWriteFailure(err error) (int, string) {
 	code := store.ErrorCodeOf(err)
 	switch code {
-	case codePolicyOperationRequired, codePolicyLayerInvalid, "POLICY_NAME_INVALID",
-		codePolicyPayloadInvalid, codePolicyPinsInvalid, policy.CodePolicyInvalid,
+	case infra.CodePolicyOperationRequired, infra.CodePolicyLayerInvalid, "POLICY_NAME_INVALID",
+		infra.CodePolicyPayloadInvalid, infra.CodePolicyPinsInvalid, policy.CodePolicyInvalid,
 		store.CodePolicyPayloadRetired:
 		return http.StatusBadRequest, code
-	case codePolicyNotFound:
+	case infra.CodePolicyNotFound:
 		return http.StatusNotFound, code
-	case codePolicyConflict, codePolicyStateInvalid, store.CodePolicyLayerRetired:
+	case infra.CodePolicyConflict, infra.CodePolicyStateInvalid, store.CodePolicyLayerRetired:
 		return http.StatusConflict, code
 	case store.CodeDatabaseUnavailable:
 		return http.StatusServiceUnavailable, code
@@ -132,16 +133,16 @@ func (app *Server) failPolicyWrite(w http.ResponseWriter, r *http.Request, err e
 	status, code := policyWriteFailure(err)
 	switch code {
 	case store.CodePolicyLayerRetired:
-		app.fail(w, r, status, code, "客户端策略层已停写：它不再影响任何订阅。", "请在规则库维护客户端分流；客户端层只保留既有版本的只读预览。")
+		app.Fail(w, r, status, code, "客户端策略层已停写：它不再影响任何订阅。", "请在规则库维护客户端分流；客户端层只保留既有版本的只读预览。")
 	case store.CodePolicyPayloadRetired:
-		app.fail(w, r, status, code, "payload 仍携带已退役的 exceptions 或 ssids 字段。", "请改为 rules 表达同一意图后重试。")
+		app.Fail(w, r, status, code, "payload 仍携带已退役的 exceptions 或 ssids 字段。", "请改为 rules 表达同一意图后重试。")
 	default:
-		app.fail(w, r, status, code, "策略写操作未完成。", "请凭操作编号检查服务日志后重试。")
+		app.Fail(w, r, status, code, "策略写操作未完成。", "请凭操作编号检查服务日志后重试。")
 	}
 }
 
 func (app *Server) writePolicyWrite(w http.ResponseWriter, r *http.Request, status int, body policyWriteResponse) {
-	body.OperationID = operation(r)
+	body.OperationID = infra.Operation(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

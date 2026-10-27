@@ -13,6 +13,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,10 +48,10 @@ type hubBackupReceipt struct {
 
 func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request, _ session) {
 	target := strings.TrimSpace(r.PostForm.Get("target_version"))
-	if !isValidReleaseVersion(target) {
-		app.event(r, "MANIFEST_UNAVAILABLE")
+	if !infra.IsValidReleaseVersion(target) {
+		app.Event(r, "MANIFEST_UNAVAILABLE")
 		app.writeJSON(w, http.StatusBadRequest, hubBackupReceipt{
-			Status: "failed", ErrorCode: "MANIFEST_UNAVAILABLE", OperationID: operation(r),
+			Status: "failed", ErrorCode: "MANIFEST_UNAVAILABLE", OperationID: infra.Operation(r),
 			Detail:     "目标版本不是 SemVer 发行版。",
 			NextAction: "请选择 root 已预置目标 manifest 的发行版后重试；本次没有写入任何备份。",
 		})
@@ -61,32 +62,32 @@ func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request,
 		create = hubupgrade.CreateBackup
 	}
 	receipt, err := create(r.Context(), hubupgrade.BackupConfig{
-		DataDir:        app.store.Dir,
+		DataDir:        app.Store.Dir,
 		Target:         target,
 		ManifestDir:    hubupgrade.RootManifestDir,
-		Vacuum:         app.store.VacuumDatabaseCopy,
-		Integrity:      app.store.IntegrityCheckCopy,
-		Schema:         app.store.LiveDatabaseSchemaVersion,
+		Vacuum:         app.Store.VacuumDatabaseCopy,
+		Integrity:      app.Store.IntegrityCheckCopy,
+		Schema:         app.Store.LiveDatabaseSchemaVersion,
 		Space:          hubupgrade.CheckFreeSpace,
 		PublishPointer: hubupgrade.PublishFlatPointer,
 		Log: func(code, operationID string) {
 			// Allowlisted fields only: a stable code and the operation id. The
 			// code is either HUB_BACKUP_POINTER_STALE (nothing new published) or
 			// HUB_BACKUP_POINTER_UNFLUSHED (published but not fsynced).
-			app.log.Info("web_event", "operation_id", operation(r), "backup_operation_id", operationID, "stage", "hub_backup", "error_code", code)
+			app.Log.Info("web_event", "operation_id", infra.Operation(r), "backup_operation_id", operationID, "stage", "hub_backup", "error_code", code)
 		},
 	})
 	if err != nil {
 		code := store.ErrorCodeOf(err)
-		app.event(r, code)
+		app.Event(r, code)
 		app.writeJSON(w, hubBackupHTTPStatus(code), hubBackupReceipt{
-			Status: "failed", ErrorCode: code, OperationID: operation(r),
+			Status: "failed", ErrorCode: code, OperationID: infra.Operation(r),
 			Detail:     "Hub 数据库备份未完成。",
 			NextAction: hubBackupNextAction(code),
 		})
 		return
 	}
-	app.event(r, "HUB_UPGRADE_BACKUP_STAGED")
+	app.Event(r, "HUB_UPGRADE_BACKUP_STAGED")
 	app.writeJSON(w, http.StatusOK, hubBackupReceipt{
 		OK: true, Status: receipt.Status, OperationID: receipt.OperationID,
 		FromVersion: receipt.FromVersion, DBSchema: receipt.DBSchema, IntegrityOK: receipt.IntegrityOK,
@@ -140,10 +141,10 @@ type hubApplyReceipt struct {
 // queued is the honest maximum it can claim.
 func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, _ session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
-	if !isValidOperationID(operationID) {
-		app.event(r, "HUB_HANDOFF_REQUEST_INVALID")
+	if !infra.IsValidOperationID(operationID) {
+		app.Event(r, "HUB_HANDOFF_REQUEST_INVALID")
 		app.writeJSON(w, http.StatusBadRequest, hubApplyReceipt{
-			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: operation(r),
+			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: infra.Operation(r),
 			Detail:     "升级操作编号不正确。",
 			NextAction: "请从 Hub 自升级的备份回执复制 32 位十六进制 operation_id 后重试；未写入任何请求。",
 		})
@@ -154,26 +155,26 @@ func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, 
 		apply = hubupgrade.Handoff
 	}
 	receipt, err := apply(r.Context(), hubupgrade.HandoffConfig{
-		DataDir:       app.store.Dir,
+		DataDir:       app.Store.Dir,
 		OperationID:   operationID,
 		ManifestDir:   hubupgrade.RootManifestDir,
 		ManifestOwner: 0,
 		RecordOwner:   0,
 		RequestDir:    hubupgrade.RequestDir,
-		Now:           app.now,
+		Now:           app.Now,
 		Space:         hubupgrade.CheckFreeSpace,
 	})
 	if err != nil {
 		code := store.ErrorCodeOf(err)
-		app.event(r, code)
+		app.Event(r, code)
 		app.writeJSON(w, hubApplyHTTPStatus(code), hubApplyReceipt{
-			Status: "failed", ErrorCode: code, OperationID: operation(r),
+			Status: "failed", ErrorCode: code, OperationID: infra.Operation(r),
 			Detail:     "Hub 升级未交接。",
 			NextAction: hubApplyNextAction(code),
 		})
 		return
 	}
-	app.event(r, "HUB_UPGRADE_QUEUED")
+	app.Event(r, "HUB_UPGRADE_QUEUED")
 	app.writeJSON(w, http.StatusOK, hubApplyReceipt{
 		OK: true, Status: receipt.Status, OperationID: receipt.OperationID,
 		TargetVersion: receipt.TargetVersion, PackageSHA256: receipt.PackageSHA256,
@@ -222,23 +223,23 @@ func hubApplyNextAction(code string) string {
 // data directory, the fixed result path the root dispatcher writes, the real
 // confirmation side effects and the fixed request directory.
 func (app *Server) hubReconcileConfig(startup bool) hubupgrade.ReconcileConfig {
-	dataDir := app.store.Dir
+	dataDir := app.Store.Dir
 	return hubupgrade.ReconcileConfig{
 		DataDir: dataDir,
 		Startup: startup,
-		Now:     app.now,
+		Now:     app.Now,
 		Result: func(operationID string) (hubupgrade.Result, bool, error) {
 			return hubupgrade.ReadResult(app.hubResultsDirValue(), operationID)
 		},
 		Confirm: func(_ context.Context, operationID, target, pkg string) error {
-			_, err := hubupgrade.ConfirmAndCollect(dataDir, operationID, target, pkg, app.now().UTC(), hubupgrade.ConfirmHooks{
+			_, err := hubupgrade.ConfirmAndCollect(dataDir, operationID, target, pkg, app.Now().UTC(), hubupgrade.ConfirmHooks{
 				Publish: hubupgrade.PublishFlatPointer,
 				Collect: hubupgrade.CleanupConfirmed,
 				Log: func(code, backupOperationID string) {
 					// Allowlisted fields only: a stable code and the operation
 					// id. Either HUB_BACKUP_POINTER_STALE/_UNFLUSHED or
 					// HUB_BACKUP_GC_FAILED; the confirmation stands regardless.
-					app.log.Info("web_event", "backup_operation_id", backupOperationID, "stage", "hub_upgrade_confirm", "error_code", code)
+					app.Log.Info("web_event", "backup_operation_id", backupOperationID, "stage", "hub_upgrade_confirm", "error_code", code)
 				},
 			})
 			return err
@@ -255,15 +256,15 @@ func (app *Server) hubReconcileConfig(startup bool) hubupgrade.ReconcileConfig {
 func (app *Server) reconcileHubUpgrade(ctx context.Context, startup bool) hubupgrade.ReconcileReport {
 	report, err := hubupgrade.Reconcile(ctx, app.hubReconcileConfig(startup))
 	if err != nil {
-		app.log.Warn("web_event", "stage", "hub_upgrade_reconcile", "startup", startup, "error_code", store.ErrorCodeOf(err))
+		app.Log.Warn("web_event", "stage", "hub_upgrade_reconcile", "startup", startup, "error_code", store.ErrorCodeOf(err))
 		return report
 	}
 	for _, change := range report.Changes {
-		app.log.Info("web_event", "stage", "hub_upgrade_reconcile", "startup", startup,
+		app.Log.Info("web_event", "stage", "hub_upgrade_reconcile", "startup", startup,
 			"backup_operation_id", change.OperationID, "from", string(change.From), "to", string(change.To), "error_code", change.Code)
 	}
 	for _, failure := range report.Errors {
-		app.log.Warn("web_event", "stage", "hub_upgrade_reconcile", "startup", startup,
+		app.Log.Warn("web_event", "stage", "hub_upgrade_reconcile", "startup", startup,
 			"backup_operation_id", failure.OperationID, "error_code", failure.Code)
 	}
 	return report
@@ -336,10 +337,10 @@ type hubRestoreReceipt struct {
 // byte, schema and pin check on the root side.
 func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request, _ session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
-	if !isValidOperationID(operationID) {
-		app.event(r, "HUB_HANDOFF_REQUEST_INVALID")
+	if !infra.IsValidOperationID(operationID) {
+		app.Event(r, "HUB_HANDOFF_REQUEST_INVALID")
 		app.writeJSON(w, http.StatusBadRequest, hubRestoreReceipt{
-			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: operation(r),
+			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: infra.Operation(r),
 			Detail:     "恢复操作编号不正确。",
 			NextAction: "请从 Hub 自升级区块复制失败操作的 32 位十六进制 operation_id；未写入任何恢复请求。",
 		})
@@ -348,15 +349,15 @@ func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request
 	receipt, err := app.queueHubRestore(operationID)
 	if err != nil {
 		code := store.ErrorCodeOf(err)
-		app.event(r, code)
+		app.Event(r, code)
 		app.writeJSON(w, hubRestoreHTTPStatus(code), hubRestoreReceipt{
-			Status: "failed", ErrorCode: code, OperationID: operation(r),
+			Status: "failed", ErrorCode: code, OperationID: infra.Operation(r),
 			Detail:     "Hub 恢复未排队。",
 			NextAction: hubRestoreNextAction(code),
 		})
 		return
 	}
-	app.event(r, "HUB_UPGRADE_RESTORE_QUEUED")
+	app.Event(r, "HUB_UPGRADE_RESTORE_QUEUED")
 	app.writeJSON(w, http.StatusOK, receipt)
 }
 
@@ -364,7 +365,7 @@ func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request
 // restore, prove no request is pending and prove the per-op record still holds
 // an integrity-checked copy, then publish exactly one kind=restore request.
 func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error) {
-	op, found, err := hubupgrade.ReadOp(app.store.Dir, operationID, os.Geteuid())
+	op, found, err := hubupgrade.ReadOp(app.Store.Dir, operationID, os.Geteuid())
 	if err != nil {
 		return hubRestoreReceipt{}, errors.New("HUB_BACKUP_JOURNAL_FAILED: the journal could not be read")
 	}
@@ -379,7 +380,7 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 	default:
 		return hubRestoreReceipt{}, errors.New("HUB_UPGRADE_BUSY: the operation is not failed, partial or verifying")
 	}
-	if _, ok, err := hubupgrade.ReadRestoredMarker(app.store.Dir); err != nil {
+	if _, ok, err := hubupgrade.ReadRestoredMarker(app.Store.Dir); err != nil {
 		return hubRestoreReceipt{}, err
 	} else if ok {
 		// Any marker means this data directory was produced by a restore. Its
@@ -387,7 +388,7 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 		// marker before a new operation can fail.
 		return hubRestoreReceipt{}, errors.New("HUB_RESTORE_CARRIED_SOURCE: this data directory was restored; its carried records are not sources")
 	}
-	root := filepath.Join(app.store.Dir, hubupgrade.DatabaseBackupDir)
+	root := filepath.Join(app.Store.Dir, hubupgrade.DatabaseBackupDir)
 	record, err := backup.Read(root, op.OperationID, os.Geteuid())
 	if err != nil {
 		return hubRestoreReceipt{}, err
@@ -410,7 +411,7 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 	}
 	if _, err := hubupgrade.WriteRequest(app.hubRequestDirValue(), hubupgrade.Request{
 		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindRestore,
-		OperationID: op.OperationID, DataDir: app.store.Dir,
+		OperationID: op.OperationID, DataDir: app.Store.Dir,
 	}); err != nil {
 		return hubRestoreReceipt{}, err
 	}
@@ -426,7 +427,7 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 // requests with HUB_HANDOFF_BUSY, and the executor independently refuses while a
 // request exists).
 func hubRequestPending(dir, operationID string) (bool, error) {
-	if !isValidOperationID(operationID) {
+	if !infra.IsValidOperationID(operationID) {
 		return false, errors.New("HUB_HANDOFF_REQUEST_INVALID: the operation id is not 32 lowercase hex")
 	}
 	path := filepath.Join(dir, operationID+".json")

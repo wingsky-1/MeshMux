@@ -76,7 +76,7 @@ type opTargetFunc func(operationID string) (version, digest string, ok bool)
 // journal yields ok=false, because the readback is advisory and must not turn
 // an unreadable operation record into a confirmed identity.
 func (app *Server) hubOpTarget(operationID string) (version, digest string, ok bool) {
-	ops, err := hubupgrade.ListOps(app.store.Dir, os.Geteuid())
+	ops, err := hubupgrade.ListOps(app.Store.Dir, os.Geteuid())
 	if err != nil {
 		return "", "", false
 	}
@@ -114,7 +114,7 @@ func readDatabaseIdentityFrom(db *sql.DB) (databaseIdentity, error) {
 // readDatabaseIdentity is the store's entry point. It is the only identity read
 // path: a second one would be a second chance to write.
 func (app *Server) readDatabaseIdentity() (databaseIdentity, error) {
-	return readDatabaseIdentityFrom(app.store.DB)
+	return readDatabaseIdentityFrom(app.Store.DB)
 }
 
 // errIdentityRead marks an identity read that failed. The caller reports
@@ -233,7 +233,7 @@ func (app *Server) publishHubIdentity(now time.Time, opTarget opTargetFunc) view
 // refreshHubIdentity publishes one readback now, so a page or a test can advance
 // the snapshot without waiting for the ticker. It is still read-only.
 func (app *Server) refreshHubIdentity() view.HubIdentity {
-	return app.publishHubIdentity(app.now(), app.opTarget)
+	return app.publishHubIdentity(app.Now(), app.opTarget)
 }
 
 // startHubIdentityRefresh starts the one bounded refresher. Observation does not
@@ -243,7 +243,7 @@ func (app *Server) refreshHubIdentity() view.HubIdentity {
 func (app *Server) startHubIdentityRefresh(ctx context.Context) {
 	// A second start replaces the first loop instead of leaving it behind.
 	app.stopHubIdentityRefresh()
-	now := app.now
+	now := app.Now
 	interval := hubIdentityRefreshInterval
 	if app.identityInterval > 0 {
 		interval = app.identityInterval

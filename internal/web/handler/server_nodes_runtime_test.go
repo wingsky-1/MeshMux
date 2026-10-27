@@ -19,7 +19,7 @@ import (
 
 func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision int64) []protocol.Task {
 	t.Helper()
-	rows, err := app.store.DB.Query(`SELECT operation_id, revision, idempotency_key, kind, params
+	rows, err := app.Store.DB.Query(`SELECT operation_id, revision, idempotency_key, kind, params
  FROM agent_tasks WHERE node_id=? AND status='pending' ORDER BY revision`, nodeID)
 	if err != nil {
 		t.Fatal(err)
@@ -52,12 +52,12 @@ func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &firstPair)
 	firstToken := firstPair["identity_token"]
 
-	code, err := app.store.ReissuePairing(created.ID, time.Now())
+	code, err := app.Store.ReissuePairing(created.ID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var replaced int
-	if err = app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='failed' AND error_code='IDENTITY_REPLACED'`, created.ID).Scan(&replaced); err != nil || replaced != 4 {
+	if err = app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='failed' AND error_code='IDENTITY_REPLACED'`, created.ID).Scan(&replaced); err != nil || replaced != 4 {
 		t.Fatalf("replaced tasks=%d err=%v", replaced, err)
 	}
 	if w = bearerReq(app, "GET", "/api/agent/tasks", firstToken, nil); w.Code != 401 {
@@ -70,7 +70,7 @@ func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	if secondPair["identity_token"] == "" || secondPair["identity_token"] == firstToken {
 		t.Fatal("reissue did not replace the identity")
 	}
-	latest, err := app.store.LatestCandidate(created.ID)
+	latest, err := app.Store.LatestCandidate(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
-	latest, err := app.store.LatestCandidate(created.ID)
+	latest, err := app.Store.LatestCandidate(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 		w = reportJSON(t, app, token, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
 		requireStatus(t, w, 200)
 	}
-	firstObserved, err := app.store.GetNodeAt(created.ID, app.now())
+	firstObserved, err := app.Store.GetNodeAt(created.ID, app.Now())
 	if err != nil || firstObserved.ObservedRevision != latest.Revision || firstObserved.ObservedTaskRevision != readback.Revision {
 		t.Fatalf("observed after readback: %+v err=%v", firstObserved, err)
 	}
@@ -121,23 +121,23 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 		firstObserved.PublicReachabilityVerified || firstObserved.ProtocolVerified || firstObserved.ClientVerified {
 		t.Fatalf("readback evidence labels are wrong: %+v", firstObserved)
 	}
-	if _, err = app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, created.ID); err != nil {
+	if _, err = app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	offline, err := app.store.GetNodeAt(created.ID, app.now())
+	offline, err := app.Store.GetNodeAt(created.ID, app.Now())
 	if err != nil || !offline.Offline || offline.NativeReady || offline.ObservedRevision != latest.Revision {
 		t.Fatalf("offline history was conflated with current readiness: %+v err=%v", offline, err)
 	}
 
 	olderID, _ := protocol.NewID()
-	if _, err = app.store.DB.Exec(`INSERT INTO agent_tasks(operation_id,node_id,kind,revision,idempotency_key,status,params,created_at,updated_at)
+	if _, err = app.Store.DB.Exec(`INSERT INTO agent_tasks(operation_id,node_id,kind,revision,idempotency_key,status,params,created_at,updated_at)
  VALUES(?,?,?,?,?, 'pending', ?,?,?)`, olderID, created.ID, protocol.KindConfigReadback, readback.Revision-10,
 		olderID, `{"revision":1}`, time.Now().Unix(), time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: olderID, Status: "healthy", Detail: string(detail)})
 	requireStatus(t, w, 200)
-	after, err := app.store.GetNodeAt(created.ID, app.now())
+	after, err := app.Store.GetNodeAt(created.ID, app.Now())
 	if err != nil || after.ObservedRevision != firstObserved.ObservedRevision || after.ObservedTaskRevision != firstObserved.ObservedTaskRevision {
 		t.Fatalf("late readback regressed observation: before=%+v after=%+v err=%v", firstObserved, after, err)
 	}
@@ -151,7 +151,7 @@ func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
-	latest, err := app.store.LatestCandidate(created.ID)
+	latest, err := app.Store.LatestCandidate(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
 	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body)})
 	requireStatus(t, w, 400)
 	var status string
-	if err := app.store.DB.QueryRow(`SELECT status FROM agent_tasks WHERE operation_id=?`, readback.OperationID).Scan(&status); err != nil || status != "pending" {
+	if err := app.Store.DB.QueryRow(`SELECT status FROM agent_tasks WHERE operation_id=?`, readback.OperationID).Scan(&status); err != nil || status != "pending" {
 		t.Fatalf("invalid readback changed task status=%q err=%v", status, err)
 	}
 
@@ -184,17 +184,17 @@ func TestIdentityRevokeFailsUnfinishedTasksWithoutDeletingCandidate(t *testing.T
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
-	if err := app.store.RevokeIdentity(created.ID, time.Now()); err != nil {
+	if err := app.Store.RevokeIdentity(created.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if w = bearerReq(app, "GET", "/api/agent/tasks", token, nil); w.Code != 401 {
 		t.Fatalf("revoked identity status=%d, want 401", w.Code)
 	}
 	var failed int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='failed' AND error_code='IDENTITY_REVOKED'`, created.ID).Scan(&failed); err != nil || failed != 4 {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='failed' AND error_code='IDENTITY_REVOKED'`, created.ID).Scan(&failed); err != nil || failed != 4 {
 		t.Fatalf("revoked unfinished tasks=%d err=%v", failed, err)
 	}
-	if latest, err := app.store.LatestCandidate(created.ID); err != nil || latest.Revision != 1 {
+	if latest, err := app.Store.LatestCandidate(created.ID); err != nil || latest.Revision != 1 {
 		t.Fatalf("candidate was deleted or changed: %+v err=%v", latest, err)
 	}
 }
@@ -206,7 +206,7 @@ func TestStaleNodeDoesNotReceiveStateChangingTasks(t *testing.T) {
 	requireStatus(t, w, 200)
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, created.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
 	w = bearerReq(app, "GET", "/api/agent/tasks", paired["identity_token"], nil)
@@ -224,21 +224,21 @@ func TestReconcilePublicationRollsBackCandidateOnTaskFailure(t *testing.T) {
 	created, code := createPendingNode(t, app, "edge", "atomic-reconcile", 8443, 2222)
 	w := pairJSON(t, app, created.ID, "edge", code)
 	requireStatus(t, w, 200)
-	if _, err := app.store.DB.Exec(`UPDATE agent_tasks SET status='failed' WHERE node_id=?`, created.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed' WHERE node_id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.DB.Exec(`CREATE TRIGGER reject_stage_task BEFORE INSERT ON agent_tasks
+	if _, err := app.Store.DB.Exec(`CREATE TRIGGER reject_stage_task BEFORE INSERT ON agent_tasks
  WHEN NEW.kind='config.stage' BEGIN SELECT RAISE(ABORT, 'TEST_TASK_FAILURE'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := app.store.ReconcileNode(created.ID, time.Now()); err == nil {
+	if _, _, err := app.Store.ReconcileNode(created.ID, time.Now()); err == nil {
 		t.Fatal("reconcile unexpectedly succeeded")
 	}
-	if latest, err := app.store.LatestCandidate(created.ID); err != nil || latest.Revision != 1 {
+	if latest, err := app.Store.LatestCandidate(created.ID); err != nil || latest.Revision != 1 {
 		t.Fatalf("candidate publication was not rolled back: %+v err=%v", latest, err)
 	}
 	var pending int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='pending'`, created.ID).Scan(&pending); err != nil || pending != 0 {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='pending'`, created.ID).Scan(&pending); err != nil || pending != 0 {
 		t.Fatalf("partial task chain persisted: pending=%d err=%v", pending, err)
 	}
 }
@@ -268,7 +268,7 @@ func TestInstallArtifactBoundariesAndShellQuote(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	app.cfg.InstallArtifact = &InstallArtifact{
+	app.Cfg.InstallArtifact = &InstallArtifact{
 		Path: path, Version: node.CurrentAgentVersion(), Architecture: "amd64", SHA256: hex.EncodeToString(sum[:]),
 	}
 	w = b.req("GET", "/api/nodes/cli", nil, nil)

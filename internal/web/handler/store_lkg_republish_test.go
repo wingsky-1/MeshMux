@@ -32,25 +32,25 @@ func lkgFixture(t *testing.T) (*Server, store.Node) {
 
 	// Publish a later candidate revision, then let its chain finish so the
 	// rollback republish has an idle node.
-	candidate, err := app.store.Candidate(created.ID, 1)
+	candidate, err := app.Store.Candidate(created.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := app.store.DB.Begin()
+	tx, err := app.Store.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
 	next := candidate.Document.Candidate()
 	next.Revision = 2
-	if err := store.InsertCandidateTx(tx, next, app.now().Unix()); err != nil {
+	if err := store.InsertCandidateTx(tx, next, app.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET observed_revision=1, observed_at=? WHERE id=?`,
-		app.now().Unix(), created.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_revision=1, observed_at=? WHERE id=?`,
+		app.Now().Unix(), created.ID); err != nil {
 		t.Fatal(err)
 	}
 	return app, created
@@ -58,7 +58,7 @@ func lkgFixture(t *testing.T) (*Server, store.Node) {
 
 func pendingTasksForNode(t *testing.T, app *Server, nodeID string) []protocol.Task {
 	t.Helper()
-	rows, err := app.store.DB.Query(`SELECT operation_id, revision, kind FROM agent_tasks
+	rows, err := app.Store.DB.Query(`SELECT operation_id, revision, kind FROM agent_tasks
  WHERE node_id=? AND status='pending' ORDER BY revision`, nodeID)
 	if err != nil {
 		t.Fatal(err)
@@ -80,12 +80,12 @@ func pendingTasksForNode(t *testing.T, app *Server, nodeID string) []protocol.Ta
 // carries the same compiled configuration, and leaves the stage row unstamped.
 func TestLkgRepublish(t *testing.T) {
 	app, created := lkgFixture(t)
-	lkg, err := app.store.Candidate(created.ID, 1)
+	lkg, err := app.Store.Candidate(created.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	republished, tasks, err := app.store.RepublishLKG(created.ID, app.now())
+	republished, tasks, err := app.Store.RepublishLKG(created.ID, app.Now())
 	if err != nil {
 		t.Fatalf("republish: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestLkgRepublish(t *testing.T) {
 	}
 	// U5 exemption pins the plain-stage semantics: no upgrade target is
 	// stamped, so Agent state.Revision == target is an ordinary local stage.
-	if stamped, ok, err := app.store.StampedStageTarget(created.ID, stage.OperationID); err != nil || ok {
+	if stamped, ok, err := app.Store.StampedStageTarget(created.ID, stage.OperationID); err != nil || ok {
 		t.Fatalf("rollback stage carries an upgrade target: %+v, %v", stamped, err)
 	}
 }
@@ -128,10 +128,10 @@ func TestLkgRepublish(t *testing.T) {
 // inventing an upgrade target.
 func TestLkgRepublishNoOpIsStillPlainStage(t *testing.T) {
 	app, created := lkgFixture(t)
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET observed_revision=2 WHERE id=?`, created.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_revision=2 WHERE id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	republished, tasks, err := app.store.RepublishLKG(created.ID, app.now())
+	republished, tasks, err := app.Store.RepublishLKG(created.ID, app.Now())
 	if err != nil {
 		t.Fatalf("no-op republish: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestLkgRepublishNoOpIsStillPlainStage(t *testing.T) {
 	}
 	for _, task := range tasks {
 		if task.Kind == protocol.KindConfigStage {
-			if _, ok, err := app.store.StampedStageTarget(created.ID, task.OperationID); err != nil || ok {
+			if _, ok, err := app.Store.StampedStageTarget(created.ID, task.OperationID); err != nil || ok {
 				t.Fatalf("no-op republish stamped a target: %+v, %v", ok, err)
 			}
 		}
@@ -163,29 +163,29 @@ func requireRepublishError(t *testing.T, err error, prefix string) {
 func TestLkgRepublishRefusals(t *testing.T) {
 	t.Run("no observed revision", func(t *testing.T) {
 		app, created := lkgFixture(t)
-		if _, err := app.store.DB.Exec(`UPDATE nodes SET observed_revision=0 WHERE id=?`, created.ID); err != nil {
+		if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_revision=0 WHERE id=?`, created.ID); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := app.store.RepublishLKG(created.ID, app.now())
+		_, _, err := app.Store.RepublishLKG(created.ID, app.Now())
 		requireRepublishError(t, err, "LKG_UNAVAILABLE")
 	})
 	t.Run("unknown observed revision", func(t *testing.T) {
 		app, created := lkgFixture(t)
-		if _, err := app.store.DB.Exec(`UPDATE nodes SET observed_revision=9 WHERE id=?`, created.ID); err != nil {
+		if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_revision=9 WHERE id=?`, created.ID); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := app.store.RepublishLKG(created.ID, app.now())
+		_, _, err := app.Store.RepublishLKG(created.ID, app.Now())
 		requireRepublishError(t, err, "LKG_UNAVAILABLE")
 	})
 	t.Run("unfinished chain", func(t *testing.T) {
 		app, created := lkgFixture(t)
-		now := app.now()
-		if _, err := app.store.DB.Exec(`INSERT INTO agent_tasks(operation_id, node_id, revision, idempotency_key, kind, params, status, created_at, updated_at)
+		now := app.Now()
+		if _, err := app.Store.DB.Exec(`INSERT INTO agent_tasks(operation_id, node_id, revision, idempotency_key, kind, params, status, created_at, updated_at)
  VALUES(?,?,?,?,?,?, 'pending', ?, ?)`, strings.Repeat("f", 32), created.ID, 99,
 			strings.Repeat("f", 32), protocol.KindConfigCheck, `{"revision":1}`, now.Unix(), now.Unix()); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := app.store.RepublishLKG(created.ID, now)
+		_, _, err := app.Store.RepublishLKG(created.ID, now)
 		requireRepublishError(t, err, "TASKS_IN_PROGRESS")
 	})
 }

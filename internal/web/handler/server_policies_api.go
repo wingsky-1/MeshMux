@@ -14,6 +14,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 
@@ -36,14 +37,14 @@ type policyValidationResponse struct {
 // policiesExplain resolves one target against the same snapshot policy.
 func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess session) {
 	target := strings.TrimSpace(r.URL.Query().Get("target"))
-	page, clientPolicy, ok := app.policySnapshot(app.now())
+	page, clientPolicy, ok := app.policySnapshot(app.Now())
 	page.Target = target
 	if target == "" {
 		app.renderPolicies(w, r, sess, page)
 		return
 	}
 	if len(target) > policyExplainTargetMax {
-		app.fail(w, r, http.StatusBadRequest, policy.CodePolicyInvalid, "目标长度超出域名或 IP 的合理范围。", "请缩短后重试。")
+		app.Fail(w, r, http.StatusBadRequest, policy.CodePolicyInvalid, "目标长度超出域名或 IP 的合理范围。", "请缩短后重试。")
 		return
 	}
 	if !ok {
@@ -53,7 +54,7 @@ func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess 
 	hit, err := policy.ExplainHit(target, clientPolicy)
 	if err != nil {
 		code, _ := policyFailure(err)
-		app.fail(w, r, http.StatusConflict, code, "无法计算命中说明。", "请检查策略后重试。")
+		app.Fail(w, r, http.StatusConflict, code, "无法计算命中说明。", "请检查策略后重试。")
 		return
 	}
 	page.Hits = []view.PolicyHitView{view.PolicyHitResult(hit, target)}
@@ -80,11 +81,11 @@ func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ se
 	clientPolicy := policy.ClientPolicy{Default: input.Default, Rules: input.Rules}
 	if err := clientPolicy.Validate(); err != nil {
 		code, detail := policyFailure(err)
-		app.event(r, "POLICY_VALIDATION_REJECTED")
+		app.Event(r, "POLICY_VALIDATION_REJECTED")
 		app.writePolicyValidation(w, r, http.StatusUnprocessableEntity, policyValidationResponse{ErrorCode: code, Detail: detail, Rules: len(input.Rules)})
 		return
 	}
-	app.event(r, "POLICY_VALIDATED")
+	app.Event(r, "POLICY_VALIDATED")
 	app.writePolicyValidation(w, r, http.StatusOK, policyValidationResponse{OK: true, Rules: len(input.Rules)})
 }
 
@@ -108,7 +109,7 @@ func readPolicyValidationInput(raw string) (struct {
 }
 
 func (app *Server) writePolicyValidation(w http.ResponseWriter, r *http.Request, status int, body policyValidationResponse) {
-	body.OperationID = operation(r)
+	body.OperationID = infra.Operation(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

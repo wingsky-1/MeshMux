@@ -19,6 +19,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 
@@ -152,10 +153,10 @@ func previewEgressState(out policyServerPreviewOut) (string, string) {
 // collapses to POLICY_INVALID so a message can never become a code.
 func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Request, err error) {
 	code := previewFailure(err)
-	app.event(r, code)
+	app.Event(r, code)
 	status := http.StatusUnprocessableEntity
 	switch code {
-	case policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited, codeOutBindingInvalid:
+	case policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited, infra.CodeOutBindingInvalid:
 		status = http.StatusConflict
 	}
 	app.writePolicyServerPreview(w, r, status, policyServerPreviewResponse{ErrorCode: code})
@@ -166,7 +167,7 @@ func previewFailure(err error) string {
 	code, _, _ := strings.Cut(err.Error(), ": ")
 	for _, known := range []string{
 		policy.CodePolicyInvalid, policy.CodeRulesetUnpinned, policy.CodeOutOfflineFailClosed,
-		policy.CodeOutFallbackUnaudited, codeOutBindingInvalid,
+		policy.CodeOutFallbackUnaudited, infra.CodeOutBindingInvalid,
 	} {
 		if code == known {
 			return code
@@ -177,7 +178,7 @@ func previewFailure(err error) string {
 
 // writePolicyServerPreview is the single response writer of this route.
 func (app *Server) writePolicyServerPreview(w http.ResponseWriter, r *http.Request, status int, body policyServerPreviewResponse) {
-	body.OperationID = operation(r)
+	body.OperationID = infra.Operation(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)

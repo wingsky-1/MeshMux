@@ -85,7 +85,7 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func installTestArtifact(app *Server, path, digest string) {
-	app.cfg.InstallArtifact = &InstallArtifact{
+	app.Cfg.InstallArtifact = &InstallArtifact{
 		Path: path, Version: node.CurrentAgentVersion(), Architecture: "amd64", SHA256: digest,
 	}
 }
@@ -299,7 +299,7 @@ func TestBoundaryLetsAnAbortReachNetHTTP(t *testing.T) {
 		r.URL.Host = ""
 		return r
 	}
-	abort := app.boundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	abort := app.Boundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
 	func() {
@@ -311,7 +311,7 @@ func TestBoundaryLetsAnAbortReachNetHTTP(t *testing.T) {
 		abort.ServeHTTP(httptest.NewRecorder(), request())
 	}()
 
-	boom := app.boundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	boom := app.Boundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("unexpected")
 	}))
 	w := httptest.NewRecorder()

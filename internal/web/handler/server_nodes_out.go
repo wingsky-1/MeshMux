@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"strings"
@@ -25,25 +26,25 @@ import (
 // transport → re-render the page with the receipt. The port never comes from the
 // form, so the stored pair cannot disagree with the VLESS listener.
 func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess session) {
-	now := s.now()
+	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	server := strings.TrimSpace(r.PostForm.Get("server"))
-	node, err := s.store.GetNodeAt(outID, now)
+	node, err := s.Store.GetNodeAt(outID, now)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), codeNodeNotFound) {
-			s.fail(w, r, 404, codeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。")
+		if strings.HasPrefix(err.Error(), infra.CodeNodeNotFound) {
+			s.Fail(w, r, 404, infra.CodeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。")
 			return
 		}
-		s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点。", "请检查数据库。")
+		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点。", "请检查数据库。")
 		return
 	}
-	transport, err := s.store.SetOutTransport(outID, server, node.VlessPort, now)
+	transport, err := s.Store.SetOutTransport(outID, server, node.VlessPort, now)
 	if err != nil {
 		status, code, message, next := outTransportFailure(err)
-		s.fail(w, r, status, code, message, next)
+		s.Fail(w, r, status, code, message, next)
 		return
 	}
-	s.event(r, "OUT_TRANSPORT_SET")
+	s.Event(r, "OUT_TRANSPORT_SET")
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "Out 出口地址已保存为 " + transport.Server + "。"})
 }
 
@@ -57,17 +58,17 @@ func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess se
 // membership and is untouched — so an Out no subscription selects is already unbound and
 // this call is an idempotent no-op that publishes nothing.
 func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess session) {
-	now := s.now()
+	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
-	usedBy, err := s.store.OutAuthorizedSubscribers(outID)
+	usedBy, err := s.Store.OutAuthorizedSubscribers(outID)
 	if err != nil {
 		status, code, message, next := outBindingFailure(err)
-		s.fail(w, r, status, code, message, next)
+		s.Fail(w, r, status, code, message, next)
 		return
 	}
 	if len(usedBy) > 0 {
-		s.event(r, store.CodeOutReferenced)
-		s.fail(w, r, 409, store.CodeOutReferenced,
+		s.Event(r, store.CodeOutReferenced)
+		s.Fail(w, r, 409, store.CodeOutReferenced,
 			"该 Out 仍被订阅选中："+strings.Join(usedBy, "、")+"。",
 			"请在订阅向导中取消这些订阅的 Out 选择后重试。ACL 由节点成员制决定（纳管即互通），订阅变更不会重算 ACL。")
 		return
@@ -79,16 +80,16 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess sess
 	// newest chain already carries it; a chain still in flight defers the republish —
 	// the intent is durable and the next Out event completes it, so the page reports
 	// the pending state instead of an error the operator cannot fix.
-	retryErr := s.store.RetryOutSync(outID, now)
+	retryErr := s.Store.RetryOutSync(outID, now)
 	if retryErr != nil && !strings.HasPrefix(retryErr.Error(), store.CodeOutSyncPending) {
 		status, code, message, next := outBindingFailure(retryErr)
-		s.fail(w, r, status, code, message, next)
+		s.Fail(w, r, status, code, message, next)
 		return
 	}
-	s.event(r, "OUT_UNBOUND")
+	s.Event(r, "OUT_UNBOUND")
 	notice := "已解除：没有任何订阅选中该 Out。Out 的 ACL 由节点成员制决定（纳管即互通），订阅变更不会重算 ACL；本次已按当前成员集重新下发。"
 	if retryErr != nil {
-		s.event(r, store.CodeOutSyncPending)
+		s.Event(r, store.CodeOutSyncPending)
 		notice = "已解除：没有任何订阅选中该 Out。Out 的 ACL 由节点成员制决定，订阅变更不会重算 ACL；本次下发的确认待同步（OUT_SYNC_PENDING），Out 上线后自动完成。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
@@ -102,37 +103,37 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess sess
 // the dial parameters and the link key are all gone (Ruling R9), so a later use means
 // enrolling the Out again.
 func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess session) {
-	now := s.now()
+	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	if r.PostForm.Get("confirm") != "1" {
-		node, err := s.store.GetNodeAt(outID, now)
+		node, err := s.Store.GetNodeAt(outID, now)
 		if err != nil {
-			if strings.HasPrefix(err.Error(), codeNodeNotFound) {
-				s.fail(w, r, 404, codeOutNotFound, "出口节点不存在。", "请先在节点页纳管该出口后重试。")
+			if strings.HasPrefix(err.Error(), infra.CodeNodeNotFound) {
+				s.Fail(w, r, 404, infra.CodeOutNotFound, "出口节点不存在。", "请先在节点页纳管该出口后重试。")
 				return
 			}
-			s.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点。", "请检查数据库。")
+			s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点。", "请检查数据库。")
 			return
 		}
-		if node.Role != nodeRoleOut && node.Role != nodeRoleHTTP {
-			s.fail(w, r, 409, "OUT_ROLE_INVALID", "所选节点不是出口角色。", "请选择角色为 Out 或 HTTP 代理的节点。")
+		if node.Role != infra.NodeRoleOut && node.Role != infra.NodeRoleHTTP {
+			s.Fail(w, r, 409, "OUT_ROLE_INVALID", "所选节点不是出口角色。", "请选择角色为 Out 或 HTTP 代理的节点。")
 			return
 		}
-		s.event(r, "OUT_DELETE_PENDING")
+		s.Event(r, "OUT_DELETE_PENDING")
 		s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{PendingDeleteOut: outID})
 		return
 	}
 	role := ""
-	if node, err := s.store.GetNodeAt(outID, now); err == nil {
+	if node, err := s.Store.GetNodeAt(outID, now); err == nil {
 		role = node.Role
 	}
-	if err := s.store.DeleteOutAt(outID, now); err != nil {
+	if err := s.Store.DeleteOutAt(outID, now); err != nil {
 		if errors.Is(err, store.ErrOutCleanupPending) {
 			// Nothing was destroyed (Ruling R9). The JSON endpoint answers the same way:
 			// a deferral is a refusal, because once the node row is gone there is nothing
 			// left to retry from. Reporting "route deleted" here would be a lie.
-			s.event(r, store.CodeOutSyncPending)
-			s.fail(w, r, 409, store.CodeOutSyncPending,
+			s.Event(r, store.CodeOutSyncPending)
+			s.Fail(w, r, 409, store.CodeOutSyncPending,
 				"删除未执行：该 Out 尚未确认清空授权（可能离线，或仍有未完成的链）。",
 				"请确认该 Out 在线并等待当前链结束后重试；本次未删除任何内容。")
 			return
@@ -143,12 +144,12 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 				message = "该出口仍被订阅选中：" + names + "。"
 			}
 		}
-		s.fail(w, r, status, code, message, next)
+		s.Fail(w, r, status, code, message, next)
 		return
 	}
-	s.event(r, "OUT_DELETED")
+	s.Event(r, "OUT_DELETED")
 	notice := "出口已彻底删除：节点行、出口地址与 link key 均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
-	if role == nodeRoleHTTP {
+	if role == infra.NodeRoleHTTP {
 		notice = "HTTP 代理节点已彻底删除：节点行与存储的 URL/凭据均已清除；引用过它的 Line 路由已按 fail-closed 重算。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
@@ -164,20 +165,20 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 // guard; it never contributes a source. A single-Line projection is never reported as
 // an established path: nothing has been published for it yet.
 func (s *Server) outPreview(w http.ResponseWriter, r *http.Request, _ session) {
-	preview, err := s.store.PreviewOutAuthorization(
+	preview, err := s.Store.PreviewOutAuthorization(
 		strings.TrimSpace(r.PostForm.Get("out_id")),
 		strings.TrimSpace(r.PostForm.Get("line_id")),
 	)
 	if err != nil {
 		status, code, message, next := outBindingFailure(err)
-		s.fail(w, r, status, code, message, next)
+		s.Fail(w, r, status, code, message, next)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		store.OutAuthorizationPreview
 		OperationID string `json:"operation_id"`
-	}{OutAuthorizationPreview: preview, OperationID: operation(r)})
+	}{OutAuthorizationPreview: preview, OperationID: infra.Operation(r)})
 }
 
 // outTransportFailure maps one transport-store refusal onto the stable HTTP
@@ -191,12 +192,12 @@ func outTransportFailure(err error) (status int, code, message, next string) {
 		return 409, "OUT_PORT_MISMATCH", "出口端口与节点 VLESS 端口不一致。", "请确认 Out 节点的 VLESS 端口后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_TRANSPORT_FAILED"):
 		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请凭操作编号检查服务日志后重试。"
-	case strings.HasPrefix(err.Error(), codeOutNotFound):
-		return 404, codeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
-	case strings.HasPrefix(err.Error(), codeOutRoleInvalid):
-		return 409, codeOutRoleInvalid, "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
-	case strings.HasPrefix(err.Error(), codeOutBindingInvalid):
-		return 400, codeOutBindingInvalid, "节点标识不正确。", "请检查所选 Out 后重试。"
+	case strings.HasPrefix(err.Error(), infra.CodeOutNotFound):
+		return 404, infra.CodeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
+	case strings.HasPrefix(err.Error(), infra.CodeOutRoleInvalid):
+		return 409, infra.CodeOutRoleInvalid, "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
+	case strings.HasPrefix(err.Error(), infra.CodeOutBindingInvalid):
+		return 400, infra.CodeOutBindingInvalid, "节点标识不正确。", "请检查所选 Out 后重试。"
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 传输参数。", "请检查数据库与服务日志后重试。"
 	default:

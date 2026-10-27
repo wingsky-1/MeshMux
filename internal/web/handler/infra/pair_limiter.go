@@ -1,4 +1,4 @@
-package handler
+package infra
 
 import (
 	"sync"
@@ -28,10 +28,10 @@ import (
 // refusal states its remainder, the cost is bounded and visible. A restart
 // resets the counter; a remote request cannot cause one.
 const (
-	// pairWindow is the length of one pairing budget window.
-	pairWindow = time.Minute
-	// pairBudget is how many pairing attempts one window admits.
-	pairBudget = 20
+	// PairWindow is the length of one pairing budget window.
+	PairWindow = time.Minute
+	// PairBudget is how many pairing attempts one window admits.
+	PairBudget = 20
 )
 
 // pairLimiter is the pairing budget's state. The zero value is a fresh window.
@@ -48,14 +48,14 @@ type pairLimiter struct {
 func (l *pairLimiter) spend(now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.started.IsZero() || now.Before(l.started) || now.Sub(l.started) >= pairWindow {
+	if l.started.IsZero() || now.Before(l.started) || now.Sub(l.started) >= PairWindow {
 		l.started, l.attempts = now, 0
 	}
 	l.attempts++
-	if l.attempts <= pairBudget {
+	if l.attempts <= PairBudget {
 		return true, 0
 	}
-	retry := l.started.Add(pairWindow).Sub(now)
+	retry := l.started.Add(PairWindow).Sub(now)
 	if retry <= 0 {
 		retry = time.Second
 	}
@@ -71,3 +71,11 @@ func (l *pairLimiter) clear() {
 	l.started, l.attempts = time.Time{}, 0
 	l.mu.Unlock()
 }
+
+// SpendPairing charges one pairing attempt and reports the wait when refused.
+func (rt *Runtime) SpendPairing(now time.Time) (bool, time.Duration) {
+	return rt.pairing.spend(now)
+}
+
+// ClearPairing ends the pairing window after a one-time code was spent.
+func (rt *Runtime) ClearPairing() { rt.pairing.clear() }

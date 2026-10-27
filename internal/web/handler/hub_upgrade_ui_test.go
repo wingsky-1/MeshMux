@@ -21,7 +21,7 @@ func plantHubUpgradePage(t *testing.T, app *Server, state hubupgrade.State) (str
 	t.Helper()
 	app.hubResultsDir = t.TempDir()
 	operationID := strings.Repeat("a", 32)
-	_, record := hubDatabaseRecord(t, app.store.Dir, operationID, func(record *backup.Record) {
+	_, record := hubDatabaseRecord(t, app.Store.Dir, operationID, func(record *backup.Record) {
 		record.IrreversibleApproved = true
 	})
 	op := hubupgrade.Op{
@@ -30,7 +30,7 @@ func plantHubUpgradePage(t *testing.T, app *Server, state hubupgrade.State) (str
 		ManifestSHA256: strings.Repeat("b", 64), PackageSHA256: strings.Repeat("c", 64),
 		DBSchema: record.DBSchema, BackupGeneration: 1, UpdatedAt: time.Now().UTC().Add(-time.Minute),
 	}
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := hubupgrade.WriteResult(app.hubResultsDir, hubupgrade.Result{

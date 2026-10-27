@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"sort"
@@ -30,18 +31,18 @@ import (
 // newServer must skip "/subscribers", otherwise the placeholder page competes
 // with the real subscriber page for the same path.
 func (app *Server) registerSubscriberRoutes(r chi.Router) {
-	r.Get("/subscribers", app.authenticated(app.subscribersPage))
-	r.Get("/subscribers/wizard", app.authenticated(app.subscribersWizard))
-	r.Post("/subscribers", app.mutation(app.subscribersCreate, true))
-	r.Post("/subscribers/rename", app.mutation(app.subscribersRename, true))
-	r.Post("/subscribers/state", app.mutation(app.subscribersState, true))
-	r.Post("/subscribers/lines", app.mutation(app.subscribersSelectLines, true))
-	r.Post("/subscribers/token/rotate", app.mutation(app.subscribersRotateToken, true))
-	r.Post("/subscribers/token/revoke", app.mutation(app.subscribersRevokeToken, true))
-	r.Post("/subscribers/sync", app.mutation(app.subscribersSync, true))
+	r.Get("/subscribers", app.Authenticated(app.subscribersPage))
+	r.Get("/subscribers/wizard", app.Authenticated(app.subscribersWizard))
+	r.Post("/subscribers", app.Mutation(app.subscribersCreate, true))
+	r.Post("/subscribers/rename", app.Mutation(app.subscribersRename, true))
+	r.Post("/subscribers/state", app.Mutation(app.subscribersState, true))
+	r.Post("/subscribers/lines", app.Mutation(app.subscribersSelectLines, true))
+	r.Post("/subscribers/token/rotate", app.Mutation(app.subscribersRotateToken, true))
+	r.Post("/subscribers/token/revoke", app.Mutation(app.subscribersRevokeToken, true))
+	r.Post("/subscribers/sync", app.Mutation(app.subscribersSync, true))
 	app.registerSubscriptionWizardRoutes(r)
-	r.Get("/api/subscribers", app.authenticated(app.subscribersAPI))
-	r.Post("/lines", app.mutation(app.linesSave, true))
+	r.Get("/api/subscribers", app.Authenticated(app.subscribersAPI))
+	r.Post("/lines", app.Mutation(app.linesSave, true))
 }
 
 // tokenDisclosure carries a plaintext subscription bearer. It is only ever
@@ -55,10 +56,10 @@ type tokenDisclosure struct {
 func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
-	app.render(w, r, 200, view.SubscribersPage(view.PageData{Title: "订阅用户", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, page))
+	app.Render(w, r, 200, view.SubscribersPage(view.PageData{Title: "订阅用户", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP}, page))
 }
 
 // subscribersAPI exposes the same non-secret projection as the page: no
@@ -66,7 +67,7 @@ func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess 
 func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	type lineProjection struct {
@@ -103,7 +104,7 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ sess
 		Subscribers []subscriberProjection `json:"subscribers"`
 		Lines       []lineProjection       `json:"lines"`
 		OperationID string                 `json:"operation_id"`
-	}{Subscribers: []subscriberProjection{}, Lines: []lineProjection{}, OperationID: operation(r)}
+	}{Subscribers: []subscriberProjection{}, Lines: []lineProjection{}, OperationID: infra.Operation(r)}
 	for _, sub := range page.Subscribers {
 		entry := subscriberProjection{ID: sub.ID, DisplayName: sub.DisplayName, State: sub.State,
 			SyncStatus: sub.SyncStatus, SyncCode: sub.SyncCode, SyncLabel: sub.SyncLabel,
@@ -128,18 +129,18 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ sess
 func (app *Server) subscribersCreate(w http.ResponseWriter, r *http.Request, sess session) {
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
 	lineIDs := selectedLineIDs(r)
-	now := app.now()
-	sub, token, err := app.store.CreateSubscriber(displayName, lineIDs, now)
+	now := app.Now()
+	sub, token, err := app.Store.CreateSubscriber(displayName, lineIDs, now)
 	if err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_CREATE_FAILED", "无法创建订阅用户。", "请检查名称与所选线路后重试。")
 		return
 	}
-	app.event(r, "SUBSCRIBER_CREATED")
+	app.Event(r, "SUBSCRIBER_CREATED")
 	// The bearer was already issued and is shown exactly once below. A failed
 	// publication must not replace that response: the token stays visible and
 	// the page renders the pending synchronization instead.
-	if err := app.store.PrepareSubscriberSync(sub.ID, now); err != nil {
-		app.event(r, store.SanitizeSubscriberSyncCode(err.Error()))
+	if err := app.Store.PrepareSubscriberSync(sub.ID, now); err != nil {
+		app.Event(r, store.SanitizeSubscriberSyncCode(err.Error()))
 	}
 	app.renderSubscribers(w, r, sess, &tokenDisclosure{Subscriber: sub.DisplayName, Token: token})
 }
@@ -149,11 +150,11 @@ func (app *Server) subscribersCreate(w http.ResponseWriter, r *http.Request, ses
 func (app *Server) subscribersRename(w http.ResponseWriter, r *http.Request, sess session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
-	if _, err := app.store.RenameSubscriber(id, displayName, app.now()); err != nil {
+	if _, err := app.Store.RenameSubscriber(id, displayName, app.Now()); err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_UPDATE_FAILED", "无法修改订阅用户名称。", "请检查名称后重试。")
 		return
 	}
-	app.event(r, "SUBSCRIBER_RENAMED")
+	app.Event(r, "SUBSCRIBER_RENAMED")
 	app.renderSubscribers(w, r, sess, nil)
 }
 
@@ -173,19 +174,19 @@ func (app *Server) subscribersState(w http.ResponseWriter, r *http.Request, sess
 	case "delete":
 		state = subscription.StateDeleting
 	default:
-		app.fail(w, r, 400, "SUBSCRIBER_ACTION_INVALID", "状态操作不正确。", "请使用页面上的暂停、恢复或删除操作。")
+		app.Fail(w, r, 400, "SUBSCRIBER_ACTION_INVALID", "状态操作不正确。", "请使用页面上的暂停、恢复或删除操作。")
 		return
 	}
-	if _, err := app.store.SetSubscriberState(id, state, app.now()); err != nil {
+	if _, err := app.Store.SetSubscriberState(id, state, app.Now()); err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_STATE_FAILED", "无法变更订阅用户状态。", "确认订阅用户存在且状态转换合法后重试。")
 		return
 	}
-	app.event(r, "SUBSCRIBER_STATE_CHANGED")
+	app.Event(r, "SUBSCRIBER_STATE_CHANGED")
 	// The state change is already durable. A Line that cannot be reached now
 	// keeps the intent; the page renders it as pending instead of hiding the
 	// failed publication.
-	if err := app.store.PrepareSubscriberSync(id, app.now()); err != nil {
-		app.event(r, store.SanitizeSubscriberSyncCode(err.Error()))
+	if err := app.Store.PrepareSubscriberSync(id, app.Now()); err != nil {
+		app.Event(r, store.SanitizeSubscriberSyncCode(err.Error()))
 	}
 	app.renderSubscribers(w, r, sess, nil)
 }
@@ -196,16 +197,16 @@ func (app *Server) subscribersState(w http.ResponseWriter, r *http.Request, sess
 func (app *Server) subscribersSelectLines(w http.ResponseWriter, r *http.Request, sess session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
 	lineIDs := selectedLineIDs(r)
-	if _, err := app.store.SelectLines(id, lineIDs, app.now()); err != nil {
+	if _, err := app.Store.SelectLines(id, lineIDs, app.Now()); err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_LINES_FAILED", "无法更新订阅用户的线路选择。", "请确认线路已配置且订阅用户处于生效状态。")
 		return
 	}
-	app.event(r, "SUBSCRIBER_LINES_CHANGED")
+	app.Event(r, "SUBSCRIBER_LINES_CHANGED")
 	// The selection is durable; the publication follows immediately. A failed
 	// publication leaves the page in its pending state instead of claiming a
 	// convergence that did not happen.
-	if err := app.store.PrepareSubscriberSync(id, app.now()); err != nil {
-		app.event(r, store.SanitizeSubscriberSyncCode(err.Error()))
+	if err := app.Store.PrepareSubscriberSync(id, app.Now()); err != nil {
+		app.Event(r, store.SanitizeSubscriberSyncCode(err.Error()))
 	}
 	app.renderSubscribers(w, r, sess, nil)
 }
@@ -215,16 +216,16 @@ func (app *Server) subscribersSelectLines(w http.ResponseWriter, r *http.Request
 // a credential that a client already downloaded.
 func (app *Server) subscribersRotateToken(w http.ResponseWriter, r *http.Request, sess session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
-	token, err := app.store.RotateToken(id, app.now())
+	token, err := app.Store.RotateToken(id, app.Now())
 	if err != nil {
 		app.subscriberFail(w, r, err, "TOKEN_ROTATE_FAILED", "无法轮换订阅 Token。", "确认订阅用户处于生效状态后重试。")
 		return
 	}
 	owner := id
-	if sub, sErr := app.store.GetSubscriber(id); sErr == nil {
+	if sub, sErr := app.Store.GetSubscriber(id); sErr == nil {
 		owner = sub.DisplayName
 	}
-	app.event(r, "SUBSCRIBER_TOKEN_ROTATED")
+	app.Event(r, "SUBSCRIBER_TOKEN_ROTATED")
 	app.renderSubscribers(w, r, sess, &tokenDisclosure{Subscriber: owner, Token: token})
 }
 
@@ -232,11 +233,11 @@ func (app *Server) subscribersRotateToken(w http.ResponseWriter, r *http.Request
 // touching its VLESS credentials.
 func (app *Server) subscribersRevokeToken(w http.ResponseWriter, r *http.Request, sess session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
-	if err := app.store.RevokeTokens(id, app.now()); err != nil {
+	if err := app.Store.RevokeTokens(id, app.Now()); err != nil {
 		app.subscriberFail(w, r, err, "TOKEN_REVOKE_FAILED", "无法吊销订阅 Token。", "确认订阅用户存在后重试。")
 		return
 	}
-	app.event(r, "SUBSCRIBER_TOKEN_REVOKED")
+	app.Event(r, "SUBSCRIBER_TOKEN_REVOKED")
 	app.renderSubscribers(w, r, sess, nil)
 }
 
@@ -244,22 +245,22 @@ func (app *Server) subscribersRevokeToken(w http.ResponseWriter, r *http.Request
 // subscriber to every selected Line.
 func (app *Server) subscribersSync(w http.ResponseWriter, r *http.Request, sess session) {
 	id := strings.TrimSpace(r.PostForm.Get("subscriber_id"))
-	if _, err := app.store.GetSubscriber(id); err != nil {
+	if _, err := app.Store.GetSubscriber(id); err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_NOT_FOUND", "订阅用户不存在。", "请刷新页面后重试。")
 		return
 	}
 	action := strings.TrimSpace(r.PostForm.Get("action"))
 	var err error
 	if action == "retry" {
-		err = app.store.RetrySubscriberSync(id, app.now())
+		err = app.Store.RetrySubscriberSync(id, app.Now())
 	} else {
-		err = app.store.PrepareSubscriberSync(id, app.now())
+		err = app.Store.PrepareSubscriberSync(id, app.Now())
 	}
 	if err != nil {
 		app.subscriberFail(w, r, err, "SUBSCRIBER_SYNC_FAILED", "无法发布订阅凭据。", "确认订阅用户与线路状态后重试。")
 		return
 	}
-	app.event(r, "SUBSCRIBER_SYNC_QUEUED")
+	app.Event(r, "SUBSCRIBER_SYNC_QUEUED")
 	app.renderSubscribers(w, r, sess, nil)
 }
 
@@ -270,27 +271,27 @@ func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess sessio
 	nodeID := strings.TrimSpace(r.PostForm.Get("node_id"))
 	port, err := integerForm(r.PostForm.Get("port"), 1, 65535)
 	if err != nil {
-		app.fail(w, r, 400, "LINE_INPUT_INVALID", "端口不正确。", "请填写 1-65535 之间的端口。")
+		app.Fail(w, r, 400, "LINE_INPUT_INVALID", "端口不正确。", "请填写 1-65535 之间的端口。")
 		return
 	}
 	handshakePort, err := integerForm(r.PostForm.Get("handshake_port"), 1, 65535)
 	if err != nil {
-		app.fail(w, r, 400, "LINE_INPUT_INVALID", "握手端口不正确。", "请填写 1-65535 之间的端口。")
+		app.Fail(w, r, 400, "LINE_INPUT_INVALID", "握手端口不正确。", "请填写 1-65535 之间的端口。")
 		return
 	}
 	sortOrder, err := integerForm(r.PostForm.Get("sort_order"), 0, 65535)
 	if err != nil {
-		app.fail(w, r, 400, "LINE_INPUT_INVALID", "排序值不正确。", "请填写 0 以上的整数。")
+		app.Fail(w, r, 400, "LINE_INPUT_INVALID", "排序值不正确。", "请填写 0 以上的整数。")
 		return
 	}
 	pair, err := subscription.NewRealityKeyPair()
 	if err != nil {
-		app.fail(w, r, 500, "REALITY_KEY_GENERATION_FAILED", "无法生成线路密钥。", "请稍后重试并检查服务日志。")
+		app.Fail(w, r, 500, "REALITY_KEY_GENERATION_FAILED", "无法生成线路密钥。", "请稍后重试并检查服务日志。")
 		return
 	}
 	shortID, err := subscription.NewShortID()
 	if err != nil {
-		app.fail(w, r, 500, "SHORT_ID_GENERATION_FAILED", "无法生成线路 short id。", "请稍后重试并检查服务日志。")
+		app.Fail(w, r, 500, "SHORT_ID_GENERATION_FAILED", "无法生成线路 short id。", "请稍后重试并检查服务日志。")
 		return
 	}
 	line := subscription.Line{
@@ -306,11 +307,11 @@ func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess sessio
 		PublicKey:       pair.PublicKey,
 		ShortID:         shortID,
 	}
-	if _, err = app.store.SetLine(line, app.now()); err != nil {
+	if _, err = app.Store.SetLine(line, app.Now()); err != nil {
 		app.subscriberFail(w, r, err, "LINE_SETTINGS_FAILED", "无法保存线路参数。", "请确认节点已纳管且参数完整后重试。")
 		return
 	}
-	app.event(r, "LINE_SETTINGS_SAVED")
+	app.Event(r, "LINE_SETTINGS_SAVED")
 	// The store already republished the Out pool for the changed address: under the
 	// membership model (Ruling R10) a Line's transport address is the source the Out
 	// observes, so SetLine owns that reconciliation in its own transaction boundary.
@@ -337,12 +338,12 @@ func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess sessio
 func (app *Server) fanOutLineChange(r *http.Request, nodeID string) {
 	subscriberIDs, err := app.lineCredentialSubscriberIDs(nodeID)
 	if err != nil {
-		app.event(r, store.SanitizeSubscriberSyncCode(err.Error()))
+		app.Event(r, store.SanitizeSubscriberSyncCode(err.Error()))
 		return
 	}
 	for _, subscriberID := range subscriberIDs {
-		if err := app.store.PrepareSubscriberSync(subscriberID, app.now()); err != nil {
-			app.event(r, store.SanitizeSubscriberSyncCode(err.Error()))
+		if err := app.Store.PrepareSubscriberSync(subscriberID, app.Now()); err != nil {
+			app.Event(r, store.SanitizeSubscriberSyncCode(err.Error()))
 		}
 	}
 }
@@ -354,7 +355,7 @@ func (app *Server) fanOutLineChange(r *http.Request, nodeID string) {
 // returning, so the single store connection is free for the caller's follow-up
 // writes.
 func (app *Server) lineCredentialSubscriberIDs(nodeID string) ([]string, error) {
-	return app.store.LineSubscriberIDs(nodeID)
+	return app.Store.LineSubscriberIDs(nodeID)
 }
 
 // selectedLineIDs reads the checked Line checkboxes of one form.
@@ -441,5 +442,5 @@ func (app *Server) subscriberFail(w http.ResponseWriter, r *http.Request, err er
 	case strings.HasPrefix(err.Error(), policy.CodeRulesetUnpinned):
 		code, status = policy.CodeRulesetUnpinned, http.StatusConflict
 	}
-	app.fail(w, r, status, code, message, next)
+	app.Fail(w, r, status, code, message, next)
 }

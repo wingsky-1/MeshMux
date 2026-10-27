@@ -303,8 +303,8 @@ func TestSubscriberSyncFailsClosedWhenTheOutIsOffline(t *testing.T) {
 // exactly what the old carry-forward produced and left behind.
 func seedStoredRouteCandidate(t *testing.T, app *Server, nodeID, fragment string) {
 	t.Helper()
-	now := app.now()
-	tx, err := app.store.DB.Begin()
+	now := app.Now()
+	tx, err := app.Store.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func upgradeManifestVersion(t *testing.T) string {
 // the stale "out" fragment a removed policy left behind.
 func TestUpgradeApprovalInvalidatesAStaleRoute(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
-	if _, err := app.store.SetLine(testLine(nodeID, "upgrade-line"), app.now()); err != nil {
+	if _, err := app.Store.SetLine(testLine(nodeID, "upgrade-line"), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	seedStoredRouteCandidate(t, app, nodeID, staleOutRoute)
@@ -352,7 +352,7 @@ func TestUpgradeApprovalInvalidatesAStaleRoute(t *testing.T) {
 	if !receipt.OK || receipt.Revision <= before {
 		t.Fatalf("approval receipt = %+v", receipt)
 	}
-	if got := latestStoredRoute(t, app.store, nodeID); got != "" {
+	if got := latestStoredRoute(t, app.Store, nodeID); got != "" {
 		t.Fatalf("approval carried the stale Out route: %s", got)
 	}
 }
@@ -362,19 +362,19 @@ func TestUpgradeApprovalInvalidatesAStaleRoute(t *testing.T) {
 // stored and the receipt names the stable policy code.
 func TestUpgradeApprovalRefusesAnUnboundOut(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
-	now := app.now()
+	now := app.Now()
 	settings := testLine(nodeID, "upgrade-line")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	created, err := app.store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
+	created, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
 		json.RawMessage(outServerPolicy), nil, "op-upgrade-policy", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ActivateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
+	if _, err := app.Store.ActivateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
 		t.Fatal(err)
 	}
 	before := latestRevision(t, app, nodeID)
@@ -394,38 +394,38 @@ func TestUpgradeApprovalRefusesAnUnboundOut(t *testing.T) {
 // refusal: the binding is still there, the Out just cannot prove it.
 func TestUpgradeApprovalRefusesAnOfflineOut(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
-	now := app.now()
+	now := app.Now()
 	settings := testLine(nodeID, "upgrade-line")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	out := pairedStoreNode(t, app.store, "out", now)
-	markLineOnline(t, app.store, out, now)
-	configureOut(t, app.store, out, now)
+	out := pairedStoreNode(t, app.Store, "out", now)
+	markLineOnline(t, app.Store, out, now)
+	configureOut(t, app.Store, out, now)
 	// Enrollment publishes the Out guard (Ruling R10); the fixture settles and confirms
 	// it so the offline state below is the only reason for the refusal.
-	app.store.RepublishOutAuthorizations(now)
-	settleTasks(t, app.store, out)
-	confirmChain(t, app.store, out, now)
-	enableOutForLine(t, app.store, out, nodeID, now)
+	app.Store.RepublishOutAuthorizations(now)
+	settleTasks(t, app.Store, out)
+	confirmChain(t, app.Store, out, now)
+	enableOutForLine(t, app.Store, out, nodeID, now)
 	// Selecting the Out makes the Line route through it; the Line's own chain has to
 	// settle before the approval can be judged on the Out state alone.
-	if err := app.store.PrepareSubscriberSync(nodeSubscriberID(t, app.store, nodeID), now); err != nil {
+	if err := app.Store.PrepareSubscriberSync(nodeSubscriberID(t, app.Store, nodeID), now); err != nil {
 		t.Fatalf("publish the line: %v", err)
 	}
-	settleTasks(t, app.store, nodeID)
-	confirmChain(t, app.store, nodeID, now)
-	created, err := app.store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
+	settleTasks(t, app.Store, nodeID)
+	confirmChain(t, app.Store, nodeID, now)
+	created, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
 		json.RawMessage(outServerPolicy), nil, "op-upgrade-policy", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ActivateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
+	if _, err := app.Store.ActivateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
 		t.Fatal(err)
 	}
 	before := latestRevision(t, app, nodeID)
@@ -448,25 +448,25 @@ func TestSubscriberSyncEndpointReportsTheOutRefusal(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 
-	now := app.now()
+	now := app.Now()
 	line := createPairedWebNode(t, app, "edge", "line-sync-out", 8443, 2222)
 	settings := testLine(line.ID, "line-sync-out")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.store, line.ID, now)
-	subscriber, _, err := app.store.CreateSubscriber("alice", []string{line.ID}, now)
+	markLineOnline(t, app.Store, line.ID, now)
+	subscriber, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := app.store.CreateRoutePolicy(store.PolicyLayerServer, "服务端策略",
+	created, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "服务端策略",
 		json.RawMessage(outServerPolicy), nil, "op-policy", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ActivateRoutePolicy(created.ID, created.Revision, "op-activate", now); err != nil {
+	if _, err := app.Store.ActivateRoutePolicy(created.ID, created.Revision, "op-activate", now); err != nil {
 		t.Fatal(err)
 	}
 	before := latestRevision(t, app, line.ID)

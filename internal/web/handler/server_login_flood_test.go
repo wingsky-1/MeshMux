@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,7 +36,7 @@ func TestAnonymousFloodCannotLockTheLoginPage(t *testing.T) {
 		}
 	}
 	var rows int
-	if err := app.store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&rows); err != nil {
+	if err := app.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 {
@@ -55,7 +56,7 @@ func TestAnonymousFloodCannotLockTheLoginPage(t *testing.T) {
 func TestLoginFormTokenIsStillEnforced(t *testing.T) {
 	app, _ := testApp(t)
 	base := time.Now()
-	app.now = func() time.Time { return base }
+	app.Now = func() time.Time { return base }
 	initialize(t, &browser{app: app})
 
 	// No form cookie: the CSRF value in the body proves nothing on its own.
@@ -65,7 +66,7 @@ func TestLoginFormTokenIsStillEnforced(t *testing.T) {
 	requireStatus(t, bodyOnly.req("POST", "/login", url.Values{"csrf": {page.csrf}, "password": {testPassword}}, nil), 401)
 
 	// A token that was never signed by this process is refused.
-	planted := &browser{app: app, form: &http.Cookie{Name: app.formCookieName(), Value: store.RandomToken()}, csrf: store.RandomToken()}
+	planted := &browser{app: app, form: &http.Cookie{Name: app.FormCookieName(), Value: store.RandomToken()}, csrf: store.RandomToken()}
 	requireStatus(t, planted.req("POST", "/login", url.Values{"csrf": {planted.csrf}, "password": {testPassword}}, nil), 401)
 
 	// Cookie and body must carry the same value.
@@ -74,11 +75,11 @@ func TestLoginFormTokenIsStillEnforced(t *testing.T) {
 
 	// Duplicate form cookies fail closed rather than picking one.
 	dup := &browser{app: app, form: page.form, csrf: page.csrf}
-	header := http.Header{"Cookie": {page.form.String() + "; " + app.formCookieName() + "=" + store.RandomToken()}}
+	header := http.Header{"Cookie": {page.form.String() + "; " + app.FormCookieName() + "=" + store.RandomToken()}}
 	requireStatus(t, dup.req("POST", "/login", url.Values{"csrf": {page.csrf}, "password": {testPassword}}, header), 401)
 
 	// The token expires on its own after the anonymous-form window.
-	app.now = func() time.Time { return base.Add(formTokenLifetime + time.Minute) }
+	app.Now = func() time.Time { return base.Add(infra.FormTokenLifetime + time.Minute) }
 	requireStatus(t, page.req("POST", "/login", url.Values{"csrf": {page.csrf}, "password": {testPassword}}, nil), 401)
 	// The page reloads with a fresh token and the login works.
 	requireStatus(t, page.req("GET", "/login", nil, nil), 200)
@@ -96,13 +97,13 @@ func TestSetupFormUsesTheSameStatelessToken(t *testing.T) {
 		t.Fatal("setup page issued no form cookie")
 	}
 	var rows int
-	if err := app.store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&rows); err != nil {
+	if err := app.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 0 {
 		t.Fatalf("setup page stored %d session rows, want 0", rows)
 	}
-	token, err := os.ReadFile(filepath.Join(app.store.Dir, "bootstrap.token"))
+	token, err := os.ReadFile(filepath.Join(app.Store.Dir, "bootstrap.token"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,7 @@ func TestLoginPageRendersWithLegacyAnonymousRowsFull(t *testing.T) {
 	initialize(t, &browser{app: app})
 	now := time.Now()
 	for range 256 {
-		if _, err := app.store.DB.Exec("INSERT INTO sessions VALUES(?,?,0,?,?)", store.TokenHash(store.RandomToken()), store.RandomToken(), now.Add(10*time.Minute).Unix(), now.Unix()); err != nil {
+		if _, err := app.Store.DB.Exec("INSERT INTO sessions VALUES(?,?,0,?,?)", store.TokenHash(store.RandomToken()), store.RandomToken(), now.Add(10*time.Minute).Unix(), now.Unix()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,7 +134,7 @@ func TestLoginPageRendersWithLegacyAnonymousRowsFull(t *testing.T) {
 	requireStatus(t, admin.req("GET", "/login", nil, nil), 200)
 	requireStatus(t, admin.post("/login", url.Values{"password": {testPassword}}), 303)
 	var legacy int
-	if err := app.store.DB.QueryRow("SELECT count(*) FROM sessions WHERE authenticated=0").Scan(&legacy); err != nil {
+	if err := app.Store.DB.QueryRow("SELECT count(*) FROM sessions WHERE authenticated=0").Scan(&legacy); err != nil {
 		t.Fatal(err)
 	}
 	if legacy != 0 {

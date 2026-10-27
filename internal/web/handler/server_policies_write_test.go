@@ -144,7 +144,7 @@ func TestPoliciesPageActiveAndBrokenSnapshots(t *testing.T) {
 
 	// A stored payload that no longer validates is never rendered as live.
 	broken := `{"default":"proxy","rules":[{"priority":200,"match":{"domains":["news.example.invalid"]},"action":"direct"},{"priority":100,"match":{"domains":["other.example.invalid"]},"action":"direct"}]}`
-	if _, err := b.app.store.DB.Exec(`UPDATE route_policies SET payload=? WHERE id=? AND revision=1`, broken, clientID); err != nil {
+	if _, err := b.app.Store.DB.Exec(`UPDATE route_policies SET payload=? WHERE id=? AND revision=1`, broken, clientID); err != nil {
 		t.Fatal(err)
 	}
 	w = b.req("GET", "/policies", nil, nil)

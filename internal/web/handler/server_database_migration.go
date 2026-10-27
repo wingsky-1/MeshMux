@@ -11,6 +11,7 @@ package handler
 // literal form value `irreversible_confirm=1` is refused and writes nothing.
 
 import (
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 )
@@ -51,7 +52,7 @@ type databaseMigrationReceipt struct {
 // receipt. There is deliberately no flag or environment switch.
 func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.Request, _ session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("backup_operation_id"))
-	if !isValidOperationID(operationID) {
+	if !infra.IsValidOperationID(operationID) {
 		app.writeDatabaseMigrationFailure(w, r, http.StatusBadRequest, "DB_BACKUP_OPERATION_INVALID",
 			"备份操作编号不正确。", "请从本页 Hub 自升级区块的备份回执复制 32 位十六进制 operation_id（即 backup_operation_id）后重试；未写入任何确认。")
 		return
@@ -62,7 +63,7 @@ func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.
 			"请由管理员在 Web 显式勾选“我确认这是不可逆迁移”后再批准，随后回到本页 Hub 自升级区块使用同一 backup_operation_id；不存在命令行开关或其他绕过方式，未写入任何确认。")
 		return
 	}
-	approval, err := app.store.ApproveIrreversibleMigration(operationID, true)
+	approval, err := app.Store.ApproveIrreversibleMigration(operationID, true)
 	if err != nil {
 		app.failDatabaseMigration(w, r, err)
 		return
@@ -71,12 +72,12 @@ func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.
 	if approval.AlreadyApproved {
 		status = "already_approved"
 	}
-	app.event(r, "DB_MIGRATION_APPROVED")
+	app.Event(r, "DB_MIGRATION_APPROVED")
 	app.writeJSON(w, http.StatusOK, databaseMigrationReceipt{
 		OK: true, Status: status, BackupOperationID: operationID, BackupRecord: approval.RecordPath,
 		FromVersion: approval.Record.FromVersion, DBSchema: approval.Record.DBSchema,
 		PolicySchema: approval.Record.PolicySchema, IrreversibleApproved: true,
-		OperationID: operation(r),
+		OperationID: infra.Operation(r),
 		Detail:      "确认位已写入 Hub 数据库备份记录；本次请求没有执行任何迁移。",
 		NextAction:  "确认位等于操作员同意，不等于迁移已完成；请回到本页 Hub 自升级区块，用同一 operation_id 执行交接或恢复，root 执行体在应用不可逆步骤前读取该位。",
 	})
@@ -115,8 +116,8 @@ func (app *Server) failDatabaseMigration(w http.ResponseWriter, r *http.Request,
 
 // writeDatabaseMigrationFailure writes the refusal in the management JSON shape.
 func (app *Server) writeDatabaseMigrationFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
-	app.event(r, code)
+	app.Event(r, code)
 	app.writeJSON(w, status, databaseMigrationReceipt{
-		Status: "failed", ErrorCode: code, Detail: message, NextAction: next, OperationID: operation(r),
+		Status: "failed", ErrorCode: code, Detail: message, NextAction: next, OperationID: infra.Operation(r),
 	})
 }

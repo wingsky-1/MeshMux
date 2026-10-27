@@ -42,24 +42,24 @@ func meshEndpointTestApp(t *testing.T, headscaleOrigin string) (*Server, *browse
 
 func meshConvergedSubscriber(t *testing.T, app *Server, now time.Time) (subscription.Subscriber, subscription.Line) {
 	t.Helper()
-	created, _, err := app.store.CreateNode("edge", "line", 8443, 2222, now)
+	created, _, err := app.Store.CreateNode("edge", "line", 8443, 2222, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	enrollNodeIdentity(t, app.store, created.ID, now)
-	line := configureLine(t, app.store, created.ID, "line-a", now)
-	sub, _, err := app.store.CreateSubscriber("alice", []string{created.ID}, now)
+	enrollNodeIdentity(t, app.Store, created.ID, now)
+	line := configureLine(t, app.Store, created.ID, "line-a", now)
+	sub, _, err := app.Store.CreateSubscriber("alice", []string{created.ID}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := app.store.ListSubscriberCredentials(sub.ID)
+	credentials, err := app.Store.ListSubscriberCredentials(sub.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(credentials) != 1 {
 		t.Fatalf("credentials = %d", len(credentials))
 	}
-	publishConvergedCandidate(t, app.store, created.ID, line, credentials, now)
+	publishConvergedCandidate(t, app.Store, created.ID, line, credentials, now)
 	return sub, line
 }
 
@@ -82,7 +82,7 @@ func TestMeshExportTailnetPrefixesMatchDomain(t *testing.T) {
 func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
 	app, b, fake, logs := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
 
 	w := b.post("/mesh", url.Values{
@@ -125,7 +125,7 @@ func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
 	}
 	// The Headscale key is not persisted. Only the Hub key digest exists.
 	var plaintext int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash=?`, []byte("headscale-preauth-example-once")).Scan(&plaintext); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash=?`, []byte("headscale-preauth-example-once")).Scan(&plaintext); err != nil {
 		t.Fatal(err)
 	}
 	if plaintext != 0 {
@@ -136,14 +136,14 @@ func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
 func TestMeshConfigRegeneratesForAPendingProxyDevice(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
 	w := b.post("/mesh", url.Values{
 		"display_name": {"alice-iphone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
 	requireStatus(t, w, http.StatusOK)
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestMeshConfigRegeneratesForAPendingProxyDevice(t *testing.T) {
 	if fake.callsOf("preauthkeys.create") != 1 {
 		t.Fatalf("regeneration calls = %v", fake.calls)
 	}
-	keys, err := app.store.ListMeshEnrollmentKeys(devices[0].ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(devices[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,8 +179,8 @@ func TestMeshConfigRegeneratesForAPendingProxyDevice(t *testing.T) {
 
 func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	now := app.Now()
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,8 +202,8 @@ func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 // that purpose is refused by the exporter rather than rendered.
 func TestMeshConfigPurposeReachesTheExporter(t *testing.T) {
 	app, _, _, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
-	device, err := app.store.CreateMeshDevice(meshSpec("nas", mesh.PurposeSubnetRouter, ""), now)
+	now := app.Now()
+	device, err := app.Store.CreateMeshDevice(meshSpec("nas", mesh.PurposeSubnetRouter, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,9 +229,9 @@ func TestMeshConfigPurposeReachesTheExporter(t *testing.T) {
 
 func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, "")
-	now := app.now()
-	subID := meshSubscriberFixture(t, app.store, now)
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subID), now)
+	now := app.Now()
+	subID := meshSubscriberFixture(t, app.Store, now)
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,13 +248,13 @@ func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 
 func TestMeshConfigRefusesInactiveSubscriberBeforeKeys(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
-	subID := meshSubscriberFixture(t, app.store, now)
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subID), now)
+	now := app.Now()
+	subID := meshSubscriberFixture(t, app.Store, now)
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, subID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = app.store.SetSubscriberState(subID, subscription.StatePaused, now); err != nil {
+	if _, err = app.Store.SetSubscriberState(subID, subscription.StatePaused, now); err != nil {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
@@ -270,9 +270,9 @@ func TestMeshConfigRefusesInactiveSubscriberBeforeKeys(t *testing.T) {
 
 func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 	app, _, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
+	now := app.Now()
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, sub.ID), now)
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeProxyMesh, sub.ID), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 	if fake.callsOf("preauthkeys.create") != 1 || fake.callsOf("preauthkeys.expire") != 1 {
 		t.Fatalf("compensation calls = %v", fake.calls)
 	}
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,13 +304,13 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 
 func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	app, b, fake, logs := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	now := app.Now()
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 77, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser, Online: true}}
-	if _, _, err = app.store.IssueMeshEnrollmentKey(device.ID, app.now()); err != nil {
+	if _, _, err = app.Store.IssueMeshEnrollmentKey(device.ID, app.Now()); err != nil {
 		t.Fatalf("fixture key: %v", err)
 	}
 
@@ -320,7 +320,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 		t.Fatalf("unclaimed same-name node was not offered: %.800s", page.Body.String())
 	}
 	// A plain page render must not claim anything.
-	before, err := app.store.GetMeshDevice(device.ID)
+	before, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 
 	w := b.post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"77"}})
 	requireStatus(t, w, http.StatusOK)
-	after, err := app.store.GetMeshDevice(device.ID)
+	after, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	// Claim is the production path that proves registration, so it spends the
 	// device's one-time key in the same transaction: the row is consumed and its
 	// digest is gone, which is what makes the key one-time.
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 		t.Fatalf("claim left the key history %+v, want one consumed key", keys)
 	}
 	var digests int
-	if err = app.store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
+	if err = app.Store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
 		t.Fatal(err)
 	}
 	if digests != 0 {
@@ -372,8 +372,8 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 
 func TestMeshClaimRefusesNodeNameMismatch(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
-	now := app.now()
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	now := app.Now()
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestMeshClaimRefusesNodeNameMismatch(t *testing.T) {
 	if !strings.Contains(w.Body.String(), codeMeshClaimNodeMismatch) {
 		t.Fatalf("mismatch refusal lost its code: %.400s", w.Body.String())
 	}
-	after, err := app.store.GetMeshDevice(device.ID)
+	after, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,16 +21,16 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 	node, _ := createPendingNode(t, app, "edge", "line-fan-01", 8443, 2222)
-	configureLine(t, app.store, node.ID, "line-a", time.Now())
+	configureLine(t, app.Store, node.ID, "line-a", time.Now())
 	// A Line outside the delivery window is never published, so put it inside
 	// the window before the save under test.
-	markLineOnline(t, app.store, node.ID, app.now())
+	markLineOnline(t, app.Store, node.ID, app.Now())
 
 	for _, name := range []string{"alice", "bob"} {
 		w := b.post("/subscribers", url.Values{"display_name": {name}, "line_" + node.ID: {"1"}})
 		require2xx(t, w)
 	}
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 2 {
 		t.Fatalf("subscriber setup: %d subscribers (err %v)", len(subs), err)
 	}
@@ -38,7 +38,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	// second creation is still in flight, and the drain correctly refuses to
 	// enqueue while that is the case, so settle it: the save below has to be
 	// the only publication trigger left.
-	settleTasks(t, app.store, node.ID)
+	settleTasks(t, app.Store, node.ID)
 
 	// The fan-out source is every subscriber that ever held a credential on
 	// the Line, not only the currently selected ones. Both subscribers must be
@@ -58,7 +58,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	// handshake address, a transport field of the compiled candidate; a save
 	// that only renames the label changes no compiled byte and is correctly
 	// withheld by the drain instead.
-	before := subscriberPublicationSnapshot(t, app.store, node.ID)
+	before := subscriberPublicationSnapshot(t, app.Store, node.ID)
 
 	w := b.post("/lines", url.Values{
 		"node_id": {node.ID}, "display_name": {"line-a-renamed"}, "sort_order": {"1"},
@@ -70,7 +70,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 		t.Fatalf("save status %d want 200", got.StatusCode)
 	}
 
-	after := subscriberPublicationSnapshot(t, app.store, node.ID)
+	after := subscriberPublicationSnapshot(t, app.Store, node.ID)
 	if after.latestRevision <= before.latestRevision {
 		t.Fatalf("line latest revision %d -> %d, fan-out published nothing", before.latestRevision, after.latestRevision)
 	}
@@ -79,19 +79,19 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	}
 	// The second revision's chain points at that revision, so the tasks are
 	// publication work and not unrelated bookkeeping.
-	if got := subscriberChainRevision(t, app.store, node.ID); got != after.latestRevision {
+	if got := subscriberChainRevision(t, app.Store, node.ID); got != after.latestRevision {
 		t.Fatalf("latest chain revision %d, latest candidate %d", got, after.latestRevision)
 	}
 	// The republished snapshot carries every subscriber that held a
 	// credential, so the fan-out never drops a user that entered while a
 	// chain was still in flight.
-	latest, err := app.store.LatestCandidate(node.ID)
+	latest, err := app.Store.LatestCandidate(node.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	missing := map[string]bool{}
 	for _, sub := range subs {
-		credentials, cErr := app.store.ListSubscriberCredentials(sub.ID)
+		credentials, cErr := app.Store.ListSubscriberCredentials(sub.ID)
 		if cErr != nil || len(credentials) == 0 {
 			t.Fatalf("credentials of %s: %d (err %v)", sub.ID, len(credentials), cErr)
 		}

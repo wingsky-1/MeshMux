@@ -9,6 +9,7 @@ package handler
 
 import (
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 
@@ -20,14 +21,14 @@ import (
 func (app *Server) renderSubscribers(w http.ResponseWriter, r *http.Request, sess session, disclosure *tokenDisclosure) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	if disclosure != nil {
 		page.Token = disclosure.Token
 		page.TokenOwner = disclosure.Subscriber
 	}
-	app.render(w, r, 200, view.SubscribersPage(view.PageData{Title: "订阅用户", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, page))
+	app.Render(w, r, 200, view.SubscribersPage(view.PageData{Title: "订阅用户", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP}, page))
 }
 
 // subscriberViewModel builds the complete page model from the store.
@@ -40,17 +41,17 @@ func (app *Server) renderSubscribers(w http.ResponseWriter, r *http.Request, ses
 // confirmed subscriber state.
 func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 	page := view.SubscriberPageView{Subscribers: []view.SubscriberView{}, Lines: []view.LineView{}, EdgeNodes: []store.Node{}}
-	now := app.now()
-	nodes, err := app.store.ListNodesAt(now)
+	now := app.Now()
+	nodes, err := app.Store.ListNodesAt(now)
 	if err != nil {
 		return page, err
 	}
 	for _, node := range nodes {
-		if node.Role == nodeRoleEdge {
+		if node.Role == infra.NodeRoleEdge {
 			page.EdgeNodes = append(page.EdgeNodes, node)
 		}
 	}
-	lines, err := app.store.ListLines()
+	lines, err := app.Store.ListLines()
 	if err != nil {
 		return page, err
 	}
@@ -61,7 +62,7 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 			HandshakePort: line.HandshakePort, Local: line.Local,
 		})
 	}
-	subscribers, err := app.store.ListSubscribers()
+	subscribers, err := app.Store.ListSubscribers()
 	if err != nil {
 		return page, err
 	}
@@ -74,11 +75,11 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 		for _, id := range selected {
 			selectedSet[id] = true
 		}
-		credentials, err := app.store.ListSubscriberCredentials(sub.ID)
+		credentials, err := app.Store.ListSubscriberCredentials(sub.ID)
 		if err != nil {
 			return page, err
 		}
-		evidence, err := app.store.SubscriberSyncView(sub.ID, now)
+		evidence, err := app.Store.SubscriberSyncView(sub.ID, now)
 		if err != nil {
 			return page, err
 		}
@@ -134,7 +135,7 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 // authoritative intent; the store owns that read and never treats a historical
 // credential row as "selected".
 func (app *Server) subscriberSelectedLineIDs(subscriberID string) ([]string, error) {
-	return app.store.SubscriberLineIDs(subscriberID)
+	return app.Store.SubscriberLineIDs(subscriberID)
 }
 
 // subscriberLineIntent renders the operator intent for one Line.

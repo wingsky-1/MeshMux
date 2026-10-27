@@ -46,14 +46,14 @@ func decodeHubRestore(t *testing.T, w *httptest.ResponseRecorder, status int) hu
 func plantHubRestoreOperation(t *testing.T, app *Server, state hubupgrade.State) (string, hubupgrade.Op) {
 	t.Helper()
 	operationID := strings.Repeat("a", 32)
-	_, record := hubDatabaseRecord(t, app.store.Dir, operationID, nil)
+	_, record := hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 	op := hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: state, TargetVersion: "1.0.1", FromVersion: "1.0.0",
 		ManifestSHA256: strings.Repeat("b", 64), PackageSHA256: strings.Repeat("c", 64),
 		DBSchema: record.DBSchema, BackupGeneration: 1, UpdatedAt: time.Now().UTC(),
 	}
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
 	return operationID, op
@@ -74,7 +74,7 @@ func TestRestoreReceipt(t *testing.T) {
 		t.Fatalf("queued request: %v", err)
 	}
 	if request.Kind != hubupgrade.KindRestore || request.OperationID != operationID ||
-		request.DataDir != app.store.Dir {
+		request.DataDir != app.Store.Dir {
 		t.Fatalf("request = %+v", request)
 	}
 
@@ -93,7 +93,7 @@ func TestRestoreSecondRequestBusy(t *testing.T) {
 	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StateFailed)
 	if _, err := hubupgrade.WriteRequest(app.hubRequestDir, hubupgrade.Request{
 		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindRestore,
-		OperationID: operationID, DataDir: app.store.Dir,
+		OperationID: operationID, DataDir: app.Store.Dir,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func writeTestRestoredMarker(app *Server, marker hubupgrade.RestoredMarker) erro
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(app.store.Dir, hubupgrade.HubUpgradeDir)
+	dir := filepath.Join(app.Store.Dir, hubupgrade.HubUpgradeDir)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}

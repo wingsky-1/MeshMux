@@ -13,6 +13,7 @@ package handler
 // friends), so the wording has exactly one home.
 
 import (
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
 	"time"
@@ -81,7 +82,7 @@ func (app *Server) policySnapshot(now time.Time) (view.PolicyPageView, policy.Cl
 }
 
 func (app *Server) ActivePolicyIntent(layer store.PolicyLayer) (store.RoutePolicy, store.RoutePolicyPayload, error) {
-	return app.store.ActivePolicyIntent(layer)
+	return app.Store.ActivePolicyIntent(layer)
 }
 
 // policyFallbackView is the draft fallback before any active revision or mesh
@@ -103,7 +104,7 @@ func policyBrokenView(err error) view.PolicyPageView {
 
 // policyMeshModel reuses the read-only mesh preflight; it mints no key.
 func (app *Server) policyMeshModel(now time.Time) (subscription.MeshConfigModel, bool) {
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		return subscription.MeshConfigModel{}, false
 	}
@@ -122,16 +123,16 @@ func (app *Server) policyMeshModel(now time.Time) (subscription.MeshConfigModel,
 // policyOutState aggregates the read-only Out projection over all edge Lines:
 // a configured-but-unavailable Out is degraded and outranks a healthy one.
 func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
-	nodes, err := app.store.ListNodesAt(now)
+	nodes, err := app.Store.ListNodesAt(now)
 	if err != nil {
 		return view.PolicyOutAbsent
 	}
 	state := view.PolicyOutAbsent
 	for _, node := range nodes {
-		if node.Role != nodeRoleEdge {
+		if node.Role != infra.NodeRoleEdge {
 			continue
 		}
-		facts, err := app.store.OutEgressFacts(node.ID, now)
+		facts, err := app.Store.OutEgressFacts(node.ID, now)
 		if err != nil || !facts.Configured {
 			continue
 		}
@@ -145,10 +146,10 @@ func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 
 // policiesPage renders the read-only snapshot.
 func (app *Server) policiesPage(w http.ResponseWriter, r *http.Request, sess session) {
-	page, _, _ := app.policySnapshot(app.now())
+	page, _, _ := app.policySnapshot(app.Now())
 	app.renderPolicies(w, r, sess, page)
 }
 
 func (app *Server) renderPolicies(w http.ResponseWriter, r *http.Request, sess session, model view.PolicyPageView) {
-	app.render(w, r, http.StatusOK, view.PoliciesPage(view.PageData{Title: "路由策略", Path: "/policies", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP, DirectProxy: app.cfg.DirectProxy}, model))
+	app.Render(w, r, http.StatusOK, view.PoliciesPage(view.PageData{Title: "路由策略", Path: "/policies", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP, DirectProxy: app.Cfg.DirectProxy}, model))
 }

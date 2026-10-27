@@ -57,7 +57,7 @@ func TestHTTPProxyCreateThroughNodesPage(t *testing.T) {
 	}
 	for table, want := range map[string]int{"node_pairing": 0, "node_identities": 0, "node_candidates": 0, "agent_tasks": 0} {
 		var count int
-		if err := app.store.DB.QueryRow(`SELECT count(*) FROM `+table+` WHERE node_id=?`, n.ID).Scan(&count); err != nil {
+		if err := app.Store.DB.QueryRow(`SELECT count(*) FROM `+table+` WHERE node_id=?`, n.ID).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count != want {
@@ -82,7 +82,7 @@ func TestHTTPProxyCreateRejectsBadURL(t *testing.T) {
 		t.Fatalf("bad URL refusal = %.300s", w.Body.String())
 	}
 	var nodes int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM nodes`).Scan(&nodes); err != nil || nodes != 0 {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM nodes`).Scan(&nodes); err != nil || nodes != 0 {
 		t.Fatalf("rejected creation wrote %d nodes (err=%v)", nodes, err)
 	}
 }
@@ -90,7 +90,7 @@ func TestHTTPProxyCreateRejectsBadURL(t *testing.T) {
 func TestWizardOffersHTTPProxyAsExternalEgress(t *testing.T) {
 	app, b, _ := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
-	proxy, err := app.store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.now())
+	proxy, err := app.Store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,35 +119,35 @@ func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
 	initialize(t, browserState)
 	loginAs(t, browserState, testPassword)
 
-	lineNode, _, err := app.store.CreateNode("edge", "line", 8443, 2222, app.now())
+	lineNode, _, err := app.Store.CreateNode("edge", "line", 8443, 2222, app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.SetLine(testLine(lineNode.ID, "line"), app.now()); err != nil {
+	if _, err := app.Store.SetLine(testLine(lineNode.ID, "line"), app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	proxy, err := app.store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.now())
+	proxy, err := app.Store.CreateHTTPProxyNode("办公室代理", "http://proxy.example.invalid:8080", app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	enableOutForLine(t, app.store, proxy.ID, lineNode.ID, app.now())
+	enableOutForLine(t, app.Store, proxy.ID, lineNode.ID, app.Now())
 
 	w := browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), "SUBSCRIPTION_OUT_CONFLICT") && !strings.Contains(w.Body.String(), "OUT_REFERENCED_BY_SUBSCRIPTIONS") {
 		t.Fatalf("referenced http proxy delete = %.300s", w.Body.String())
 	}
-	if _, err := app.store.GetNodeAt(proxy.ID, app.now()); err != nil {
+	if _, err := app.Store.GetNodeAt(proxy.ID, app.Now()); err != nil {
 		t.Fatal("refused delete destroyed the proxy")
 	}
 
-	clearOutForLine(t, app.store, lineNode.ID, app.now())
+	clearOutForLine(t, app.Store, lineNode.ID, app.Now())
 	w = browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "HTTP 代理节点已彻底删除") {
 		t.Fatalf("http proxy delete notice = %.300s", w.Body.String())
 	}
-	if _, err := app.store.GetNodeAt(proxy.ID, app.now()); err == nil {
+	if _, err := app.Store.GetNodeAt(proxy.ID, app.Now()); err == nil {
 		t.Fatal("http proxy node survived the delete")
 	}
 }

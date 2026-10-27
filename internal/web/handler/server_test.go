@@ -23,6 +23,10 @@ const testPassword = "test-only-long-password-47!"
 
 var csrfPattern = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
 
+// kdfSlotOf exposes the runtime's password-KDF slot to this package's tests.
+// It is the one seam a test needs from infra's unexported guard state.
+func (s *Server) kdfSlotOf() chan struct{} { return s.Runtime.KDFSlotForTest() }
+
 type browser struct {
 	app    *Server
 	cookie *http.Cookie
@@ -67,10 +71,10 @@ func (b *browser) req(method, path string, form url.Values, headers http.Header)
 	w := httptest.NewRecorder()
 	b.app.Handler().ServeHTTP(w, r)
 	for _, c := range w.Result().Cookies() {
-		if c.Name == b.app.cookieName() {
+		if c.Name == b.app.CookieName() {
 			b.cookie = c
 		}
-		if c.Name == b.app.formCookieName() {
+		if c.Name == b.app.FormCookieName() {
 			if c.MaxAge < 0 {
 				b.form = nil
 			} else {
@@ -99,12 +103,12 @@ func requireStatus(t *testing.T, w *httptest.ResponseRecorder, status int) {
 func initialize(t *testing.T, b *browser) {
 	t.Helper()
 	requireStatus(t, b.req("GET", "/setup", nil, nil), 200)
-	token, err := os.ReadFile(filepath.Join(b.app.store.Dir, "bootstrap.token"))
+	token, err := os.ReadFile(filepath.Join(b.app.Store.Dir, "bootstrap.token"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 303)
-	if _, err = os.Stat(filepath.Join(b.app.store.Dir, "bootstrap.token")); !os.IsNotExist(err) {
+	if _, err = os.Stat(filepath.Join(b.app.Store.Dir, "bootstrap.token")); !os.IsNotExist(err) {
 		t.Fatal("bootstrap secret was not removed")
 	}
 }
@@ -129,14 +133,14 @@ func TestAuthenticationLifecycleAndRestart(t *testing.T) {
 		t.Fatal("insecure cookie attributes")
 	}
 	var saved []byte
-	if err := app.store.DB.QueryRow("SELECT token_hash FROM sessions WHERE authenticated=1").Scan(&saved); err != nil {
+	if err := app.Store.DB.QueryRow("SELECT token_hash FROM sessions WHERE authenticated=1").Scan(&saved); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Equal(saved, []byte(old.Value)) || len(saved) != 32 {
 		t.Fatal("session must be hashed")
 	}
 	// A real close/open performs the migration again and keeps a valid session.
-	c := app.cfg
+	c := app.Cfg
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +212,7 @@ func TestCSRFOriginAndMalformedRequests(t *testing.T) {
 	// Duplicate cookies and invalid random sessions fail closed.
 	dup := http.Header{"Cookie": {b.cookie.String() + "; " + b.cookie.Name + "=forged"}}
 	requireStatus(t, b.req("GET", "/api/status", nil, dup), 401)
-	invalid := &browser{app: app, cookie: &http.Cookie{Name: app.cookieName(), Value: store.RandomToken()}}
+	invalid := &browser{app: app, cookie: &http.Cookie{Name: app.CookieName(), Value: store.RandomToken()}}
 	requireStatus(t, invalid.req("GET", "/api/status", nil, nil), 401)
 	r := httptest.NewRequest("GET", "https://evil.example.invalid/api/status", nil)
 	r.AddCookie(b.cookie)
@@ -237,14 +241,14 @@ func TestSessionRotationExpiryAndNoFixation(t *testing.T) {
 	stale.cookie = &old
 	requireStatus(t, stale.req("GET", "/api/status", nil, nil), 401)
 	now := time.Now()
-	app.now = func() time.Time { return now.Add(31 * time.Minute) }
+	app.Now = func() time.Time { return now.Add(31 * time.Minute) }
 	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
 	// Refreshing seen cannot extend the absolute lifetime.
-	app.now = time.Now
+	app.Now = time.Now
 	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
 	other.cookie = nil
 	loginAs(t, other, testPassword)
-	if _, err := app.store.DB.Exec("UPDATE sessions SET expires=? WHERE authenticated=1", time.Now().Add(-time.Second).Unix()); err != nil {
+	if _, err := app.Store.DB.Exec("UPDATE sessions SET expires=? WHERE authenticated=1", time.Now().Add(-time.Second).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
@@ -255,15 +259,15 @@ func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {
 	b := &browser{app: app}
 	requireStatus(t, b.req("GET", "/setup", nil, nil), 200)
 	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {"wrong"}, "password": {testPassword}}), 401)
-	token, _ := os.ReadFile(filepath.Join(app.store.Dir, "bootstrap.token"))
-	if _, err := app.store.DB.Exec("UPDATE bootstrap SET expires=0"); err != nil {
+	token, _ := os.ReadFile(filepath.Join(app.Store.Dir, "bootstrap.token"))
+	if _, err := app.Store.DB.Exec("UPDATE bootstrap SET expires=0"); err != nil {
 		t.Fatal(err)
 	}
 	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {testPassword}}), 401)
-	if err := app.store.PrepareBootstrap(time.Now()); err != nil {
+	if err := app.Store.PrepareBootstrap(time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	token, _ = os.ReadFile(filepath.Join(app.store.Dir, "bootstrap.token"))
+	token, _ = os.ReadFile(filepath.Join(app.Store.Dir, "bootstrap.token"))
 	requireStatus(t, b.post("/setup", url.Values{"bootstrap": {strings.TrimSpace(string(token))}, "password": {"short"}}), 400)
 	// Simulate a second already-open setup tab; its form token is still valid,
 	// but the initialization entry is closed and the bootstrap secret is gone,
@@ -281,9 +285,9 @@ func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {
 	// session-less request is refused earlier with its own code.
 	anon := &browser{app: app}
 	requireStatus(t, anon.req("GET", "/login", nil, nil), 200)
-	app.kdfSlot <- struct{}{}
+	app.kdfSlotOf() <- struct{}{}
 	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 429)
-	<-app.kdfSlot
+	<-app.kdfSlotOf()
 	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 303)
 }
 
@@ -301,7 +305,7 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	if strings.Contains(logs.String(), `"ban_candidate":true`) || strings.Contains(logs.String(), "192.0.2.") {
 		t.Fatal("untrusted proxy address logged as candidate")
 	}
-	c := app.cfg
+	c := app.Cfg
 	app.Close()
 	again, err := New(c, slog.New(slog.NewJSONHandler(logs, nil)))
 	if err != nil {
@@ -314,8 +318,8 @@ func TestDurableRateLimitAndProxyLog(t *testing.T) {
 	// show that the persisted limit, not the form, is what refuses.
 	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
 	requireStatus(t, b.post("/login", url.Values{"password": {testPassword}}), 429)
-	again.now = func() time.Time { return time.Now().Add(11 * time.Minute) }
-	again.cfg.DirectProxy = true
+	again.Now = func() time.Time { return time.Now().Add(11 * time.Minute) }
+	again.Cfg.DirectProxy = true
 	requireStatus(t, b.req("POST", "/login", url.Values{"csrf": {b.csrf}, "password": {"wrong"}}, http.Header{"X-MeshMux-Client-Ip": {"192.0.2.8"}}), 401)
 	var found bool
 	for line := range strings.SplitSeq(logs.String(), "\n") {
@@ -343,7 +347,7 @@ func TestSuccessfulLoginsResetTheGlobalBudget(t *testing.T) {
 		}
 	}
 	var attempts int
-	if err := app.store.DB.QueryRow("SELECT attempts FROM auth_limit WHERE id=1").Scan(&attempts); err != nil {
+	if err := app.Store.DB.QueryRow("SELECT attempts FROM auth_limit WHERE id=1").Scan(&attempts); err != nil {
 		t.Fatal(err)
 	}
 	if attempts != 0 {
@@ -377,7 +381,7 @@ func TestOnlyAProvenPasswordResetsTheBudget(t *testing.T) {
 func TestRateLimitRefusalStatesWhenToRetry(t *testing.T) {
 	app, _ := testApp(t)
 	base := time.Now()
-	app.now = func() time.Time { return base }
+	app.Now = func() time.Time { return base }
 	initialize(t, &browser{app: app})
 	b := &browser{app: app}
 	requireStatus(t, b.req("GET", "/login", nil, nil), 200)
@@ -399,7 +403,7 @@ func TestRateLimitRefusalStatesWhenToRetry(t *testing.T) {
 			t.Fatalf("refusal page lacks %q", want)
 		}
 	}
-	app.now = func() time.Time { return base.Add(4 * time.Minute) }
+	app.Now = func() time.Time { return base.Add(4 * time.Minute) }
 	w = wrong()
 	requireStatus(t, w, 429)
 	if got := w.Header().Get("Retry-After"); got != "360" {
@@ -409,7 +413,7 @@ func TestRateLimitRefusalStatesWhenToRetry(t *testing.T) {
 		t.Fatal("refusal page does not state the remaining wait")
 	}
 	// The window reopens on its own; a failed attempt does not slide it.
-	app.now = func() time.Time { return base.Add(11 * time.Minute) }
+	app.Now = func() time.Time { return base.Add(11 * time.Minute) }
 	requireStatus(t, wrong(), 401)
 }
 
@@ -426,12 +430,12 @@ func TestDatabaseFailureClosedAndHeaders(t *testing.T) {
 	if w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("cache enabled")
 	}
-	app.store.DB.Close()
+	app.Store.DB.Close()
 	requireStatus(t, b.req("GET", "/healthz", nil, nil), 503)
 	requireStatus(t, b.req("GET", "/login", nil, nil), 503)
 	// Missing/invalid session is unauthorized even when the DB is unavailable;
 	// a syntactically valid session must report DB failure, never authenticate.
-	b.cookie = &http.Cookie{Name: app.cookieName(), Value: store.RandomToken()}
+	b.cookie = &http.Cookie{Name: app.CookieName(), Value: store.RandomToken()}
 	requireStatus(t, b.req("GET", "/api/status", nil, nil), 503)
 }
 

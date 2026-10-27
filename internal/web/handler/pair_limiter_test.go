@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -39,7 +40,7 @@ func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
 	app, _ := testApp(t)
 	_, code := createPendingNode(t, app, "edge", "pair-flood", 8443, 2222)
 	base := time.Now()
-	app.now = func() time.Time { return base }
+	app.Now = func() time.Time { return base }
 	bad := wrongCode(code)
 	// A malformed body never reaches the store, so it is not charged: a real
 	// agent with a broken local config is not locked out by its own retries.
@@ -48,7 +49,7 @@ func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
 			t.Fatalf("malformed body status = %d, want 400", w.Code)
 		}
 	}
-	for i := range pairBudget {
+	for i := range infra.PairBudget {
 		w := pairJSON(t, app, strings.Repeat("a", 32), "edge", bad)
 		if w.Code != 401 {
 			t.Fatalf("attempt %d status = %d, want 401: %.200s", i+1, w.Code, w.Body.String())
@@ -58,16 +59,16 @@ func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
 	// whole remaining window instead of a constant.
 	w := pairJSON(t, app, strings.Repeat("a", 32), "edge", bad)
 	requireStatus(t, w, 429)
-	if got := w.Header().Get("Retry-After"); got != strconv.Itoa(int(pairWindow/time.Second)) {
-		t.Fatalf("Retry-After at the start of the window = %q, want %d", got, int(pairWindow/time.Second))
+	if got := w.Header().Get("Retry-After"); got != strconv.Itoa(int(infra.PairWindow/time.Second)) {
+		t.Fatalf("Retry-After at the start of the window = %q, want %d", got, int(infra.PairWindow/time.Second))
 	}
-	for _, want := range []string{"PAIRING_RATE_LIMITED", "配对预算为 " + strconv.Itoa(pairBudget) + " 次 / 分钟", "已配对身份、心跳与任务不受影响"} {
+	for _, want := range []string{"PAIRING_RATE_LIMITED", "配对预算为 " + strconv.Itoa(infra.PairBudget) + " 次 / 分钟", "已配对身份、心跳与任务不受影响"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("refusal lost %q: %.300s", want, w.Body.String())
 		}
 	}
 	// The window reopens without a sliding extension.
-	app.now = func() time.Time { return base.Add(pairWindow) }
+	app.Now = func() time.Time { return base.Add(infra.PairWindow) }
 	if w := pairJSON(t, app, strings.Repeat("a", 32), "edge", bad); w.Code != 401 {
 		t.Fatalf("attempt after the window status = %d, want 401: %.200s", w.Code, w.Body.String())
 	}
@@ -83,15 +84,15 @@ func TestPairingFloodNeverContendsForTheSingleConnection(t *testing.T) {
 	app, _ := testApp(t)
 	node, code := createPendingNode(t, app, "edge", "pair-hold", 8443, 2222)
 	base := time.Now()
-	app.now = func() time.Time { return base }
+	app.Now = func() time.Time { return base }
 	bad := wrongCode(code)
-	for range pairBudget {
+	for range infra.PairBudget {
 		requireStatus(t, pairJSON(t, app, strings.Repeat("a", 32), "edge", bad), 401)
 	}
 
 	// Hold the only connection for the duration of the burst. A limiter that
 	// touched SQLite would block here forever; a budgeted refusal cannot.
-	tx, err := app.store.DB.Begin()
+	tx, err := app.Store.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +134,7 @@ func TestPairingFloodNeverContendsForTheSingleConnection(t *testing.T) {
 	}
 	rollback()
 	// With the connection free again the budget is the only thing refusing.
-	app.now = func() time.Time { return base.Add(pairWindow) }
+	app.Now = func() time.Time { return base.Add(infra.PairWindow) }
 	requireStatus(t, pairJSON(t, app, node.ID, "edge", code), 200)
 }
 
@@ -143,8 +144,8 @@ func TestPairingFloodNeverContendsForTheSingleConnection(t *testing.T) {
 func TestPairingSuccessClearsTheBudget(t *testing.T) {
 	app, _ := testApp(t)
 	base := time.Now()
-	app.now = func() time.Time { return base }
-	for i := range 2 * pairBudget {
+	app.Now = func() time.Time { return base }
+	for i := range 2 * infra.PairBudget {
 		node, code := createPendingNode(t, app, "edge", "fleet-"+strconv.Itoa(i), 8443, 2222)
 		w := pairJSON(t, app, node.ID, "edge", code)
 		if w.Code != 200 {
@@ -165,7 +166,7 @@ func TestPairingRefusalIsNotACodeOracle(t *testing.T) {
 	requireStatus(t, pairJSON(t, app, consumedNode.ID, "edge", consumedCode), 200)
 	clearNodeTasks(t, app, consumedNode.ID)
 	expiredNode, expiredCode := createPendingNode(t, app, "edge", "oracle-expired", 8444, 2224)
-	if _, err := app.store.DB.Exec(`UPDATE node_pairing SET expires=0 WHERE node_id=?`, expiredNode.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE node_pairing SET expires=0 WHERE node_id=?`, expiredNode.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,55 +209,12 @@ func TestPairingRefusalIsNotACodeOracle(t *testing.T) {
 func TestPairingRefusesAnUnavailableDatabaseAsItself(t *testing.T) {
 	app, _ := testApp(t)
 	node, code := createPendingNode(t, app, "edge", "pair-db", 8443, 2222)
-	if err := app.store.DB.Close(); err != nil {
+	if err := app.Store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
 	w := pairJSON(t, app, node.ID, "edge", code)
 	requireStatus(t, w, 503)
 	if !strings.Contains(w.Body.String(), "DATABASE_UNAVAILABLE") {
 		t.Fatalf("outage was reported as a code rejection: %.200s", w.Body.String())
-	}
-}
-
-// TestPairingLimiterWindowIsAnchoredAndNeverSlides pins the arithmetic the
-// handler relies on, without an HTTP round trip: the window opens at its first
-// attempt, refused attempts do not extend it, a success clears it, and a clock
-// that moved backwards opens a new window instead of blocking for the skew.
-func TestPairingLimiterWindowIsAnchoredAndNeverSlides(t *testing.T) {
-	var limiter pairLimiter
-	base := time.Now()
-	for i := range pairBudget {
-		if ok, _ := limiter.spend(base.Add(time.Duration(i) * time.Second)); !ok {
-			t.Fatalf("attempt %d refused inside the budget", i+1)
-		}
-	}
-	// A refused attempt reports the remainder of the window that already
-	// started, not a fresh minute.
-	ok, retry := limiter.spend(base.Add(50 * time.Second))
-	if ok {
-		t.Fatal("attempt beyond the budget was admitted")
-	}
-	if want := 10 * time.Second; retry != want {
-		t.Fatalf("retry = %v, want %v", retry, want)
-	}
-	// Still refused near the end of the window: a refusal never slid it.
-	if ok, _ := limiter.spend(base.Add(59 * time.Second)); ok {
-		t.Fatal("a refusal extended the window")
-	}
-	// The window reopens exactly at its end.
-	if ok, _ := limiter.spend(base.Add(pairWindow)); !ok {
-		t.Fatal("the window did not reopen at its end")
-	}
-	// A successful pairing clears it, so a fleet install is not throttled.
-	limiter.clear()
-	for i := range pairBudget {
-		if ok, _ := limiter.spend(base.Add(pairWindow + time.Duration(i)*time.Second)); !ok {
-			t.Fatalf("attempt %d after a successful pairing was refused", i+1)
-		}
-	}
-	// A clock that moved backwards opens a new window rather than holding the
-	// caller for the skew.
-	if ok, _ := limiter.spend(base.Add(-time.Hour)); !ok {
-		t.Fatal("a backwards clock kept the old window")
 	}
 }

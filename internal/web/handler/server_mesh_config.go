@@ -84,11 +84,11 @@ func (app *Server) meshConfigPreflight(record store.MeshDeviceRecord, now time.T
 		return meshConfigPlan{}, store.MeshError(codeMeshEndpointPurposeUnsupported,
 			"only proxy_mesh devices combine a proxy subscription with a mesh endpoint")
 	}
-	if app.cfg.HeadscaleOrigin == "" {
+	if app.Cfg.HeadscaleOrigin == "" {
 		return meshConfigPlan{}, store.MeshError(codeMeshEndpointControlURLUnavailable,
 			"configure --headscale-origin before generating a mesh client config")
 	}
-	lines, credentials, err := app.store.SubscriptionForSubscriber(record.SubscriberID, now)
+	lines, credentials, err := app.Store.SubscriptionForSubscriber(record.SubscriberID, now)
 	if err != nil {
 		if errors.Is(err, store.ErrSubscriptionStoreUnavailable) {
 			return meshConfigPlan{}, errors.New(store.CodeDatabaseUnavailable)
@@ -101,7 +101,7 @@ func (app *Server) meshConfigPreflight(record store.MeshDeviceRecord, now time.T
 		DisplayName: record.DisplayName,
 		Hostname:    record.NodeName,
 		Purpose:     subscription.MeshPurpose(record.Purpose),
-		ControlURL:  app.cfg.HeadscaleOrigin,
+		ControlURL:  app.Cfg.HeadscaleOrigin,
 		Lines:       lines,
 		Credentials: credentials,
 	}
@@ -123,7 +123,7 @@ func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user mes
 	if err != nil {
 		return nil, err
 	}
-	hubKey, hubSecret, err := app.store.IssueMeshEnrollmentKey(plan.Record.ID, now)
+	hubKey, hubSecret, err := app.Store.IssueMeshEnrollmentKey(plan.Record.ID, now)
 	if err != nil {
 		app.compensateMeshConfig(ctx, key, "")
 		return nil, fmt.Errorf("%s: %w", codeMeshEndpointKeyIssueFailed, err)
@@ -156,7 +156,7 @@ func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user mes
 // caller can show it next to the still-valid Hub key instead of hiding the
 // created device.
 func (app *Server) meshCreateDisclosure(ctx context.Context, record store.MeshDeviceRecord, user meshnet.User, now time.Time) (*view.MeshKeyDisclosure, string, error) {
-	if record.Purpose == mesh.PurposeProxyMesh && app.cfg.HeadscaleOrigin != "" {
+	if record.Purpose == mesh.PurposeProxyMesh && app.Cfg.HeadscaleOrigin != "" {
 		plan, preflightErr := app.meshConfigPreflight(record, now)
 		if preflightErr == nil {
 			disclosure, configErr := app.meshConfig(ctx, plan, user, now)
@@ -191,7 +191,7 @@ type meshRekeyStage struct {
 // with the refusal code as ConfigNotice, because losing the ability to enroll is
 // worse than losing the combined document.
 func (app *Server) stageMeshRekey(ctx context.Context, record store.MeshDeviceRecord, user meshnet.User, now time.Time) (meshRekeyStage, error) {
-	if record.Purpose == mesh.PurposeProxyMesh && app.cfg.HeadscaleOrigin != "" {
+	if record.Purpose == mesh.PurposeProxyMesh && app.Cfg.HeadscaleOrigin != "" {
 		plan, preflightErr := app.meshConfigPreflight(record, now)
 		if preflightErr == nil {
 			stage, configErr := app.stageMeshConfig(ctx, plan, user, now)
@@ -268,11 +268,11 @@ func (app *Server) discardMeshRekeyStage(ctx context.Context, stage meshRekeySta
 
 // issueMeshKeyDisclosure mints only the Hub-side one-time key.
 func (app *Server) issueMeshKeyDisclosure(deviceID string, now time.Time, noticeCode string) (*view.MeshKeyDisclosure, string, error) {
-	key, secret, err := app.store.IssueMeshEnrollmentKey(deviceID, now)
+	key, secret, err := app.Store.IssueMeshEnrollmentKey(deviceID, now)
 	if err != nil {
 		return nil, noticeCode, err
 	}
-	record, err := app.store.GetMeshDevice(deviceID)
+	record, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {
 		return nil, noticeCode, err
 	}
@@ -286,7 +286,7 @@ func (app *Server) issueMeshKeyDisclosure(deviceID string, now time.Time, notice
 func (app *Server) compensateMeshConfig(ctx context.Context, key meshnet.PreAuthKey, hubKeyID string) {
 	_ = app.mesh.ExpirePreAuthKey(ctx, key.ID)
 	if hubKeyID != "" {
-		_, _ = app.store.RevokeMeshEnrollmentKey(hubKeyID)
+		_, _ = app.Store.RevokeMeshEnrollmentKey(hubKeyID)
 	}
 }
 
@@ -296,17 +296,17 @@ func (app *Server) compensateMeshConfig(ctx context.Context, key meshnet.PreAuth
 // link or cache.
 func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
-	record, err := app.store.GetMeshDevice(deviceID)
+	record, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshEndpointRenderFailed, "无法读取 Mesh 设备。", "请刷新页面后重试。")
 		return
 	}
 	if record.Status != mesh.StatusPending {
-		app.fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable,
+		app.Fail(w, r, http.StatusConflict, codeMeshDeviceNotReenrollable,
 			"只有待注册设备可以签发设备配置。", "请刷新页面确认状态；已过期设备需先重新签发一次性 Key。")
 		return
 	}
-	now := app.now()
+	now := app.Now()
 	plan, err := app.meshConfigPreflight(record, now)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshEndpointRenderFailed, "无法生成设备配置。", "请检查用途、订阅用户与 Line 状态后重试。")
@@ -322,7 +322,7 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 	// The device normally already holds the Hub key issued at creation. A
 	// re-generation must not leave two live keys: withdraw the current one
 	// before the chain mints the replacement.
-	keys, err := app.store.ListMeshEnrollmentKeys(deviceID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(deviceID)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshEndpointRenderFailed, "无法读取 Key 记录。", "请检查数据库后重试。")
 		return
@@ -331,19 +331,19 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 		if key.State != mesh.KeyIssued || !now.Before(time.Unix(key.ExpiresAt, 0)) {
 			continue
 		}
-		if _, err = app.store.RevokeMeshEnrollmentKey(key.ID); err != nil {
+		if _, err = app.Store.RevokeMeshEnrollmentKey(key.ID); err != nil {
 			app.meshFail(w, r, err, codeMeshEndpointRenderFailed, "无法作废旧的一次性 Key。", "请刷新页面后重试。")
 			return
 		}
-		app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
+		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
 	}
 	disclosure, err := app.meshConfig(ctx, plan, user, now)
 	if err != nil {
 		app.meshControlPlaneFail(w, r, err, codeMeshEndpointRenderFailed, "设备配置未生成。", "请检查 Headscale 服务、订阅用户与 Line 状态后重试。")
 		return
 	}
-	app.event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
-	app.event(r, "MESH_DEVICE_CONFIG_ISSUED")
+	app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_ISSUED")
+	app.Event(r, "MESH_DEVICE_CONFIG_ISSUED")
 	app.renderMesh(w, r, sess, disclosure,
 		"设备配置已生成。配置中的 Headscale 入网 Key 与 Hub 一次性 Key 都只在本响应中显示一次。", "notice")
 }
@@ -354,14 +354,14 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 // registration needs an observed Headscale node id, never a hostname guess.
 func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
-	record, err := app.store.GetMeshDevice(deviceID)
+	record, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshClaimFailed, "无法读取 Mesh 设备。", "请刷新页面后重试。")
 		return
 	}
 	nodeID, parseErr := strconv.ParseUint(strings.TrimSpace(r.PostForm.Get("node_id")), 10, 64)
 	if parseErr != nil || nodeID == 0 {
-		app.fail(w, r, http.StatusBadRequest, codeMeshClaimNodeNotFound,
+		app.Fail(w, r, http.StatusBadRequest, codeMeshClaimNodeNotFound,
 			"待认领的 Headscale Node ID 不正确。", "请从设备卡中的待认领列表重新选择。")
 		return
 	}
@@ -370,7 +370,7 @@ func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	if record.Status != mesh.StatusPending {
-		app.fail(w, r, http.StatusConflict, mesh.CodeStatusTransitionInvalid,
+		app.Fail(w, r, http.StatusConflict, mesh.CodeStatusTransitionInvalid,
 			"只有待注册设备可以认领 Headscale 节点。", "请刷新页面确认设备状态；已过期设备需先重新签发。")
 		return
 	}
@@ -382,16 +382,16 @@ func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	if !found {
-		app.fail(w, r, http.StatusConflict, codeMeshClaimNodeNotFound,
+		app.Fail(w, r, http.StatusConflict, codeMeshClaimNodeNotFound,
 			"Headscale 当前未报告该节点。", "请重新核对后再认领；节点可能已离线、过期或被删除。")
 		return
 	}
 	if !meshNodeMatchesName(node, record.NodeName) || (node.UserName != "" && node.UserName != record.HeadscaleUser) {
-		app.fail(w, r, http.StatusConflict, codeMeshClaimNodeMismatch,
+		app.Fail(w, r, http.StatusConflict, codeMeshClaimNodeMismatch,
 			"该节点的名称或 Headscale 用户与设备记录不一致。", "请使用设备卡中列出的同名待认领节点。")
 		return
 	}
-	records, err := app.store.ListMeshDevices()
+	records, err := app.Store.ListMeshDevices()
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshClaimFailed, "无法读取 Mesh 设备列表。", "请检查数据库后重试。")
 		return
@@ -401,22 +401,22 @@ func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess sessio
 			continue
 		}
 		if other.HeadscaleNodeID == node.ID {
-			app.fail(w, r, http.StatusConflict, codeMeshClaimNodeOccupied,
+			app.Fail(w, r, http.StatusConflict, codeMeshClaimNodeOccupied,
 				"该 Headscale 节点已绑定到另一台 Mesh 设备。", "一个 Headscale 节点只能属于一台设备；请刷新页面确认。")
 			return
 		}
 		if other.HeadscaleUser == record.HeadscaleUser && other.NodeName == record.NodeName && other.Status.OccupiesNodeName() {
-			app.fail(w, r, http.StatusConflict, codeMeshClaimNodeOccupied,
+			app.Fail(w, r, http.StatusConflict, codeMeshClaimNodeOccupied,
 				"该节点名称已被另一台 Mesh 设备占用。", "请先处理占用同名节点的设备，再认领。")
 			return
 		}
 	}
-	claimed, err := app.store.RecordMeshObservation(record.ID, node.ID, app.now())
+	claimed, err := app.Store.RecordMeshObservation(record.ID, node.ID, app.Now())
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshClaimFailed, "无法记录认领结果。", "请检查数据库后重试。")
 		return
 	}
-	app.event(r, "MESH_DEVICE_CLAIMED")
+	app.Event(r, "MESH_DEVICE_CLAIMED")
 	app.renderMesh(w, r, sess, nil,
 		"已认领 Headscale 节点 "+strconv.FormatUint(claimed.HeadscaleNodeID, 10)+"；注册证据来自本次显式确认的观测。", "notice")
 }

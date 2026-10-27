@@ -116,13 +116,13 @@ func TestMeshControlPlaneFailRefusesForeignCodes(t *testing.T) {
 // stay out of the page, and the log carries the code rather than the message.
 func TestMeshPageNoticeNeverRendersFreeFormText(t *testing.T) {
 	app, b, _, logs := meshTestApp(t)
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.now())
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A hand-edited node name that no longer satisfies the domain rules is a
 	// corrupt row: the store reports MESH_DEVICE_CORRUPT without quoting it.
-	if _, err = app.store.DB.Exec(`UPDATE mesh_devices SET node_name='Not A Name' WHERE id=?`, device.ID); err != nil {
+	if _, err = app.Store.DB.Exec(`UPDATE mesh_devices SET node_name='Not A Name' WHERE id=?`, device.ID); err != nil {
 		t.Fatal(err)
 	}
 	logs.Reset()
