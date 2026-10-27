@@ -33,19 +33,19 @@ import (
 )
 
 const (
-	// CodeSchemaReadbackFailed is the management event for a database whose
+	// codeSchemaReadbackFailed is the management event for a database whose
 	// user_version is not the schema this binary owns, or one whose identity
 	// could not be read. /healthz still answers 200 while SQLite answers
 	// SELECT 1: the storage is readable, the identity is not confirmed.
-	CodeSchemaReadbackFailed = "SCHEMA_READBACK_FAILED"
-	// CodeDatabaseUnconfirmed means the schema matches and no started binary
+	codeSchemaReadbackFailed = "SCHEMA_READBACK_FAILED"
+	// codeDatabaseUnconfirmed means the schema matches and no started binary
 	// has confirmed this database. It is a management event, never a startup
 	// refusal.
-	CodeDatabaseUnconfirmed = "DATABASE_UNCONFIRMED"
-	// CodeDatabaseVersionMismatch means the row exists but names another
+	codeDatabaseUnconfirmed = "DATABASE_UNCONFIRMED"
+	// codeDatabaseVersionMismatch means the row exists but names another
 	// version or schema, or names a different target than a verifying upgrade
 	// operation. Reported, never rewritten.
-	CodeDatabaseVersionMismatch = "DATABASE_VERSION_MISMATCH"
+	codeDatabaseVersionMismatch = "DATABASE_VERSION_MISMATCH"
 )
 
 // hubIdentityRefreshInterval is the bounded refresh period. A test may shorten
@@ -121,7 +121,7 @@ func (app *Server) readDatabaseIdentity() (DatabaseIdentity, error) {
 // errIdentityRead marks an identity read that failed. The caller reports
 // SCHEMA_READBACK_FAILED and never the SQL text, so a path or statement cannot
 // reach a page or a log line.
-var errIdentityRead = errors.New(CodeSchemaReadbackFailed)
+var errIdentityRead = errors.New(codeSchemaReadbackFailed)
 
 // hubOpTarget is one resolved upgrade target: the release the journal says is
 // being verified. Both halves are compared, because a release is proved by the
@@ -139,10 +139,10 @@ type hubOpTarget struct {
 // is proved by version and digest together, never by either alone.
 func judgeHubIdentity(ident DatabaseIdentity, target *hubOpTarget, runningDigest string) string {
 	if ident.UserVersion != store.DatabaseSchemaVersion {
-		return CodeSchemaReadbackFailed
+		return codeSchemaReadbackFailed
 	}
 	if !ident.HasRow {
-		return CodeDatabaseUnconfirmed
+		return codeDatabaseUnconfirmed
 	}
 	if target != nil {
 		// A verifying operation that cannot name its target cannot confirm
@@ -150,14 +150,14 @@ func judgeHubIdentity(ident DatabaseIdentity, target *hubOpTarget, runningDigest
 		// record of. A nil target means no verifying operation exists, so there
 		// is nothing to compare against and the build's own identity stands.
 		if target.Version == "" || target.Digest == "" {
-			return CodeDatabaseVersionMismatch
+			return codeDatabaseVersionMismatch
 		}
 		if ident.Row.Version != target.Version || runningDigest == "" || runningDigest != target.Digest {
-			return CodeDatabaseVersionMismatch
+			return codeDatabaseVersionMismatch
 		}
 	}
 	if ident.Row.Version != buildinfo.Version || ident.Row.Schema != store.DatabaseSchemaVersion {
-		return CodeDatabaseVersionMismatch
+		return codeDatabaseVersionMismatch
 	}
 	return ""
 }
@@ -176,7 +176,7 @@ func (app *Server) hubIdentityAt(now time.Time, opTarget opTargetFunc) view.HubI
 	snapshot := view.HubIdentity{Version: buildinfo.Version, Schema: store.DatabaseSchemaVersion, CheckedAt: now.UTC()}
 	ident, err := app.readDatabaseIdentity()
 	if err != nil {
-		snapshot.Code = CodeSchemaReadbackFailed
+		snapshot.Code = codeSchemaReadbackFailed
 		return snapshot
 	}
 	snapshot.UserVersion = ident.UserVersion

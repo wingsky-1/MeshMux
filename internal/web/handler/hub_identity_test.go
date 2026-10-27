@@ -90,17 +90,17 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 	if _, err := app.Store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	check(t, handlerupgrade.CodeDatabaseVersionMismatch, 200)
+	check(t, "DATABASE_VERSION_MISMATCH", 200)
 
 	if _, err := app.Store.DB.Exec(`DELETE FROM database_versions`); err != nil {
 		t.Fatal(err)
 	}
-	check(t, handlerupgrade.CodeDatabaseUnconfirmed, 200)
+	check(t, "DATABASE_UNCONFIRMED", 200)
 
 	if _, err := app.Store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
-	check(t, handlerupgrade.CodeSchemaReadbackFailed, 200)
+	check(t, "SCHEMA_READBACK_FAILED", 200)
 
 	// Only a database that cannot answer SELECT 1 is a health failure.
 	if err := app.Store.DB.Close(); err != nil {
@@ -199,17 +199,17 @@ func TestReadbackMatrix(t *testing.T) {
 			if _, err := app.Store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
 				t.Fatal(err)
 			}
-		}, handlerupgrade.CodeSchemaReadbackFailed},
+		}, "SCHEMA_READBACK_FAILED"},
 		{"database unconfirmed", func(t *testing.T, app *Server) {
 			if _, err := app.Store.DB.Exec(`DELETE FROM database_versions`); err != nil {
 				t.Fatal(err)
 			}
-		}, handlerupgrade.CodeDatabaseUnconfirmed},
+		}, "DATABASE_UNCONFIRMED"},
 		{"database version mismatch", func(t *testing.T, app *Server) {
 			if _, err := app.Store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
 				t.Fatal(err)
 			}
-		}, handlerupgrade.CodeDatabaseVersionMismatch},
+		}, "DATABASE_VERSION_MISMATCH"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -257,8 +257,8 @@ func TestOpTargetSeamLeavesReadbackReadOnly(t *testing.T) {
 		ok                    bool
 		want                  string
 	}{
-		{"another version", "9.9.9", digest, true, handlerupgrade.CodeDatabaseVersionMismatch},
-		{"another package digest", buildinfo.Version, strings.Repeat("0", 64), true, handlerupgrade.CodeDatabaseVersionMismatch},
+		{"another version", "9.9.9", digest, true, "DATABASE_VERSION_MISMATCH"},
+		{"another package digest", buildinfo.Version, strings.Repeat("0", 64), true, "DATABASE_VERSION_MISMATCH"},
 		{"no verifying operation", "", "", false, ""},
 		{"matching version and digest", buildinfo.Version, digest, true, ""},
 	} {
@@ -365,8 +365,8 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := app.upgradeServer.HubIdentity(now); snapshot.Code != handlerupgrade.CodeDatabaseVersionMismatch {
-		t.Fatalf("another target: code = %q, want %q", snapshot.Code, handlerupgrade.CodeDatabaseVersionMismatch)
+	if snapshot := app.upgradeServer.HubIdentity(now); snapshot.Code != "DATABASE_VERSION_MISMATCH" {
+		t.Fatalf("another target: code = %q, want %q", snapshot.Code, "DATABASE_VERSION_MISMATCH")
 	}
 	requireIdentityUntouched(t, app, before, "a mismatching verifying target")
 

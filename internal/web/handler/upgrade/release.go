@@ -44,15 +44,12 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
-// Stable approval refusals of this task. The literals live in codes.go so a
-// second handler never re-spells them.
+// Stable approval refusals of this task. The literal of a refusal another
+// domain also emits stays in infra (CodeManifestUnavailable), so it is spelled
+// exactly once; the golden test requires every constant here to be a literal.
 const (
-	// CodeUpgradeManifestUnavailable: no pinned manifest describes the
-	// requested release, so the operator's tag is still only a suggestion. The
-	// Hub never falls back to a cached or newer release.
-	CodeUpgradeManifestUnavailable = infra.CodeManifestUnavailable
-	// CodeUpgradeTargetInvalid: the requested version is not a SemVer release.
-	CodeUpgradeTargetInvalid = "UPGRADE_TARGET_INVALID"
+	// codeUpgradeTargetInvalid: the requested version is not a SemVer release.
+	codeUpgradeTargetInvalid = "UPGRADE_TARGET_INVALID"
 	// codeUpgradeSchemaIncompatible: the target names another stored policy
 	// schema, so it cannot be adopted by this Hub.
 	codeUpgradeSchemaIncompatible = "UPGRADE_SCHEMA_INCOMPATIBLE"
@@ -155,12 +152,12 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ infra.
 	nodeID := strings.TrimSpace(r.PostForm.Get("node_id"))
 	version := strings.TrimPrefix(strings.TrimSpace(r.PostForm.Get("version")), "v")
 	if !infra.IsValidNodeID(nodeID) {
-		app.writeUpgradeFailure(w, r, http.StatusBadRequest, CodeUpgradeTargetInvalid,
+		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
 			"节点标识不正确。", "请从任务页面的节点行重新提交批准。")
 		return
 	}
 	if !infra.IsValidReleaseVersion(version) {
-		app.writeUpgradeFailure(w, r, http.StatusBadRequest, CodeUpgradeTargetInvalid,
+		app.writeUpgradeFailure(w, r, http.StatusBadRequest, codeUpgradeTargetInvalid,
 			"目标版本不是 SemVer 发行版。", "请重新检查新版本后再批准。")
 		return
 	}
@@ -178,7 +175,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ infra.
 	}
 	manifest, manifestSHA, err := pinnedManifest(architecture)
 	if err != nil {
-		app.writeUpgradeFailure(w, r, http.StatusConflict, CodeUpgradeManifestUnavailable,
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeManifestUnavailable,
 			"该节点架构没有可验证的发行 manifest。", "请确认节点架构受支持（amd64/arm64）后重试；未写入任何升级记录。")
 		return
 	}
@@ -192,7 +189,7 @@ func (app *Server) tasksApprove(w http.ResponseWriter, r *http.Request, _ infra.
 	// node's read-back differs, so it passes through to the gates below, which
 	// decide whether the chain may queue.
 	if manifest.Version != version {
-		app.writeUpgradeFailure(w, r, http.StatusConflict, CodeUpgradeManifestUnavailable,
+		app.writeUpgradeFailure(w, r, http.StatusConflict, infra.CodeManifestUnavailable,
 			"该版本尚未有可验证的 manifest pin。", "latest 只是建议；请等待该发行提供 manifest 后再批准。")
 		return
 	}

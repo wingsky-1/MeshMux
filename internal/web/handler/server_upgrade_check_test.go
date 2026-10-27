@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
@@ -151,7 +152,7 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 
 	// Approving the unverified tag is refused and stores nothing.
 	receipt := decodeApprove(t, approveUpgrade(t, b, nodeID, "1.0.1"), http.StatusConflict)
-	if receipt.OK || receipt.ErrorCode != handlerupgrade.CodeUpgradeManifestUnavailable {
+	if receipt.OK || receipt.ErrorCode != infra.CodeManifestUnavailable {
 		t.Fatalf("unverified approval = %+v, want MANIFEST_UNAVAILABLE", receipt)
 	}
 	if got := countStamped(t, app, nodeID); got != 0 {
@@ -435,10 +436,10 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 	if got := decodeApprove(t, approveUpgrade(t, b, strings.Repeat("f", 32), manifest.Version), http.StatusNotFound); got.ErrorCode != "NODE_NOT_FOUND" {
 		t.Fatalf("unknown node = %+v", got)
 	}
-	if got := decodeApprove(t, approveUpgrade(t, b, "not-a-node", manifest.Version), http.StatusBadRequest); got.ErrorCode != handlerupgrade.CodeUpgradeTargetInvalid {
+	if got := decodeApprove(t, approveUpgrade(t, b, "not-a-node", manifest.Version), http.StatusBadRequest); got.ErrorCode != "UPGRADE_TARGET_INVALID" {
 		t.Fatalf("malformed node = %+v", got)
 	}
-	if got := decodeApprove(t, approveUpgrade(t, b, nodeID, "latest"), http.StatusBadRequest); got.ErrorCode != handlerupgrade.CodeUpgradeTargetInvalid {
+	if got := decodeApprove(t, approveUpgrade(t, b, nodeID, "latest"), http.StatusBadRequest); got.ErrorCode != "UPGRADE_TARGET_INVALID" {
 		t.Fatalf("floating version = %+v", got)
 	}
 	// The approval is a CSRF-protected management POST.
