@@ -12,6 +12,7 @@ package handler
 import (
 	"fmt"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 	"net/url"
 	"reflect"
 	"strings"
@@ -194,12 +195,12 @@ func TestLkgRepublishRefusals(t *testing.T) {
 // failure after the chain was committed never says "not published", while
 // every pre-commit refusal does.
 func TestLkgRollbackFailureMessages(t *testing.T) {
-	committed := lkgRollbackFailure(fmt.Errorf("LKG_ROLLBACK_READBACK_FAILED: DATABASE_UNAVAILABLE"))
-	if committed.code != "LKG_ROLLBACK_READBACK_FAILED" || committed.status != 503 {
+	committed := node.LKGRollbackFailure(fmt.Errorf("LKG_ROLLBACK_READBACK_FAILED: DATABASE_UNAVAILABLE"))
+	if committed.Code != "LKG_ROLLBACK_READBACK_FAILED" || committed.Status != 503 {
 		t.Fatalf("committed failure = %+v", committed)
 	}
-	if !strings.Contains(committed.message, "已发布") || strings.Contains(committed.message, "未发布") {
-		t.Fatalf("committed message = %q, want a published-but-unreadable message", committed.message)
+	if !strings.Contains(committed.Message, "已发布") || strings.Contains(committed.Message, "未发布") {
+		t.Fatalf("committed message = %q, want a published-but-unreadable message", committed.Message)
 	}
 	for _, tc := range []struct{ err, code string }{
 		{"TASKS_IN_PROGRESS: busy", "TASKS_IN_PROGRESS"},
@@ -207,12 +208,12 @@ func TestLkgRollbackFailureMessages(t *testing.T) {
 		{"NODE_NOT_FOUND: gone", "NODE_NOT_FOUND"},
 		{"DATABASE_UNAVAILABLE", "LKG_ROLLBACK_FAILED"},
 	} {
-		failure := lkgRollbackFailure(fmt.Errorf("%s", tc.err))
-		if failure.code != tc.code || !strings.Contains(failure.message, "未发布") {
+		failure := node.LKGRollbackFailure(fmt.Errorf("%s", tc.err))
+		if failure.Code != tc.code || !strings.Contains(failure.Message, "未发布") {
 			t.Fatalf("%q => %+v, want %s / not-published", tc.err, failure, tc.code)
 		}
 	}
-	if failure := lkgRollbackFailure(nil); failure.code != "LKG_ROLLBACK_FAILED" {
+	if failure := node.LKGRollbackFailure(nil); failure.Code != "LKG_ROLLBACK_FAILED" {
 		t.Fatalf("nil error = %+v", failure)
 	}
 }

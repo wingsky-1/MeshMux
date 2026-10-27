@@ -7,8 +7,9 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
-	"github.com/wingsky-1/MeshMux/internal/core/node"
+	corenode "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io/fs"
@@ -26,6 +27,8 @@ type Server struct {
 	// subscriptionServer is the public download boundary. It runs before the
 	// management boundary, so a bearer download never carries a session.
 	subscriptionServer *subscription.Server
+	// nodeServer is the node lifecycle and Agent channel.
+	nodeServer *node.Server
 	// mesh is the narrow Headscale control-plane adapter behind the mesh
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.
@@ -33,7 +36,7 @@ type Server struct {
 	// publishRunner is the fixed process boundary of the publish gate. It is
 	// nil in production (node.ExecRunner) and replaced by a fixture runner in
 	// tests so no kernel binary is required to exercise the gate.
-	publishRunner node.CommandRunner
+	publishRunner corenode.CommandRunner
 	// publishGate replaces the whole gate in tests. Production leaves it nil
 	// so the real kernel verifier is always built from the deployment
 	// configuration; it exists so a unit test never needs a kernel install.
@@ -138,7 +141,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &Server{Runtime: rt, mesh: meshnet.NewCLIRunner(), subscriptionServer: subscription.New(rt)}
+	app := &Server{Runtime: rt, mesh: meshnet.NewCLIRunner(), subscriptionServer: subscription.New(rt), nodeServer: node.New(rt)}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -156,58 +159,11 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Post("/password", app.Mutation(app.KDFGuard(app.Password), true))
 	r.Get("/api/status", infra.JSONAPI(app.Authenticated(app.Status)))
 	r.Get("/status", app.Authenticated(app.StatusFragment))
-	r.Get("/nodes", app.Authenticated(func(w http.ResponseWriter, r *http.Request, sess session) {
-		app.nodesPage(w, r, sess, nil, "")
-	}))
-	r.Post("/nodes", app.Mutation(app.nodesCreate, true))
-	r.Post("/nodes/reconcile", app.Mutation(app.nodesReconcile, true))
-	r.Post("/nodes/reissue", app.Mutation(app.nodesReissue, true))
-	r.Post("/nodes/revoke", app.Mutation(app.nodesRevoke, true))
-	r.Post("/nodes/{nodeID}/reconcile", app.Mutation(app.nodesReconcile, true))
-	r.Post("/nodes/{nodeID}/recheck", app.Mutation(app.nodesReconcile, true))
-	r.Post("/nodes/{nodeID}/retry", app.Mutation(app.nodesReconcile, true))
-	r.Post("/nodes/{nodeID}/rollback-lkg", app.Mutation(app.nodesRollbackLKG, true))
-	r.Post("/nodes/{nodeID}/reissue", app.Mutation(app.nodesReissue, true))
-	r.Post("/nodes/{nodeID}/reissue-pairing", app.Mutation(app.nodesReissue, true))
-	r.Post("/nodes/{nodeID}/revoke", app.Mutation(app.nodesRevoke, true))
-	r.Post("/nodes/{nodeID}/revoke-identity", app.Mutation(app.nodesRevoke, true))
-	// Out management. The binding endpoints are gone with the binding table
-	// (Task 5): selecting an Out is a subscription edit. Their paths stay
-	// registered and answer one stable "retired" code, so an old client learns
-	// where the action moved instead of reading a bare 404 as a typo.
-	// Delete is still an Out lifecycle action, not a subscription choice.
-	// These are a JSON management API whose paths live under /nodes; they are
-	// marked as JSON here, at registration, so the error writer never has to
-	// recognise their path.
-	r.Post("/nodes/out/bind", infra.JSONAPI(app.Mutation(app.outBindingAPIRetired, true)))
-	r.Post("/nodes/out/unbind", infra.JSONAPI(app.Mutation(app.outBindingAPIRetired, true)))
-	r.Post("/nodes/out/delete", infra.JSONAPI(app.Mutation(app.outDelete, true)))
-	r.Post("/nodes/out/preview", infra.JSONAPI(app.Mutation(app.outPreview, true)))
-	// The nodes-page Out actions are the HTML twins of the transport and delete
-	// mutations above: same store calls, same session + CSRF boundary, but they
-	// re-render the list instead of answering JSON.
-	r.Post("/nodes/out-transport", app.Mutation(app.outTransportSet, true))
-	r.Post("/nodes/out-unbind", app.Mutation(app.outUnbindPage, true))
-	r.Post("/nodes/out-delete", app.Mutation(app.outDeletePage, true))
-	// The JSON management routes declare their failure representation here, next
-	// to the route. The error writer never infers it from the URL, so moving an
-	// endpoint cannot silently change its failure body.
-	r.Get("/api/nodes", infra.JSONAPI(app.Authenticated(app.nodesList)))
-	r.Get("/api/nodes/cli", infra.JSONAPI(app.Authenticated(app.installArtifactDownload)))
-	// Agent endpoints use Bearer identity, not admin session + browser Origin.
-	r.Post("/api/agent/pair", infra.JSONAPI(app.pairAgent))
-	r.Get("/api/agent/node", infra.JSONAPI(app.agentMetadata))
-	r.Get("/api/agent/config/{revision}", infra.JSONAPI(app.agentCandidate))
-	// The stamped upgrade target of one stage row (#11c-1): the read-only
-	// channel the Agent uses instead of stuffing a target into frozen config.*
-	// params.
+	app.nodeServer.RegisterRoutes(r, infra.JSONAPI, app.Authenticated, app.Mutation)
+	// The two read-only Agent channels of the restricted executor (#11c-1) sit
+	// with the upgrade domain, but authenticate exactly like the node channel.
 	r.Get("/api/agent/upgrade-target/{operationID}", infra.JSONAPI(app.agentUpgradeTarget))
-	// The read-only release manifest of the restricted executor (#11c-1): the
-	// body never travels as config.* params.
 	r.Get("/api/agent/manifest", infra.JSONAPI(app.agentManifest))
-	r.Get("/api/agent/tasks", infra.JSONAPI(app.agentTasks))
-	r.Post("/api/agent/heartbeat", infra.JSONAPI(app.agentHeartbeat))
-	r.Post("/api/agent/result", infra.JSONAPI(app.agentResult))
 	// The subscriber and Line routes are registered before the generic
 	// navigation loop, so the real subscriber page owns its path.
 	app.registerSubscriberRoutes(r)

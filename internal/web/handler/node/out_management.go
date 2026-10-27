@@ -1,4 +1,4 @@
-package handler
+package node
 
 // The Out management API after the authorization migration (Task 5).
 //
@@ -73,7 +73,7 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 // Both routes edited the binding that no longer exists. The authorization itself is
 // node membership (Ruling R10), which no request can edit; what the operator configures
 // through the wizard is which egress a client document names.
-func (s *Server) outBindingAPIRetired(w http.ResponseWriter, r *http.Request, _ session) {
+func (s *Server) outBindingAPIRetired(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	s.Fail(w, r, http.StatusGone, CodeBindingAPIRetired,
 		"该接口已移除：Out 授权来自节点成员（纳管即互通），不再由绑定或订阅写入。",
 		"若要让客户端走该 Out，请在订阅向导中选择它；若要让某条 Line 不再被 Out 接受，请吊销该 Line 身份。")
@@ -82,12 +82,12 @@ func (s *Server) outBindingAPIRetired(w http.ResponseWriter, r *http.Request, _ 
 // outDelete removes one Out entirely: its ACL is brought back to default-deny, then the
 // node row, the dial address and the Hub-issued link key are deleted (Ruling R9).
 //
-// The delete is a management action with the same session + CSRF boundary as every
+// The delete is a management action with the same infra.Session + CSRF boundary as every
 // other mutation. Success means the host proved the empty authorization and the node is
 // gone. A delete that cannot reach that state is refused with nothing destroyed — it is
 // never reported as a partial success, because once the row disappears there is nothing
 // left to retry from.
-func (s *Server) outDelete(w http.ResponseWriter, r *http.Request, _ session) {
+func (s *Server) outDelete(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	if err := s.Store.DeleteOutAt(outID, now); err != nil {

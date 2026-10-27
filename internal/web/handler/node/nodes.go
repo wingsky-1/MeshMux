@@ -1,4 +1,4 @@
-package handler
+package node
 
 import (
 	"bytes"
@@ -64,11 +64,11 @@ func decodeAgentJSON(r *http.Request, dst any) error {
 
 // nodesPage renders the pending-node workspace. created + pairingCode are set
 // only immediately after creation so the one-time code is shown once.
-func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, pairingCode string) {
+func (s *Server) nodesPage(w http.ResponseWriter, r *http.Request, sess infra.Session, created *store.Node, pairingCode string) {
 	s.nodesPageFull(w, r, sess, created, "", pairingCode, view.NodesData{})
 }
 
-func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
+func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	nodes, err := s.Store.ListNodesAt(s.Now())
 	if err != nil {
 		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
@@ -81,7 +81,7 @@ func (s *Server) nodesList(w http.ResponseWriter, r *http.Request, _ session) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"nodes": nodes, "operation_id": infra.Operation(r)})
 }
 
-func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	role := strings.TrimSpace(r.PostForm.Get("role"))
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
 	if role == string(nodedomain.RoleHTTP) {
@@ -131,7 +131,7 @@ func httpProxyCreateFailure(err error) (status int, code, message, next string) 
 	}
 }
 
-func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	nodeID := nodeIDFromRequest(r)
 	candidate, tasks, err := s.Store.ReconcileNode(nodeID, s.Now())
 	if err != nil {
@@ -156,13 +156,13 @@ func (s *Server) nodesReconcile(w http.ResponseWriter, r *http.Request, sess ses
 // observed candidate revision through the fixed four-task chain, with no
 // upgrade target stamp (spec §4.11 U5 exemption). The caller supplies no
 // revision; the Hub uses the node's own readback.
-func (s *Server) nodesRollbackLKG(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) nodesRollbackLKG(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	nodeID := nodeIDFromRequest(r)
 	candidate, tasks, err := s.Store.RepublishLKG(nodeID, s.Now())
 	if err != nil {
-		failure := lkgRollbackFailure(err)
-		s.Event(r, failure.code)
-		s.Fail(w, r, failure.status, failure.code, failure.message, failure.action)
+		failure := LKGRollbackFailure(err)
+		s.Event(r, failure.Code)
+		s.Fail(w, r, failure.Status, failure.Code, failure.Message, failure.Action)
 		return
 	}
 	s.Event(r, "LKG_ROLLBACK_QUEUED")
@@ -173,22 +173,27 @@ func (s *Server) nodesRollbackLKG(w http.ResponseWriter, r *http.Request, sess s
 // lkgFailure is the operator-facing outcome of one LKG rollback refusal. A
 // post-commit readback failure must NOT claim the chain was not published: it
 // was committed, and telling the operator otherwise invites a duplicate chain.
-type lkgFailure struct {
-	status  int
-	code    string
-	message string
-	action  string
+// LKGFailure is the mapped refusal of a rollback attempt. The fields are
+// exported so the root package's store-level test can pin the mapping without a
+// second copy of the table.
+type LKGFailure struct {
+	Status  int
+	Code    string
+	Message string
+	Action  string
 }
 
-func lkgRollbackFailure(err error) lkgFailure {
+// LKGRollbackFailure maps one rollback error onto its status, code and operator
+// wording. It keeps "committed but unreadable" distinct from "not published".
+func LKGRollbackFailure(err error) LKGFailure {
 	if err == nil {
-		return lkgFailure{status: 500, code: "LKG_ROLLBACK_FAILED", message: "LKG 回退链未发布。",
-			action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
+		return LKGFailure{Status: 500, Code: "LKG_ROLLBACK_FAILED", Message: "LKG 回退链未发布。",
+			Action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
 	}
 	if strings.HasPrefix(err.Error(), "LKG_ROLLBACK_READBACK_FAILED") {
-		return lkgFailure{status: 503, code: "LKG_ROLLBACK_READBACK_FAILED",
-			message: "LKG 回退链已发布，但修订读取失败。",
-			action:  "链已提交；刷新节点页确认修订，不要重复提交。"}
+		return LKGFailure{Status: 503, Code: "LKG_ROLLBACK_READBACK_FAILED",
+			Message: "LKG 回退链已发布，但修订读取失败。",
+			Action:  "链已提交；刷新节点页确认修订，不要重复提交。"}
 	}
 	code := "LKG_ROLLBACK_FAILED"
 	switch {
@@ -199,11 +204,11 @@ func lkgRollbackFailure(err error) lkgFailure {
 	case strings.HasPrefix(err.Error(), infra.CodeNodeNotFound):
 		code = infra.CodeNodeNotFound
 	}
-	return lkgFailure{status: 409, code: code, message: "LKG 回退链未发布。",
-		action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
+	return LKGFailure{Status: 409, Code: code, Message: "LKG 回退链未发布。",
+		Action: "确认节点已成功读取当前修订且没有进行中的任务后重试。"}
 }
 
-func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	nodeID := nodeIDFromRequest(r)
 	code, err := s.Store.ReissuePairing(nodeID, s.Now())
 	if err != nil {
@@ -221,7 +226,7 @@ func (s *Server) nodesReissue(w http.ResponseWriter, r *http.Request, sess sessi
 	s.nodesPageWithCode(w, r, sess, &existing, "reissued", code)
 }
 
-func (s *Server) nodesRevoke(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) nodesRevoke(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	nodeID := nodeIDFromRequest(r)
 	if err := s.Store.RevokeIdentity(nodeID, s.Now()); err != nil {
 		code := "IDENTITY_REVOKE_FAILED"
@@ -243,14 +248,14 @@ func nodeIDFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.PostForm.Get("node_id"))
 }
 
-func (s *Server) nodesPageWithCode(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, action, code string) {
+func (s *Server) nodesPageWithCode(w http.ResponseWriter, r *http.Request, sess infra.Session, created *store.Node, action, code string) {
 	s.nodesPageFull(w, r, sess, created, action, code, view.NodesData{})
 }
 
 // nodesPageFull renders the nodes page with the Task 2 pool projection: the
 // Out pool strip, the per-card transport and binding state, an optional
 // one-shot notice and an optional pending delete confirm.
-func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess session, created *store.Node, action, code string, data view.NodesData) {
+func (s *Server) nodesPageFull(w http.ResponseWriter, r *http.Request, sess infra.Session, created *store.Node, action, code string, data view.NodesData) {
 	nodes, err := s.Store.ListNodesAt(s.Now())
 	if err != nil {
 		s.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取节点列表。", "请检查数据库。")
@@ -338,7 +343,7 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 //
 // Two properties matter here beyond the exchange itself:
 //
-//   - The endpoint spends work before any session exists, so it carries its own
+//   - The endpoint spends work before any infra.Session exists, so it carries its own
 //     budget (pair_limiter.go). The refusal needs no database access, which keeps
 //     an anonymous flood off the single SQLite connection.
 //   - An unknown code, an expired code and an already-spent code all answer the
@@ -497,7 +502,7 @@ func copyArtifactVerified(w io.Writer, r io.Reader, size int64, want string, chu
 	return written, nil
 }
 
-func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request, _ session) {
+func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	artifact := s.Cfg.InstallArtifact
 	if artifact == nil {
 		s.Fail(w, r, 404, "INSTALL_ARTIFACT_UNAVAILABLE", "当前 Web 没有同源 CLI 安装制品。", "请通过已安装的 meshmux __internal-web 打开节点管理。")
@@ -514,7 +519,7 @@ func (s *Server) installArtifactDownload(w http.ResponseWriter, r *http.Request,
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > InstallArtifactMaxBytes {
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > infra.InstallArtifactMaxBytes {
 		s.Fail(w, r, 503, "INSTALL_ARTIFACT_INVALID", "安装制品大小或类型不安全。", "请重新安装匹配版本。")
 		return
 	}

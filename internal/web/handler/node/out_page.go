@@ -1,4 +1,4 @@
-package handler
+package node
 
 // The nodes-page Out actions and the read-only Out preview.
 //
@@ -25,7 +25,7 @@ import (
 // Flow: parse (out_id, server) → load the node (404 when unknown) → store the
 // transport → re-render the page with the receipt. The port never comes from the
 // form, so the stored pair cannot disagree with the VLESS listener.
-func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	server := strings.TrimSpace(r.PostForm.Get("server"))
@@ -57,7 +57,7 @@ func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess se
 // release changes only which egress the client document names — the ACL is node
 // membership and is untouched — so an Out no subscription selects is already unbound and
 // this call is an idempotent no-op that publishes nothing.
-func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	usedBy, err := s.Store.OutAuthorizedSubscribers(outID)
@@ -102,7 +102,7 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess sess
 // Deleting is not revoking the host: the identity is untouched, but the routing model,
 // the dial parameters and the link key are all gone (Ruling R9), so a later use means
 // enrolling the Out again.
-func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess session) {
+func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	now := s.Now()
 	outID := strings.TrimSpace(r.PostForm.Get("out_id"))
 	if r.PostForm.Get("confirm") != "1" {
@@ -156,7 +156,7 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 }
 
 // outPreview is a read-only projection. It goes through the mutation wrapper only
-// to require the same session + CSRF boundary as every management POST; it never
+// to require the same infra.Session + CSRF boundary as every management POST; it never
 // writes a row.
 //
 // The projection answers "which enrolled Lines does this Out accept, and which sources
@@ -164,7 +164,7 @@ func (s *Server) outDeletePage(w http.ResponseWriter, r *http.Request, sess sess
 // subscription that selects the Out is reported only as a used-by name for the delete
 // guard; it never contributes a source. A single-Line projection is never reported as
 // an established path: nothing has been published for it yet.
-func (s *Server) outPreview(w http.ResponseWriter, r *http.Request, _ session) {
+func (s *Server) outPreview(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	preview, err := s.Store.PreviewOutAuthorization(
 		strings.TrimSpace(r.PostForm.Get("out_id")),
 		strings.TrimSpace(r.PostForm.Get("line_id")),

@@ -10,6 +10,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -104,7 +105,7 @@ func TestOutBindingEndpointsAreRetired(t *testing.T) {
 
 	for _, path := range []string{"/nodes/out/bind", "/nodes/out/unbind"} {
 		w := b.post(path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
-		requireBindingError(t, w, 410, CodeBindingAPIRetired)
+		requireBindingError(t, w, 410, node.CodeBindingAPIRetired)
 		var body struct {
 			NextAction string `json:"next_action"`
 		}
