@@ -125,16 +125,16 @@ func DesiredLineDigestTx(tx *sql.Tx, nodeID string, now time.Time) (string, erro
 //   - an offline Line keeps the durable intent but receives no state-changing
 //     task.
 func (s *Store) DrainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allowRetry bool) error {
-	return drainSubscriberNodeIntentTx(tx, nodeID, now, allowRetry, s)
+	return drainSubscriberNodeIntentTx(tx, nodeID, now, allowRetry)
 }
 
 // DrainSubscriberNodeIntentTx is the handle-free spelling used by a caller that
 // owns the transaction and has no assembled handle.
 func DrainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allowRetry bool) error {
-	return drainSubscriberNodeIntentTx(tx, nodeID, now, allowRetry, nil)
+	return drainSubscriberNodeIntentTx(tx, nodeID, now, allowRetry)
 }
 
-func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allowRetry bool, s *Store) error {
+func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allowRetry bool) error {
 	tracked, err := storenode.LineTrackedTx(tx, nodeID)
 	if err != nil {
 		return err
@@ -305,15 +305,15 @@ func historicalCredentialUUIDsTx(tx *sql.Tx, subscriberID, nodeID string) (map[s
 // The state is written directly: setSubscriberState must not be nested in the
 // caller's transaction.
 func (s *Store) FinalizeDeletingTx(tx *sql.Tx, nodeID string, now time.Time) error {
-	return finalizeDeletingSubscribersTx(tx, nodeID, now, s)
+	return finalizeDeletingSubscribersTx(tx, nodeID, now)
 }
 
 // FinalizeDeletingSubscribersTx is the handle-free spelling of FinalizeDeletingTx.
 func FinalizeDeletingSubscribersTx(tx *sql.Tx, nodeID string, now time.Time) error {
-	return finalizeDeletingSubscribersTx(tx, nodeID, now, nil)
+	return finalizeDeletingSubscribersTx(tx, nodeID, now)
 }
 
-func finalizeDeletingSubscribersTx(tx *sql.Tx, nodeID string, now time.Time, s *Store) error {
+func finalizeDeletingSubscribersTx(tx *sql.Tx, nodeID string, now time.Time) error {
 	rows, err := tx.Query(`SELECT DISTINCT s.id FROM subscribers s
  JOIN proxy_credentials c ON c.subscriber_id=s.id
  WHERE s.state='deleting' AND c.node_id=?`, nodeID)
