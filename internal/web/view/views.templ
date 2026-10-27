@@ -237,7 +237,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								<div class="panel-heading">
 									<h3>{ n.DisplayName }</h3>
 									if n.Role == "http" {
-										<span class="badge accent">外部</span>
+										<span class="badge accent">外部声明</span>
 									} else if n.Offline {
 										<span class="badge failure">离线</span>
 									} else {
@@ -247,7 +247,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 									<dl class="details">
 										<dt>Node ID</dt><dd><code>{ n.ID }</code></dd>
 										if n.Role == "http" {
-											<dt>角色</dt><dd>http · 外部 HTTP 代理（无 Agent / 无回读 / 不参与 ACL）</dd>
+											<dt>角色</dt><dd>http · 外部 HTTP 代理（无 Agent / 无回读 / 无控制器 / 不参与 ACL）</dd>
 										} else {
 											<dt>角色 / 端口</dt><dd>{ n.Role } · VLESS { n.VlessPortString() } · SSH { n.SSHPortString() }</dd>
 										}
@@ -332,11 +332,12 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 										if entry.OutID == n.ID {
 											<dt>出口地址</dt><dd>
 												if entry.TransportConfigured {
-													<code>{ entry.Server }:{ entry.Port }</code><span class="badge accent">外部</span>
+													<code>{ entry.Server }:{ entry.Port }</code><span class="badge accent">外部声明</span>
 												} else {
 													<span class="badge failure">未配置代理 URL</span>
 												}
 											</dd>
+											<dt>配置代理 URL</dt><dd><form method="post" action="/nodes/http-proxy"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "http-proxy-url-" + n.ID }>HTTP 代理 URL</label><input id={ "http-proxy-url-" + n.ID } name="proxy_url" type="text" maxlength="512" placeholder="http://user:pass@proxy.example.invalid:8080"/><button type="submit">保存代理 URL →</button></form><p class="hint">仅接受 http://主机:端口，可带用户名与密码，不要带路径或查询参数。凭据单独存放，页面与日志只显示 host:port。保存后引用该代理的 Line 在下一次收敛中获得新的 http 出站；Hub 没有它的 ACL、回读或控制器。</p></dd>
 											<dt>服务对象</dt><dd>
 												if len(entry.LineIDs) == 0 {
 													<span class="muted">没有订阅选择该 HTTP 代理 · 它不承载任何客户端出口</span>
@@ -372,7 +373,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								}
 									</dl>
 									if n.Role == "http" {
-										<p class="hint">外部 HTTP 代理没有 Agent、配对、回读或 ACL：无需安装、重签或吊销。凭据只用于渲染 Line 的 http 出站，页面与日志只显示 host:port。</p>
+										<p class="hint">外部 HTTP 代理没有 Agent、配对、回读或 ACL：无需安装、重签或吊销，也没有可等待的机器回读，页面的“外部声明”只是操作员声明的端点。凭据只用于渲染 Line 的 http 出站，页面与日志只显示 host:port。</p>
 									} else {
 									<div class="action-row">
 										<form method="post" action="/nodes/reconcile"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button type="submit">重新校验 / 应用</button></form>

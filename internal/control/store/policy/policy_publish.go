@@ -424,11 +424,19 @@ func (s *Store) gatePolicyAssembly(ctx context.Context, verifier common.PublishV
 }
 
 // policyEgressState maps the Out facts onto the documented states.
+//
+// An external HTTP proxy keeps the "out" state because the rendered route does
+// select the out egress, but it carries LINE_EGRESS_EXTERNAL_DECLARED: the
+// state is the operator's declaration, not a proof, and a receipt that shows
+// "out" with no code would read as a confirmed managed egress.
 func policyEgressState(facts storenode.OutEgressFacts, fallback bool) (string, string) {
 	if !facts.Configured {
 		return coredomain.AIEgressLine, ""
 	}
 	if facts.Available {
+		if facts.ExternalDeclared {
+			return coredomain.AIEgressOut, storenode.CodeLineEgressExternalDeclared
+		}
 		return coredomain.AIEgressOut, ""
 	}
 	if fallback {

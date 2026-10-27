@@ -188,6 +188,71 @@ func (s *Store) CreateHTTPProxyNode(displayName, proxyURL string, now time.Time)
 	}, nil
 }
 
+// SetHTTPProxy replaces the dial body of one external HTTP proxy. It is the
+// exact twin of SetOutTransport (Ruling R11): the two egress forms are handled
+// the same way, so a proxy URL change converges the Lines that render it
+// instead of leaving a stale endpoint in their last candidate.
+//
+// The URL is validated by the same parser that created the node, so a stored
+// row can never hold a shape the renderer refuses. Credentials are replaced
+// together with the URL: an operator who resubmits a credential-free URL
+// removes the old Basic auth instead of keeping a secret the UI no longer
+// shows.
+//
+// The relayed drain happens after the commit and never fails the mutation: each
+// Line publication owns its own transaction, and the next event retries it.
+func (s *Store) SetHTTPProxy(proxyID, proxyURL string, now time.Time) (HTTPProxy, error) {
+	proxyID = strings.TrimSpace(proxyID)
+	if !validNodeID(proxyID) {
+		return HTTPProxy{}, errors.New("OUT_BINDING_INVALID: proxy_id must be 32 lowercase hex characters")
+	}
+	egress, err := coredomain.ParseHTTPProxyURL(proxyURL)
+	if err != nil {
+		return HTTPProxy{}, err
+	}
+	var username, password any
+	if egress.Username != "" {
+		username = egress.Username
+	}
+	if egress.Password != "" {
+		password = egress.Password
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return HTTPProxy{}, errors.New(common.CodeDatabaseUnavailable)
+	}
+	defer tx.Rollback()
+	var role string
+	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, proxyID).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return HTTPProxy{}, errors.New("OUT_NOT_FOUND: unknown egress node")
+	}
+	if err != nil {
+		return HTTPProxy{}, errors.New(common.CodeDatabaseUnavailable)
+	}
+	if coredomain.Role(role) != coredomain.RoleHTTP {
+		return HTTPProxy{}, errors.New("OUT_ROLE_INVALID: only an external http proxy carries a proxy URL")
+	}
+	stamp := now.Unix()
+	if _, err = tx.Exec(`UPDATE node_http_proxy SET url=?, username=?, password=?, updated_at=? WHERE node_id=?`,
+		egress.ProxyURL(), username, password, stamp, proxyID); err != nil {
+		return HTTPProxy{}, errors.New("HTTP_PROXY_UPDATE_FAILED: the proxy URL was not stored")
+	}
+	if err = tx.Commit(); err != nil {
+		return HTTPProxy{}, errors.New(common.CodeDatabaseUnavailable)
+	}
+	// A changed dial body invalidates every Line candidate that renders this
+	// proxy: the exact post-commit drain SetOutTransport performs for a managed
+	// Out. No Out chain is involved (there is no Agent), so the Lines are the
+	// only state to converge.
+	if lines, err := s.lineIDsForOut(proxyID); err == nil {
+		for _, lineID := range lines {
+			s.Subscribers.DrainNode(lineID, now)
+		}
+	}
+	return HTTPProxy{ProxyID: proxyID, Server: egress.Server, Port: egress.Port, UpdatedAt: stamp}, nil
+}
+
 // scanHTTPProxy reads one stored proxy row into its dial body. The stored URL
 // is canonical and credential-free; the two credential columns are nullable.
 func scanHTTPProxy(row common.RowScanner) (coredomain.OutEgress, error) {

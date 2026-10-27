@@ -120,13 +120,18 @@ func (app *Server) policyMeshModel(now time.Time) (subscription.MeshConfigModel,
 }
 
 // policyOutState aggregates the read-only Out projection over all edge Lines:
-// a configured-but-unavailable Out is degraded and outranks a healthy one.
+// a configured-but-unavailable Out is degraded and outranks a healthy one. An
+// external HTTP proxy outranks neither: it is a declared egress with no ACL,
+// no readback and no controller, so it is reported as declared instead of
+// being folded into "active" (a proof the Hub does not have) or "degraded" (a
+// fault the Hub cannot observe).
 func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 	nodes, err := app.Store.ListNodesAt(now)
 	if err != nil {
 		return view.PolicyOutAbsent
 	}
 	state := view.PolicyOutAbsent
+	external := false
 	for _, node := range nodes {
 		if node.Role != infra.NodeRoleEdge {
 			continue
@@ -135,10 +140,22 @@ func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 		if err != nil || !facts.Configured {
 			continue
 		}
+		if facts.ExternalDeclared {
+			external = true
+			continue
+		}
 		if !facts.Available {
 			return view.PolicyOutDegraded
 		}
 		state = view.PolicyOutActive
+	}
+	// A degraded managed Out still wins over a declared proxy: it is the state
+	// that actually fails closed and needs the operator.
+	if state == view.PolicyOutActive {
+		return state
+	}
+	if external {
+		return view.PolicyOutExternal
 	}
 	return state
 }

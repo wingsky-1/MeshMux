@@ -48,6 +48,8 @@ templ PoliciesPage(p PageData, v PolicyPageView) {
 								<span class="badge accent">Out 已接入</span>
 							} else if v.Out == PolicyOutDegraded {
 								<span class="badge failure">Out 故障 · fail-closed</span>
+							} else if v.Out == PolicyOutExternal {
+								<span class="badge accent">外部声明 · HTTP 代理</span>
 							} else {
 								<span class="badge">Out 未配置</span>
 							}
@@ -56,6 +58,8 @@ templ PoliciesPage(p PageData, v PolicyPageView) {
 							<p class="hint">AI 与指定分流优先经 Out 直出。Out 不可用时按 fail-closed 处理，不会自动改走 Line。</p>
 						} else if v.Out == PolicyOutDegraded {
 							<p class="hint">Out 健康检查未通过。指定到 Out 的分流进入 fail-closed：拒绝转发并提示目标不可达，不隐式回落到 Line 直出；恢复后自动退出该状态。</p>
+						} else if v.Out == PolicyOutExternal {
+							<p class="hint">出口位是外部 HTTP 代理：Hub 没有它的 ACL、回读或机器控制器，因此这里报告的是<b>操作员声明</b>，不是已证明可用的出口。链路是否真的通，只能由该代理自己的日志与客户端实测证明（<code>LINE_EGRESS_EXTERNAL_DECLARED</code>）。</p>
 						} else {
 							<p class="hint">Out 是可选节点，未配置不是错误。AI 与指定分流按默认路径走 Line 直出，不生成任何指向 Out 的规则。</p>
 						}

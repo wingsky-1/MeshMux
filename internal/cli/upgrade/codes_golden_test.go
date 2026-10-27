@@ -89,6 +89,7 @@ var errorCodeDomainPaths = map[string]bool{
 // client, a log line or an operator sees is a visible diff here.
 var goldenErrorCodeValues = []string{
 	"DATABASE_UNAVAILABLE",
+	"LINE_EGRESS_EXTERNAL_DECLARED",
 	// The Hub self-upgrade shared codes moved into internal/hubupgrade/codes.go
 	// so the Web producer and the root executor name one value each; they are
 	// frozen here from this commit on.
@@ -116,6 +117,7 @@ var goldenErrorCodeValues = []string{
 	"OUT_OFFLINE_FAIL_CLOSED",
 	"OUT_REFERENCED_BY_SUBSCRIPTIONS",
 	"OUT_SYNC_IN_PROGRESS",
+	"OUT_SYNC_NOT_APPLICABLE",
 	"OUT_SYNC_PENDING",
 	"POLICY_CONFLICT",
 	"POLICY_INVALID",

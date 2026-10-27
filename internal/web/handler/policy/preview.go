@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
@@ -34,10 +35,14 @@ const policyServerPreviewFragmentLines = 40
 // egress. The tri-state it carries is decided here (previewEgressState), never
 // by the client.
 type policyServerPreviewOut struct {
-	Configured     bool   `json:"configured"`
-	Available      bool   `json:"available"`
-	FallbackToLine bool   `json:"fallback_to_line"`
-	OperationID    string `json:"operation_id"`
+	Configured bool `json:"configured"`
+	Available  bool `json:"available"`
+	// ExternalDeclared says the egress is an external HTTP proxy: no ACL, no
+	// readback and no controller exist for it, so "available" is the operator's
+	// declaration and the preview must say so instead of implying a proof.
+	ExternalDeclared bool   `json:"external_declared"`
+	FallbackToLine   bool   `json:"fallback_to_line"`
+	OperationID      string `json:"operation_id"`
 }
 
 // policyServerPreviewInput is the whole accepted request shape. Any JSON field
@@ -141,6 +146,12 @@ func previewEgressState(out policyServerPreviewOut) (string, string) {
 		return policy.AIEgressLine, ""
 	}
 	if out.Available {
+		if out.ExternalDeclared {
+			// The route still selects the out tag, but the egress is an external
+			// proxy whose availability the Hub cannot prove. The code names the
+			// declaration so a preview never reads as a confirmed Out.
+			return policy.AIEgressOut, store.CodeLineEgressExternalDeclared
+		}
 		return policy.AIEgressOut, ""
 	}
 	if out.FallbackToLine && strings.TrimSpace(out.OperationID) != "" {

@@ -23,6 +23,9 @@ const (
 	PolicyOutActive PolicyOutState = "active"
 	// Out 故障：fail-closed，不隐式回落 Line 直出。
 	PolicyOutDegraded PolicyOutState = "degraded"
+	// Out 为外部声明：出口位是外部 HTTP 代理，Hub 无 ACL、无回读、无控制器，
+	// 因此这是操作员的声明而不是已证明可用的出口。页面必须据此措辞。
+	PolicyOutExternal PolicyOutState = "external"
 )
 
 // PolicyRuleView is one display row of a policy layer.
@@ -167,6 +170,9 @@ func PolicyServerRows(serverIntent policy.ServerPolicy, out PolicyOutState) []Po
 	}
 	if out == PolicyOutDegraded {
 		action, note = "Out 故障 · fail-closed", "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
+	}
+	if out == PolicyOutExternal {
+		action, note = "外部 HTTP 代理直出（声明）", "出口位是外部 HTTP 代理：Hub 无 ACL、无回读、无控制器，可用性是操作员的声明而不是已证明的结论。"
 	}
 	rows := make([]PolicyRuleView, 0, len(serverIntent.Rules)+1)
 	for _, rule := range serverIntent.Rules {

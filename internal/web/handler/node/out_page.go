@@ -15,6 +15,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +47,33 @@ func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess in
 	}
 	s.Event(r, "OUT_TRANSPORT_SET")
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "Out 出口地址已保存为 " + transport.Server + "。"})
+}
+
+// httpProxySet replaces the dial body of one external HTTP proxy. It is the
+// exact twin of outTransportSet: a changed URL must converge the Lines that
+// render it, which is why the store drains them after its own commit. The
+// external proxy has no Agent, so there is no chain to wait for — only the
+// Line candidates that embed the new endpoint.
+func (s *Server) httpProxySet(w http.ResponseWriter, r *http.Request, sess infra.Session) {
+	now := s.Now()
+	proxyID := strings.TrimSpace(r.PostForm.Get("out_id"))
+	proxyURL := strings.TrimSpace(r.PostForm.Get("proxy_url"))
+	proxy, err := s.Store.SetHTTPProxy(proxyID, proxyURL, now)
+	if err != nil {
+		s.Event(r, "HTTP_PROXY_UPDATE_FAILED")
+		status, code, message, next := httpProxyUpdateFailure(err)
+		s.Fail(w, r, status, code, message, next)
+		return
+	}
+	s.Event(r, "HTTP_PROXY_UPDATED")
+	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{
+		Notice: "HTTP 代理已更新为 " + proxyAddress(proxy.Server, proxy.Port) + "（外部声明，无回读；引用它的 Line 已重新收敛）。",
+	})
+}
+
+// proxyAddress renders host:port without ever including credentials.
+func proxyAddress(server string, port int) string {
+	return server + ":" + strconv.Itoa(port)
 }
 
 // outUnbindPage releases the Lines an Out serves by removing the Out choice from the
@@ -80,7 +108,18 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infr
 	// newest chain already carries it; a chain still in flight defers the republish —
 	// the intent is durable and the next Out event completes it, so the page reports
 	// the pending state instead of an error the operator cannot fix.
+	//
+	// An external HTTP proxy has no chain, no ACL and no readback at all (Ruling
+	// R11): the drain answers OUT_SYNC_NOT_APPLICABLE, which is an explicit no-op
+	// rather than a failure and rather than a silent success. The page says so.
 	retryErr := s.Store.RetryOutSync(outID, now)
+	if retryErr != nil && strings.HasPrefix(retryErr.Error(), store.CodeOutSyncNotApplicable) {
+		s.Event(r, store.CodeOutSyncNotApplicable)
+		s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{
+			Notice: "已解除：没有任何订阅选中该 HTTP 代理。外部代理没有 Agent、ACL 或回读（OUT_SYNC_NOT_APPLICABLE），本次未下发任何任务。",
+		})
+		return
+	}
 	if retryErr != nil && !strings.HasPrefix(retryErr.Error(), store.CodeOutSyncPending) {
 		status, code, message, next := outBindingFailure(retryErr)
 		s.Fail(w, r, status, code, message, next)
@@ -202,5 +241,27 @@ func outTransportFailure(err error) (status int, code, message, next string) {
 		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 传输参数。", "请检查数据库与服务日志后重试。"
 	default:
 		return 500, "OUT_TRANSPORT_FAILED", "出口地址未保存。", "请凭操作编号检查服务日志后重试。"
+	}
+}
+
+// httpProxyUpdateFailure maps one proxy-update refusal onto the stable HTTP
+// contract. The submitted URL and its userinfo never reach the response: the
+// success notice renders host:port only.
+func httpProxyUpdateFailure(err error) (status int, code, message, next string) {
+	switch {
+	case strings.HasPrefix(err.Error(), "HTTP_PROXY_INVALID"):
+		return 400, "HTTP_PROXY_INVALID", "HTTP 代理 URL 不正确。", "请填写一个 http://主机:端口 的 URL，可带用户名与密码，不要带路径或查询参数。"
+	case strings.HasPrefix(err.Error(), "HTTP_PROXY_UPDATE_FAILED"):
+		return 500, "HTTP_PROXY_UPDATE_FAILED", "HTTP 代理 URL 未保存。", "请凭操作编号检查服务日志后重试。"
+	case strings.HasPrefix(err.Error(), "OUT_NOT_FOUND"):
+		return 404, "OUT_NOT_FOUND", "出口节点不存在。", "请先在节点页纳管该 HTTP 代理后重试。"
+	case strings.HasPrefix(err.Error(), "OUT_ROLE_INVALID"):
+		return 409, "OUT_ROLE_INVALID", "所选节点不是 HTTP 代理。", "请选择角色为 HTTP 代理的节点。"
+	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
+		return 400, "OUT_BINDING_INVALID", "节点标识不正确。", "请检查所选节点后重试。"
+	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
+		return 503, store.CodeDatabaseUnavailable, "无法读写 HTTP 代理参数。", "请检查数据库与服务日志后重试。"
+	default:
+		return 500, "HTTP_PROXY_UPDATE_FAILED", "HTTP 代理 URL 未保存。", "请凭操作编号检查服务日志后重试。"
 	}
 }

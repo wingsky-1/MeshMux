@@ -75,6 +75,7 @@ func (s *Server) RegisterRoutes(r chi.Router, jsonAPI func(http.HandlerFunc) htt
 	// mutations above: same store calls, same session + CSRF boundary, but they
 	// re-render the list instead of answering JSON.
 	r.Post("/nodes/out-transport", mutation(s.outTransportSet, true))
+	r.Post("/nodes/http-proxy", mutation(s.httpProxySet, true))
 	r.Post("/nodes/out-unbind", mutation(s.outUnbindPage, true))
 	r.Post("/nodes/out-delete", mutation(s.outDeletePage, true))
 	// The JSON management routes declare their failure representation here, next
