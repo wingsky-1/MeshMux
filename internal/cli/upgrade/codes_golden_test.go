@@ -272,18 +272,73 @@ func parseErrorCodeConstants(t *testing.T, root, directory, name string) []error
 					t.Fatalf("%s: %s has no value literal; the golden cannot read it", where, identifier.Name)
 				}
 				literal, ok := values.Values[index].(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING {
+				if ok && literal.Kind == token.STRING {
+					value, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						t.Fatalf("%s: unquote %s: %v", where, literal.Value, err)
+					}
+					declarations = append(declarations, errorCodeDeclaration{value: value, where: where})
+					continue
+				}
+				selector, ok := values.Values[index].(*ast.SelectorExpr)
+				if !ok {
 					t.Fatalf("%s: %s is not a string literal; the golden cannot read it", where, identifier.Name)
 				}
-				value, err := strconv.Unquote(literal.Value)
-				if err != nil {
-					t.Fatalf("%s: unquote %s: %v", where, literal.Value, err)
+				pkgIdent, ok := selector.X.(*ast.Ident)
+				if !ok || pkgIdent.Name != "versions" {
+					t.Fatalf("%s: %s is not a string literal; the golden cannot read it", where, identifier.Name)
 				}
+				value := resolveVersionsCode(t, root, selector.Sel.Name)
 				declarations = append(declarations, errorCodeDeclaration{value: value, where: where})
 			}
 		}
 	}
 	return declarations
+}
+
+// resolveVersionsCode follows a single-level alias like
+// `versions.CodeDatabaseUnavailable` to its string literal in
+// internal/cli/versions/codes.go, keeping the golden readable when a domain
+// moves its literal to the shared leaf.
+func resolveVersionsCode(t *testing.T, root, name string) string {
+	t.Helper()
+	path := filepath.Join(root, "internal", "cli", "versions", "codes.go")
+	files := token.NewFileSet()
+	file, err := parser.ParseFile(files, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse versions codes %s: %v", path, err)
+	}
+	for _, declaration := range file.Decls {
+		generic, ok := declaration.(*ast.GenDecl)
+		if !ok || generic.Tok != token.CONST {
+			continue
+		}
+		for _, specification := range generic.Specs {
+			values, ok := specification.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, identifier := range values.Names {
+				if identifier.Name != name {
+					continue
+				}
+				if index >= len(values.Values) {
+					t.Fatalf("versions %s has no value literal", name)
+				}
+				literal, ok := values.Values[index].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("versions %s is not a string literal", name)
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatalf("unquote versions %s: %v", name, err)
+				}
+				return value
+			}
+		}
+	}
+	t.Fatalf("versions %s not found in %s", name, path)
+	return ""
 }
 
 // diffCodeValues returns the golden-only and actual-only values, both sorted.
