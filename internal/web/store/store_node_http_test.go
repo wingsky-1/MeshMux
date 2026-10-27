@@ -10,6 +10,7 @@ package store
 // `sing-box check` evidence is in internal/node (render_http_egress_test.go).
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -171,20 +172,24 @@ func TestHTTPProxyEgressIsExcludedFromOutAuthorizationGate(t *testing.T) {
 	defer tx.Rollback()
 	// No Out node is enrolled at all: the HTTP proxy still gives the Line a
 	// configured, available egress, so the policy may keep the out tag without
-	// an OUT_NOT_AUTHORIZED / OUT_OFFLINE_FAIL_CLOSED refusal.
+	// an OUT_NOT_AUTHORIZED / OUT_OFFLINE_FAIL_CLOSED refusal. The availability
+	// is the operator's declaration, so it is never reported as a bare
+	// "available with no code": the code names the declaration and
+	// ExternalDeclared distinguishes it from a confirmed managed Out.
 	facts, err := outEgressFactsTx(tx, lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Configured || !facts.Available || facts.OutID != proxyID || facts.Code != "" {
+	if !facts.Configured || !facts.Available || !facts.ExternalDeclared ||
+		facts.OutID != proxyID || facts.Code != CodeLineEgressExternalDeclared {
 		t.Fatalf("http egress facts = %+v", facts)
 	}
 	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != LineEgressExternal || code != "" {
-		t.Fatalf("line egress state = %q/%q, want external", state, code)
+	if state != LineEgressExternal || code != CodeLineEgressExternalDeclared {
+		t.Fatalf("line egress state = %q/%q, want external/%s", state, code, CodeLineEgressExternalDeclared)
 	}
 }
 
@@ -284,6 +289,186 @@ func TestSchema16RebuildPreservesNodesAndChildren(t *testing.T) {
 	if _, err := s.DB.Exec(`UPDATE node_candidates SET config_sha256='y' WHERE node_id=?`, lineID); err == nil || !strings.Contains(err.Error(), "CANDIDATE_IMMUTABLE") {
 		t.Fatalf("candidate update trigger lost by rebuild: %v", err)
 	}
+}
+
+// TestHTTPProxyDeleteSkipsTheOutCandidateChain pins the lifecycle branch: an
+// external HTTP proxy has no Agent, no candidate and no ACL, so its delete must
+// never reach BuildLineCandidateTx (which would answer NODE_ROLE_INVALID and
+// turn every proxy delete into a permanent failure), and it must never publish
+// an empty ACL chain for a host that does not exist.
+func TestHTTPProxyDeleteSkipsTheOutCandidateChain(t *testing.T) {
+	s := selectionStore(t)
+	now := time.Unix(1_700_000_000, 0)
+	_, proxyID, _ := httpProxyFixture(t, s, now)
+	// A published candidate on the proxy would be the only way the cleanup
+	// branch runs; nothing can create one, which is exactly the invariant. The
+	// delete therefore has nothing to clear and must succeed.
+	if _, err := s.DB.Exec(`SELECT revision FROM node_candidates WHERE node_id=?`, proxyID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteOutAt(proxyID, now); err != nil {
+		t.Fatalf("http proxy delete = %v, want success without an out chain", err)
+	}
+	var candidates, tasks int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM node_candidates WHERE node_id=?`, proxyID).Scan(&candidates); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=?`, proxyID).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if candidates != 0 || tasks != 0 {
+		t.Fatalf("proxy delete wrote candidate/task rows: candidates=%d tasks=%d", candidates, tasks)
+	}
+	if _, err := s.GetNodeAt(proxyID, now); err == nil {
+		t.Fatal("http proxy node survived the delete")
+	}
+}
+
+// TestHTTPProxyRetryIsAnExplicitNoop pins the retry path: there is no Agent
+// chain to republish for an external proxy, so the call answers the stable
+// "not applicable" code instead of a silent success that would read as a
+// published and confirmed chain.
+func TestHTTPProxyRetryIsAnExplicitNoop(t *testing.T) {
+	s := selectionStore(t)
+	now := time.Unix(1_700_000_000, 0)
+	_, proxyID, _ := httpProxyFixture(t, s, now)
+	if err := s.RetryOutSync(proxyID, now); err == nil ||
+		!strings.HasPrefix(err.Error(), CodeOutSyncNotApplicable) {
+		t.Fatalf("http proxy retry = %v, want %s", err, CodeOutSyncNotApplicable)
+	}
+	var candidates int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM node_candidates WHERE node_id=?`, proxyID).Scan(&candidates); err != nil {
+		t.Fatal(err)
+	}
+	if candidates != 0 {
+		t.Fatalf("http proxy retry published %d candidates", candidates)
+	}
+}
+
+// TestHTTPProxyReadbackReportsTheDeclaration pins the diagnosis projection: the
+// proxy half is reported as the operator's declaration (with the stable code)
+// and never as a healthy managed Out, and the declaration alone never makes the
+// pair healthy — the Line still has to prove its own inbound half.
+func TestHTTPProxyReadbackReportsTheDeclaration(t *testing.T) {
+	s := selectionStore(t)
+	now := time.Unix(1_700_000_000, 0)
+	lineID, proxyID, subID := httpProxyFixture(t, s, now)
+	if _, err := s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=? WHERE id=?`, now.Unix(), lineID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
+		t.Fatal(err)
+	}
+	lineReadback, err := s.NodeCoordinationReadback(lineID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lineReadback.Allowlist != LineEgressExternal ||
+		lineReadback.AllowlistCode != CodeLineEgressExternalDeclared {
+		t.Fatalf("line allowlist fact = %+v, want the external declaration", lineReadback)
+	}
+	if lineReadback.FinalEgress == LineEgressHealthy || lineReadback.RetryPending {
+		t.Fatalf("line readback = %+v, want a declared egress that is not retry-pending", lineReadback)
+	}
+	proxyReadback, err := s.NodeCoordinationReadback(proxyID, now)
+	if err != nil {
+		t.Fatalf("proxy readback: %v", err)
+	}
+	if proxyReadback.Allowlist != LineEgressExternal ||
+		proxyReadback.FinalEgress != LineEgressExternal ||
+		proxyReadback.AllowlistCode != CodeLineEgressExternalDeclared ||
+		proxyReadback.RetryPending {
+		t.Fatalf("proxy readback = %+v, want the external declaration", proxyReadback)
+	}
+}
+
+// TestHTTPProxyURLUpdateConvergesTheBoundLines pins the post-commit drain: a
+// changed proxy URL must republish every Line that renders it, exactly like
+// SetOutTransport does for a managed Out. Without it, a Line keeps dialing the
+// previous endpoint from its last candidate until some unrelated event.
+func TestHTTPProxyURLUpdateConvergesTheBoundLines(t *testing.T) {
+	s := selectionStore(t)
+	now := time.Unix(1_700_000_000, 0)
+	lineID, proxyID, subID := httpProxyFixture(t, s, now)
+	// The Line has to be reachable for the post-commit drain to publish it: an
+	// offline Line keeps the durable intent and receives no task.
+	if _, err := s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=? WHERE id=?`, now.Unix(), lineID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
+		t.Fatal(err)
+	}
+	before := candidateCount(t, s, lineID)
+
+	proxy, err := s.SetHTTPProxy(proxyID, "http://bob:n3w@edge.example.invalid:3128", now)
+	if err != nil {
+		t.Fatalf("proxy URL update: %v", err)
+	}
+	if proxy.Server != "edge.example.invalid" || proxy.Port != 3128 {
+		t.Fatalf("stored proxy projection = %+v, want only host:port", proxy)
+	}
+	if got := candidateCount(t, s, lineID); got <= before {
+		t.Fatalf("proxy URL update did not republish the bound line: %d -> %d", before, got)
+	}
+	var username, password, rawURL string
+	if err := s.DB.QueryRow(`SELECT url, username, password FROM node_http_proxy WHERE node_id=?`, proxyID).
+		Scan(&rawURL, &username, &password); err != nil {
+		t.Fatal(err)
+	}
+	if rawURL != "http://edge.example.invalid:3128" || username != "bob" || password != "n3w" {
+		t.Fatalf("stored proxy = %q/%q/%q", rawURL, username, password)
+	}
+	// A credential-free URL removes the previous Basic auth instead of leaving a
+	// secret the UI no longer shows.
+	if _, err := s.SetHTTPProxy(proxyID, "http://edge.example.invalid:3128", now); err != nil {
+		t.Fatal(err)
+	}
+	var nullUser, nullPassword sql.NullString
+	if err := s.DB.QueryRow(`SELECT username, password FROM node_http_proxy WHERE node_id=?`, proxyID).
+		Scan(&nullUser, &nullPassword); err != nil {
+		t.Fatal(err)
+	}
+	if nullUser.Valid || nullPassword.Valid {
+		t.Fatalf("credential-free update kept credentials: %+v/%+v", nullUser, nullPassword)
+	}
+	// The latest published candidate carries the new dial body, which is the
+	// only proof that the Line actually converged on it.
+	tx := mustTx(t, s)
+	revision, _, _, found, err := LatestPublishedCandidateTx(tx, lineID)
+	if err != nil || !found {
+		t.Fatalf("latest line candidate: found=%v err=%v", found, err)
+	}
+	candidate, err := BuildLineCandidateTx(tx, lineID, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Out == nil || candidate.Out.Type != node.OutEgressHTTP ||
+		candidate.Out.Server != "edge.example.invalid" || candidate.Out.Port != 3128 ||
+		candidate.Out.Username != "" || candidate.Out.Password != "" {
+		t.Fatalf("republished line egress = %+v, want the updated credential-free proxy", candidate.Out)
+	}
+}
+
+// mustTx opens one transaction for a read helper and rolls it back when the
+// test ends, so a store test can reuse the transaction-scoped readers.
+func mustTx(t *testing.T, s *Store) *sql.Tx {
+	t.Helper()
+	tx, err := s.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return tx
+}
+
+// candidateCount reads how many immutable revisions a node has.
+func candidateCount(t *testing.T, s *Store, nodeID string) int {
+	t.Helper()
+	var count int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func TestHTTPProxyCreateValidatesURLAndDisplayName(t *testing.T) {

@@ -135,8 +135,18 @@ type OutPoolEntry struct {
 
 // External reports whether the entry is an external HTTP proxy. An external
 // egress is always reachable as far as the Hub knows, so the UI labels it
-// "外部" instead of online/offline.
+// "外部声明" instead of online/offline or a proved Out health.
 func (e OutPoolEntry) External() bool { return e.Role == "http" }
+
+// HTTPProxy is the operator-visible half of one external proxy: the canonical
+// credential-free host:port the Line renders. The Basic credentials stay in
+// node_http_proxy and never leave the store.
+type HTTPProxy struct {
+	ProxyID   string `json:"proxy_id"`
+	Server    string `json:"server"`
+	Port      int    `json:"port"`
+	UpdatedAt int64  `json:"updated_at"`
+}
 
 // SetOutTransport stores the dial address of one Out node. The node must
 // exist with the immutable out role; the port must equal the Out's VLESS

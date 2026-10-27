@@ -64,6 +64,7 @@ var errorCodeDomains = map[string]bool{
 // client, a log line or an operator sees is a visible diff here.
 var goldenErrorCodeValues = []string{
 	"DATABASE_UNAVAILABLE",
+	"LINE_EGRESS_EXTERNAL_DECLARED",
 	"LINE_EGRESS_UNVERIFIED",
 	"LINE_NOT_AUTHORIZED",
 	"MESH_DEVICE_CORRUPT",
@@ -79,6 +80,7 @@ var goldenErrorCodeValues = []string{
 	"OUT_OFFLINE_FAIL_CLOSED",
 	"OUT_REFERENCED_BY_SUBSCRIPTIONS",
 	"OUT_SYNC_IN_PROGRESS",
+	"OUT_SYNC_NOT_APPLICABLE",
 	"OUT_SYNC_PENDING",
 	"POLICY_CONFLICT",
 	"POLICY_INVALID",

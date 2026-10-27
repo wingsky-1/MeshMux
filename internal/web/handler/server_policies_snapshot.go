@@ -105,13 +105,18 @@ func (app *Server) policyMeshModel(now time.Time) (subscription.MeshConfigModel,
 }
 
 // policyOutState aggregates the read-only Out projection over all edge Lines:
-// a configured-but-unavailable Out is degraded and outranks a healthy one.
+// a configured-but-unavailable Out is degraded and outranks a healthy one. An
+// external HTTP proxy outranks neither: it is a declared egress with no ACL,
+// no readback and no controller, so it is reported as declared instead of
+// being folded into "active" (a proof the Hub does not have) or "degraded" (a
+// fault the Hub cannot observe).
 func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 	nodes, err := app.store.ListNodesAt(now)
 	if err != nil {
 		return view.PolicyOutAbsent
 	}
 	state := view.PolicyOutAbsent
+	external := false
 	for _, node := range nodes {
 		if node.Role != "edge" {
 			continue
@@ -120,10 +125,22 @@ func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 		if err != nil || !facts.Configured {
 			continue
 		}
+		if facts.ExternalDeclared {
+			external = true
+			continue
+		}
 		if !facts.Available {
 			return view.PolicyOutDegraded
 		}
 		state = view.PolicyOutActive
+	}
+	// A degraded managed Out still wins over a declared proxy: it is the state
+	// that actually fails closed and needs the operator.
+	if state == view.PolicyOutActive {
+		return state
+	}
+	if external {
+		return view.PolicyOutExternal
 	}
 	return state
 }
@@ -207,6 +224,9 @@ func policyServerRows(serverIntent policy.ServerPolicy, out view.PolicyOutState)
 	}
 	if out == view.PolicyOutDegraded {
 		action, note = "Out 故障 · fail-closed", "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
+	}
+	if out == view.PolicyOutExternal {
+		action, note = "外部 HTTP 代理直出（声明）", "出口位是外部 HTTP 代理：Hub 无 ACL、无回读、无控制器，可用性是操作员的声明而不是已证明的结论。"
 	}
 	rows := make([]view.PolicyRuleView, 0, len(serverIntent.Rules)+1)
 	for _, rule := range serverIntent.Rules {

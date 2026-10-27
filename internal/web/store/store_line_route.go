@@ -173,11 +173,15 @@ func outEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 		return OutEgressFacts{}, err
 	}
 	if len(outs) == 0 {
-		// The slot holds an external HTTP proxy (Ruling R11). It has no ACL,
-		// no Agent and no readback, so there is no Hub-side fact to wait for:
-		// the policy may keep the out tag, and the availability is the
-		// operator's external endpoint.
+		// The slot holds an external HTTP proxy (Ruling R11). It has no ACL, no
+		// Agent, no readback and no machine controller that could apply or prove
+		// one, so there is no Hub-side fact to wait for. The out tag stays
+		// available, but only as the operator's declaration: ExternalDeclared is
+		// set and Code names the declaration so no caller can read this as a
+		// proven managed egress. The egress body is the stored http outbound.
 		facts.Available = true
+		facts.ExternalDeclared = true
+		facts.Code = CodeLineEgressExternalDeclared
 		return facts, nil
 	}
 	// An Out that stopped reporting cannot apply or prove the authorization.

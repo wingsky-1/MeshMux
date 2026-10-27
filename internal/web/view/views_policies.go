@@ -18,6 +18,9 @@ const (
 	PolicyOutActive PolicyOutState = "active"
 	// Out 故障：fail-closed，不隐式回落 Line 直出。
 	PolicyOutDegraded PolicyOutState = "degraded"
+	// Out 为外部声明：出口位是外部 HTTP 代理，Hub 无 ACL、无回读、无控制器，
+	// 因此这是操作员的声明而不是已证明可用的出口。页面必须据此措辞。
+	PolicyOutExternal PolicyOutState = "external"
 )
 
 // PolicyRuleView is one display row of a policy layer.

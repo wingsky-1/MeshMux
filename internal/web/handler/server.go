@@ -208,6 +208,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// mutations above: same store calls, same session + CSRF boundary, but they
 	// re-render the list instead of answering JSON.
 	r.Post("/nodes/out-transport", app.mutation(app.outTransportSet, true))
+	r.Post("/nodes/http-proxy", app.mutation(app.httpProxySet, true))
 	r.Post("/nodes/out-unbind", app.mutation(app.outUnbindPage, true))
 	r.Post("/nodes/out-delete", app.mutation(app.outDeletePage, true))
 	// The JSON management routes declare their failure representation here, next

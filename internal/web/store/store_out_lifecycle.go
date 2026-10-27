@@ -97,15 +97,20 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 		return errors.Join(errors.New(CodeOutSyncPending+": the out still has an unfinished chain; retry after it settles"), ErrOutCleanupPending)
 	}
 	// Publish the explicit empty authorization before the node is gone. An Out that
-	// never published a chain has no host state to clear.
-	deferred, deferredErr := s.clearOutACLBeforeDeleteTx(tx, outID, now)
-	if deferred {
-		// The host cannot drop its guard yet: a chain is still applying, or it stopped
-		// reporting. Deleting anyway would leave a host accepting the old sources with no
-		// node row left to retry from, so nothing is destroyed and the caller sees the
-		// deferral. The intent is durable, so the next Out event completes the cleanup and
-		// the operator can delete again.
-		return errors.Join(deferredErr, ErrOutCleanupPending)
+	// never published a chain has no host state to clear, and an external HTTP proxy
+	// has no Agent, no candidate and no ACL at all (Ruling R11): its delete must not
+	// walk the Out chain, so it is branched by kind instead of being fed to the
+	// candidate builder.
+	if role == "out" {
+		deferred, deferredErr := s.clearOutACLBeforeDeleteTx(tx, outID, now)
+		if deferred {
+			// The host cannot drop its guard yet: a chain is still applying, or it stopped
+			// reporting. Deleting anyway would leave a host accepting the old sources with no
+			// node row left to retry from, so nothing is destroyed and the caller sees the
+			// deferral. The intent is durable, so the next Out event completes the cleanup and
+			// the operator can delete again.
+			return errors.Join(deferredErr, ErrOutCleanupPending)
+		}
 	}
 	// Delete the node. Everything keyed to it (out_settings with the dial address and
 	// link key, node_candidates, agent_tasks, node_identities, node_pairing) cascades.

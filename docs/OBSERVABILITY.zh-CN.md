@@ -44,8 +44,10 @@
 | LINE_EGRESS_UNVERIFIED | Out 授权 | Line 传输地址是 DNS 名，Hub 无法证明 Out 将看到的源地址 |
 | LINE_NOT_AUTHORIZED | Out 授权 | 绑定 Line 没有当前未撤销的配对身份 |
 | LINE_NOT_RETIRED | Out 授权（T3 既有码，此处仅补登记） | 试图回收仍可验证的 Line；须先撤销身份 |
+| LINE_EGRESS_EXTERNAL_DECLARED | Out 授权 / 外部出口 | 出口位是外部 HTTP 代理：Hub 无 ACL、无回读、无控制器，这是操作员声明而非已证明可用；不阻断发布 |
 | OUT_SYNC_IN_PROGRESS | Out 同步 | 存在在途链，等待其结算 |
 | OUT_SYNC_PENDING | Out 同步 | 授权变更尚未发布（Offline/在途/删除清理未下发） |
+| OUT_SYNC_NOT_APPLICABLE | Out 同步 / 外部出口 | 外部 HTTP 代理没有 Agent 链、ACL 或回读可重试；显式 no-op，不是失败也不是“已下发” |
 | OUT_SYNC_FAILED | Out 同步 | 双 readback 未收敛且无更具体子码 |
 | OUT_OFFLINE | Out 同步 | Out 超过心跳窗口未上报，不下发状态变更任务 |
 | OUT_EGRESS_REALITY_UNVERIFIED | Out 同步 | 白名单与入站均健康，但已确认候选缺 REALITY 块 |

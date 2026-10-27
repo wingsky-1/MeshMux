@@ -35,12 +35,22 @@ type OutEgressFacts struct {
 	// Configured is true when at least one enabled binding exists. A false
 	// value means "direct by configuration", never "the Out broke".
 	Configured bool `json:"configured"`
-	// Available is true only when the Out path is confirmed healthy and the
-	// Out is currently reporting.
+	// Available is true when the Out path may carry traffic: a managed Out the
+	// Agent confirmed, or an external HTTP proxy the operator declared. The
+	// external case is a declaration, not a proof; ExternalDeclared and Code
+	// distinguish the two, so a caller can never present a declaration as a
+	// confirmed egress.
 	Available bool `json:"available"`
+	// ExternalDeclared is true only for the external HTTP proxy egress: the Hub
+	// has no ACL, no Agent and no readback for it, so "available" is the
+	// operator's own endpoint. Code carries CodeLineEgressExternalDeclared in
+	// that state.
+	ExternalDeclared bool `json:"external_declared,omitempty"`
 	// Code is the stable reason when Configured is true and Available is
 	// false: OUT_OFFLINE, OUT_SYNC_IN_PROGRESS, OUT_SYNC_PENDING,
-	// LINE_NOT_AUTHORIZED, LINE_EGRESS_UNVERIFIED or the Agent's own code.
+	// LINE_NOT_AUTHORIZED, LINE_EGRESS_UNVERIFIED or the Agent's own code. It
+	// also carries LINE_EGRESS_EXTERNAL_DECLARED when Available is the
+	// external declaration rather than a confirmed Out.
 	Code string `json:"code,omitempty"`
 }
 

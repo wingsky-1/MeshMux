@@ -94,9 +94,13 @@ const (
 	// ACL state: the Line is still an authorized source at every Out (Ruling R10).
 	LineEgressDirect = "direct"
 	// LineEgressExternal: the Line's egress slot holds an external HTTP proxy
-	// (Ruling R11). The proxy is not a managed host, so there is no Out ACL,
-	// readback or deep-hook fact to prove; the Line is excluded from the Out
-	// convergence gate but still has to prove its own inbound snapshot.
+	// (Ruling R11). The proxy is not a managed host: there is no Out ACL, no
+	// readback and no machine controller that could apply or prove one, so this
+	// state is the operator's declaration, never a proven egress. The Line is
+	// excluded from the Out convergence gate but still has to prove its own
+	// inbound snapshot. It always carries CodeLineEgressExternalDeclared, so a
+	// projection or a log line can tell the declaration apart from a managed
+	// healthy Out.
 	LineEgressExternal = "external"
 	// LineEgressHealthy: every Out selected for this Line authorized it and
 	// confirmed it.
@@ -129,6 +133,17 @@ const (
 	// gate and every projection report it, so an operator never reads "preview
 	// says fine, publish says no".
 	CodeOutNotAuthorized = "OUT_NOT_AUTHORIZED"
+	// CodeLineEgressExternalDeclared marks the LineEgressExternal state: the
+	// egress is an external HTTP proxy the operator declared, and the Hub
+	// deliberately holds no proof of it (no ACL, no readback, no controller).
+	// The code is informational and never blocks a publication; it exists so a
+	// readback, a log line and the UI can say "declared" instead of "healthy".
+	CodeLineEgressExternalDeclared = "LINE_EGRESS_EXTERNAL_DECLARED"
+	// CodeOutSyncNotApplicable marks an operation that has no meaning for an
+	// external HTTP proxy: there is no Agent, no candidate, no ACL and no
+	// readback to publish or retry. The action reports it explicitly instead of
+	// a silent success, so an operator never believes a chain was sent.
+	CodeOutSyncNotApplicable = "OUT_SYNC_NOT_APPLICABLE"
 )
 
 // outDrainOutcome classifies what one Out drain attempt did. It lets the retire
@@ -146,6 +161,12 @@ const (
 	// outDrainDeferred: a publish is required but cannot happen yet (a chain is
 	// in flight, or the Out is offline). The change stays pending.
 	outDrainDeferred
+	// outDrainNotApplicable: the egress is an external HTTP proxy (Ruling R11).
+	// It has no Agent, no candidate, no ACL and no readback, so there is no
+	// out-side chain to publish at all. The caller reports this explicitly
+	// instead of a silent no-op, and the only meaningful work (re-deriving the
+	// Lines that embed the proxy dial body) happens after its commit.
+	outDrainNotApplicable
 )
 
 // OutEgressReadback is the Hub-side dual readback of one Line that egresses
@@ -158,7 +179,10 @@ type OutEgressReadback struct {
 	LineID string `json:"line_id"`
 	OutID  string `json:"out_id"`
 	// Allowlist is the Out ACL readback: the published source set is the
-	// authorized one and the Agent confirmed it.
+	// authorized one and the Agent confirmed it. For an external HTTP proxy the
+	// field carries LineEgressExternal instead: there is no ACL, no readback and
+	// no controller, so the value is the operator's declaration, and
+	// AllowlistCode names it (LINE_EGRESS_EXTERNAL_DECLARED).
 	Allowlist string `json:"allowlist"`
 	// AllowlistCode is the stable reason when Allowlist is not healthy.
 	AllowlistCode string `json:"allowlist_code,omitempty"`
@@ -171,7 +195,9 @@ type OutEgressReadback struct {
 	// REALITY transport block that its stored Line settings describe.
 	Reality bool `json:"reality"`
 	// FinalEgress is healthy only when the allowlist and the inbound are both
-	// healthy (or the Line egresses directly and its inbound is healthy).
+	// healthy (or the Line egresses directly and its inbound is healthy). An
+	// external HTTP proxy is never healthy here: a converged Line proves only
+	// its own inbound half, so the pair reports the declaration.
 	FinalEgress string `json:"final_egress"`
 	// FinalEgressCode is the stable reason when FinalEgress is not healthy.
 	FinalEgressCode string `json:"final_egress_code,omitempty"`
@@ -681,8 +707,10 @@ func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, st
 		// The slot names an external HTTP proxy: there is no Out ACL and no
 		// Agent readback to prove, so the gate is deliberately excluded
 		// (Ruling R11). The Line still has to prove its own inbound snapshot;
-		// that fact is reported separately.
-		return LineEgressExternal, "", nil
+		// that fact is reported separately. The state is the operator's
+		// declaration, and the code says so, because "healthy" is a proof the
+		// Hub does not have and must never fabricate.
+		return LineEgressExternal, CodeLineEgressExternalDeclared, nil
 	}
 	if _, authorized, err := lineEgressSourceTx(tx, lineID); err != nil {
 		return LineEgressPartial, SanitizeSubscriberSyncCode(err.Error()), nil
@@ -724,7 +752,14 @@ func lineOutPublishGateTx(tx *sql.Tx, lineID string, now time.Time) error {
 		return err
 	}
 	switch state {
-	case LineEgressDirect, LineEgressExternal, LineEgressHealthy:
+	case LineEgressDirect, LineEgressHealthy:
+		return nil
+	case LineEgressExternal:
+		// The egress is an external HTTP proxy the operator declared (Ruling
+		// R11). There is no Out ACL, no readback and no machine controller that
+		// could apply or prove one, so the gate has nothing to verify and must
+		// not invent a proof. The Line's own inbound snapshot is still gated by
+		// the ordinary publication path.
 		return nil
 	}
 	if code == "" {
@@ -777,8 +812,18 @@ func outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressRea
 	readback.Reality = lineRealityConfirmedTx(tx, lineID)
 	readback.ConfirmedRevision, readback.ConfirmedDigest = confirmedLineRevisionTx(tx, lineID)
 	switch {
-	case readback.Allowlist == LineEgressDirect || readback.Allowlist == LineEgressExternal:
+	case readback.Allowlist == LineEgressDirect:
 		readback.FinalEgress, readback.FinalEgressCode = inbound, inboundCode
+	case readback.Allowlist == LineEgressExternal:
+		// The egress is the operator's external HTTP proxy (Ruling R11): no ACL,
+		// no readback and no controller can prove it. A converged Line proves only
+		// its own inbound half, so the pair is reported as the declaration it is
+		// instead of a healthy egress the Hub never demonstrated.
+		if inbound == SubscriberSyncHealthy && readback.Reality {
+			readback.FinalEgress, readback.FinalEgressCode = LineEgressExternal, CodeLineEgressExternalDeclared
+		} else {
+			readback.FinalEgress, readback.FinalEgressCode = inbound, inboundCode
+		}
 	case readback.Allowlist == LineEgressHealthy && inbound == SubscriberSyncHealthy && readback.Reality:
 		readback.FinalEgress = LineEgressHealthy
 	case readback.Allowlist == LineEgressHealthy && inbound == SubscriberSyncHealthy:
@@ -793,7 +838,8 @@ func outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressRea
 	}
 	// The retry pointer is derived from the same evidence as the state above:
 	// only a terminal failure is retryable. A direct Line has no Out path to
-	// retry, and a transition is still applying its own chain.
+	// retry, an external proxy has no chain to retry at all, and a transition is
+	// still applying its own chain.
 	readback.RetryPending = readback.FinalEgress == LineEgressPartial
 	return readback, nil
 }
@@ -869,6 +915,14 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 	}
 	if err != nil {
 		return outDrainNoop, errors.New("DATABASE_UNAVAILABLE")
+	}
+	if role == "http" {
+		// An external HTTP proxy has no Agent, no candidate and no ACL: there is
+		// nothing an Out drain could publish, so this is "not applicable" rather
+		// than a silent no-op. The Lines that embed the proxy dial body are
+		// re-derived by the caller after its own commit (see SetHTTPProxy), and
+		// the caller reports CodeOutSyncNotApplicable.
+		return outDrainNotApplicable, nil
 	}
 	if role != "out" {
 		return outDrainNoop, nil
@@ -961,6 +1015,10 @@ func NextCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 // republishes a chain even when the desired authorization did not change, which is
 // exactly what an operator needs after a partial/failed or superseded chain.
 // Automatic polls never call it.
+//
+// An external HTTP proxy has no chain to retry (Ruling R11), so the call answers
+// CodeOutSyncNotApplicable explicitly: a success here would otherwise read as
+// "the chain was published and confirmed", which the Hub never did.
 func (s *Store) RetryOutSync(outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
@@ -978,7 +1036,10 @@ func (s *Store) RetryOutSync(outID string, now time.Time) error {
 	if err := tx.Commit(); err != nil {
 		return errors.New("DATABASE_UNAVAILABLE")
 	}
-	if outcome == outDrainDeferred {
+	switch outcome {
+	case outDrainNotApplicable:
+		return errors.New(CodeOutSyncNotApplicable + ": an external http proxy has no agent chain, acl or readback to retry")
+	case outDrainDeferred:
 		return errors.New(CodeOutSyncPending + ": the out authorization change is queued behind an in-flight or offline out")
 	}
 	return nil
@@ -1147,6 +1208,20 @@ func (s *Store) NodeCoordinationReadback(nodeID string, now time.Time) (OutEgres
 			AllowlistCode: code,
 			FinalEgress:   state,
 			RetryPending:  state == OutSyncPartial,
+		}, nil
+	}
+	if role == "http" {
+		// An external HTTP proxy has no Agent, no ACL and no readback at all
+		// (Ruling R11). Reporting it through the Line projection would answer
+		// LINE_ROLE_INVALID, which a diagnosis log would misread as a fault;
+		// the honest answer is the declaration itself.
+		return OutEgressReadback{
+			OutID:           nodeID,
+			Allowlist:       LineEgressExternal,
+			AllowlistCode:   CodeLineEgressExternalDeclared,
+			FinalEgress:     LineEgressExternal,
+			FinalEgressCode: CodeLineEgressExternalDeclared,
+			RetryPending:    false,
 		}, nil
 	}
 	return outEgressReadbackTx(tx, nodeID, now)

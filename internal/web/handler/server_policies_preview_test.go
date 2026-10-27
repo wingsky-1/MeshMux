@@ -33,6 +33,7 @@ func TestPoliciesServerPreview(t *testing.T) {
 	}{
 		{`{"domains":["chat.example.invalid"],"out":{"configured":false}}`, 200, policy.AIEgressLine, "", `"outbound": "direct"`},
 		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"available":true}}`, 200, policy.AIEgressOut, "", `"outbound": "out"`},
+		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"available":true,"external_declared":true}}`, 200, policy.AIEgressOut, "LINE_EGRESS_EXTERNAL_DECLARED", `"outbound": "out"`},
 		{`{"domains":["chat.example.invalid"],"out":{"configured":true}}`, 409, "", policy.CodeOutOfflineFailClosed, ""},
 		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true}}`, 409, "", policy.CodeOutFallbackUnaudited, ""},
 		{`{"domains":["chat.example.invalid"],"out":{"configured":true,"fallback_to_line":true,"operation_id":"preview-op"}}`, 200, policy.AIEgressLineFallback, policy.CodeOutOfflineFailClosed, `"outbound": "direct"`},
