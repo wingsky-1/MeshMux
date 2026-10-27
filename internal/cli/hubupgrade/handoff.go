@@ -116,8 +116,8 @@ func (cfg HandoffConfig) nowUTC() time.Time {
 //	validate  journal state (backed_up/verifying only), record digest, manifest
 //	          target/digest/package agreement, request-directory shape;
 //	assemble  the frozen request document for this operation;
-//	effects   publish the request through the staging sibling, then journal
-//	          queued; no root call, no exec, no unit attribute;
+//	effects   publish the request atomically in the request directory, then
+//	          journal queued; no root call, no exec, no unit attribute;
 //	return    a queued receipt. The root dispatcher performs the mutation and
 //	          the Web only reconciles its result afterwards.
 func Handoff(ctx context.Context, cfg HandoffConfig) (HandoffReceipt, error) {
