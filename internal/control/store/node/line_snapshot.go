@@ -73,7 +73,7 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain
 		return coredomain.Candidate{}, errors.New("CANDIDATE_INVALID: role must be edge or out")
 	}
 
-	line, err := scanLine(tx.QueryRow(`SELECT node_id, display_name, server, port, sort_order,
+	line, err := scanLine(tx.QueryRow(`SELECT node_id, display_name, server, server_source, port, sort_order,
 	 server_name, handshake_server, handshake_port, private_key, public_key, short_id, local
 	 FROM line_settings WHERE node_id=?`, nodeID))
 	if errors.Is(err, sql.ErrNoRows) {

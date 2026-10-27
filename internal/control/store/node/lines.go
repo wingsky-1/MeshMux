@@ -15,6 +15,10 @@ import (
 // setLine stores the transport of one Line. The node must be an existing edge
 // node; an Out node never carries a proxy Line.
 //
+// An empty client-facing address is filled from the node's last reported IPv4
+// and stored with source "reported"; any explicit address is source "manual"
+// and is never overwritten by a later report.
+//
 // The REALITY key pair and the short ID identify the transport. For an
 // existing Line they are preserved, so renaming or reordering a Line can
 // never invalidate a published client configuration.
@@ -33,7 +37,9 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	defer tx.Rollback()
 	var role string
 	var vlessPort int
-	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, line.NodeID).Scan(&role, &vlessPort)
+	var observedIPv4 string
+	err = tx.QueryRow(`SELECT role, vless_port, observed_ipv4 FROM nodes WHERE id=?`, line.NodeID).
+		Scan(&role, &vlessPort, &observedIPv4)
 	if errors.Is(err, sql.ErrNoRows) {
 		return subscription.Line{}, common.ErrLineNotFound
 	}
@@ -63,7 +69,18 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	// The client-facing address is canonicalized to lower case, so one Line is
 	// never published under two spellings of the same host. An IPv6 address
 	// keeps its form.
-	line.Server = strings.ToLower(line.Server)
+	line.Server = strings.ToLower(strings.TrimSpace(line.Server))
+	// An empty address means "use the node's own report". It is materialized
+	// now so every existing reader (candidate, download, Out allowlist) sees
+	// one effective value; a later report refreshes only reported rows.
+	line.ServerSource = AddressSourceManual
+	if line.Server == "" {
+		if observedIPv4 == "" {
+			return subscription.Line{}, errors.New("LINE_SERVER_REQUIRED: enter a client-facing address or wait for the node to report one")
+		}
+		line.Server = observedIPv4
+		line.ServerSource = AddressSourceReported
+	}
 	if err = line.Validate(); err != nil {
 		return subscription.Line{}, err
 	}
@@ -87,8 +104,8 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	if line.Local {
 		local = 1
 	}
-	result, err := tx.Exec(`UPDATE line_settings SET display_name=?, server=?, port=?, sort_order=?, server_name=?, handshake_server=?, handshake_port=?, local=?, updated_at=? WHERE node_id=?`,
-		line.DisplayName, line.Server, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort, local, now.Unix(), line.NodeID)
+	result, err := tx.Exec(`UPDATE line_settings SET display_name=?, server=?, server_source=?, port=?, sort_order=?, server_name=?, handshake_server=?, handshake_port=?, local=?, updated_at=? WHERE node_id=?`,
+		line.DisplayName, line.Server, line.ServerSource, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort, local, now.Unix(), line.NodeID)
 	if err != nil {
 		return subscription.Line{}, common.ErrLineSettingsFailed
 	}
@@ -97,8 +114,8 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 		return subscription.Line{}, common.ErrLineSettingsFailed
 	}
 	if affected == 0 {
-		if _, err = tx.Exec(`INSERT INTO line_settings(node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			line.NodeID, line.DisplayName, line.Server, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort,
+		if _, err = tx.Exec(`INSERT INTO line_settings(node_id, display_name, server, server_source, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			line.NodeID, line.DisplayName, line.Server, line.ServerSource, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort,
 			line.PrivateKey, line.PublicKey, line.ShortID, local, now.Unix(), now.Unix()); err != nil {
 			return subscription.Line{}, common.ErrLineSettingsFailed
 		}
@@ -117,7 +134,7 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 
 // listLines returns every stored Line ordered by its sort order.
 func (s *Store) ListLines() ([]subscription.Line, error) {
-	rows, err := s.DB.Query(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)
+	rows, err := s.DB.Query(`SELECT node_id, display_name, server, server_source, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)
 	if err != nil {
 		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -149,13 +166,21 @@ func (s *Store) ListLines() ([]subscription.Line, error) {
 func scanLine(row common.RowScanner) (subscription.Line, error) {
 	var line subscription.Line
 	var local int
-	err := row.Scan(&line.NodeID, &line.DisplayName, &line.Server, &line.Port, &line.SortOrder,
+	err := row.Scan(&line.NodeID, &line.DisplayName, &line.Server, &line.ServerSource, &line.Port, &line.SortOrder,
 		&line.ServerName, &line.HandshakeServer, &line.HandshakePort,
 		&line.PrivateKey, &line.PublicKey, &line.ShortID, &local)
 	if err != nil {
 		return subscription.Line{}, err
 	}
 	line.Local = local == 1
+	if line.ServerSource == "" {
+		// A pre-feature row is a manual address even if a fixture inserted it
+		// before the additive column existed.
+		line.ServerSource = AddressSourceManual
+	}
+	if line.ServerSource != AddressSourceManual && line.ServerSource != AddressSourceReported {
+		return subscription.Line{}, common.ErrLineSettingsCorrupt
+	}
 	if err := validateStoredLine(line); err != nil {
 		return subscription.Line{}, err
 	}

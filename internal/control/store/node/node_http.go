@@ -40,7 +40,7 @@ const nodeColumns = `id, role, display_name, vless_port, ssh_port, status,
  agent_version, kernel_version, last_heartbeat, last_success, created_at, updated_at,
  observed_revision, observed_config_sha256, observed_architecture,
  observed_agent_version, observed_agent_sha256, observed_kernel_version,
- observed_kernel_sha256, observed_out_default_deny, observed_at,
+ observed_kernel_sha256, observed_out_default_deny, observed_ipv4, observed_at,
  observed_task_revision, observed_task_operation_id, last_success_at`
 
 // nodeHTTPProxyDDL is the one definition of the private proxy table.
@@ -73,11 +73,20 @@ func MigrateSchema16(db *sql.DB) error {
 		// payload rewrite) keeps its rows; ensure the additive table is present
 		// so a manually damaged/older fixture converges instead of failing at the
 		// first proxy read.
+		if err := EnsureReportedAddressColumns(db); err != nil {
+			return err
+		}
 		_, err := db.Exec(nodeHTTPProxyDDL)
 		return err
 	}
 	if version != 15 {
 		return errors.New("SCHEMA_MIGRATION_FAILED: schema 16 requires the schema 15 chain")
+	}
+	// A schema-15 database can already carry the additive reported-address
+	// columns (a replay of a newer file). Add them before the rebuild so the
+	// column list below can copy them instead of losing the last observation.
+	if err := EnsureReportedAddressColumns(db); err != nil {
+		return err
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
 		return err
@@ -112,6 +121,7 @@ CREATE TABLE nodes_new (
   observed_kernel_version TEXT NOT NULL DEFAULT '',
   observed_kernel_sha256 TEXT NOT NULL DEFAULT '',
   observed_out_default_deny INTEGER NOT NULL DEFAULT 0,
+  observed_ipv4 TEXT NOT NULL DEFAULT '',
   observed_at INTEGER NOT NULL DEFAULT 0,
   observed_task_revision INTEGER NOT NULL DEFAULT 0,
   observed_task_operation_id TEXT NOT NULL DEFAULT '',

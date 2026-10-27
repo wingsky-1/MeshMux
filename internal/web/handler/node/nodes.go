@@ -445,7 +445,11 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.agentFail(w, r, 400, "HEARTBEAT_INVALID", "心跳缺少版本信息。", "请上报 agent 与内核版本。")
 		return
 	}
-	if err := s.Store.Heartbeat(node.ID, body.AgentVersion, body.KernelVersion, s.Now()); err != nil {
+	if err := s.Store.Heartbeat(node.ID, body.AgentVersion, body.KernelVersion, body.ReportedIPv4, s.Now()); err != nil {
+		if strings.HasPrefix(err.Error(), "REPORTED_IPV4_INVALID") {
+			s.agentFail(w, r, 400, "HEARTBEAT_INVALID", "心跳中的上报地址不正确。", "请上报一个 IPv4 地址或省略该字段。")
+			return
+		}
 		s.agentFail(w, r, 503, store.CodeDatabaseUnavailable, "无法记录心跳。", "请稍后重试。")
 		return
 	}

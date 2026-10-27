@@ -203,6 +203,12 @@ func (s *Store) Migrate() error {
 	if err := storepolicy.MigrateSchema17(s.DB, DatabaseSchemaVersion); err != nil {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
+	// Agent-reported addresses are additive columns that do not move
+	// user_version: an older binary ignores them and a newer binary converges
+	// every existing database on open.
+	if err := storenode.EnsureReportedAddressColumns(s.DB); err != nil {
+		return err
+	}
 	return nil
 }
 

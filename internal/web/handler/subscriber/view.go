@@ -57,7 +57,8 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 	}
 	for _, line := range lines {
 		page.Lines = append(page.Lines, view.LineView{
-			NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server, Port: line.Port,
+			NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
+			ServerSource: line.ServerSource, Port: line.Port,
 			SortOrder: line.SortOrder, ServerName: line.ServerName, Handshake: line.HandshakeServer,
 			HandshakePort: line.HandshakePort, Local: line.Local,
 		})
@@ -97,7 +98,8 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 		for _, line := range lines {
 			row := view.SubscriberLineView{
 				NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
-				Port: line.Port, SortOrder: line.SortOrder, Selected: selectedSet[line.NodeID],
+				ServerSource: line.ServerSource, Port: line.Port, SortOrder: line.SortOrder,
+				Selected: selectedSet[line.NodeID],
 			}
 			row.Intent = subscriberLineIntent(row.Selected)
 			lineState, hasEvidence := lineEvidence[line.NodeID]

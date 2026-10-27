@@ -235,6 +235,21 @@ func TestReadbackValidate(t *testing.T) {
 	if len(body) >= 512 {
 		t.Fatalf("readback detail is %d bytes, want <512", len(body))
 	}
+	// The optional egress address is display/default-fill information only;
+	// it must not invalidate the evidence shape when present or absent.
+	readback.ReportedIPv4 = "203.0.113.21"
+	if err := readback.Validate(); err != nil {
+		t.Fatalf("readback with a reported IPv4 rejected: %v", err)
+	}
+	body, err = json.Marshal(readback)
+	if err != nil || len(body) >= 512 {
+		t.Fatalf("readback with a reported IPv4 is %d bytes, err=%v", len(body), err)
+	}
+	readback.ReportedIPv4 = "::1"
+	if err := readback.Validate(); err == nil {
+		t.Fatal("non-IPv4 reported address accepted")
+	}
+	readback.ReportedIPv4 = ""
 	readback.KernelVersion = "1.15.0"
 	if err := readback.Validate(); err == nil {
 		t.Fatal("unpinned kernel readback accepted")

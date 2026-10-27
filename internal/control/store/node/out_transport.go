@@ -11,9 +11,11 @@ import (
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
-// Out transport: the operator-entered dial address of one Out node plus the
-// Hub-issued SS link key the Line presents when it egresses through that Out
-// (Ruling R7: the double-hop is Shadowsocks, never bare VLESS).
+// Out transport: the dial address of one Out node plus the Hub-issued SS link
+// key the Line presents when it egresses through that Out (Ruling R7: the
+// double-hop is Shadowsocks, never bare VLESS). The address is either entered
+// by the operator (source "manual") or filled from the Out's own IPv4 report
+// (source "reported"); a manual value always wins.
 //
 // The table is created idempotently without a user_version bump: the
 // subscription-aggregation schema numbers (12/13/14) are reserved for Task
@@ -105,10 +107,11 @@ CREATE TABLE IF NOT EXISTS out_settings (
 // The link key never leaves this package: list projections and the Web UI only
 // see the address, never the key.
 type OutTransport struct {
-	OutID     string `json:"out_id"`
-	Server    string `json:"server"`
-	Port      int    `json:"port"`
-	UpdatedAt int64  `json:"updated_at"`
+	OutID        string `json:"out_id"`
+	Server       string `json:"server"`
+	ServerSource string `json:"server_source"`
+	Port         int    `json:"port"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
 // OutPoolEntry is one selectable egress of the pool: an Out node or an
@@ -124,16 +127,23 @@ type OutTransport struct {
 // source authorization is node membership (Ruling R10): every enrolled Line is
 // accepted by every enrolled Out regardless of any selection.
 type OutPoolEntry struct {
-	OutID               string   `json:"out_id"`
-	DisplayName         string   `json:"display_name"`
-	Role                string   `json:"role"`
-	VlessPort           int      `json:"vless_port"`
-	Online              bool     `json:"online"`
-	TransportConfigured bool     `json:"transport_configured"`
-	Server              string   `json:"server,omitempty"`
-	Port                int      `json:"port,omitempty"`
-	LineIDs             []string `json:"line_ids,omitempty"`
-	Enabled             bool     `json:"enabled"`
+	OutID               string `json:"out_id"`
+	DisplayName         string `json:"display_name"`
+	Role                string `json:"role"`
+	VlessPort           int    `json:"vless_port"`
+	Online              bool   `json:"online"`
+	TransportConfigured bool   `json:"transport_configured"`
+	Server              string `json:"server,omitempty"`
+	// ServerSource is "manual" or "reported"; the UI labels the origin of the
+	// effective address and never treats reported as an operator statement.
+	ServerSource string `json:"server_source,omitempty"`
+	// ManualServer is the operator-entered value only. The edit form leaves the
+	// input empty for a reported address so resubmitting cannot silently turn
+	// it into a manual one.
+	ManualServer string   `json:"-"`
+	Port         int      `json:"port,omitempty"`
+	LineIDs      []string `json:"line_ids,omitempty"`
+	Enabled      bool     `json:"enabled"`
 }
 
 // External reports whether the entry is an external HTTP proxy. An external
@@ -153,11 +163,13 @@ type HTTPProxy struct {
 
 // SetOutTransport stores the dial address of one Out node. The node must
 // exist with the immutable out role; the port must equal the Out's VLESS
-// port, mirroring the Line port-match rule. The link key is issued on
-// first set and preserved afterwards, mirroring the REALITY key preservation
-// of SetLine: renaming the address never invalidates the egress the bound
-// Line already dials with. Setting transport on a migrated-empty row mints
-// the key now.
+// port, mirroring the Line port-match rule. An empty server means the operator
+// left the field to its default: the Out's last reported IPv4 is stored with
+// source "reported". A non-empty server is always source "manual" and is never
+// overwritten by a later report. The link key is issued on first set and
+// preserved afterwards, mirroring the REALITY key preservation of SetLine:
+// renaming the address never invalidates the egress the bound Line already
+// dials with. Setting transport on a migrated-empty row mints the key now.
 func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
@@ -171,7 +183,9 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 	defer tx.Rollback()
 	var role string
 	var vlessPort int
-	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, outID).Scan(&role, &vlessPort)
+	var observedIPv4 string
+	err = tx.QueryRow(`SELECT role, vless_port, observed_ipv4 FROM nodes WHERE id=?`, outID).
+		Scan(&role, &vlessPort, &observedIPv4)
 	if errors.Is(err, sql.ErrNoRows) {
 		return OutTransport{}, common.ErrOutNotFound
 	}
@@ -183,6 +197,14 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 	}
 	if port != vlessPort {
 		return OutTransport{}, errors.New("OUT_PORT_MISMATCH: the out port must match the vless port of the node")
+	}
+	source := AddressSourceManual
+	if server == "" {
+		if observedIPv4 == "" {
+			return OutTransport{}, errors.New("OUT_TRANSPORT_REPORTED_IP_MISSING: enter a dial address or wait for the out node to report an IPv4 address")
+		}
+		server = observedIPv4
+		source = AddressSourceReported
 	}
 	var linkKey string
 	err = tx.QueryRow(`SELECT link_key FROM out_settings WHERE node_id=?`, outID).Scan(&linkKey)
@@ -209,10 +231,10 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 		return OutTransport{}, errors.New("OUT_TRANSPORT_INVALID: need one hostname or IP address without scheme, path, port or credentials")
 	}
 	stamp := now.Unix()
-	if _, err = tx.Exec(`INSERT INTO out_settings(node_id, server, port, link_key, created_at, updated_at)
-	 VALUES(?,?,?,?,?,?)
-	 ON CONFLICT(node_id) DO UPDATE SET server=excluded.server, port=excluded.port, link_key=excluded.link_key, updated_at=excluded.updated_at`,
-		outID, server, port, linkKey, stamp, stamp); err != nil {
+	if _, err = tx.Exec(`INSERT INTO out_settings(node_id, server, server_source, port, link_key, created_at, updated_at)
+	 VALUES(?,?,?,?,?,?,?)
+	 ON CONFLICT(node_id) DO UPDATE SET server=excluded.server, server_source=excluded.server_source, port=excluded.port, link_key=excluded.link_key, updated_at=excluded.updated_at`,
+		outID, server, source, port, linkKey, stamp, stamp); err != nil {
 		return OutTransport{}, errors.New("OUT_TRANSPORT_FAILED: the out transport was not stored")
 	}
 	if err = tx.Commit(); err != nil {
@@ -226,7 +248,7 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 			s.Subscribers.DrainNode(lineID, now)
 		}
 	}
-	return OutTransport{OutID: outID, Server: server, Port: port, UpdatedAt: stamp}, nil
+	return OutTransport{OutID: outID, Server: server, ServerSource: source, Port: port, UpdatedAt: stamp}, nil
 }
 
 // outEgressTx is the single derivation of one Out's dial body for candidate
@@ -264,7 +286,7 @@ func outEgressTx(tx *sql.Tx, outID string) (coredomain.OutEgress, bool, error) {
 func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
 	rows, err := s.DB.Query(`
 SELECT n.id, n.role, n.display_name, n.vless_port, n.status, n.last_heartbeat,
- o2.server, o2.port, h.url, l.node_id, b.state
+ o2.server, o2.server_source, o2.port, h.url, l.node_id, b.state
 FROM nodes n
 LEFT JOIN out_settings o2 ON o2.node_id=n.id
 LEFT JOIN node_http_proxy h ON h.node_id=n.id
@@ -288,13 +310,14 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 			status   string
 			lastBeat int64
 			server   sql.NullString
+			source   sql.NullString
 			port     sql.NullInt64
 			proxyURL sql.NullString
 			lineID   sql.NullString
 			state    sql.NullString
 		)
 		if err := rows.Scan(&outID, &role, &name, &vless, &status, &lastBeat,
-			&server, &port, &proxyURL, &lineID, &state); err != nil {
+			&server, &source, &port, &proxyURL, &lineID, &state); err != nil {
 			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		entry, seen := byOut[outID]
@@ -323,6 +346,13 @@ ORDER BY n.created_at ASC, n.id ASC, l.node_id ASC`)
 				entry.TransportConfigured = server.Valid && port.Valid
 				if entry.TransportConfigured {
 					entry.Server = server.String
+					entry.ServerSource = source.String
+					if entry.ServerSource == "" {
+						entry.ServerSource = AddressSourceManual
+					}
+					if entry.ServerSource == AddressSourceManual {
+						entry.ManualServer = server.String
+					}
 					entry.Port = int(port.Int64)
 				}
 			}

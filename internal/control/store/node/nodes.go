@@ -41,6 +41,7 @@ type Node struct {
 	ObservedKernelVersion      string `json:"observed_kernel_version"`
 	ObservedKernelSHA256       string `json:"observed_kernel_sha256"`
 	ObservedOutDefaultDeny     bool   `json:"observed_out_default_deny"`
+	ObservedIPv4               string `json:"observed_ipv4"`
 	ObservedAt                 int64  `json:"observed_at"`
 	ObservedTaskRevision       int64  `json:"observed_task_revision"`
 	ObservedTaskOperationID    string `json:"observed_task_operation_id"`
@@ -103,6 +104,15 @@ func (n Node) ObservedAtString() string {
 	return time.Unix(n.ObservedAt, 0).Format("2006-01-02 15:04:05")
 }
 
+// ReportedIPv4String renders the last egress address the node reported. It is
+// display information only and never evidence of reachability.
+func (n Node) ReportedIPv4String() string {
+	if n.ObservedIPv4 == "" {
+		return "尚未上报"
+	}
+	return n.ObservedIPv4
+}
+
 func (n Node) LastTaskUpdatedString() string {
 	if n.LastTaskUpdatedAt == 0 {
 		return "尚无任务结果"
@@ -160,7 +170,7 @@ SELECT n.id, n.role, n.display_name, n.vless_port, n.ssh_port, n.status,
  COALESCE((SELECT c.config_sha256 FROM node_candidates c WHERE c.node_id=n.id ORDER BY c.revision DESC LIMIT 1),''),
  n.observed_revision, n.observed_config_sha256, n.observed_architecture,
  n.observed_agent_version, n.observed_agent_sha256, n.observed_kernel_version,
- n.observed_kernel_sha256, n.observed_out_default_deny, n.observed_at, n.observed_task_revision,
+ n.observed_kernel_sha256, n.observed_out_default_deny, n.observed_ipv4, n.observed_at, n.observed_task_revision,
  n.observed_task_operation_id,
  COALESCE((SELECT t.status FROM agent_tasks t WHERE t.node_id=n.id ORDER BY t.revision DESC LIMIT 1),''),
  COALESCE((SELECT t.kind FROM agent_tasks t WHERE t.node_id=n.id ORDER BY t.revision DESC LIMIT 1),''),
@@ -193,7 +203,7 @@ func scanNodeAt(row common.RowScanner, now time.Time) (Node, error) {
 		&n.LatestConfigRevision, &n.LatestConfigSHA256,
 		&n.ObservedRevision, &n.ObservedConfigSHA256, &n.ObservedArchitecture,
 		&n.ObservedAgentVersion, &n.ObservedAgentSHA256, &n.ObservedKernelVersion,
-		&n.ObservedKernelSHA256, &n.ObservedOutDefaultDeny, &n.ObservedAt, &n.ObservedTaskRevision,
+		&n.ObservedKernelSHA256, &n.ObservedOutDefaultDeny, &n.ObservedIPv4, &n.ObservedAt, &n.ObservedTaskRevision,
 		&n.ObservedTaskOperationID,
 		&n.LastTaskStatus, &n.LastTaskKind, &n.LastTaskOperationID,
 		&n.LastTaskErrorCode, &n.LastTaskDetail, &n.LastTaskRevision, &n.LastTaskUpdatedAt,
@@ -362,19 +372,34 @@ func (s *Store) AuthenticateAgentAt(token string, now time.Time) (Node, error) {
 	return n, err
 }
 
-func (s *Store) Heartbeat(nodeID, agentVersion, kernelVersion string, now time.Time) error {
-	res, err := s.DB.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID)
+func (s *Store) Heartbeat(nodeID, agentVersion, kernelVersion, reportedIPv4 string, now time.Time) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return errors.New(common.CodeDatabaseUnavailable)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID)
 	if err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		return common.ErrNodeNotFound
 	}
+	// The report is observation only and an empty value (an older Agent) is a
+	// no-op. It runs in the same transaction as the liveness stamp so a node
+	// can never be marked connected while its new address is lost.
+	if err := applyReportedIPv4Tx(tx, nodeID, reportedIPv4, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New(common.CodeDatabaseUnavailable)
+	}
 	// A reconnecting Line picks up the persisted subscriber intent even if
 	// the Hub crashed before the tasks of a change were enqueued. The
 	// coordination is bidirectional: the Line event also lets every Out that
 	// serves it authorize the Line, and an Out event republishes its allowlist
-	// before the Lines it serves are drained.
+	// before the Lines it serves are drained. A changed report also converges
+	// the defaulted addresses through this same path.
 	s.drainNodeCoordination(nodeID, now)
 	return nil
 }
@@ -676,6 +701,12 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 				nodeID, taskRevision, readback.ActiveRevision); err != nil {
 				return false, errors.New(common.CodeDatabaseUnavailable)
 			}
+			// A readback is the second place an Agent reports its egress
+			// address. An older Agent omits it and the stored observation is
+			// kept.
+			if err := applyReportedIPv4Tx(tx, nodeID, readback.ReportedIPv4, now); err != nil {
+				return false, err
+			}
 			// A deleting subscriber becomes deleted only once the Line proved
 			// the exact desired snapshot without its historical UUIDs. The
 			// check runs in this transaction, directly after the observation,
@@ -740,9 +771,10 @@ func validateReadbackTx(tx *sql.Tx, nodeID string, configRevision int64, readbac
 	return nil
 }
 
-// decodeReadbackDetail accepts exactly the nine Readback fields and returns a
-// canonical representation. This prevents extra fields, duplicate keys, nulls
-// and other loose JSON from being treated as valid local evidence.
+// decodeReadbackDetail accepts the nine required Readback fields plus the one
+// optional reported address and returns a canonical representation. This
+// prevents extra fields, duplicate keys, nulls and other loose JSON from being
+// treated as valid local evidence.
 func decodeReadbackDetail(detail string) (coredomain.Readback, string, error) {
 	if len(detail) == 0 || len(detail) >= 512 {
 		return coredomain.Readback{}, "", common.ErrReadbackInvalid
@@ -784,11 +816,28 @@ func decodeReadbackDetail(detail string) (coredomain.Readback, string, error) {
 		"config_sha256", "kernel_sha256", "kernel_version", "local_active",
 		"out_default_deny",
 	}
-	if len(fields) != len(required) {
+	// reported_ipv4 is the one optional field: an older Agent never sends it,
+	// and its absence must not invalidate otherwise exact evidence.
+	if len(fields) != len(required) && len(fields) != len(required)+1 {
 		return coredomain.Readback{}, "", common.ErrReadbackInvalid
 	}
 	for _, key := range required {
 		if _, ok := fields[key]; !ok {
+			return coredomain.Readback{}, "", common.ErrReadbackInvalid
+		}
+	}
+	for key := range fields {
+		if key == "reported_ipv4" {
+			continue
+		}
+		found := false
+		for _, requiredKey := range required {
+			if key == requiredKey {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return coredomain.Readback{}, "", common.ErrReadbackInvalid
 		}
 	}
@@ -803,6 +852,12 @@ func decodeReadbackDetail(detail string) (coredomain.Readback, string, error) {
 		json.Unmarshal(fields["local_active"], &readback.LocalActive) != nil ||
 		json.Unmarshal(fields["out_default_deny"], &readback.OutDefaultDeny) != nil {
 		return coredomain.Readback{}, "", common.ErrReadbackInvalid
+	}
+	if raw, ok := fields["reported_ipv4"]; ok {
+		if json.Unmarshal(raw, &readback.ReportedIPv4) != nil ||
+			(readback.ReportedIPv4 != "" && !protocol.ValidIPv4(readback.ReportedIPv4)) {
+			return coredomain.Readback{}, "", common.ErrReadbackInvalid
+		}
 	}
 	canonical, err := json.Marshal(readback)
 	if err != nil || len(canonical) >= 512 {

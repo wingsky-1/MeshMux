@@ -24,15 +24,17 @@ type SubscriberLineView struct {
 	NodeID      string
 	DisplayName string
 	Server      string
-	Port        int
-	SortOrder   int
-	Selected    bool
-	Intent      string
-	SyncStatus  string
-	SyncCode    string
-	Confirmed   string
-	ConfirmedOK bool
-	ErrorCode   string
+	// ServerSource is the origin of Server: reported or manual.
+	ServerSource string
+	Port         int
+	SortOrder    int
+	Selected     bool
+	Intent       string
+	SyncStatus   string
+	SyncCode     string
+	Confirmed    string
+	ConfirmedOK  bool
+	ErrorCode    string
 }
 
 // SubscriberPageView is the complete page model.
@@ -48,13 +50,38 @@ type SubscriberPageView struct {
 // LineView is one configured Line transport. It never carries the REALITY
 // private key, the short ID or any credential.
 type LineView struct {
-	NodeID        string
-	DisplayName   string
-	Server        string
+	NodeID      string
+	DisplayName string
+	Server      string
+	// ServerSource is the origin of Server: reported or manual.
+	ServerSource  string
 	Port          int
 	SortOrder     int
 	ServerName    string
 	Handshake     string
 	HandshakePort int
 	Local         bool
+}
+
+// addressSourceLabel renders the origin of one effective Line or Out address.
+// An empty source is a legacy manual row or an egress that has no agent
+// address (an external HTTP proxy), so it renders nothing.
+func addressSourceLabel(source string) string {
+	switch source {
+	case store.AddressSourceReported:
+		return "上报"
+	case store.AddressSourceManual:
+		return "手填"
+	default:
+		return ""
+	}
+}
+
+// addressSourceSuffix appends the origin to an endpoint string only when the
+// origin is known.
+func addressSourceSuffix(source string) string {
+	if label := addressSourceLabel(source); label != "" {
+		return " · " + label
+	}
+	return ""
 }

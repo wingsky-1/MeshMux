@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -113,8 +114,11 @@ var resultStatuses = map[string]struct{}{
 }
 
 var (
-	hex32      = regexp.MustCompile(`^[a-f0-9]{32}$`)
-	paramKey   = regexp.MustCompile(`^[a-z_]{1,32}$`)
+	hex32 = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	// Snake-case keys may carry digits after the first character. The grammar
+	// still refuses upper case, hyphens and arbitrary symbols, so a key can
+	// never smuggle a second spelling past the exact field allowlists.
+	paramKey   = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,31}$`)
 	errorCode  = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 	token43    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	sha256RE   = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -135,6 +139,18 @@ func ValidToken43(value string) bool   { return token43.MatchString(value) }
 func ValidErrorCode(value string) bool { return errorCode.MatchString(value) }
 func ValidSemVer(value string) bool    { return semverRE.MatchString(value) }
 func ValidParamKey(value string) bool  { return paramKey.MatchString(value) }
+
+// ValidIPv4 accepts one canonical IPv4 literal. A reported address is display
+// and default-fill information only: it never authenticates a node, so any
+// routable, loopback or private unicast address is allowed and only shapes that
+// cannot name a host interface (IPv6, unspecified, multicast) are refused.
+func ValidIPv4(value string) bool {
+	addr, err := netip.ParseAddr(value)
+	if err != nil || !addr.Is4() || addr.IsUnspecified() || addr.IsMulticast() {
+		return false
+	}
+	return addr.String() == value
+}
 
 // ValidShortID and ValidUUIDv4 are the REALITY short-id and VLESS credential
 // spellings. Both the node candidate reader and the subscription credential
@@ -199,11 +215,14 @@ type PairingRequest struct {
 	KernelVersion string `json:"kernel_version"`
 }
 
-// HeartbeatRequest is the strict typed heartbeat body. It carries only the
-// agent and kernel versions; identity comes from the Bearer credential.
+// HeartbeatRequest is the strict typed heartbeat body. It carries the agent
+// and kernel versions plus an optional local egress IPv4; identity comes from
+// the Bearer credential. ReportedIPv4 is informational only: an older Agent
+// that omits it stays valid, and the Hub never uses it to authenticate a node.
 type HeartbeatRequest struct {
 	AgentVersion  string `json:"agent_version"`
 	KernelVersion string `json:"kernel_version"`
+	ReportedIPv4  string `json:"reported_ipv4,omitempty"`
 }
 
 func (t *Task) UnmarshalJSON(data []byte) error {
@@ -282,17 +301,26 @@ func (r *HeartbeatRequest) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return errors.New("HEARTBEAT_INVALID: malformed or overlapping fields")
 	}
-	if err := requireFields(obj, "agent_version", "kernel_version"); err != nil {
+	if err := allowFields(obj, "agent_version", "kernel_version", "reported_ipv4"); err != nil {
 		return errors.New("HEARTBEAT_INVALID: malformed or overlapping fields")
 	}
-	if bytes.Equal(bytes.TrimSpace(obj["agent_version"]), []byte("null")) ||
-		bytes.Equal(bytes.TrimSpace(obj["kernel_version"]), []byte("null")) {
+	for _, name := range []string{"agent_version", "kernel_version"} {
+		raw, ok := obj[name]
+		if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return errors.New("HEARTBEAT_INVALID: field type invalid")
+		}
+	}
+	// The address is optional so an older Agent that never learned to report
+	// one keeps heartbeating. Null is still refused: an absent field and an
+	// explicit null must not be two spellings of the same thing.
+	if raw, ok := obj["reported_ipv4"]; ok && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return errors.New("HEARTBEAT_INVALID: field type invalid")
 	}
 	var decoded HeartbeatRequest
 	if err := decodeExactFields(obj, []fieldSpec{
 		{"agent_version", &decoded.AgentVersion},
 		{"kernel_version", &decoded.KernelVersion},
+		{"reported_ipv4", &decoded.ReportedIPv4},
 	}); err != nil {
 		return errors.New("HEARTBEAT_INVALID: field type invalid")
 	}
@@ -300,10 +328,14 @@ func (r *HeartbeatRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Validate checks the two heartbeat versions without requiring pairing fields.
+// Validate checks the heartbeat versions and the optional reported address
+// without requiring pairing fields.
 func (r HeartbeatRequest) Validate() error {
 	if !validVersionString(r.AgentVersion) || !validVersionString(r.KernelVersion) {
 		return errors.New("VERSION_INVALID: agent and kernel versions must be 1-64 printable characters")
+	}
+	if r.ReportedIPv4 != "" && !ValidIPv4(r.ReportedIPv4) {
+		return errors.New("REPORTED_IPV4_INVALID: reported_ipv4 must be one canonical IPv4 literal")
 	}
 	return nil
 }

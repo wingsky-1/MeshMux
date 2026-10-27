@@ -35,12 +35,13 @@ import (
 
 // subscriptionWizardLine is one Line row of the wizard's first group.
 type subscriptionWizardLine struct {
-	NodeID      string
-	DisplayName string
-	Server      string
-	Port        int
-	SortOrder   int
-	Selected    bool
+	NodeID       string
+	DisplayName  string
+	Server       string
+	ServerSource string
+	Port         int
+	SortOrder    int
+	Selected     bool
 	// Credential is the UUID already issued to this subscriber on this Line.
 	// Empty on the create form, where no credential exists yet.
 	Credential string
@@ -91,14 +92,14 @@ func (m subscriptionWizardView) toView() view.SubscriptionWizardView {
 	for _, line := range m.Lines {
 		out.Lines = append(out.Lines, view.WizardLine{
 			NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
-			Port: line.Port, SortOrder: line.SortOrder, Selected: line.Selected,
-			Credential: line.Credential, Converged: line.Converged, Code: line.Code,
+			ServerSource: line.ServerSource, Port: line.Port, SortOrder: line.SortOrder,
+			Selected: line.Selected, Credential: line.Credential, Converged: line.Converged, Code: line.Code,
 		})
 	}
 	for _, outEntry := range m.Outs {
 		out.Outs = append(out.Outs, view.WizardOut{
 			OutID: outEntry.OutID, DisplayName: outEntry.DisplayName,
-			Server: outEntry.Server, Port: outEntry.Port,
+			Server: outEntry.Server, ServerSource: outEntry.ServerSource, Port: outEntry.Port,
 			Online: outEntry.Online, Configured: outEntry.TransportConfigured,
 			Selected: outEntry.OutID == m.OutID, Kind: outEntry.Role,
 		})
@@ -234,7 +235,7 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 			for _, line := range lines {
 				model.Lines = append(model.Lines, subscriptionWizardLine{
 					NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
-					Port: line.Port, SortOrder: line.SortOrder,
+					ServerSource: line.ServerSource, Port: line.Port, SortOrder: line.SortOrder,
 				})
 			}
 			applySubmittedSelection(&model, selection)
@@ -276,8 +277,8 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 		for _, line := range lines {
 			row := subscriptionWizardLine{
 				NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
-				Port: line.Port, SortOrder: line.SortOrder, Selected: selected[line.NodeID],
-				Credential: activeCredential[line.NodeID],
+				ServerSource: line.ServerSource, Port: line.Port, SortOrder: line.SortOrder,
+				Selected: selected[line.NodeID], Credential: activeCredential[line.NodeID],
 			}
 			if evidence, ok := lineEvidence[line.NodeID]; ok {
 				row.Converged = evidence.Status == store.SubscriberSyncHealthy
@@ -299,7 +300,7 @@ func (app *Server) subscriptionWizardModelWith(subscriberID string, submitted *s
 	for _, line := range lines {
 		model.Lines = append(model.Lines, subscriptionWizardLine{
 			NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
-			Port: line.Port, SortOrder: line.SortOrder,
+			ServerSource: line.ServerSource, Port: line.Port, SortOrder: line.SortOrder,
 		})
 	}
 	return model, nil

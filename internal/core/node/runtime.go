@@ -918,7 +918,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 }
 
 func (r *Runtime) cycle(ctx context.Context) {
-	heartbeat := protocol.HeartbeatRequest{AgentVersion: r.cfg.AgentVersion, KernelVersion: KernelVersion}
+	heartbeat := protocol.HeartbeatRequest{
+		AgentVersion:  r.cfg.AgentVersion,
+		KernelVersion: KernelVersion,
+		ReportedIPv4:  LocalEgressIPv4(),
+	}
 	if err := heartbeat.Validate(); err != nil {
 		r.logger.ErrorContext(ctx, "heartbeat invalid", "error_code", errorCode(err))
 		return

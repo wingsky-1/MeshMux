@@ -304,6 +304,7 @@ func (r *Runtime) readbackForProcess(ctx context.Context, role Role, candidate C
 		ConfigSHA256:   configHash,
 		LocalActive:    true,
 		OutDefaultDeny: outDeny,
+		ReportedIPv4:   LocalEgressIPv4(),
 	}
 	return readback, validateReadbackEvidence(readback, role)
 }

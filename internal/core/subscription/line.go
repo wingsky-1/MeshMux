@@ -7,9 +7,15 @@ import "errors"
 // a node identity. DisplayName is only a label and can change without touching
 // NodeID, credentials or REALITY keys.
 type Line struct {
-	NodeID          string
-	DisplayName     string
-	Server          string
+	NodeID      string
+	DisplayName string
+	Server      string
+	// ServerSource records where Server came from. The Hub stores "manual"
+	// for an operator-entered address and "reported" when the address was
+	// taken from the node's own egress report; an empty value is the legacy
+	// manual spelling. It is Hub metadata only and never reaches a client
+	// document.
+	ServerSource    string
 	Port            int
 	SortOrder       int
 	ServerName      string

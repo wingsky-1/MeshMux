@@ -330,6 +330,20 @@ func TestHeartbeatRequestStrictDecoding(t *testing.T) {
 	if err := req.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if req.ReportedIPv4 != "" {
+		t.Fatalf("old heartbeat gained a reported address: %q", req.ReportedIPv4)
+	}
+
+	withReport := `{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3","reported_ipv4":"203.0.113.21"}`
+	if err := json.Unmarshal([]byte(withReport), &req); err != nil {
+		t.Fatal(err)
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if req.ReportedIPv4 != "203.0.113.21" {
+		t.Fatalf("reported address = %q", req.ReportedIPv4)
+	}
 
 	for _, body := range []string{
 		`{"agent_version":"meshmux-agent 1.0.0-dev"}`,
@@ -337,6 +351,7 @@ func TestHeartbeatRequestStrictDecoding(t *testing.T) {
 		`{"Agent_Version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3"}`,
 		`{"agent_version":null,"kernel_version":"1.14.3"}`,
 		`{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3","kernel_version":"1.15.0"}`,
+		`{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3","reported_ipv4":null}`,
 		`{"agent_version":"meshmux-agent 1.0.0-dev","kernel_version":"1.14.3"} trailing`,
 	} {
 		if err := json.Unmarshal([]byte(body), &req); err == nil {
@@ -347,6 +362,12 @@ func TestHeartbeatRequestStrictDecoding(t *testing.T) {
 	req = HeartbeatRequest{AgentVersion: "agent\nforged", KernelVersion: "1.14.3"}
 	if err := req.Validate(); err == nil {
 		t.Fatal("control character in heartbeat version accepted")
+	}
+	for _, reported := range []string{"not-an-ip", "::1", "2001:db8::1", "0.0.0.0", "224.0.0.1"} {
+		req = HeartbeatRequest{AgentVersion: "meshmux-agent 1.0.0-dev", KernelVersion: "1.14.3", ReportedIPv4: reported}
+		if err := req.Validate(); err == nil {
+			t.Fatalf("malformed reported IPv4 %q accepted", reported)
+		}
 	}
 }
 

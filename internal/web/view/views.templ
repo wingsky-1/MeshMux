@@ -265,6 +265,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 											}
 										</dd>
 										<dt>最近联系</dt><dd>{ heartbeatAt }</dd>
+										<dt>上报 IPv4</dt><dd>{ n.ReportedIPv4String() } <span class="badge">上报</span> <span class="muted">· 节点出站地址观测；仅用于展示与默认填充，不参与身份认证</span></dd>
 										<dt>最新配置 / 任务</dt><dd>candidate rev { n.LatestConfigRevision } · task { n.LastTaskRevision }</dd>
 										<dt>最近回读</dt><dd>observed rev { n.ObservedRevision } · task <code>{ n.ObservedTaskOperationID }</code> · { n.ObservedAtString() }</dd>
 										<dt>最近任务</dt><dd>{ n.LastTaskKind } · { n.LastTaskStatus } · <code>{ n.LastTaskOperationID }</code></dd>
@@ -298,12 +299,12 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 										if entry.OutID == n.ID {
 											<dt>出口地址</dt><dd>
 												if entry.TransportConfigured {
-													<code>{ entry.Server }:{ entry.Port }</code>
+													<code>{ entry.Server }:{ entry.Port }</code> <span class="badge">{ addressSourceLabel(entry.ServerSource) }</span>
 												} else {
 													<span class="badge failure">未配置出口地址</span>
 												}
 											</dd>
-											<dt>配置出口地址</dt><dd><form method="post" action="/nodes/out-transport"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "out-server-" + n.ID }>出口地址</label><input id={ "out-server-" + n.ID } name="server" type="text" required maxlength="253" placeholder="例如 out.example.invalid 或 203.0.113.10" value={ entry.Server }/><button type="submit">保存出口地址 →</button></form><p class="hint">端口须与 VLESS 端口（{ n.VlessPortString() }）一致。保存后，选中该 Out 的订阅所涉 Line 在下一次收敛中获得真实 Shadowsocks 出站；凭据由 Hub 签发，不显示、不进日志。</p></dd>
+											<dt>配置出口地址</dt><dd><form method="post" action="/nodes/out-transport"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "out-server-" + n.ID }>出口地址</label><input id={ "out-server-" + n.ID } name="server" type="text" maxlength="253" placeholder={ "留空使用该 Out 上报的 IPv4（当前 " + n.ReportedIPv4String() + "）；也可手填例如 out.example.invalid" } value={ entry.ManualServer }/><button type="submit">保存出口地址 →</button></form><p class="hint">留空时使用该 Out 最近上报的本机出站 IPv4；手填永远优先，标签会区分“上报”与“手填”。端口须与 VLESS 端口（{ n.VlessPortString() }）一致。保存后，选中该 Out 的订阅所涉 Line 在下一次收敛中获得真实 Shadowsocks 出站；凭据由 Hub 签发，不显示、不进日志。</p></dd>
 											<dt>服务对象</dt><dd>
 												if len(entry.LineIDs) == 0 {
 													<span class="muted">没有订阅选择该 Out · 该 Out 不承载任何客户端出口</span>

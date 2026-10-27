@@ -46,7 +46,11 @@ func (s *Server) outTransportSet(w http.ResponseWriter, r *http.Request, sess in
 		return
 	}
 	s.Event(r, "OUT_TRANSPORT_SET")
-	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "Out 出口地址已保存为 " + transport.Server + "。"})
+	source := "手填"
+	if transport.ServerSource == store.AddressSourceReported {
+		source = "上报"
+	}
+	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: "Out 出口地址已保存为 " + transport.Server + "（" + source + "）。"})
 }
 
 // httpProxySet replaces the dial body of one external HTTP proxy. It is the
@@ -227,6 +231,8 @@ func outTransportFailure(err error) (status int, code, message, next string) {
 	switch {
 	case strings.HasPrefix(err.Error(), "OUT_TRANSPORT_INVALID"):
 		return 400, "OUT_TRANSPORT_INVALID", "出口地址不正确。", "请填写一个主机名或 IP 地址，不要带 scheme、路径或端口。"
+	case strings.HasPrefix(err.Error(), "OUT_TRANSPORT_REPORTED_IP_MISSING"):
+		return 409, "OUT_TRANSPORT_REPORTED_IP_MISSING", "该 Out 尚未上报 IPv4，不能留空。", "请手填出口地址，或等待该 Out 上线并上报本机出站 IPv4 后再留空保存。"
 	case strings.HasPrefix(err.Error(), "OUT_PORT_MISMATCH"):
 		return 409, "OUT_PORT_MISMATCH", "出口端口与节点 VLESS 端口不一致。", "请确认 Out 节点的 VLESS 端口后重试。"
 	case strings.HasPrefix(err.Error(), "OUT_TRANSPORT_FAILED"):

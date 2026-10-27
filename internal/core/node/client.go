@@ -312,8 +312,10 @@ func (c *Client) Candidate(ctx context.Context, revision int64) (CandidateDocume
 	return candidate, nil
 }
 
-// Heartbeat reports only the fixed Agent and kernel versions. The node
-// identity is carried exclusively in the Authorization header.
+// Heartbeat reports the fixed Agent and kernel versions plus the optional
+// local egress address. The node identity is carried exclusively in the
+// Authorization header; the address is display and default-fill information
+// only.
 func (c *Client) Heartbeat(ctx context.Context, req protocol.HeartbeatRequest) error {
 	if err := req.Validate(); err != nil {
 		return &ClientError{Code: "HEARTBEAT_INVALID"}

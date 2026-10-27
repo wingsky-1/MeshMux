@@ -66,7 +66,7 @@ templ SubscribersPage(p PageData, v SubscriberPageView) {
 										for _,line:=range v.Lines {
 											<label class="sub-check">
 												<input type="checkbox" name={ "line_" + line.NodeID } value="1"/>
-												<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port } · 排序 { line.SortOrder }</small></span>
+												<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port } · { addressSourceLabel(line.ServerSource) } · 排序 { line.SortOrder }</small></span>
 											</label>
 										}
 									</div>
@@ -87,7 +87,7 @@ templ SubscribersPage(p PageData, v SubscriberPageView) {
 										<option value="">尚无已纳管的 Line 节点</option>
 									}
 									for _,node:=range v.EdgeNodes {
-										<option value={ node.ID }>{ node.DisplayName } · { node.ID }</option>
+										<option value={ node.ID }>{ node.DisplayName } · { node.ID } · 上报 IPv4 { node.ReportedIPv4String() }</option>
 									}
 								</select>
 								<div class="sub-inline">
@@ -101,7 +101,7 @@ templ SubscribersPage(p PageData, v SubscriberPageView) {
 									</div>
 								</div>
 								<label for="line_server">对外地址</label>
-								<input id="line_server" name="server" type="text" required maxlength="253" placeholder="例如 line.example.invalid"/>
+								<input id="line_server" name="server" type="text" maxlength="253" placeholder="留空使用该节点上报的 IPv4；也可手填例如 line.example.invalid"/>
 								<label for="line_port">对外端口</label>
 								<input id="line_port" name="port" type="number" min="1" max="65535" required placeholder="8443"/>
 								<label for="line_server_name">server_name</label>
@@ -110,7 +110,7 @@ templ SubscribersPage(p PageData, v SubscriberPageView) {
 								<input id="line_handshake" name="handshake_server" type="text" required maxlength="253" placeholder="例如 handshake.example.invalid"/>
 								<label for="line_handshake_port">握手伪装端口</label>
 								<input id="line_handshake_port" name="handshake_port" type="number" min="1" max="65535" required placeholder="443"/>
-								<p class="hint">保存已存在的 Line 时保留其 REALITY 密钥与 short id，因此改展示名或排序不会让已发布的客户端配置失效。参数只写入 Hub 本地状态，不会自动改到已纳管主机。</p>
+								<p class="hint">对外地址留空时使用该 Line 节点最近上报的本机出站 IPv4；手填永远优先，标签会区分“上报”与“手填”。保存已存在的 Line 时保留其 REALITY 密钥与 short id，因此改展示名或排序不会让已发布的客户端配置失效。参数只写入 Hub 本地状态，不会自动改到已纳管主机。</p>
 								<button type="submit">保存线路参数 →</button>
 							</form>
 						</section>
@@ -144,7 +144,7 @@ templ SubscribersPage(p PageData, v SubscriberPageView) {
 								</dl>
 								for _,line:=range sub.Lines {
 									<div class="sub-line">
-										<span class="sub-line-name">{ line.DisplayName }<br/><span class="sub-line-endpoint">{ line.Server }:{ line.Port }</span></span>
+										<span class="sub-line-name">{ line.DisplayName }<br/><span class="sub-line-endpoint">{ line.Server }:{ line.Port }</span> <span class="badge">{ addressSourceLabel(line.ServerSource) }</span></span>
 										<span>
 											<span class="sub-intent">{ line.Intent }</span><br/>
 											if line.SyncStatus == store.SubscriberSyncHealthy {
@@ -182,7 +182,7 @@ templ SubscribersPage(p PageData, v SubscriberPageView) {
 											for _,line:=range sub.Lines {
 												<label class="sub-check">
 													<input type="checkbox" name={ "line_" + line.NodeID } value="1" checked?={ line.Selected }/>
-													<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port }</small></span>
+													<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port } · { addressSourceLabel(line.ServerSource) }</small></span>
 												</label>
 											}
 										</div>

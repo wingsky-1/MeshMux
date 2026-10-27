@@ -58,6 +58,7 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ infr
 		NodeID        string `json:"node_id"`
 		DisplayName   string `json:"display_name"`
 		Server        string `json:"server"`
+		ServerSource  string `json:"server_source"`
 		Port          int    `json:"port"`
 		SortOrder     int    `json:"sort_order"`
 		ServerName    string `json:"server_name"`
@@ -66,12 +67,13 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ infr
 		Local         bool   `json:"local"`
 	}
 	type subscriberLineProjection struct {
-		NodeID      string `json:"node_id"`
-		DisplayName string `json:"display_name"`
-		Intent      string `json:"intent"`
-		SyncStatus  string `json:"sync_status"`
-		SyncCode    string `json:"sync_code"`
-		Confirmed   string `json:"confirmed"`
+		NodeID       string `json:"node_id"`
+		DisplayName  string `json:"display_name"`
+		ServerSource string `json:"server_source"`
+		Intent       string `json:"intent"`
+		SyncStatus   string `json:"sync_status"`
+		SyncCode     string `json:"sync_code"`
+		Confirmed    string `json:"confirmed"`
 	}
 	type subscriberProjection struct {
 		ID          string                     `json:"id"`
@@ -95,14 +97,20 @@ func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ infr
 			Confirmed: sub.Confirmed, Total: sub.Total, Lines: []subscriberLineProjection{}}
 		for _, line := range sub.Lines {
 			entry.Lines = append(entry.Lines, subscriberLineProjection{
-				NodeID: line.NodeID, DisplayName: line.DisplayName, Intent: line.Intent,
-				SyncStatus: line.SyncStatus, SyncCode: line.SyncCode, Confirmed: line.Confirmed,
+				NodeID: line.NodeID, DisplayName: line.DisplayName, ServerSource: line.ServerSource,
+				Intent: line.Intent, SyncStatus: line.SyncStatus, SyncCode: line.SyncCode,
+				Confirmed: line.Confirmed,
 			})
 		}
 		projection.Subscribers = append(projection.Subscribers, entry)
 	}
 	for _, line := range page.Lines {
-		projection.Lines = append(projection.Lines, lineProjection(line))
+		projection.Lines = append(projection.Lines, lineProjection{
+			NodeID: line.NodeID, DisplayName: line.DisplayName, Server: line.Server,
+			ServerSource: line.ServerSource, Port: line.Port, SortOrder: line.SortOrder,
+			ServerName: line.ServerName, Handshake: line.Handshake,
+			HandshakePort: line.HandshakePort, Local: line.Local,
+		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(projection)
@@ -292,6 +300,11 @@ func (app *Server) linesSave(w http.ResponseWriter, r *http.Request, sess infra.
 		ShortID:         shortID,
 	}
 	if _, err = app.Store.SetLine(line, app.Now()); err != nil {
+		if strings.HasPrefix(err.Error(), "LINE_SERVER_REQUIRED") {
+			app.Fail(w, r, 409, "LINE_SERVER_REQUIRED", "这条 Line 还没有可用的对外地址。",
+				"请在“对外地址”中手填，或等待该 Line 节点上线并上报本机出站 IPv4 后留空保存。")
+			return
+		}
 		app.subscriberFail(w, r, err, "LINE_SETTINGS_FAILED", "无法保存线路参数。", "请确认节点已纳管且参数完整后重试。")
 		return
 	}

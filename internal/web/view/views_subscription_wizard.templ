@@ -80,7 +80,7 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 									for _,line:=range v.Lines {
 										<label class="sub-check">
 											<input type="checkbox" name={ "line_" + line.NodeID } value="1" checked?={ line.Selected }/>
-											<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port } · 排序 { line.SortOrder }</small></span>
+											<span class="sub-check-text">{ line.DisplayName }<small>{ line.Server }:{ line.Port }{ addressSourceSuffix(line.ServerSource) } · 排序 { line.SortOrder }</small></span>
 										</label>
 										if !v.Create {
 											if line.Converged {
@@ -108,7 +108,7 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 									for _,out:=range v.Outs {
 										<label class="sub-check">
 											<input type="radio" name="out_id" value={ out.OutID } checked?={ out.Selected } disabled?={ !out.Configured }/>
-											<span class="sub-check-text">{ out.DisplayName }<small>{ out.Endpoint() } · { out.StateLabel() }</small></span>
+											<span class="sub-check-text">{ out.DisplayName }<small>{ out.Endpoint() }{ addressSourceSuffix(out.ServerSource) } · { out.StateLabel() }</small></span>
 										</label>
 									}
 								</div>

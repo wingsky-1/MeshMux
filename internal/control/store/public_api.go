@@ -168,6 +168,11 @@ const (
 	OutPoolBound       = storenode.OutPoolBound
 	OutPoolLineDirect  = storenode.OutPoolLineDirect
 	OutPoolNoOutDirect = storenode.OutPoolNoOutDirect
+
+	// AddressSourceManual and AddressSourceReported name the origin of an
+	// effective Line or Out address.
+	AddressSourceManual   = storenode.AddressSourceManual
+	AddressSourceReported = storenode.AddressSourceReported
 )
 
 // The subscriber convergence states and batch outcomes.

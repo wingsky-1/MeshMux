@@ -370,6 +370,10 @@ type Readback struct {
 	ConfigSHA256   string `json:"config_sha256"`
 	LocalActive    bool   `json:"local_active"`
 	OutDefaultDeny bool   `json:"out_default_deny"`
+	// ReportedIPv4 is the same optional local egress address the heartbeat
+	// carries. It is omitted by older Agents and never part of the evidence a
+	// readback proves.
+	ReportedIPv4 string `json:"reported_ipv4,omitempty"`
 }
 
 // dnsLabel is the only local pattern here: a single-label shape no other
@@ -832,6 +836,9 @@ func (r Readback) Validate() error {
 	}
 	if r.ActiveRevision < 1 {
 		return errors.New("READBACK_INVALID: active revision must be positive")
+	}
+	if r.ReportedIPv4 != "" && !protocol.ValidIPv4(r.ReportedIPv4) {
+		return errors.New("READBACK_INVALID: reported IPv4 is not canonical")
 	}
 	return nil
 }
