@@ -473,7 +473,7 @@ func TestSubscriberSyncEndpointReportsTheOutRefusal(t *testing.T) {
 	}
 	before := latestRevision(t, app, line.ID)
 
-	w := b.post("/subscribers/sync", url.Values{"subscriber_id": {subscriber.ID}})
+	w := b.Post("/subscribers/sync", url.Values{"subscriber_id": {subscriber.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), "OUT_BINDING_INVALID") {
 		t.Fatalf("sync refusal does not name the Out conflict: %.400s", w.Body.String())

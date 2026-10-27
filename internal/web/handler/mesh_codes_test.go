@@ -104,7 +104,7 @@ func TestMeshStatusIsChosenFromCodesOnly(t *testing.T) {
 func TestMeshControlPlaneFailRefusesForeignCodes(t *testing.T) {
 	_, b, fake, _ := meshTestApp(t)
 	fake.failWith["nodes.list"] = "HEADSCALE_SOMETHING_NEW"
-	w := b.post("/mesh/reconcile", nil)
+	w := b.Post("/mesh/reconcile", nil)
 	requireStatus(t, w, http.StatusInternalServerError)
 	if strings.Contains(w.Body.String(), "HEADSCALE_SOMETHING_NEW") {
 		t.Fatalf("unregistered adapter code reached the page: %.300s", w.Body.String())
@@ -129,7 +129,7 @@ func TestMeshPageNoticeNeverRendersFreeFormText(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs.Reset()
-	w := b.post("/mesh/reconcile", nil)
+	w := b.Post("/mesh/reconcile", nil)
 	// A corrupt row is a server-side defect: it must never render as a healthy
 	// page, and it must never quote the row.
 	requireStatus(t, w, http.StatusInternalServerError)

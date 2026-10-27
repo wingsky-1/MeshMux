@@ -185,7 +185,7 @@ func meshCreateDevice(t *testing.T, b *browser, fake *fakeHeadscale, displayName
 		"display_name": {displayName}, "purpose": {purpose},
 		"platform": {platform}, "subscriber_id": {subscriberID},
 	}
-	w := b.post("/mesh", fields)
+	w := b.Post("/mesh", fields)
 	requireStatus(t, w, http.StatusOK)
 	match := meshKeyPattern.FindStringSubmatch(w.Body.String())
 	if len(match) != 2 {
@@ -211,14 +211,14 @@ func TestMeshRoutesRequireAuthentication(t *testing.T) {
 	app, _ := testApp(t)
 	b := &browser{app: app}
 	for _, path := range []string{"/mesh"} {
-		w := b.req("GET", path, nil, http.Header{"Accept": {"text/html"}})
+		w := b.Req("GET", path, nil, http.Header{"Accept": {"text/html"}})
 		requireStatus(t, w, http.StatusUnauthorized)
 		if !strings.Contains(w.Body.String(), "AUTH_REQUIRED") {
 			t.Fatalf("%s did not require authentication", path)
 		}
 	}
 	for _, path := range []string{"/mesh", "/mesh/rekey", "/mesh/reconcile", "/mesh/revoke", "/mesh/retry"} {
-		w := b.req("POST", path, url.Values{"csrf": {"x"}, "device_id": {"ffffffffffffffffffffffffffffffff"}}, nil)
+		w := b.Req("POST", path, url.Values{"csrf": {"x"}, "device_id": {"ffffffffffffffffffffffffffffffff"}}, nil)
 		requireStatus(t, w, http.StatusUnauthorized)
 		if !strings.Contains(w.Body.String(), "SESSION_INVALID") {
 			t.Fatalf("%s did not report SESSION_INVALID", path)
@@ -235,7 +235,7 @@ func TestMeshRoutesRequireAuthentication(t *testing.T) {
 
 func TestMeshPageRequiresCSRFOnMutations(t *testing.T) {
 	app, b, _, _ := meshTestApp(t)
-	w := b.req("POST", "/mesh", url.Values{"csrf": {"wrong"}, "display_name": {"phone"}, "purpose": {"mesh_only"}, "platform": {"ios"}}, nil)
+	w := b.Req("POST", "/mesh", url.Values{"csrf": {"wrong"}, "display_name": {"phone"}, "purpose": {"mesh_only"}, "platform": {"ios"}}, nil)
 	requireStatus(t, w, http.StatusForbidden)
 	if !strings.Contains(w.Body.String(), "CSRF_REJECTED") {
 		t.Fatal("wrong CSRF was not rejected")
@@ -254,7 +254,7 @@ func TestMeshPageRequiresCSRFOnMutations(t *testing.T) {
 // workspace, not the "尚未实现" filler.
 func TestMeshPageOwnsNavigationRoute(t *testing.T) {
 	_, b, _, _ := meshTestApp(t)
-	w := b.req("GET", "/mesh", nil, nil)
+	w := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, w, 200)
 	body := w.Body.String()
 	if !strings.Contains(body, "新增 Mesh 设备") || !strings.Contains(body, "重新核对全部设备") {
@@ -274,7 +274,7 @@ func TestMeshPageOwnsNavigationRoute(t *testing.T) {
 	}
 	// The page's own stylesheet is embedded with the rest of the assets, so the
 	// page never depends on a remote stylesheet (the CSP forbids one).
-	requireStatus(t, b.req("GET", "/assets/mesh.css", nil, nil), 200)
+	requireStatus(t, b.Req("GET", "/assets/mesh.css", nil, nil), 200)
 }
 
 // TestMeshCreateShowsKeyOnceAndNeverLeaksIt covers the disclosure contract: the
@@ -284,7 +284,7 @@ func TestMeshPageOwnsNavigationRoute(t *testing.T) {
 func TestMeshCreateShowsKeyOnceAndNeverLeaksIt(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 
-	w := b.post("/mesh", url.Values{"display_name": {"alice-iphone"}, "purpose": {"mesh_only"}, "platform": {"ios"}, "subscriber_id": {""}})
+	w := b.Post("/mesh", url.Values{"display_name": {"alice-iphone"}, "purpose": {"mesh_only"}, "platform": {"ios"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusOK)
 	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
 		t.Fatalf("Cache-Control = %q, want private, no-store", got)
@@ -315,7 +315,7 @@ func TestMeshCreateShowsKeyOnceAndNeverLeaksIt(t *testing.T) {
 	if got := strings.Count(w.Body.String(), secret); got != 1 {
 		t.Fatalf("the plaintext key appears %d times in the response, want 1", got)
 	}
-	next := b.req("GET", "/mesh", nil, nil)
+	next := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, next, 200)
 	if strings.Contains(next.Body.String(), secret) {
 		t.Fatal("the following page rendered the plaintext key again")
@@ -354,7 +354,7 @@ func TestMeshOnlyDisclosureShowsStandardJoinCommand(t *testing.T) {
 	app, b, _, _ := meshTestApp(t)
 	app.Cfg.HeadscaleOrigin = "https://headscale.example.invalid"
 
-	w := b.post("/mesh", url.Values{"display_name": {"carol-nas"}, "purpose": {"mesh_only"}, "platform": {"linux"}, "subscriber_id": {""}})
+	w := b.Post("/mesh", url.Values{"display_name": {"carol-nas"}, "purpose": {"mesh_only"}, "platform": {"linux"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	if !strings.Contains(body, "tailscale up --login-server=https://headscale.example.invalid --auth-key=") {
@@ -372,7 +372,7 @@ func TestMeshDisclosureWithoutOriginAsksForConfiguration(t *testing.T) {
 	app, b, _, _ := meshTestApp(t)
 	app.Cfg.HeadscaleOrigin = ""
 
-	w := b.post("/mesh", url.Values{"display_name": {"dave-phone"}, "purpose": {"mesh_only"}, "platform": {"android"}, "subscriber_id": {""}})
+	w := b.Post("/mesh", url.Values{"display_name": {"dave-phone"}, "purpose": {"mesh_only"}, "platform": {"android"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	if !strings.Contains(body, "--headscale-origin") {
@@ -395,7 +395,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 	// node with a matching name is not evidence: the row stays "未注册" and no
 	// address is attributed to it.
 	fake.nodes = []meshnet.Node{{ID: 77, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.7"}}}
-	page := b.req("GET", "/mesh", nil, nil)
+	page := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
 	afterRender, err := b.app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -413,7 +413,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 
 	// The explicit action records an observation. A device with no node id is
 	// still not registered by it, because no Headscale node id was observed.
-	w := b.post("/mesh/reconcile", url.Values{})
+	w := b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
 	reconciled, err := b.app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -433,7 +433,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := measured.ObservedAt
-	page = b.req("GET", "/mesh", nil, nil)
+	page = b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
 	if !strings.Contains(page.Body.String(), "100.64.0.7") {
 		t.Fatal("the live Tailnet address was not shown even though Headscale reported it")
@@ -467,7 +467,7 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	// Headscale reports nothing, so the confirmed disappearance moves the device
 	// to expired instead of leaving a stale "registered".
 	fake.nodes = nil
-	w := b.post("/mesh/reconcile", url.Values{})
+	w := b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
 	expired, err := app.Store.GetMeshDevice(records.ID)
 	if err != nil {
@@ -478,7 +478,7 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	}
 	// A Headscale outage is reported, never rendered as "expired".
 	fake.failWith["nodes.list"] = meshnet.CodeUnavailable
-	w = b.post("/mesh/reconcile", url.Values{})
+	w = b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if !strings.Contains(w.Body.String(), meshnet.CodeUnavailable) {
 		t.Fatalf("outage lost its stable code: %.300s", w.Body.String())
@@ -512,7 +512,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 	}
 
 	fake.nodes = []meshnet.Node{{ID: 42, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser}}
-	w := b.post("/mesh/reconcile", url.Values{})
+	w := b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
 
 	var (
@@ -528,7 +528,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 		t.Fatalf("reconcile left the key %q hash=%v consumed_at=%d, want consumed/NULL/set", state, hash, consumedAt)
 	}
 	// A second check finds no issued row and changes nothing.
-	w = b.post("/mesh/reconcile", url.Values{})
+	w = b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
 	if err = app.Store.DB.QueryRow(`SELECT state, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
 		Scan(&state, &consumedAt); err != nil {
@@ -569,7 +569,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	fake.nodes = []meshnet.Node{{ID: 42, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.9"}}}
 	fake.resetCalls()
 
-	w := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
 	revoked, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -596,7 +596,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 
 	// Repeating the deletion is a success and performs no remote change: the
 	// page render that follows reads users and nodes only.
-	w = b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "无需再次操作") {
 		t.Fatalf("repeat revoke was not reported as a no-op: %.300s", w.Body.String())
@@ -653,7 +653,7 @@ func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
 	}
 	fake.failWith["nodes.delete"] = meshnet.CodeCommandFailed
 
-	w := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
 	pending, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -669,7 +669,7 @@ func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
 	// The retry button is the same intent route; once Headscale answers, the
 	// device settles.
 	delete(fake.failWith, "nodes.delete")
-	w = b.post("/mesh/retry", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/retry", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
 	settled, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -684,7 +684,7 @@ func TestMeshUnknownDeviceIs404(t *testing.T) {
 	_, b, _, _ := meshTestApp(t)
 	missing := "ffffffffffffffffffffffffffffffff"
 	for _, path := range []string{"/mesh/revoke", "/mesh/retry", "/mesh/rekey"} {
-		w := b.post(path, url.Values{"device_id": {missing}})
+		w := b.Post(path, url.Values{"device_id": {missing}})
 		requireStatus(t, w, http.StatusNotFound)
 		if !strings.Contains(w.Body.String(), "MESH_DEVICE_NOT_FOUND") {
 			t.Fatalf("%s did not report MESH_DEVICE_NOT_FOUND: %.300s", path, w.Body.String())
@@ -695,7 +695,7 @@ func TestMeshUnknownDeviceIs404(t *testing.T) {
 		}
 	}
 	// A malformed identifier is a client error, not a missing record.
-	w := b.post("/mesh/revoke", url.Values{"device_id": {"not-an-id"}})
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {"not-an-id"}})
 	requireStatus(t, w, http.StatusBadRequest)
 	if !strings.Contains(w.Body.String(), mesh.CodeDeviceIDInvalid) {
 		t.Fatalf("malformed id lost its code: %.300s", w.Body.String())
@@ -716,7 +716,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 		t.Fatalf("unexpected initial keys: %+v", firstKeys)
 	}
 
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
 	match := meshKeyPattern.FindStringSubmatch(w.Body.String())
 	if len(match) != 2 || match[1] == firstSecret {
@@ -771,7 +771,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	if _, _, err = app.Store.RequestMeshDeviceRevocation(device.ID, "USER_DELETE", app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), "MESH_DEVICE_NOT_REENROLLABLE") {
 		t.Fatalf("revoked device accepted a reissue: %.300s", w.Body.String())
@@ -781,7 +781,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 func TestMeshCreateRejectsBindingMismatch(t *testing.T) {
 	_, b, fake, _ := meshTestApp(t)
 	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
-	w := b.post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"proxy_mesh"}, "platform": {"ios"}, "subscriber_id": {""}})
+	w := b.Post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"proxy_mesh"}, "platform": {"ios"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusBadRequest)
 	if !strings.Contains(w.Body.String(), mesh.CodeSubscriberBindingInvalid) {
 		t.Fatalf("binding mismatch lost its code: %.300s", w.Body.String())

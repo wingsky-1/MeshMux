@@ -1,11 +1,9 @@
-package handler
+package subscription_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +11,9 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
+	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
@@ -27,23 +28,23 @@ const testSubscriptionOrigin = "https://download.example.invalid"
 
 // subscriptionApp opens a Web runtime whose download routes are served by the
 // management origin, which is the single-host development default.
-func subscriptionApp(t *testing.T) (*Server, *bytes.Buffer) {
+func subscriptionApp(t *testing.T) (*handler.Server, *bytes.Buffer) {
 	t.Helper()
 	return subscriptionAppWithOrigin(t, "")
 }
 
 // subscriptionAppWithOrigin opens a Web runtime with an optional dedicated
 // download origin.
-func subscriptionAppWithOrigin(t *testing.T, subscriptionOrigin string) (*Server, *bytes.Buffer) {
+func subscriptionAppWithOrigin(t *testing.T, subscriptionOrigin string) (*handler.Server, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
-	c := Config{
+	c := handler.Config{
 		Listen:             "127.0.0.1:9080",
-		Origin:             testOrigin,
+		Origin:             handlertest.Origin,
 		SubscriptionOrigin: subscriptionOrigin,
 		DataDir:            filepath.Join(t.TempDir(), "state"),
 	}
-	app, err := New(c, slog.New(slog.NewJSONHandler(&logs, nil)))
+	app, err := handler.New(c, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,135 +52,11 @@ func subscriptionAppWithOrigin(t *testing.T, subscriptionOrigin string) (*Server
 	return app, &logs
 }
 
-// subscriptionRequest sends one raw request to the Web runtime. The target is
-// written exactly as given, so percent escapes and dot segments survive.
-func subscriptionRequest(app *Server, method, host, target string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, target, nil)
-	r.Host = host
-	r.RemoteAddr = "127.0.0.1:40000"
-	r.URL.Scheme = ""
-	r.URL.Host = ""
-	w := httptest.NewRecorder()
-	app.Handler().ServeHTTP(w, r)
-	return w
-}
-
-// downloadLineFixture returns a valid Line transport for one node. The port
-// matches the VLESS port of the fixture nodes.
-func downloadLineFixture(t *testing.T, nodeID, name string) subscription.Line {
-	t.Helper()
-	pair, err := subscription.NewRealityKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	shortID, err := subscription.NewShortID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return subscription.Line{
-		NodeID:          nodeID,
-		DisplayName:     name,
-		Server:          "line.example.invalid",
-		Port:            8443,
-		SortOrder:       1,
-		ServerName:      "line.example.invalid",
-		HandshakeServer: "handshake.example.invalid",
-		HandshakePort:   443,
-		PrivateKey:      pair.PrivateKey,
-		PublicKey:       pair.PublicKey,
-		ShortID:         shortID,
-	}
-}
-
-// publishConvergedCandidate writes the next candidate revision of one Line
-// and records the matching readback evidence on the node.
-func publishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line subscription.Line, credentials []subscription.Credential, now time.Time) {
-	t.Helper()
-	users := make([]node.VLESSUser, 0, len(credentials))
-	for _, credential := range credentials {
-		users = append(users, node.VLESSUser{CredentialID: credential.ID, UUID: credential.UUID})
-	}
-	reality := &node.RealityConfig{
-		ServerName:      line.ServerName,
-		HandshakeServer: line.HandshakeServer,
-		HandshakePort:   line.HandshakePort,
-		PrivateKey:      line.PrivateKey,
-		ShortID:         line.ShortID,
-	}
-	var revision int64
-	if err := s.DB.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		t.Fatal(err)
-	}
-	candidate := node.Candidate{
-		NodeID:        nodeID,
-		Role:          node.RoleEdge,
-		Revision:      revision,
-		VLESSPort:     8443,
-		KernelVersion: node.KernelVersion,
-		Users:         users,
-		Reality:       reality,
-	}
-	document, err := json.Marshal(node.NewCandidateDocument(candidate))
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := store.CandidateSHA256(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.DB.Exec(`INSERT INTO node_candidates(node_id, revision, candidate_json, config_sha256, created_at) VALUES(?,?,?,?,?)`,
-		nodeID, candidate.Revision, document, digest, now.Unix()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=?, observed_revision=?, observed_config_sha256=?,
-	 observed_at=?, updated_at=? WHERE id=?`, now.Unix(), candidate.Revision, digest, now.Unix(), now.Unix(), nodeID); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// enrollNodeIdentity records a valid, unrevoked Agent identity for one node.
-// A Line without an identity is not enrolled and can never serve a
-// credential.
-func enrollNodeIdentity(t *testing.T, s *store.Store, nodeID string, now time.Time) {
-	t.Helper()
-	if _, err := s.DB.Exec(`INSERT INTO node_identities(node_id, token_hash, created_at, revoked) VALUES(?,?,?,0)`,
-		nodeID, store.TokenHash(store.RandomToken()), now.Unix()); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // downloadFixture inserts one edge Line whose transport, candidate and
 // readback all agree, so the download gate passes.
 //
 // It returns the node id, the Line, the subscriber, the bearer and the
 // credential of that subscriber.
-func downloadFixture(t *testing.T, app *Server, now time.Time) (string, subscription.Line, subscription.Subscriber, string, subscription.Credential) {
-	t.Helper()
-	s := app.Store
-	created, _, err := s.CreateNode("edge", "line", 8443, 2222, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nodeID := created.ID
-	enrollNodeIdentity(t, s, nodeID, now)
-	line, err := s.SetLine(downloadLineFixture(t, nodeID, "line-a"), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sub, bearer, err := s.CreateSubscriber("alice", []string{nodeID}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	credentials, err := s.ListSubscriberCredentials(sub.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(credentials) != 1 {
-		t.Fatalf("expected one credential, got %d", len(credentials))
-	}
-	publishConvergedCandidate(t, s, nodeID, line, credentials, now)
-	return nodeID, line, sub, bearer, credentials[0]
-}
 
 // TestSubscriptionDownloadServesBothFixedFormats proves that a converged
 // bearer downloads the sing-box and the mihomo document, that the response
@@ -189,10 +66,10 @@ func TestSubscriptionDownloadServesBothFixedFormats(t *testing.T) {
 	app, logs := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, line, _, bearer, credential := downloadFixture(t, app, now)
+	_, line, _, bearer, credential := storetest.DownloadFixture(t, app.Store, now)
 
 	for _, format := range []string{"sing-box.json", "mihomo.yaml"} {
-		w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/"+format)
+		w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/"+format)
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s status %d want 200: %s", format, w.Code, w.Body.String())
 		}
@@ -227,9 +104,9 @@ func TestSubscriptionDownloadHeadHasNoBody(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
-	w := subscriptionRequest(app, "HEAD", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "HEAD", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d want 200", w.Code)
 	}
@@ -251,7 +128,7 @@ func TestSubscriptionRejectsInvalidBearersGenerically(t *testing.T) {
 	app, logs := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	unknown := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	cases := []struct {
@@ -266,7 +143,7 @@ func TestSubscriptionRejectsInvalidBearersGenerically(t *testing.T) {
 	var reference string
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+tc.token+"/sing-box.json")
+			w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+tc.token+"/sing-box.json")
 			if w.Code != http.StatusNotFound {
 				t.Fatalf("status %d want 404", w.Code)
 			}
@@ -295,12 +172,12 @@ func TestSubscriptionRejectsSuspendedAndRevoked(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, sub, bearer, _ := downloadFixture(t, app, now)
+	_, _, sub, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	if _, err := app.Store.SetSubscriberState(sub.ID, subscription.StatePaused, now); err != nil {
 		t.Fatal(err)
 	}
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("suspended subscriber status %d want 404", w.Code)
 	}
@@ -311,7 +188,7 @@ func TestSubscriptionRejectsSuspendedAndRevoked(t *testing.T) {
 	if err := app.Store.RevokeTokens(sub.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	w = subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w = testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("revoked bearer status %d want 404", w.Code)
 	}
@@ -324,13 +201,13 @@ func TestSubscriptionRejectsUnconvergedLine(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	nodeID, _, _, bearer, _ := downloadFixture(t, app, now)
+	nodeID, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	// A stale heartbeat means the Line is no longer contacting the Hub.
 	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=? WHERE id=?`, now.Add(-10*time.Minute).Unix(), nodeID); err != nil {
 		t.Fatal(err)
 	}
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("offline line status %d want 404", w.Code)
 	}
@@ -343,7 +220,7 @@ func TestSubscriptionRejectsUnconvergedLine(t *testing.T) {
 	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_revision=1 WHERE id=?`, nodeID); err != nil {
 		t.Fatal(err)
 	}
-	w = subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w = testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("stale revision status %d want 404", w.Code)
 	}
@@ -357,7 +234,7 @@ func TestSubscriptionRejectsMissingOtherSubscriber(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
 	s := app.Store
-	nodeID, line, _, aliceBearer, aliceCredential := downloadFixture(t, app, now)
+	nodeID, line, _, aliceBearer, aliceCredential := storetest.DownloadFixture(t, app.Store, now)
 
 	// A second subscriber joins the same Line.
 	bob, _, err := s.CreateSubscriber("bob", []string{nodeID}, now)
@@ -369,8 +246,8 @@ func TestSubscriptionRejectsMissingOtherSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The Line confirms the complete desired user set of both subscribers.
-	publishConvergedCandidate(t, s, nodeID, line, append(append([]subscription.Credential{}, aliceCredential), bobCredentials...), now)
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+aliceBearer+"/sing-box.json")
+	storetest.PublishConvergedCandidate(t, s, nodeID, line, append(append([]subscription.Credential{}, aliceCredential), bobCredentials...), now)
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+aliceBearer+"/sing-box.json")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d want 200: %s", w.Code, w.Body.String())
 	}
@@ -381,13 +258,13 @@ func TestSubscriptionRejectsMissingOtherSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The confirmed candidate still carries Bob's user.
-	w = subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+aliceBearer+"/sing-box.json")
+	w = testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+aliceBearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("pending removal status %d want 404", w.Code)
 	}
 	// Once the Line confirms the reduced user set, the download works again.
-	publishConvergedCandidate(t, s, nodeID, line, []subscription.Credential{aliceCredential}, now)
-	w = subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+aliceBearer+"/sing-box.json")
+	storetest.PublishConvergedCandidate(t, s, nodeID, line, []subscription.Credential{aliceCredential}, now)
+	w = testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+aliceBearer+"/sing-box.json")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d want 200 after the removal was confirmed", w.Code)
 	}
@@ -399,9 +276,9 @@ func TestSubscriptionRejectsForeignHost(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
-	w := subscriptionRequest(app, "GET", "evil.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "evil.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("foreign host status %d want 404", w.Code)
 	}
@@ -416,7 +293,7 @@ func TestSubscriptionRejectsNonCanonicalPaths(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	paths := []string{
 		"/subscription/" + bearer + "/sing-box.json?x=1",
@@ -433,7 +310,7 @@ func TestSubscriptionRejectsNonCanonicalPaths(t *testing.T) {
 		"/subscription/" + bearer + "/",
 	}
 	for _, path := range paths {
-		w := subscriptionRequest(app, "GET", "admin.example.invalid", path)
+		w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", path)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("%s status %d want 404", path, w.Code)
 		}
@@ -449,10 +326,10 @@ func TestSubscriptionRejectsNonGetMethods(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	for _, method := range []string{"POST", "PUT", "DELETE", "PATCH", "OPTIONS"} {
-		w := subscriptionRequest(app, method, "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+		w := testhttp.SubscriptionRequest(app.Handler(), method, "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s status %d want 405", method, w.Code)
 		}
@@ -466,16 +343,16 @@ func TestSubscriptionHostIsolation(t *testing.T) {
 	app, _ := subscriptionAppWithOrigin(t, testSubscriptionOrigin)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	// The download host serves the download.
-	w := subscriptionRequest(app, "GET", "download.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "download.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusOK {
 		t.Fatalf("download host status %d want 200", w.Code)
 	}
 	// The download host serves nothing else.
 	for _, path := range []string{"/healthz", "/login", "/api/status", "/assets/app.css", "/", "/nodes"} {
-		w = subscriptionRequest(app, "GET", "download.example.invalid", path)
+		w = testhttp.SubscriptionRequest(app.Handler(), "GET", "download.example.invalid", path)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("download host %s status %d want 404", path, w.Code)
 		}
@@ -484,11 +361,11 @@ func TestSubscriptionHostIsolation(t *testing.T) {
 		}
 	}
 	// The management host keeps its console and never serves a download.
-	w = subscriptionRequest(app, "GET", "admin.example.invalid", "/healthz")
+	w = testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/healthz")
 	if w.Code != http.StatusOK {
 		t.Fatalf("management host status %d want 200", w.Code)
 	}
-	w = subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w = testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("management host download status %d want 404", w.Code)
 	}
@@ -501,9 +378,9 @@ func TestSubscriptionOperationIDMatchesLog(t *testing.T) {
 	app, logs := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d want 200", w.Code)
 	}
@@ -532,7 +409,7 @@ func TestSubscriptionRejectsUnconfiguredLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodeID := created.ID
-	if _, err = s.SetLine(downloadLineFixture(t, nodeID, "line-a"), now); err != nil {
+	if _, err = s.SetLine(storetest.DownloadLineFixture(t, nodeID, "line-a"), now); err != nil {
 		t.Fatal(err)
 	}
 	sub, bearer, err := s.CreateSubscriber("alice", []string{nodeID}, now)
@@ -547,13 +424,13 @@ func TestSubscriptionRejectsUnconfiguredLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publishConvergedCandidate(t, s, nodeID, line, credentials, now)
+	storetest.PublishConvergedCandidate(t, s, nodeID, line, credentials, now)
 
 	// The transport settings disappear: the download must fail closed.
 	if _, err = s.DB.Exec(`DELETE FROM line_settings WHERE node_id=?`, nodeID); err != nil {
 		t.Fatal(err)
 	}
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status %d want 404", w.Code)
 	}
@@ -565,7 +442,7 @@ func TestSubscriptionDownloadReturnsPublicLinesOnly(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, line, _, bearer, _ := downloadFixture(t, app, now)
+	_, line, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	lines, credentials, err := app.Store.SubscriptionDownload(bearer, now)
 	if err != nil {
@@ -595,12 +472,12 @@ func refuseSubscriptionAfterMutation(t *testing.T, mutation string) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	nodeID, _, _, bearer, _ := downloadFixture(t, app, now)
+	nodeID, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	if _, err := app.Store.DB.Exec(mutation, nodeID); err != nil {
 		t.Fatal(err)
 	}
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status %d want 404", w.Code)
 	}
@@ -625,12 +502,12 @@ func TestSubscriptionReportsDatabaseFailure(t *testing.T) {
 	app, _ := subscriptionApp(t)
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
-	_, _, _, bearer, _ := downloadFixture(t, app, now)
+	_, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, now)
 
 	if err := app.Store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d want 503", w.Code)
 	}

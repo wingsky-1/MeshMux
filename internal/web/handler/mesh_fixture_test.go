@@ -14,6 +14,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 )
 
 const meshFixtureListen = "127.0.0.1:19444"
@@ -128,7 +129,7 @@ func TestMeshHubFixture(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 
-	empty := b.req("GET", "/mesh", nil, nil)
+	empty := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, empty, http.StatusOK)
 	if strings.Contains(empty.Body.String(), "Headscale 用户读取失败") || strings.Contains(empty.Body.String(), "Headscale 节点读取失败") {
 		t.Fatalf("a live Headscale read was reported as failed: %.600s", empty.Body.String())
@@ -158,7 +159,7 @@ func TestMeshHubFixture(t *testing.T) {
 		t.Fatalf("a device without an observed node became %+v", device)
 	}
 
-	listed := b.req("GET", "/mesh", nil, nil)
+	listed := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, listed, http.StatusOK)
 	for _, want := range []string{"fixture-nas", "未注册", "已签发 · 未使用"} {
 		if !strings.Contains(listed.Body.String(), want) {
@@ -171,7 +172,7 @@ func TestMeshHubFixture(t *testing.T) {
 
 	// Reconcile is the only path that persists an observation, and a real
 	// `nodes list` must not invent a registration for an unregistered device.
-	reconciled := b.post("/mesh/reconcile", url.Values{})
+	reconciled := b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, reconciled, http.StatusOK)
 	if !strings.Contains(reconciled.Body.String(), "已核对 1 台设备") || strings.Contains(reconciled.Body.String(), "无法核对") {
 		t.Fatalf("reconcile did not report a clean single-device check: %.600s", reconciled.Body.String())
@@ -186,7 +187,7 @@ func TestMeshHubFixture(t *testing.T) {
 
 	// A device with no observed node has nothing to remove remotely, so the
 	// deletion settles locally and never touches another node in the tailnet.
-	revoked := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	revoked := b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, revoked, http.StatusOK)
 	settled, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -229,7 +230,7 @@ func TestMeshHubFixture(t *testing.T) {
 			approvedRoutes++
 		}
 	}
-	if err = writePrivateJSON(metadataPath, meshFixtureMetadata{
+	if err = testhttp.WritePrivateJSON(metadataPath, meshFixtureMetadata{
 		HubOrigin:        testOrigin,
 		HeadscaleBinary:  meshnet.BinaryPath,
 		HeadscaleConfig:  meshnet.ConfigPath,
@@ -242,7 +243,7 @@ func TestMeshHubFixture(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = writeAtomicFile(readyPath, []byte("mesh-hub-fixture-ready\n"), 0644); err != nil {
+	if err = testhttp.WriteAtomicFile(readyPath, []byte("mesh-hub-fixture-ready\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	t.Log("Mesh Hub fixture PASS: real users/nodes read, device created, reconciled and revoked")
@@ -303,7 +304,7 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 
 	// The page reports the adapter's stable code instead of rendering "offline",
 	// and it still renders the honest empty state: a failed read is not a device.
-	page := b.req("GET", "/mesh", nil, nil)
+	page := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, http.StatusOK)
 	body := page.Body.String()
 	if code := headscaleErrorCodeIn(body); code == "" {
@@ -316,7 +317,7 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 		t.Fatal("a failed read was rendered as a live snapshot")
 	}
 
-	w := b.post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"mesh_only"}, "platform": {"ios"}})
+	w := b.Post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"mesh_only"}, "platform": {"ios"}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if code := headscaleErrorCodeIn(w.Body.String()); code == "" {
 		t.Fatalf("create lost its stable code: %.400s", w.Body.String())
@@ -329,7 +330,7 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 		t.Fatalf("a refused create stored %d devices", len(devices))
 	}
 
-	w = b.post("/mesh/reconcile", url.Values{})
+	w = b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if code := headscaleErrorCodeIn(w.Body.String()); code == "" {
 		t.Fatalf("reconcile lost its stable code: %.400s", w.Body.String())
@@ -359,7 +360,7 @@ func TestMeshPageRenderOnlyReadsControlPlane(t *testing.T) {
 	_, b, fake, _ := meshTestApp(t)
 	meshCreateDevice(t, b, fake, "nas", "mesh_only", "nas", "")
 	fake.resetCalls()
-	requireStatus(t, b.req("GET", "/mesh", nil, nil), http.StatusOK)
+	requireStatus(t, b.Req("GET", "/mesh", nil, nil), http.StatusOK)
 	calls := fake.resetCalls()
 	want := []string{"users.list", "nodes.list"}
 	if len(calls) != len(want) {

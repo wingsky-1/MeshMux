@@ -39,7 +39,7 @@ func publishApp(t *testing.T) (*browser, *storetest.FixturePublishVerifier) {
 
 func postPublish(t *testing.T, b *browser, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	return b.post("/policies/publish", url.Values{"publish": {body}})
+	return b.Post("/policies/publish", url.Values{"publish": {body}})
 }
 
 func publishReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) store.PolicyPublishReceipt {
@@ -212,7 +212,7 @@ func TestPublishEndpointRequiresAdminSession(t *testing.T) {
 	verifier := &storetest.FixturePublishVerifier{}
 	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
-	w := b.req("POST", "/policies/publish", url.Values{"publish": {`{"operation_id":"op"}`}}, nil)
+	w := b.Req("POST", "/policies/publish", url.Values{"publish": {`{"operation_id":"op"}`}}, nil)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated publish = %d, want 401", w.Code)
 	}
@@ -226,7 +226,7 @@ func TestPublishEndpointRequiresAdminSession(t *testing.T) {
 	// Without the CSRF token the mutation wrapper refuses the request.
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	noCSRF := b.req("POST", "/policies/publish", url.Values{"publish": {`{"operation_id":"op"}`}}, nil)
+	noCSRF := b.Req("POST", "/policies/publish", url.Values{"publish": {`{"operation_id":"op"}`}}, nil)
 	if noCSRF.Code != http.StatusForbidden {
 		t.Fatalf("CSRF-less publish = %d, want 403", noCSRF.Code)
 	}

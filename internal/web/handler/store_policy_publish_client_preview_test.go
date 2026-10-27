@@ -18,6 +18,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
+	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 )
 
 // previewSeed stores one converged Line whose confirmed candidate carries
@@ -25,14 +26,14 @@ import (
 // reuses the subscription fixture verbatim and returns the Line and bearer.
 func previewSeed(t *testing.T, app *Server) (string, string) {
 	t.Helper()
-	lineID, _, _, bearer, _ := downloadFixture(t, app, app.Now())
+	lineID, _, _, bearer, _ := storetest.DownloadFixture(t, app.Store, app.Now())
 	return lineID, bearer
 }
 
 // subscriptionBytes downloads one fixed format and returns the body.
 func subscriptionBytes(t *testing.T, app *Server, bearer, format string) string {
 	t.Helper()
-	w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/"+format)
+	w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/"+format)
 	if w.Code != http.StatusOK {
 		t.Fatalf("%s download = %d: %s", format, w.Code, w.Body.String())
 	}
@@ -121,7 +122,7 @@ func TestPoliciesPageMarksClientLayerAsPreview(t *testing.T) {
 	b := policyWriteApp(t)
 	activateViaAPI(t, b, "client",
 		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`)
-	w := b.req("GET", "/policies", nil, nil)
+	w := b.Req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{"预览 · 不改变订阅", "没有消费者", "不读取客户端层", "不包含这些规则"} {

@@ -1,4 +1,4 @@
-package handler
+package node_test
 
 import (
 	"crypto/sha256"
@@ -12,43 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
-func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision int64) []protocol.Task {
-	t.Helper()
-	rows, err := app.Store.DB.Query(`SELECT operation_id, revision, idempotency_key, kind, params
- FROM agent_tasks WHERE node_id=? AND status='pending' ORDER BY revision`, nodeID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var tasks []protocol.Task
-	for rows.Next() {
-		task := protocol.Task{Schema: protocol.Schema, Version: protocol.Version, NodeID: nodeID}
-		var params string
-		if err := rows.Scan(&task.OperationID, &task.Revision, &task.IdempotencyKey, &task.Kind, &params); err != nil {
-			t.Fatal(err)
-		}
-		task.Params = json.RawMessage(params)
-		var p struct {
-			Revision int64 `json:"revision"`
-		}
-		if json.Unmarshal(task.Params, &p) == nil && p.Revision == revision {
-			tasks = append(tasks, task)
-		}
-	}
-	return tasks
-}
-
 func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
-	app, _ := testApp(t)
-	created, firstCode := createPendingNode(t, app, "edge", "repair-edge", 8443, 2222)
-	w := pairJSON(t, app, created.ID, "edge", firstCode)
-	requireStatus(t, w, 200)
+	app, _ := handlertest.TestApp(t)
+	created, firstCode := handlertest.CreatePendingNode(t, app, "edge", "repair-edge", 8443, 2222)
+	w := handlertest.PairJSON(t, app, created.ID, "edge", firstCode)
+	handlertest.RequireStatus(t, w, 200)
 	var firstPair map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &firstPair)
 	firstToken := firstPair["identity_token"]
@@ -61,11 +37,11 @@ func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	if err = app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='failed' AND error_code='IDENTITY_REPLACED'`, created.ID).Scan(&replaced); err != nil || replaced != 4 {
 		t.Fatalf("replaced tasks=%d err=%v", replaced, err)
 	}
-	if w = bearerReq(app, "GET", "/api/agent/tasks", firstToken, nil); w.Code != 401 {
+	if w = handlertest.BearerReq(app, "GET", "/api/agent/tasks", firstToken, nil); w.Code != 401 {
 		t.Fatalf("old identity status=%d, want 401", w.Code)
 	}
-	w = pairJSON(t, app, created.ID, "edge", code)
-	requireStatus(t, w, 200)
+	w = handlertest.PairJSON(t, app, created.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 200)
 	var secondPair map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &secondPair)
 	if secondPair["identity_token"] == "" || secondPair["identity_token"] == firstToken {
@@ -75,7 +51,7 @@ func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tasks := fixedTasksForRevision(t, app, created.ID, latest.Revision)
+	tasks := handlertest.FixedTasksForRevision(t, app, created.ID, latest.Revision)
 	if len(tasks) != 4 {
 		t.Fatalf("new identity seeded %d fixed tasks, want 4", len(tasks))
 	}
@@ -90,10 +66,10 @@ func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 }
 
 func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
-	app, _ := testApp(t)
-	created, code := createPendingNode(t, app, "out", "late-readback", 8443, 2222)
-	w := pairJSON(t, app, created.ID, "out", code)
-	requireStatus(t, w, 200)
+	app, _ := handlertest.TestApp(t)
+	created, code := handlertest.CreatePendingNode(t, app, "out", "late-readback", 8443, 2222)
+	w := handlertest.PairJSON(t, app, created.ID, "out", code)
+	handlertest.RequireStatus(t, w, 200)
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
@@ -101,7 +77,7 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	apply, readback := fixedTasksForRevision(t, app, created.ID, latest.Revision)[2], fixedTasksForRevision(t, app, created.ID, latest.Revision)[3]
+	apply, readback := handlertest.FixedTasksForRevision(t, app, created.ID, latest.Revision)[2], handlertest.FixedTasksForRevision(t, app, created.ID, latest.Revision)[3]
 	release, _ := node.KernelReleaseFor("amd64")
 	evidence := node.Readback{
 		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
@@ -111,8 +87,8 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 	}
 	detail, _ := json.Marshal(evidence)
 	for _, task := range []protocol.Task{apply, readback} {
-		w = reportJSON(t, app, token, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
-		requireStatus(t, w, 200)
+		w = handlertest.ReportJSON(t, app, token, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
+		handlertest.RequireStatus(t, w, 200)
 	}
 	firstObserved, err := app.Store.GetNodeAt(created.ID, app.Now())
 	if err != nil || firstObserved.ObservedRevision != latest.Revision || firstObserved.ObservedTaskRevision != readback.Revision {
@@ -136,8 +112,8 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 		olderID, `{"revision":1}`, time.Now().Unix(), time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
-	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: olderID, Status: "healthy", Detail: string(detail)})
-	requireStatus(t, w, 200)
+	w = handlertest.ReportJSON(t, app, token, protocol.TaskResult{OperationID: olderID, Status: "healthy", Detail: string(detail)})
+	handlertest.RequireStatus(t, w, 200)
 	after, err := app.Store.GetNodeAt(created.ID, app.Now())
 	if err != nil || after.ObservedRevision != firstObserved.ObservedRevision || after.ObservedTaskRevision != firstObserved.ObservedTaskRevision {
 		t.Fatalf("late readback regressed observation: before=%+v after=%+v err=%v", firstObserved, after, err)
@@ -145,10 +121,10 @@ func TestLateReadbackCannotRegressObservedRevision(t *testing.T) {
 }
 
 func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
-	app, _ := testApp(t)
-	created, code := createPendingNode(t, app, "edge", "strict-readback", 8443, 2222)
-	w := pairJSON(t, app, created.ID, "edge", code)
-	requireStatus(t, w, 200)
+	app, _ := handlertest.TestApp(t)
+	created, code := handlertest.CreatePendingNode(t, app, "edge", "strict-readback", 8443, 2222)
+	w := handlertest.PairJSON(t, app, created.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 200)
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
@@ -156,7 +132,7 @@ func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	readback := fixedTasksForRevision(t, app, created.ID, latest.Revision)[3]
+	readback := handlertest.FixedTasksForRevision(t, app, created.ID, latest.Revision)[3]
 	release, _ := node.KernelReleaseFor("amd64")
 	evidence := node.Readback{
 		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
@@ -166,29 +142,29 @@ func TestHealthyReadbackRejectsExtraFields(t *testing.T) {
 	}
 	body, _ := json.Marshal(evidence)
 	body = append(body[:len(body)-1], []byte(`,"extra":true}`)...)
-	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body)})
-	requireStatus(t, w, 400)
+	w = handlertest.ReportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body)})
+	handlertest.RequireStatus(t, w, 400)
 	var status string
 	if err := app.Store.DB.QueryRow(`SELECT status FROM agent_tasks WHERE operation_id=?`, readback.OperationID).Scan(&status); err != nil || status != "pending" {
 		t.Fatalf("invalid readback changed task status=%q err=%v", status, err)
 	}
 
-	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body[:len(body)-1])})
-	requireStatus(t, w, 400)
+	w = handlertest.ReportJSON(t, app, token, protocol.TaskResult{OperationID: readback.OperationID, Status: "healthy", Detail: string(body[:len(body)-1])})
+	handlertest.RequireStatus(t, w, 400)
 }
 
 func TestIdentityRevokeFailsUnfinishedTasksWithoutDeletingCandidate(t *testing.T) {
-	app, _ := testApp(t)
-	created, code := createPendingNode(t, app, "edge", "revoke-edge", 8443, 2222)
-	w := pairJSON(t, app, created.ID, "edge", code)
-	requireStatus(t, w, 200)
+	app, _ := handlertest.TestApp(t)
+	created, code := handlertest.CreatePendingNode(t, app, "edge", "revoke-edge", 8443, 2222)
+	w := handlertest.PairJSON(t, app, created.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 200)
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	token := paired["identity_token"]
 	if err := app.Store.RevokeIdentity(created.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if w = bearerReq(app, "GET", "/api/agent/tasks", token, nil); w.Code != 401 {
+	if w = handlertest.BearerReq(app, "GET", "/api/agent/tasks", token, nil); w.Code != 401 {
 		t.Fatalf("revoked identity status=%d, want 401", w.Code)
 	}
 	var failed int
@@ -201,17 +177,17 @@ func TestIdentityRevokeFailsUnfinishedTasksWithoutDeletingCandidate(t *testing.T
 }
 
 func TestStaleNodeDoesNotReceiveStateChangingTasks(t *testing.T) {
-	app, _ := testApp(t)
-	created, code := createPendingNode(t, app, "edge", "offline-edge", 8443, 2222)
-	w := pairJSON(t, app, created.ID, "edge", code)
-	requireStatus(t, w, 200)
+	app, _ := handlertest.TestApp(t)
+	created, code := handlertest.CreatePendingNode(t, app, "edge", "offline-edge", 8443, 2222)
+	w := handlertest.PairJSON(t, app, created.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 200)
 	var paired map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &paired)
 	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	w = bearerReq(app, "GET", "/api/agent/tasks", paired["identity_token"], nil)
-	requireStatus(t, w, 200)
+	w = handlertest.BearerReq(app, "GET", "/api/agent/tasks", paired["identity_token"], nil)
+	handlertest.RequireStatus(t, w, 200)
 	var body struct {
 		Tasks []protocol.Task `json:"tasks"`
 	}
@@ -221,10 +197,10 @@ func TestStaleNodeDoesNotReceiveStateChangingTasks(t *testing.T) {
 }
 
 func TestReconcilePublicationRollsBackCandidateOnTaskFailure(t *testing.T) {
-	app, _ := testApp(t)
-	created, code := createPendingNode(t, app, "edge", "atomic-reconcile", 8443, 2222)
-	w := pairJSON(t, app, created.ID, "edge", code)
-	requireStatus(t, w, 200)
+	app, _ := handlertest.TestApp(t)
+	created, code := handlertest.CreatePendingNode(t, app, "edge", "atomic-reconcile", 8443, 2222)
+	w := handlertest.PairJSON(t, app, created.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 200)
 	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed' WHERE node_id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -245,16 +221,16 @@ func TestReconcilePublicationRollsBackCandidateOnTaskFailure(t *testing.T) {
 }
 
 func TestInstallArtifactBoundariesAndShellQuote(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
-	w := b.req("GET", "/api/nodes/cli", nil, nil)
-	requireStatus(t, w, 404)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
+	w := b.Req("GET", "/api/nodes/cli", nil, nil)
+	handlertest.RequireStatus(t, w, 404)
 	if !strings.Contains(w.Body.String(), "INSTALL_ARTIFACT_UNAVAILABLE") {
 		t.Fatal("missing artifact did not fail explicitly")
 	}
-	page := b.req("GET", "/nodes", nil, nil)
+	page := b.Req("GET", "/nodes", nil, nil)
 	if strings.Contains(page.Body.String(), "./meshmux install") {
 		t.Fatal("development preview rendered an executable install command")
 	}
@@ -269,25 +245,25 @@ func TestInstallArtifactBoundariesAndShellQuote(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	app.Cfg.InstallArtifact = &InstallArtifact{
+	app.Cfg.InstallArtifact = &handler.InstallArtifact{
 		Path: path, Version: node.CurrentAgentVersion(), Architecture: "amd64", SHA256: hex.EncodeToString(sum[:]),
 	}
-	w = b.req("GET", "/api/nodes/cli", nil, nil)
-	requireStatus(t, w, 200)
+	w = b.Req("GET", "/api/nodes/cli", nil, nil)
+	handlertest.RequireStatus(t, w, 200)
 	if !strings.Contains(w.Header().Get("Content-Disposition"), "meshmux") || w.Body.String() != string(body) {
 		t.Fatal("artifact bytes were not bound to the download")
 	}
 }
 
 func TestNodeCreateAndReissueFormsRequireOriginAndCSRF(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
-	node, _ := createPendingNode(t, app, "edge", "form-security", 8443, 2222)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
+	node, _ := handlertest.CreatePendingNode(t, app, "edge", "form-security", 8443, 2222)
 	for _, path := range []string{"/nodes/reconcile", "/nodes/reissue"} {
-		w := b.req("POST", path, url.Values{"node_id": {node.ID}, "csrf": {b.csrf}}, http.Header{"Origin": {}})
-		requireStatus(t, w, 403)
+		w := b.Req("POST", path, url.Values{"node_id": {node.ID}, "csrf": {b.CSRF}}, http.Header{"Origin": {}})
+		handlertest.RequireStatus(t, w, 403)
 		if !strings.Contains(w.Body.String(), "ORIGIN_REJECTED") {
 			t.Fatalf("%s missing origin rejection", path)
 		}

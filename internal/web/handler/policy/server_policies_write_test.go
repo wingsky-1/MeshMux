@@ -1,4 +1,4 @@
-package handler
+package policy_test
 
 import (
 	"encoding/json"
@@ -10,26 +10,27 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 )
 
-func policyWriteApp(t *testing.T) *browser {
+func policyWriteApp(t *testing.T) *handlertest.Browser {
 	t.Helper()
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 	return b
 }
 
-func postPolicy(t *testing.T, b *browser, path, body string) *httptest.ResponseRecorder {
+func postPolicy(t *testing.T, b *handlertest.Browser, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	return b.post(path, url.Values{"policy": {body}})
+	return b.Post(path, url.Values{"policy": {body}})
 }
 
 func policyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) policy.PolicyWriteResponse {
 	t.Helper()
-	requireStatus(t, w, status)
+	handlertest.RequireStatus(t, w, status)
 	var out policy.PolicyWriteResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("write response: %v %.300s", err, w.Body.String())
@@ -67,7 +68,7 @@ func TestPolicyWriteAPILifecycle(t *testing.T) {
 		t.Fatalf("revoke = %+v", revoked)
 	}
 	// The client layer stays readable but is closed to the write API.
-	clientID := seedLegacyClientPolicy(t, b,
+	clientID := handlertest.SeedLegacyClientPolicy(t, b,
 		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`)
 	for _, request := range []struct {
 		path, body string
@@ -115,8 +116,8 @@ func TestPolicyWriteAPIRejectsBadRequests(t *testing.T) {
 
 func TestPoliciesPageActiveAndBrokenSnapshots(t *testing.T) {
 	b := policyWriteApp(t)
-	w := b.req("GET", "/policies", nil, nil)
-	requireStatus(t, w, http.StatusOK)
+	w := b.Req("GET", "/policies", nil, nil)
+	handlertest.RequireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "默认预览") {
 		t.Fatalf("default snapshot is not labelled: %.400s", w.Body.String())
 	}
@@ -130,11 +131,11 @@ func TestPoliciesPageActiveAndBrokenSnapshots(t *testing.T) {
 	}
 	client := `{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`
 	server := `{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"direct"}]}`
-	clientID := seedLegacyClientPolicy(t, b, client)
+	clientID := handlertest.SeedLegacyClientPolicy(t, b, client)
 	activate(create("server", server))
 
-	w = b.req("GET", "/policies", nil, nil)
-	requireStatus(t, w, http.StatusOK)
+	w = b.Req("GET", "/policies", nil, nil)
+	handlertest.RequireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{"域名例外（news.example.invalid）", "域名例外（ai.example.invalid）", "当前生效的客户端策略通过"} {
 		if !strings.Contains(body, want) {
@@ -147,11 +148,11 @@ func TestPoliciesPageActiveAndBrokenSnapshots(t *testing.T) {
 
 	// A stored payload that no longer validates is never rendered as live.
 	broken := `{"default":"proxy","rules":[{"priority":200,"match":{"domains":["news.example.invalid"]},"action":"direct"},{"priority":100,"match":{"domains":["other.example.invalid"]},"action":"direct"}]}`
-	if _, err := b.app.Store.DB.Exec(`UPDATE route_policies SET payload=? WHERE id=? AND revision=1`, broken, clientID); err != nil {
+	if _, err := b.App.Store.DB.Exec(`UPDATE route_policies SET payload=? WHERE id=? AND revision=1`, broken, clientID); err != nil {
 		t.Fatal(err)
 	}
-	w = b.req("GET", "/policies", nil, nil)
-	requireStatus(t, w, http.StatusOK)
+	w = b.Req("GET", "/policies", nil, nil)
+	handlertest.RequireStatus(t, w, http.StatusOK)
 	for _, want := range []string{"当前 active 策略未通过复核", "当前没有可用的真实策略数据"} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Fatalf("broken active snapshot missing %q: %.500s", want, w.Body.String())

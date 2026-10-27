@@ -26,13 +26,13 @@ func TestSubscriberRoutesRequireAuthentication(t *testing.T) {
 	app, _ := testApp(t)
 	b := &browser{app: app}
 
-	w := b.req("GET", "/subscribers", nil, http.Header{"Accept": {"text/html"}})
+	w := b.Req("GET", "/subscribers", nil, http.Header{"Accept": {"text/html"}})
 	requireStatus(t, w, http.StatusUnauthorized)
 	if !strings.Contains(w.Body.String(), "AUTH_REQUIRED") {
 		t.Fatal("unauthenticated page did not require authentication")
 	}
 
-	w = b.req("POST", "/subscribers", url.Values{"csrf": {"x"}, "display_name": {"anonymous"}}, nil)
+	w = b.Req("POST", "/subscribers", url.Values{"csrf": {"x"}, "display_name": {"anonymous"}}, nil)
 	requireStatus(t, w, http.StatusUnauthorized)
 	if !strings.Contains(w.Body.String(), "SESSION_INVALID") {
 		t.Fatal("unauthenticated mutation did not report SESSION_INVALID")
@@ -52,13 +52,13 @@ func TestSubscriberMutationsRejectWrongCSRFAndOrigin(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 
-	w := b.req("POST", "/subscribers", url.Values{"csrf": {"wrong"}, "display_name": {"mallory"}}, nil)
+	w := b.Req("POST", "/subscribers", url.Values{"csrf": {"wrong"}, "display_name": {"mallory"}}, nil)
 	requireStatus(t, w, http.StatusForbidden)
 	if !strings.Contains(w.Body.String(), "CSRF_REJECTED") {
 		t.Fatal("wrong CSRF was not rejected")
 	}
 
-	w = b.req("POST", "/subscribers", url.Values{"csrf": {b.csrf}, "display_name": {"mallory"}},
+	w = b.Req("POST", "/subscribers", url.Values{"csrf": {b.csrf}, "display_name": {"mallory"}},
 		http.Header{"Origin": {"https://evil.example.invalid"}})
 	requireStatus(t, w, http.StatusForbidden)
 	if !strings.Contains(w.Body.String(), "ORIGIN_REJECTED") {
@@ -81,7 +81,7 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 	loginAs(t, b, testPassword)
 	node, _ := createPendingNode(t, app, "edge", "line-hk-01", 8443, 2222)
 
-	w := b.post("/lines", url.Values{
+	w := b.Post("/lines", url.Values{
 		"node_id": {node.ID}, "display_name": {"香港 01"}, "sort_order": {"1"},
 		"server": {"line.example.invalid"}, "port": {"8443"},
 		"server_name":      {"handshake.example.invalid"},
@@ -105,7 +105,7 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 		}
 	}
 
-	w = b.post("/subscribers", url.Values{"display_name": {"alice"}, "line_" + node.ID: {"1"}})
+	w = b.Post("/subscribers", url.Values{"display_name": {"alice"}, "line_" + node.ID: {"1"}})
 	require2xx(t, w)
 	createBody := w.Body.String()
 	match := subscriberTokenPattern.FindStringSubmatch(createBody)
@@ -131,9 +131,9 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 		t.Fatal("unique line_<node_id> checkbox did not select the Line")
 	}
 
-	page := b.req("GET", "/subscribers", nil, nil)
+	page := b.Req("GET", "/subscribers", nil, nil)
 	requireStatus(t, page, http.StatusOK)
-	api := b.req("GET", "/api/subscribers", nil, nil)
+	api := b.Req("GET", "/api/subscribers", nil, nil)
 	requireStatus(t, api, http.StatusOK)
 	for name, body := range map[string]string{"create": createBody, "page": page.Body.String(), "api": api.Body.String()} {
 		for _, secret := range []string{creds[0].UUID, line.PrivateKey, line.PublicKey, line.ShortID} {
@@ -162,7 +162,7 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 	node, _ := createPendingNode(t, app, "edge", "line-01", 8443, 2222)
 	storetest.ConfigureLine(t, app.Store, node.ID, "line-a", time.Now())
 
-	w := b.post("/subscribers", url.Values{"display_name": {"alice"}, "line_" + node.ID: {"1"}})
+	w := b.Post("/subscribers", url.Values{"display_name": {"alice"}, "line_" + node.ID: {"1"}})
 	require2xx(t, w)
 	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
@@ -170,7 +170,7 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 	}
 	id := subs[0].ID
 
-	w = b.post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"complete"}})
+	w = b.Post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"complete"}})
 	requireStatus(t, w, http.StatusBadRequest)
 	if !strings.Contains(w.Body.String(), "SUBSCRIBER_ACTION_INVALID") {
 		t.Fatal("complete action was not rejected")
@@ -180,14 +180,14 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 		t.Fatalf("state = %q after rejected complete, want active (err %v)", sub.State, err)
 	}
 
-	w = b.post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"delete"}})
+	w = b.Post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"delete"}})
 	require2xx(t, w)
 	sub, err = app.Store.GetSubscriber(id)
 	if err != nil || sub.State != subscription.StateDeleting {
 		t.Fatalf("state = %q after delete, want deleting (err %v)", sub.State, err)
 	}
 
-	w = b.post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"complete"}})
+	w = b.Post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"complete"}})
 	requireStatus(t, w, http.StatusBadRequest)
 	sub, err = app.Store.GetSubscriber(id)
 	if err != nil || sub.State != subscription.StateDeleting {

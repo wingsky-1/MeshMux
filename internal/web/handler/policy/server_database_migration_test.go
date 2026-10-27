@@ -1,4 +1,4 @@
-package handler
+package policy_test
 
 // HTTP tests for the irreversible database migration approval (#11c-3 Task 5,
 // spec §4.15, §6). The migration itself is 11d; this surface is the only way the
@@ -10,9 +10,7 @@ package handler
 // "1" in the explicit confirmation field, and a refused request writes nothing.
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,40 +19,18 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 )
 
 const databaseMigrationApprovePath = "/tasks/db-migration/approve"
 
-func databaseMigrationBrowser(t *testing.T) (*browser, *Server) {
-	t.Helper()
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
-	return b, app
-}
-
-func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status int) policy.DatabaseMigrationReceipt {
-	t.Helper()
-	requireStatus(t, w, status)
-	var receipt policy.DatabaseMigrationReceipt
-	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
-		t.Fatalf("database migration receipt: %v %.300s", err, w.Body.String())
-	}
-	if receipt.OperationID == "" {
-		t.Fatal("receipt carries no operation id")
-	}
-	return receipt
-}
-
 // TestIrreversibleNeedsExplicitConfirm is the review gate: without the explicit
 // Web bit an irreversible migration approval is refused and the backup record
 // stays byte-identical; with the bit the approval is stored on that record.
 func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
-	b, app := databaseMigrationBrowser(t)
+	b, app := handlertest.DatabaseMigrationBrowser(t)
 	operationID := strings.Repeat("d", 32)
 	recordPath, _ := storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 	before, err := os.ReadFile(recordPath)
@@ -62,7 +38,7 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refused := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath,
+	refused := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath,
 		url.Values{"backup_operation_id": {operationID}}), http.StatusConflict)
 	if refused.ErrorCode != "IRREVERSIBLE_CONFIRM_REQUIRED" || refused.IrreversibleApproved {
 		t.Fatalf("missing bit was not refused: %+v", refused)
@@ -78,7 +54,7 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 		t.Fatal("refused approval changed the backup record")
 	}
 	for _, truthy := range []string{"on", "true", "yes", "0", ""} {
-		receipt := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath,
+		receipt := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath,
 			url.Values{"backup_operation_id": {operationID}, "irreversible_confirm": {truthy}}), http.StatusConflict)
 		if receipt.ErrorCode != "IRREVERSIBLE_CONFIRM_REQUIRED" {
 			t.Fatalf("inexplicit bit %q accepted: %+v", truthy, receipt)
@@ -88,7 +64,7 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 		t.Fatal("refusals set the bit anyway")
 	}
 
-	approved := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath,
+	approved := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath,
 		url.Values{"backup_operation_id": {operationID}, "irreversible_confirm": {"1"}}), http.StatusOK)
 	if !approved.OK || approved.Status != "approved" || !approved.IrreversibleApproved {
 		t.Fatalf("explicit approval receipt: %+v", approved)
@@ -111,7 +87,7 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 	}
 
 	// Retrying the operator action is idempotent and never says "applied".
-	again := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath,
+	again := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath,
 		url.Values{"backup_operation_id": {operationID}, "irreversible_confirm": {"1"}}), http.StatusOK)
 	if again.Status != "already_approved" || !again.IrreversibleApproved {
 		t.Fatalf("retry receipt: %+v", again)
@@ -128,21 +104,21 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 	}
 
 	t.Run("authentication, origin and csrf stay required", func(t *testing.T) {
-		b, app := databaseMigrationBrowser(t)
+		b, app := handlertest.DatabaseMigrationBrowser(t)
 		storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, nil)
-		anonymous := &browser{app: app}
-		requireStatus(t, anonymous.req("POST", databaseMigrationApprovePath, approvedForm(), nil), http.StatusUnauthorized)
-		requireStatus(t, b.req("POST", databaseMigrationApprovePath,
+		anonymous := &handlertest.Browser{App: app}
+		handlertest.RequireStatus(t, anonymous.Req("POST", databaseMigrationApprovePath, approvedForm(), nil), http.StatusUnauthorized)
+		handlertest.RequireStatus(t, b.Req("POST", databaseMigrationApprovePath,
 			url.Values{"backup_operation_id": {operationID}, "irreversible_confirm": {"1"}, "csrf": {"wrong"}}, nil),
 			http.StatusForbidden)
-		requireStatus(t, b.req("POST", databaseMigrationApprovePath,
-			url.Values{"backup_operation_id": {operationID}, "irreversible_confirm": {"1"}, "csrf": {b.csrf}},
+		handlertest.RequireStatus(t, b.Req("POST", databaseMigrationApprovePath,
+			url.Values{"backup_operation_id": {operationID}, "irreversible_confirm": {"1"}, "csrf": {b.CSRF}},
 			http.Header{"Origin": {"https://evil.example.invalid"}}), http.StatusForbidden)
 	})
 
 	t.Run("invalid operation id", func(t *testing.T) {
-		b, _ := databaseMigrationBrowser(t)
-		receipt := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath,
+		b, _ := handlertest.DatabaseMigrationBrowser(t)
+		receipt := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath,
 			url.Values{"backup_operation_id": {"../../etc"}, "irreversible_confirm": {"1"}}), http.StatusBadRequest)
 		if receipt.ErrorCode != "DB_BACKUP_OPERATION_INVALID" {
 			t.Fatalf("receipt: %+v", receipt)
@@ -150,8 +126,8 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 	})
 
 	t.Run("missing record", func(t *testing.T) {
-		b, _ := databaseMigrationBrowser(t)
-		receipt := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath, approvedForm()), http.StatusNotFound)
+		b, _ := handlertest.DatabaseMigrationBrowser(t)
+		receipt := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath, approvedForm()), http.StatusNotFound)
 		if receipt.ErrorCode != "DB_BACKUP_RECORD_MISSING" || receipt.IrreversibleApproved {
 			t.Fatalf("receipt: %+v", receipt)
 		}
@@ -211,12 +187,12 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b, app := databaseMigrationBrowser(t)
+			b, app := handlertest.DatabaseMigrationBrowser(t)
 			path, _ := storetest.HubDatabaseRecord(t, app.Store.Dir, operationID, tc.mutate)
 			if tc.write != nil {
 				tc.write(path)
 			}
-			receipt := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath, approvedForm()), tc.status)
+			receipt := handlertest.DecodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath, approvedForm()), tc.status)
 			if receipt.ErrorCode != tc.code || receipt.IrreversibleApproved {
 				t.Fatalf("receipt: %+v", receipt)
 			}

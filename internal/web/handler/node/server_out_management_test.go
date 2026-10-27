@@ -1,4 +1,4 @@
-package handler
+package node_test
 
 // The Out management API after the authorization migration (Task 5).
 //
@@ -17,7 +17,10 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
+	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 )
 
 // outTransportConfigured reports whether one Out still has dial parameters.
@@ -36,7 +39,7 @@ func outTransportConfigured(t *testing.T, s *store.Store, outID string) bool {
 // {error_code, operation_id, stage:"web", next_action}.
 func requireBindingError(t *testing.T, w *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
-	requireStatus(t, w, status)
+	handlertest.RequireStatus(t, w, status)
 	var body struct {
 		ErrorCode   string `json:"error_code"`
 		OperationID string `json:"operation_id"`
@@ -51,19 +54,9 @@ func requireBindingError(t *testing.T, w *httptest.ResponseRecorder, status int,
 	}
 }
 
-// createPairedWebNode drives the real pairing endpoint so a handler test uses a
-// node with the same non-revoked identity the production flow issues.
-func createPairedWebNode(t *testing.T, app *Server, role, name string, vless, ssh int) store.Node {
+func createPairedWebNode(t *testing.T, app *handler.Server, role, name string, vless, ssh int) store.Node {
 	t.Helper()
-	node, code := createPendingNode(t, app, role, name, vless, ssh)
-	w := pairJSON(t, app, node.ID, role, code)
-	requireStatus(t, w, 200)
-	clearNodeTasks(t, app, node.ID)
-	paired, err := app.Store.GetNodeAt(node.ID, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return paired
+	return testhttp.CreatePairedWebNode(t, app.Handler(), app.Store, role, name, vless, ssh)
 }
 
 type outAuthorizationPreviewResponse struct {
@@ -86,10 +79,10 @@ type outAuthorizationPreviewResponse struct {
 // routes answer one stable code that names the replacement action, so an old client
 // learns where the action moved instead of reading a bare 404 as a typo.
 func TestOutBindingEndpointsAreRetired(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 
 	line := createPairedWebNode(t, app, "edge", "line-retired", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-retired", 9443, 2223)
@@ -99,14 +92,14 @@ func TestOutBindingEndpointsAreRetired(t *testing.T) {
 
 	// Session and CSRF boundaries are unchanged: the routes are still mutations, so
 	// an anonymous or unmarked request never reaches the handler.
-	anon := &browser{app: app}
+	anon := &handlertest.Browser{App: app}
 	for _, path := range []string{"/nodes/out/bind", "/nodes/out/unbind"} {
-		requireBindingError(t, anon.req("POST", path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}}, nil), 401, "SESSION_INVALID")
-		requireBindingError(t, b.req("POST", path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}}, nil), 403, "CSRF_REJECTED")
+		requireBindingError(t, anon.Req("POST", path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}}, nil), 401, "SESSION_INVALID")
+		requireBindingError(t, b.Req("POST", path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}}, nil), 403, "CSRF_REJECTED")
 	}
 
 	for _, path := range []string{"/nodes/out/bind", "/nodes/out/unbind"} {
-		w := b.post(path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
+		w := b.Post(path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
 		requireBindingError(t, w, 410, node.CodeBindingAPIRetired)
 		var body struct {
 			NextAction string `json:"next_action"`
@@ -129,14 +122,14 @@ func TestOutBindingEndpointsAreRetired(t *testing.T) {
 // its answer is the subscription projection, so it can never describe an egress
 // the wizard would not produce.
 func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 
 	// No Out at all: the Hub previews the Out-free direct deployment.
-	w := b.post("/nodes/out/preview", nil)
-	requireStatus(t, w, 200)
+	w := b.Post("/nodes/out/preview", nil)
+	handlertest.RequireStatus(t, w, 200)
 	var preview outAuthorizationPreviewResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatalf("preview body: %v %.300s", err, w.Body.String())
@@ -158,8 +151,8 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	// Membership is the authorization (Ruling R10): the Out accepts the enrolled Line
 	// whether or not any subscription selects it. No subscription exists yet, so the
 	// preview reports a pool of one accepted Line and no affected policy.
-	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
-	requireStatus(t, w, 200)
+	w = b.Post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
+	handlertest.RequireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
@@ -178,8 +171,8 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	// A single-Line projection narrows the answer to that Line and reports its real
 	// state. The derivation still refuses the DNS-named address, so this is a refusal
 	// rather than a fabricated pending transition.
-	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
-	requireStatus(t, w, 200)
+	w = b.Post("/nodes/out/preview", url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
+	handlertest.RequireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
@@ -198,8 +191,8 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
-	requireStatus(t, w, 200)
+	w = b.Post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
+	handlertest.RequireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
@@ -213,8 +206,8 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	// The subscription does not authorize anything; it appears only as a used-by name
 	// for the delete guard, while the source set stays the membership set.
 	storetest.EnableOutForLine(t, app.Store, out.ID, line.ID, now)
-	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
-	requireStatus(t, w, 200)
+	w = b.Post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
+	handlertest.RequireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
@@ -244,10 +237,10 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 // publishes the explicit empty authorization, then the node row and its dial
 // parameters are gone (Ruling R9: delete means delete).
 func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
-	app, logs := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, logs := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 
 	line := createPairedWebNode(t, app, "edge", "line-del", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-del", 9443, 2223)
@@ -263,12 +256,12 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 	storetest.SettleTasks(t, app.Store, out.ID)
 
 	// Missing session / CSRF never reach the handler.
-	anon := &browser{app: app}
-	requireBindingError(t, anon.req("POST", "/nodes/out/delete", url.Values{"out_id": {out.ID}}, nil), 401, "SESSION_INVALID")
-	requireBindingError(t, b.req("POST", "/nodes/out/delete", url.Values{"out_id": {out.ID}}, nil), 403, "CSRF_REJECTED")
+	anon := &handlertest.Browser{App: app}
+	requireBindingError(t, anon.Req("POST", "/nodes/out/delete", url.Values{"out_id": {out.ID}}, nil), 401, "SESSION_INVALID")
+	requireBindingError(t, b.Req("POST", "/nodes/out/delete", url.Values{"out_id": {out.ID}}, nil), 403, "CSRF_REJECTED")
 
-	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
-	requireStatus(t, w, 200)
+	w := b.Post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+	handlertest.RequireStatus(t, w, 200)
 	var deleted struct {
 		Status      string `json:"status"`
 		OutID       string `json:"out_id"`
@@ -318,19 +311,19 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 	}
 
 	// A wrong role and an unknown node use the shared error contract.
-	requireBindingError(t, b.post("/nodes/out/delete", url.Values{"out_id": {line.ID}}), 409, "OUT_ROLE_INVALID")
-	requireBindingError(t, b.post("/nodes/out/delete", url.Values{"out_id": {strings.Repeat("d", 32)}}), 404, "OUT_NOT_FOUND")
-	requireBindingError(t, b.post("/nodes/out/delete", url.Values{"out_id": {"nope"}}), 400, "OUT_BINDING_INVALID")
+	requireBindingError(t, b.Post("/nodes/out/delete", url.Values{"out_id": {line.ID}}), 409, "OUT_ROLE_INVALID")
+	requireBindingError(t, b.Post("/nodes/out/delete", url.Values{"out_id": {strings.Repeat("d", 32)}}), 404, "OUT_NOT_FOUND")
+	requireBindingError(t, b.Post("/nodes/out/delete", url.Values{"out_id": {"nope"}}), 400, "OUT_BINDING_INVALID")
 }
 
 // TestOutDeleteRefusesALiveSubscriptionReference keeps the used-by guard: an Out a
 // subscription still selects is a live egress, and the refusal names the
 // subscription so the operator can migrate it first.
 func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 
 	line := createPairedWebNode(t, app, "edge", "line-live", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-live", 9443, 2223)
@@ -351,7 +344,7 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 	}
 	storetest.SettleTasks(t, app.Store, out.ID)
 
-	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+	w := b.Post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	requireBindingError(t, w, 409, store.CodeOutReferenced)
 	if !strings.Contains(w.Body.String(), "owner-") && !strings.Contains(w.Body.String(), "alice") {
 		t.Fatalf("the refusal does not name the subscription: %.300s", w.Body.String())
@@ -379,7 +372,7 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 	// A confirmed, non-empty membership still has to be emptied before the row can go,
 	// so the delete publishes that empty guard and the host confirms it. Here the Line
 	// carries a literal address, so the membership is a real source.
-	w = b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+	w = b.Post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	if w.Code == 202 {
 		storetest.SettleTasks(t, app.Store, out.ID)
 		if err := app.Store.RetryOutSync(out.ID, now); err != nil {
@@ -387,9 +380,9 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 		}
 		storetest.SettleTasks(t, app.Store, out.ID)
 		storetest.ConfirmChain(t, app.Store, out.ID, now)
-		w = b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+		w = b.Post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	}
-	requireStatus(t, w, 200)
+	handlertest.RequireStatus(t, w, 200)
 	if _, err := app.Store.GetNodeAt(out.ID, now); err == nil {
 		t.Fatal("the delete kept the node row")
 	}
@@ -403,10 +396,10 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 // receive it (offline) is REFUSED rather than deleted. Deleting anyway would leave an
 // unreachable host accepting the old sources with no node row left to retry from.
 func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 
 	line := createPairedWebNode(t, app, "edge", "line-del-offline", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-del-offline", 9443, 2223)
@@ -429,7 +422,7 @@ func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
+	w := b.Post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	requireBindingError(t, w, 409, store.CodeOutSyncPending)
 	// Nothing was destroyed: the node, its dial address and its authorization survive,
 	// so the operator can bring the host back and retry.

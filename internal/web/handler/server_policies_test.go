@@ -30,7 +30,7 @@ func policiesLiveApp(t *testing.T) (*Server, *browser) {
 
 func TestPoliciesPageUsesLiveSnapshot(t *testing.T) {
 	_, b := policiesLiveApp(t)
-	w := b.req("GET", "/policies", nil, nil)
+	w := b.Req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{"Tailnet / 指定网段", "地区规则（cn）", "走 Line", "兜底（未命中任何规则）", "当前生效的客户端策略通过"} {
@@ -54,7 +54,7 @@ func TestPoliciesPageWithoutMeshDataFallsBackToDraft(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	w := b.req("GET", "/policies", nil, nil)
+	w := b.Req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "当前没有可用的真实策略数据") || !strings.Contains(w.Body.String(), "示例") {
 		t.Fatalf("no-data fallback is not explicit: %.400s", w.Body.String())
@@ -91,7 +91,7 @@ func policiesOutFixture(t *testing.T) (*Server, *browser, storetest.OutSyncFixtu
 
 func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 	app, b, f := policiesOutFixture(t)
-	w := b.req("GET", "/policies", nil, nil)
+	w := b.Req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "Out 未配置") {
 		t.Fatalf("absent state missing: %.400s", w.Body.String())
@@ -104,7 +104,7 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	storetest.ConfirmChain(t, f.Store, f.Line, f.Now)
-	w = b.req("GET", "/policies", nil, nil)
+	w = b.Req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "Out 已接入") || !strings.Contains(w.Body.String(), "Out 直出（可选）") {
 		t.Fatalf("active state missing: %.400s", w.Body.String())
@@ -113,7 +113,7 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.Out); err != nil {
 		t.Fatal(err)
 	}
-	w = b.req("GET", "/policies", nil, nil)
+	w = b.Req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "Out 故障 · fail-closed") {
 		t.Fatalf("degraded state missing: %.400s", w.Body.String())
@@ -129,7 +129,7 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 	pass := `{"default":"proxy","rules":[
 		{"Priority":100,"Match":{"IPCIDRs":["100.64.0.0/10"]},"Action":"tailscale"},
 		{"Priority":200,"Match":{"Domains":["news.example.invalid"]},"Action":"direct"}]}`
-	w := b.post("/policies/validate", url.Values{"rules": {pass}})
+	w := b.Post("/policies/validate", url.Values{"rules": {pass}})
 	requireStatus(t, w, http.StatusOK)
 	var ok policy.PolicyValidationResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &ok); err != nil || !ok.OK || ok.Rules != 2 || ok.OperationID == "" {
@@ -139,7 +139,7 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 	conflict := `{"default":"proxy","rules":[
 		{"Priority":100,"Match":{"Domains":["news.example.invalid"]},"Action":"direct"},
 		{"Priority":200,"Match":{"Domains":["news.example.invalid"]},"Action":"proxy"}]}`
-	w = b.post("/policies/validate", url.Values{"rules": {conflict}})
+	w = b.Post("/policies/validate", url.Values{"rules": {conflict}})
 	requireStatus(t, w, http.StatusUnprocessableEntity)
 	var refused policy.PolicyValidationResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
@@ -149,7 +149,7 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 		t.Fatalf("validate refusal = %+v", refused)
 	}
 
-	w = b.post("/policies/validate", url.Values{"rules": {"not json"}})
+	w = b.Post("/policies/validate", url.Values{"rules": {"not json"}})
 	requireStatus(t, w, http.StatusBadRequest)
 	if !strings.Contains(w.Body.String(), corepolicy.CodePolicyInvalid) {
 		t.Fatalf("malformed rules lost POLICY_INVALID: %.300s", w.Body.String())
@@ -158,7 +158,7 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 
 func TestPoliciesExplainHitAndFallback(t *testing.T) {
 	_, b := policiesLiveApp(t)
-	w := b.req("GET", "/policies/explain?target=100.100.100.100", nil, nil)
+	w := b.Req("GET", "/policies/explain?target=100.100.100.100", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{"命中说明：100.100.100.100", "优先级 100", "直连（Tailnet）", "meshmux-ts", "规则", "动作", "实际出口", "DNS", "geo 与远端 ruleset 需要锁定数据"} {
@@ -167,7 +167,7 @@ func TestPoliciesExplainHitAndFallback(t *testing.T) {
 		}
 	}
 
-	w = b.req("GET", "/policies/explain?target=news.example.invalid", nil, nil)
+	w = b.Req("GET", "/policies/explain?target=news.example.invalid", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body = w.Body.String()
 	if !strings.Contains(body, "兜底路径：news.example.invalid") || !strings.Contains(body, "meshmux-selector (selected Line)") {
@@ -180,7 +180,7 @@ func TestPoliciesExplainWithoutDataStaysDraft(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	w := b.req("GET", "/policies/explain?target=news.example.invalid", nil, nil)
+	w := b.Req("GET", "/policies/explain?target=news.example.invalid", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "当前没有可用的真实策略数据") || strings.Contains(w.Body.String(), "命中说明：") {
 		t.Fatalf("explain invented a chain without data: %.400s", w.Body.String())

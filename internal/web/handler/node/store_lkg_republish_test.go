@@ -1,4 +1,4 @@
-package handler
+package node_test
 
 // LKG republish (#11c-3 Task 4, spec §4.11).
 //
@@ -17,6 +17,8 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
@@ -25,12 +27,12 @@ import (
 // lkgFixture creates one paired node whose candidate 1 is the last-known-good
 // revision and whose candidate 2 is the current (later) revision. The observed
 // revision is the Agent's own readback, which is the LKG source.
-func lkgFixture(t *testing.T) (*Server, store.Node) {
+func lkgFixture(t *testing.T) (*handler.Server, store.Node) {
 	t.Helper()
-	app, _ := testApp(t)
-	created, code := createPendingNode(t, app, "edge", "lkg-rollback", 8443, 2222)
-	requireStatus(t, pairJSON(t, app, created.ID, "edge", code), 200)
-	clearNodeTasks(t, app, created.ID)
+	app, _ := handlertest.TestApp(t)
+	created, code := handlertest.CreatePendingNode(t, app, "edge", "lkg-rollback", 8443, 2222)
+	handlertest.RequireStatus(t, handlertest.PairJSON(t, app, created.ID, "edge", code), 200)
+	handlertest.ClearNodeTasks(t, app, created.ID)
 
 	// Publish a later candidate revision, then let its chain finish so the
 	// rollback republish has an idle node.
@@ -58,7 +60,7 @@ func lkgFixture(t *testing.T) (*Server, store.Node) {
 	return app, created
 }
 
-func pendingTasksForNode(t *testing.T, app *Server, nodeID string) []protocol.Task {
+func pendingTasksForNode(t *testing.T, app *handler.Server, nodeID string) []protocol.Task {
 	t.Helper()
 	rows, err := app.Store.DB.Query(`SELECT operation_id, revision, kind FROM agent_tasks
  WHERE node_id=? AND status='pending' ORDER BY revision`, nodeID)
@@ -224,11 +226,11 @@ func TestLkgRollbackFailureMessages(t *testing.T) {
 // revision without exposing any caller-chosen revision.
 func TestRollbackLkgRoute(t *testing.T) {
 	app, created := lkgFixture(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
-	page := b.post("/nodes/"+created.ID+"/rollback-lkg", url.Values{})
-	requireStatus(t, page, 200)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
+	page := b.Post("/nodes/"+created.ID+"/rollback-lkg", url.Values{})
+	handlertest.RequireStatus(t, page, 200)
 	if !strings.Contains(page.Body.String(), "LKG 回退已排队") {
 		t.Fatalf("rollback action did not report the queued chain: %s", page.Body.String())
 	}

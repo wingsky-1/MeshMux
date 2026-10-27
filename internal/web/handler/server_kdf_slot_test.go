@@ -68,7 +68,7 @@ func TestPublishDoesNotHoldThePasswordSlot(t *testing.T) {
 	publisher := &browser{app: app, cookie: &cookie, csrf: b.csrf}
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- publisher.post("/policies/publish", url.Values{"publish": {`{"layer":"server","operation_id":"op-publish"}`}})
+		done <- publisher.Post("/policies/publish", url.Values{"publish": {`{"layer":"server","operation_id":"op-publish"}`}})
 	}()
 	<-verifier.entered
 
@@ -82,9 +82,9 @@ func TestPublishDoesNotHoldThePasswordSlot(t *testing.T) {
 	}
 	// The gate is holding a kernel check, not the password slot: an unrelated
 	// management POST must be accepted while it is blocked.
-	requireStatus(t, b.post("/nodes", url.Values{"role": {"edge"}, "display_name": {"line-bg-01"}, "vless_port": {"8443"}, "ssh_port": {"2222"}}), 200)
+	requireStatus(t, b.Post("/nodes", url.Values{"role": {"edge"}, "display_name": {"line-bg-01"}, "vless_port": {"8443"}, "ssh_port": {"2222"}}), 200)
 	// The read side is equally unaffected.
-	requireStatus(t, b.req("GET", "/api/nodes", nil, nil), 200)
+	requireStatus(t, b.Req("GET", "/api/nodes", nil, nil), 200)
 
 	close(verifier.release)
 	requireStatus(t, <-done, 200)
@@ -100,10 +100,10 @@ func TestPasswordSlotOnlyRefusesPasswordRoutes(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 	anon := &browser{app: app}
-	requireStatus(t, anon.req("GET", "/login", nil, nil), 200)
+	requireStatus(t, anon.Req("GET", "/login", nil, nil), 200)
 
 	app.kdfSlotOf() <- struct{}{}
-	busy := anon.post("/login", url.Values{"password": {testPassword}})
+	busy := anon.Post("/login", url.Values{"password": {testPassword}})
 	requireStatus(t, busy, 429)
 	if !strings.Contains(busy.Body.String(), "AUTH_KDF_BUSY") {
 		t.Fatalf("busy login code missing: %.300s", busy.Body.String())
@@ -113,8 +113,8 @@ func TestPasswordSlotOnlyRefusesPasswordRoutes(t *testing.T) {
 	}
 	// A node creation is not a password operation, so the held slot does not
 	// refuse it.
-	requireStatus(t, b.post("/nodes", url.Values{"role": {"edge"}, "display_name": {"line-slot-01"}, "vless_port": {"8443"}, "ssh_port": {"2222"}}), 200)
+	requireStatus(t, b.Post("/nodes", url.Values{"role": {"edge"}, "display_name": {"line-slot-01"}, "vless_port": {"8443"}, "ssh_port": {"2222"}}), 200)
 	<-app.kdfSlotOf()
 	// Once released, the same login form works again.
-	requireStatus(t, anon.post("/login", url.Values{"password": {testPassword}}), 303)
+	requireStatus(t, anon.Post("/login", url.Values{"password": {testPassword}}), 303)
 }

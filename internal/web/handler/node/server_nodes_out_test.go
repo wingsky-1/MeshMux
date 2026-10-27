@@ -1,4 +1,4 @@
-package handler
+package node_test
 
 import (
 	"net/url"
@@ -8,16 +8,18 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 )
 
-// nodesOutTestApp opens one authenticated browser on a Hub with a paired Out
+// nodesOutTestApp opens one authenticated handlertest.Browser on a Hub with a paired Out
 // and a paired, configured Line.
-func nodesOutTestApp(t *testing.T) (*Server, *browser, string, string) {
+func nodesOutTestApp(t *testing.T) (*handler.Server, *handlertest.Browser, string, string) {
 	t.Helper()
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 	now := time.Now()
 	line := createPairedWebNode(t, app, "edge", "line-pool-ui", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-pool-ui", 9443, 2223)
@@ -30,10 +32,10 @@ func nodesOutTestApp(t *testing.T) (*Server, *browser, string, string) {
 	return app, b, line.ID, out.ID
 }
 
-func nodesPageBody(t *testing.T, b *browser) string {
+func nodesPageBody(t *testing.T, b *handlertest.Browser) string {
 	t.Helper()
-	w := b.req("GET", "/nodes", nil, nil)
-	requireStatus(t, w, 200)
+	w := b.Req("GET", "/nodes", nil, nil)
+	handlertest.RequireStatus(t, w, 200)
 	return w.Body.String()
 }
 
@@ -63,8 +65,8 @@ func TestNodesPageShowsOutPoolStrip(t *testing.T) {
 func TestOutTransportSetFlow(t *testing.T) {
 	app, b, _, outID := nodesOutTestApp(t)
 
-	w := b.post("/nodes/out-transport", url.Values{"out_id": {outID}, "server": {"out.example.invalid"}})
-	requireStatus(t, w, 200)
+	w := b.Post("/nodes/out-transport", url.Values{"out_id": {outID}, "server": {"out.example.invalid"}})
+	handlertest.RequireStatus(t, w, 200)
 	body := w.Body.String()
 	if !strings.Contains(body, "出口地址已保存") || !strings.Contains(body, "out.example.invalid") {
 		t.Fatalf("transport save did not render back: %.300s", body)
@@ -78,14 +80,14 @@ func TestOutTransportSetFlow(t *testing.T) {
 		t.Fatalf("strip did not converge after transport set: %.300s", storedBody)
 	}
 
-	w = b.post("/nodes/out-transport", url.Values{"out_id": {outID}, "server": {"https://out.example.invalid"}})
-	requireStatus(t, w, 400)
+	w = b.Post("/nodes/out-transport", url.Values{"out_id": {outID}, "server": {"https://out.example.invalid"}})
+	handlertest.RequireStatus(t, w, 400)
 	if !strings.Contains(w.Body.String(), "OUT_TRANSPORT_INVALID") {
 		t.Fatalf("bad server body: %.200s", w.Body.String())
 	}
 
-	w = b.post("/nodes/out-transport", url.Values{"out_id": {strings.Repeat("c", 32)}, "server": {"out.example.invalid"}})
-	requireStatus(t, w, 404)
+	w = b.Post("/nodes/out-transport", url.Values{"out_id": {strings.Repeat("c", 32)}, "server": {"out.example.invalid"}})
+	handlertest.RequireStatus(t, w, 404)
 }
 
 // TestOutDeleteConfirmFlow pins the delete protection: the first POST only
@@ -108,8 +110,8 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 
 	// First POST: no deletion, only the used-by confirm. The Line is named
 	// because the subscription selects the Out for it.
-	w := b.post("/nodes/out-delete", url.Values{"out_id": {outID}})
-	requireStatus(t, w, 200)
+	w := b.Post("/nodes/out-delete", url.Values{"out_id": {outID}})
+	handlertest.RequireStatus(t, w, 200)
 	body = w.Body.String()
 	if !strings.Contains(body, "确认删除出口") || !strings.Contains(body, lineID) {
 		t.Fatalf("delete confirm does not name the used-by Line: %.500s", body)
@@ -122,16 +124,16 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	// the operator has to migrate the subscription first, and the refusal names
 	// it. This is the same protection the retired /nodes/out/bind pair used to
 	// provide, now enforced by the edge itself.
-	w = b.post("/nodes/out-delete", url.Values{"out_id": {outID}, "confirm": {"1"}})
-	requireStatus(t, w, 409)
+	w = b.Post("/nodes/out-delete", url.Values{"out_id": {outID}, "confirm": {"1"}})
+	handlertest.RequireStatus(t, w, 409)
 	if !strings.Contains(w.Body.String(), store.CodeOutReferenced) {
 		t.Fatalf("delete of a selected out = %.300s", w.Body.String())
 	}
 
 	// Unbind path: the page reports the live reference instead of silently
 	// rewriting a subscription the operator did not open.
-	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
-	requireStatus(t, w, 409)
+	w = b.Post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	handlertest.RequireStatus(t, w, 409)
 	if !strings.Contains(w.Body.String(), store.CodeOutReferenced) {
 		t.Fatalf("unbind of a selected out = %.300s", w.Body.String())
 	}
@@ -140,8 +142,8 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	// NOT empty the ACL: the published set is the node membership (Ruling R10), so the
 	// page only reports that the hub-side publication was refreshed.
 	storetest.ClearOutForLine(t, app.Store, lineID, now)
-	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
-	requireStatus(t, w, 200)
+	w = b.Post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	handlertest.RequireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "已解除") {
 		t.Fatalf("unbind notice missing: %.300s", w.Body.String())
 	}
@@ -174,8 +176,8 @@ func TestOutUnbindCopyNamesMembership(t *testing.T) {
 
 	// A live reference is refused; the refusal must not claim a subscription-driven
 	// ACL recompute would follow.
-	w := b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
-	requireStatus(t, w, 409)
+	w := b.Post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	handlertest.RequireStatus(t, w, 409)
 	refusal := w.Body.String()
 	for _, lie := range []string{"ACL 会随订阅自动重算", "随订阅自动重算", "ACL 已按空授权"} {
 		if strings.Contains(refusal, lie) {
@@ -188,8 +190,8 @@ func TestOutUnbindCopyNamesMembership(t *testing.T) {
 
 	// Released: the action succeeds and reports what it actually did.
 	storetest.ClearOutForLine(t, app.Store, lineID, now)
-	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
-	requireStatus(t, w, 200)
+	w = b.Post("/nodes/out-unbind", url.Values{"out_id": {outID}})
+	handlertest.RequireStatus(t, w, 200)
 	notice := w.Body.String()
 	for _, lie := range []string{"空授权重算", "空授权下发", "ACL 会随订阅", "随订阅自动重算"} {
 		if strings.Contains(notice, lie) {

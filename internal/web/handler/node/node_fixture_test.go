@@ -1,4 +1,4 @@
-package handler
+package node_test
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -26,6 +25,8 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 )
 
 const nodeFixtureListen = "127.0.0.1:19443"
@@ -92,12 +93,12 @@ func TestNodeHubFixture(t *testing.T) {
 			}
 		},
 	}))
-	cfg := Config{
+	cfg := handler.Config{
 		Listen:  nodeFixtureListen,
 		Origin:  nodeFixtureOrigin(t),
 		DataDir: stateDir,
 	}
-	app, err := New(cfg, eventLogger)
+	app, err := handler.New(cfg, eventLogger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestNodeHubFixture(t *testing.T) {
 	if metadata.Role != role || metadata.HubURL != cfg.Origin || metadata.CAPath != caPath {
 		t.Fatal("persistent Node fixture metadata does not match this role or origin")
 	}
-	if err := writePrivateJSON(metadataPath, metadata); err != nil {
+	if err := testhttp.WritePrivateJSON(metadataPath, metadata); err != nil {
 		t.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", nodeFixtureListen)
@@ -127,7 +128,7 @@ func TestNodeHubFixture(t *testing.T) {
 	go func() {
 		errCh <- server.Serve(tls.NewListener(listener, server.TLSConfig))
 	}()
-	if err := writeAtomicFile(readyPath, []byte("node-hub-fixture-ready\n"), 0644); err != nil {
+	if err := testhttp.WriteAtomicFile(readyPath, []byte("node-hub-fixture-ready\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	t.Log("Node Hub HTTPS/SQLite fixture ready")
@@ -192,7 +193,7 @@ func nodeFixtureOrigin(t *testing.T) string {
 	return "https://" + host + ":" + port
 }
 
-func loadOrCreateNodeFixtureMetadata(app *Server, path string, role node.Role, caPath string, origin string) (nodeFixtureMetadata, error) {
+func loadOrCreateNodeFixtureMetadata(app *handler.Server, path string, role node.Role, caPath string, origin string) (nodeFixtureMetadata, error) {
 	var metadata nodeFixtureMetadata
 	sshPort, err := fixtureSSHPort()
 	if err != nil {
@@ -329,7 +330,7 @@ func loadOrCreateFixtureTLS(caPath, caKeyPath, certPath, keyPath string) (tls.Ce
 		certPath:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}),
 		keyPath:   pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafKeyDER}),
 	} {
-		if err := writeAtomicFile(path, data, 0600); err != nil {
+		if err := testhttp.WriteAtomicFile(path, data, 0600); err != nil {
 			return tls.Certificate{}, nil, err
 		}
 	}
@@ -343,42 +344,6 @@ func loadOrCreateFixtureTLS(caPath, caKeyPath, certPath, keyPath string) (tls.Ce
 func randomSerial() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), 128)
 	return rand.Int(rand.Reader, limit)
-}
-
-func writePrivateJSON(path string, value any) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	return writeAtomicFile(path, append(data, '\n'), 0600)
-}
-
-func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".fixture-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, path); err != nil {
-		return fmt.Errorf("replace fixture file: %w", err)
-	}
-	return nil
 }
 
 func fileExists(path string) bool {

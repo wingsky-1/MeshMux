@@ -92,7 +92,7 @@ func decodeApprove(t *testing.T, w *httptest.ResponseRecorder, status int) handl
 
 func approveUpgrade(t *testing.T, b *browser, nodeID, version string) *httptest.ResponseRecorder {
 	t.Helper()
-	return b.post("/tasks/approve", url.Values{"node_id": {nodeID}, "version": {version}})
+	return b.Post("/tasks/approve", url.Values{"node_id": {nodeID}, "version": {version}})
 }
 
 // seedUpgradeRouteIntent gives one node a configured Line transport and an
@@ -124,7 +124,7 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return "1.0.1", nil })
 	before := latestRevision(t, app, nodeID)
 
-	w := b.req("GET", "/tasks/check", nil, nil)
+	w := b.Req("GET", "/tasks/check", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{"1.0.1", "未验证", "仅提示", "检查新版本"} {
@@ -141,14 +141,14 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 
 	// A failed query is unknown, never a cached or guessed release.
 	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return "", errors.New("unreachable") })
-	w = b.req("GET", "/tasks/check", nil, nil)
+	w = b.Req("GET", "/tasks/check", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "无法确认") {
 		t.Fatal("failed check did not state that the release is unknown")
 	}
 
 	// The check is an authenticated operator action.
-	if got := (&browser{app: app}).req("GET", "/tasks/check", nil, nil); got.Code != http.StatusUnauthorized {
+	if got := (&browser{app: app}).Req("GET", "/tasks/check", nil, nil); got.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated check status=%d, want 401", got.Code)
 	}
 
@@ -445,7 +445,7 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 		t.Fatalf("floating version = %+v", got)
 	}
 	// The approval is a CSRF-protected management POST.
-	if w := (&browser{app: b.app}).post("/tasks/approve", url.Values{"node_id": {nodeID}, "version": {manifest.Version}}); w.Code != http.StatusUnauthorized {
+	if w := (&browser{app: b.app}).Post("/tasks/approve", url.Values{"node_id": {nodeID}, "version": {manifest.Version}}); w.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated approval status=%d, want 401", w.Code)
 	}
 }
@@ -479,7 +479,7 @@ func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
 	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return manifest.Version, nil })
 	// The page states the boundary precisely: newer releases need 11d, while a
 	// lagging node is still approvable to this Hub's release.
-	body := b.req("GET", "/tasks/check", nil, nil).Body.String()
+	body := b.Req("GET", "/tasks/check", nil, nil).Body.String()
 	for _, want := range []string{"11d", "无法批准", "落后于本机的节点仍可批准"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("check page does not state %q", want)

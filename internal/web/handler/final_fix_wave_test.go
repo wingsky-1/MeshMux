@@ -67,7 +67,7 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 
 	// The save changes the Line's server address, which is exactly the value the
 	// Out allowlist is derived from.
-	w := b.post("/lines", url.Values{
+	w := b.Post("/lines", url.Values{
 		"node_id": {line.ID}, "display_name": {"line-line-save"}, "sort_order": {"1"},
 		"server": {"198.51.100.9"}, "port": {"8443"},
 		"server_name":      {"line.example.invalid"},
@@ -131,7 +131,7 @@ func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 	storetest.ConfirmChain(t, app.Store, out.ID, now)
 	before := storetest.CandidateCount(t, app.Store, out.ID)
 
-	w := b.post("/lines", url.Values{
+	w := b.Post("/lines", url.Values{
 		"node_id": {line.ID}, "display_name": {"line-unbound"}, "sort_order": {"1"},
 		"server": {"198.51.100.9"}, "port": {"8443"},
 		"server_name":      {"line.example.invalid"},
@@ -408,7 +408,7 @@ func TestJSONFailureBodyIsDeclaredByTheRoute(t *testing.T) {
 	loginAs(t, b, testPassword)
 
 	// A JSON management route under /nodes answers the JSON envelope.
-	w := b.post("/nodes/out/preview", url.Values{"out_id": {"out"}})
+	w := b.Post("/nodes/out/preview", url.Values{"out_id": {"out"}})
 	requireStatus(t, w, 400)
 	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("out preview failure Content-Type = %q, want JSON", ct)
@@ -460,7 +460,7 @@ func TestJSONFailureBodyIsDeclaredByTheRoute(t *testing.T) {
 	// An unmarked page route keeps the HTML error page even though another JSON
 	// namespace exists. This is the direction that a path-prefix check used to
 	// decide on its own.
-	page := b.req("POST", "/subscribers", url.Values{"csrf": {b.csrf}, "display_name": {""}}, nil)
+	page := b.Req("POST", "/subscribers", url.Values{"csrf": {b.csrf}, "display_name": {""}}, nil)
 	requireStatus(t, page, 400)
 	if ct := page.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("page failure Content-Type = %q, want HTML", ct)
@@ -471,7 +471,7 @@ func TestJSONFailureBodyIsDeclaredByTheRoute(t *testing.T) {
 
 	// An unmatched path inside a declared JSON namespace keeps JSON, because the
 	// fallback has no handler to declare anything.
-	unknown := b.req("GET", "/api/nope", nil, nil)
+	unknown := b.Req("GET", "/api/nope", nil, nil)
 	if unknown.Code != http.StatusNotFound {
 		t.Fatalf("unknown api path status = %d, want 404", unknown.Code)
 	}
@@ -482,7 +482,7 @@ func TestJSONFailureBodyIsDeclaredByTheRoute(t *testing.T) {
 		t.Fatalf("unknown api path body lacks the stable code: %.200s", unknown.Body.String())
 	}
 	// An unmatched page path keeps the HTML error page.
-	missing := b.req("GET", "/no-such-page", nil, nil)
+	missing := b.Req("GET", "/no-such-page", nil, nil)
 	requireStatus(t, missing, 404)
 	if ct := missing.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("unknown page path Content-Type = %q, want HTML", ct)

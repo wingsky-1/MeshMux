@@ -55,7 +55,7 @@ func TestHubUpgradePage(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID, record := plantHubUpgradePage(t, app, hubupgrade.StateFailed)
 
-	w := b.req("GET", "/tasks", nil, nil)
+	w := b.Req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 200)
 	body := w.Body.String()
 	for _, want := range []string{
@@ -92,7 +92,7 @@ func TestHubUpgradePage(t *testing.T) {
 func TestHubUpgradePageOffersHandoffForBackedUp(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID, _ := plantHubUpgradePage(t, app, hubupgrade.StateBackedUp)
-	w := b.req("GET", "/tasks", nil, nil)
+	w := b.Req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 200)
 	body := w.Body.String()
 	if !strings.Contains(body, `action="/tasks/hub-upgrade/apply"`) {
@@ -110,7 +110,7 @@ func TestHubUpgradePageOffersHandoffForBackedUp(t *testing.T) {
 // hint names the Hub block and the same operation_id the backup receipt gave.
 func TestApproveHintPointsToHubUpgrade(t *testing.T) {
 	b, _ := databaseMigrationBrowser(t)
-	receipt := decodeDatabaseMigration(t, b.post(databaseMigrationApprovePath,
+	receipt := decodeDatabaseMigration(t, b.Post(databaseMigrationApprovePath,
 		url.Values{"backup_operation_id": {strings.Repeat("d", 32)}}), http.StatusConflict)
 	if receipt.ErrorCode != "IRREVERSIBLE_CONFIRM_REQUIRED" {
 		t.Fatalf("receipt: %+v", receipt)

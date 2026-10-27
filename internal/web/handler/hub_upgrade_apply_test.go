@@ -66,7 +66,7 @@ func TestApplyReceipt(t *testing.T) {
 			TargetVersion: "1.0.1", PackageSHA256: strings.Repeat("b", 64),
 		}, nil
 	})
-	receipt := decodeHubApply(t, b.post(hubApplyPath,
+	receipt := decodeHubApply(t, b.Post(hubApplyPath,
 		url.Values{"operation_id": {operationID}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "queued" || receipt.OperationID != operationID ||
 		receipt.TargetVersion != "1.0.1" || receipt.PackageSHA256 != strings.Repeat("b", 64) {
@@ -82,13 +82,13 @@ func TestApplyReceipt(t *testing.T) {
 
 	// The mutation boundary stays the existing one: session, exact Origin and
 	// CSRF are all still required.
-	requireStatus(t, b.req("POST", hubApplyPath,
+	requireStatus(t, b.Req("POST", hubApplyPath,
 		url.Values{"operation_id": {operationID}}, nil), http.StatusForbidden)
-	requireStatus(t, b.req("POST", hubApplyPath,
+	requireStatus(t, b.Req("POST", hubApplyPath,
 		url.Values{"operation_id": {operationID}, "csrf": {b.csrf}},
 		http.Header{"Origin": {"https://evil.example.invalid"}}), http.StatusForbidden)
 	anonymous := &browser{app: app}
-	requireStatus(t, anonymous.req("POST", hubApplyPath,
+	requireStatus(t, anonymous.Req("POST", hubApplyPath,
 		url.Values{"operation_id": {operationID}, "csrf": {b.csrf}}, nil), http.StatusUnauthorized)
 }
 
@@ -103,7 +103,7 @@ func TestApplyRejectsMalformedOperation(t *testing.T) {
 		return hubupgrade.HandoffReceipt{}, nil
 	})
 	for _, id := range []string{"", "latest", strings.Repeat("A", 32), strings.Repeat("a", 31), "../" + strings.Repeat("a", 29)} {
-		receipt := decodeHubApply(t, b.post(hubApplyPath,
+		receipt := decodeHubApply(t, b.Post(hubApplyPath,
 			url.Values{"operation_id": {id}}), http.StatusBadRequest)
 		if receipt.OK || receipt.ErrorCode != "HUB_HANDOFF_REQUEST_INVALID" {
 			t.Fatalf("operation %q receipt: %+v", id, receipt)
@@ -137,7 +137,7 @@ func TestApplyFailureCodes(t *testing.T) {
 			app.upgradeServer.SetHubApplyForTest(func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 				return hubupgrade.HandoffReceipt{}, &hubApplyError{code: tc.code}
 			})
-			receipt := decodeHubApply(t, b.post(hubApplyPath,
+			receipt := decodeHubApply(t, b.Post(hubApplyPath,
 				url.Values{"operation_id": {strings.Repeat("a", 32)}}), tc.status)
 			if receipt.OK || receipt.Status == "queued" || receipt.ErrorCode != tc.code {
 				t.Fatalf("failure receipt: %+v", receipt)

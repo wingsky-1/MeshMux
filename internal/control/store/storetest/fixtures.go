@@ -18,6 +18,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 	subdomain "github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
@@ -253,4 +254,169 @@ func ReadStoredDatabaseRecord(t *testing.T, path string) backup.Record {
 		t.Fatalf("stored record is not JSON: %v", err)
 	}
 	return record
+}
+
+// enrollNodeIdentity records a valid, unrevoked Agent identity for one node.
+// A Line without an identity is not enrolled and can never serve a
+// credential.
+func EnrollNodeIdentity(t *testing.T, s *store.Store, nodeID string, now time.Time) {
+	t.Helper()
+	if _, err := s.DB.Exec(`INSERT INTO node_identities(node_id, token_hash, created_at, revoked) VALUES(?,?,?,0)`,
+		nodeID, store.TokenHash(store.RandomToken()), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+}
+func PublishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line subscription.Line, credentials []subscription.Credential, now time.Time) {
+	t.Helper()
+	users := make([]node.VLESSUser, 0, len(credentials))
+	for _, credential := range credentials {
+		users = append(users, node.VLESSUser{CredentialID: credential.ID, UUID: credential.UUID})
+	}
+	reality := &node.RealityConfig{
+		ServerName:      line.ServerName,
+		HandshakeServer: line.HandshakeServer,
+		HandshakePort:   line.HandshakePort,
+		PrivateKey:      line.PrivateKey,
+		ShortID:         line.ShortID,
+	}
+	var revision int64
+	if err := s.DB.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	candidate := node.Candidate{
+		NodeID:        nodeID,
+		Role:          node.RoleEdge,
+		Revision:      revision,
+		VLESSPort:     8443,
+		KernelVersion: node.KernelVersion,
+		Users:         users,
+		Reality:       reality,
+	}
+	document, err := json.Marshal(node.NewCandidateDocument(candidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := store.CandidateSHA256(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(`INSERT INTO node_candidates(node_id, revision, candidate_json, config_sha256, created_at) VALUES(?,?,?,?,?)`,
+		nodeID, candidate.Revision, document, digest, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=?, observed_revision=?, observed_config_sha256=?,
+	 observed_at=?, updated_at=? WHERE id=?`, now.Unix(), candidate.Revision, digest, now.Unix(), now.Unix(), nodeID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// downloadLineFixture returns a valid Line transport for one node. The port
+// matches the VLESS port of the fixture nodes.
+func DownloadLineFixture(t *testing.T, nodeID, name string) subscription.Line {
+	t.Helper()
+	pair, err := subscription.NewRealityKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortID, err := subscription.NewShortID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return subscription.Line{
+		NodeID:          nodeID,
+		DisplayName:     name,
+		Server:          "line.example.invalid",
+		Port:            8443,
+		SortOrder:       1,
+		ServerName:      "line.example.invalid",
+		HandshakeServer: "handshake.example.invalid",
+		HandshakePort:   443,
+		PrivateKey:      pair.PrivateKey,
+		PublicKey:       pair.PublicKey,
+		ShortID:         shortID,
+	}
+}
+
+// publishConvergedCandidate writes the next candidate revision of one Line
+// and records the matching readback evidence on the node.
+func publishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line subscription.Line, credentials []subscription.Credential, now time.Time) {
+	t.Helper()
+	users := make([]node.VLESSUser, 0, len(credentials))
+	for _, credential := range credentials {
+		users = append(users, node.VLESSUser{CredentialID: credential.ID, UUID: credential.UUID})
+	}
+	reality := &node.RealityConfig{
+		ServerName:      line.ServerName,
+		HandshakeServer: line.HandshakeServer,
+		HandshakePort:   line.HandshakePort,
+		PrivateKey:      line.PrivateKey,
+		ShortID:         line.ShortID,
+	}
+	var revision int64
+	if err := s.DB.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	candidate := node.Candidate{
+		NodeID:        nodeID,
+		Role:          node.RoleEdge,
+		Revision:      revision,
+		VLESSPort:     8443,
+		KernelVersion: node.KernelVersion,
+		Users:         users,
+		Reality:       reality,
+	}
+	document, err := json.Marshal(node.NewCandidateDocument(candidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := store.CandidateSHA256(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(`INSERT INTO node_candidates(node_id, revision, candidate_json, config_sha256, created_at) VALUES(?,?,?,?,?)`,
+		nodeID, candidate.Revision, document, digest, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=?, observed_revision=?, observed_config_sha256=?,
+	 observed_at=?, updated_at=? WHERE id=?`, now.Unix(), candidate.Revision, digest, now.Unix(), now.Unix(), nodeID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// enrollNodeIdentity records a valid, unrevoked Agent identity for one node.
+// A Line without an identity is not enrolled and can never serve a
+// credential.
+func enrollNodeIdentity(t *testing.T, s *store.Store, nodeID string, now time.Time) {
+	t.Helper()
+	if _, err := s.DB.Exec(`INSERT INTO node_identities(node_id, token_hash, created_at, revoked) VALUES(?,?,?,0)`,
+		nodeID, store.TokenHash(store.RandomToken()), now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func DownloadFixture(t *testing.T, s *store.Store, now time.Time) (string, subscription.Line, subscription.Subscriber, string, subscription.Credential) {
+	t.Helper()
+	created, _, err := s.CreateNode("edge", "line", 8443, 2222, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID := created.ID
+	EnrollNodeIdentity(t, s, nodeID, now)
+	line, err := s.SetLine(DownloadLineFixture(t, nodeID, "line-a"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, bearer, err := s.CreateSubscriber("alice", []string{nodeID}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := s.ListSubscriberCredentials(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(credentials) != 1 {
+		t.Fatalf("expected one credential, got %d", len(credentials))
+	}
+	PublishConvergedCandidate(t, s, nodeID, line, credentials, now)
+	return nodeID, line, sub, bearer, credentials[0]
 }

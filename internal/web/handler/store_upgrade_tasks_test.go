@@ -72,7 +72,7 @@ func TestUpgradeTaskRecordRoundTripAndPage(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	body := b.req("GET", "/tasks", nil, nil).Body.String()
+	body := b.Req("GET", "/tasks", nil, nil).Body.String()
 	for _, want := range []string{target.Version, target.ManifestSHA256, "policy_schema 8", "upgrade-record"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page is missing %q", want)

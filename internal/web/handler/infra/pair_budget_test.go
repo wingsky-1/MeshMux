@@ -1,4 +1,4 @@
-package handler
+package infra_test
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/web/handler"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 )
 
@@ -24,9 +26,9 @@ func wrongCode(code string) string {
 
 // pairJSONBody posts one raw body to the pairing endpoint, for the checks that
 // need a malformed request rather than a well-formed attempt.
-func pairJSONBody(t *testing.T, app *Server, body string) *httptest.ResponseRecorder {
+func pairJSONBody(t *testing.T, app *handler.Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest("POST", testOrigin+"/api/agent/pair", strings.NewReader(body))
+	r := httptest.NewRequest("POST", handlertest.Origin+"/api/agent/pair", strings.NewReader(body))
 	r.URL.Scheme, r.URL.Host = "", ""
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -38,8 +40,8 @@ func pairJSONBody(t *testing.T, app *Server, body string) *httptest.ResponseReco
 // endpoint that spends a secret before any session exists admits a bounded
 // number of attempts per window and then refuses with an actionable remainder.
 func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
-	app, _ := testApp(t)
-	_, code := createPendingNode(t, app, "edge", "pair-flood", 8443, 2222)
+	app, _ := handlertest.TestApp(t)
+	_, code := handlertest.CreatePendingNode(t, app, "edge", "pair-flood", 8443, 2222)
 	base := time.Now()
 	app.Now = func() time.Time { return base }
 	bad := wrongCode(code)
@@ -51,15 +53,15 @@ func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
 		}
 	}
 	for i := range infra.PairBudget {
-		w := pairJSON(t, app, strings.Repeat("a", 32), "edge", bad)
+		w := handlertest.PairJSON(t, app, strings.Repeat("a", 32), "edge", bad)
 		if w.Code != 401 {
 			t.Fatalf("attempt %d status = %d, want 401: %.200s", i+1, w.Code, w.Body.String())
 		}
 	}
 	// The window is anchored at its first attempt, so the refusal reports the
 	// whole remaining window instead of a constant.
-	w := pairJSON(t, app, strings.Repeat("a", 32), "edge", bad)
-	requireStatus(t, w, 429)
+	w := handlertest.PairJSON(t, app, strings.Repeat("a", 32), "edge", bad)
+	handlertest.RequireStatus(t, w, 429)
 	if got := w.Header().Get("Retry-After"); got != strconv.Itoa(int(infra.PairWindow/time.Second)) {
 		t.Fatalf("Retry-After at the start of the window = %q, want %d", got, int(infra.PairWindow/time.Second))
 	}
@@ -70,7 +72,7 @@ func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
 	}
 	// The window reopens without a sliding extension.
 	app.Now = func() time.Time { return base.Add(infra.PairWindow) }
-	if w := pairJSON(t, app, strings.Repeat("a", 32), "edge", bad); w.Code != 401 {
+	if w := handlertest.PairJSON(t, app, strings.Repeat("a", 32), "edge", bad); w.Code != 401 {
 		t.Fatalf("attempt after the window status = %d, want 401: %.200s", w.Code, w.Body.String())
 	}
 }
@@ -82,13 +84,13 @@ func TestPairingBudgetRefusesAFloodAndStatesTheWait(t *testing.T) {
 // the difference deterministic: a budgeted refusal must still answer, because it
 // touches no database at all.
 func TestPairingFloodNeverContendsForTheSingleConnection(t *testing.T) {
-	app, _ := testApp(t)
-	node, code := createPendingNode(t, app, "edge", "pair-hold", 8443, 2222)
+	app, _ := handlertest.TestApp(t)
+	node, code := handlertest.CreatePendingNode(t, app, "edge", "pair-hold", 8443, 2222)
 	base := time.Now()
 	app.Now = func() time.Time { return base }
 	bad := wrongCode(code)
 	for range infra.PairBudget {
-		requireStatus(t, pairJSON(t, app, strings.Repeat("a", 32), "edge", bad), 401)
+		handlertest.RequireStatus(t, handlertest.PairJSON(t, app, strings.Repeat("a", 32), "edge", bad), 401)
 	}
 
 	// Hold the only connection for the duration of the burst. A limiter that
@@ -112,13 +114,13 @@ func TestPairingFloodNeverContendsForTheSingleConnection(t *testing.T) {
 	// A real code is refused too, and the refusal happens before the store is
 	// reached: the flood cannot spend an operator's one-time code, and the code
 	// is still usable once the window reopens.
-	w := pairJSON(t, app, node.ID, "edge", code)
-	requireStatus(t, w, 429)
+	w := handlertest.PairJSON(t, app, node.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 429)
 
 	var wg sync.WaitGroup
 	results := make(chan *httptest.ResponseRecorder, 16)
 	for range cap(results) {
-		wg.Go(func() { results <- pairJSON(t, app, strings.Repeat("a", 32), "edge", bad) })
+		wg.Go(func() { results <- handlertest.PairJSON(t, app, strings.Repeat("a", 32), "edge", bad) })
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -136,23 +138,23 @@ func TestPairingFloodNeverContendsForTheSingleConnection(t *testing.T) {
 	rollback()
 	// With the connection free again the budget is the only thing refusing.
 	app.Now = func() time.Time { return base.Add(infra.PairWindow) }
-	requireStatus(t, pairJSON(t, app, node.ID, "edge", code), 200)
+	handlertest.RequireStatus(t, handlertest.PairJSON(t, app, node.ID, "edge", code), 200)
 }
 
 // TestPairingSuccessClearsTheBudget keeps the pairing budget from locking an
 // operator out of a fleet install: proving a code is the pairing analogue of a
 // proven password, and the proof is single-use so it cannot be replayed.
 func TestPairingSuccessClearsTheBudget(t *testing.T) {
-	app, _ := testApp(t)
+	app, _ := handlertest.TestApp(t)
 	base := time.Now()
 	app.Now = func() time.Time { return base }
 	for i := range 2 * infra.PairBudget {
-		node, code := createPendingNode(t, app, "edge", "fleet-"+strconv.Itoa(i), 8443, 2222)
-		w := pairJSON(t, app, node.ID, "edge", code)
+		node, code := handlertest.CreatePendingNode(t, app, "edge", "fleet-"+strconv.Itoa(i), 8443, 2222)
+		w := handlertest.PairJSON(t, app, node.ID, "edge", code)
 		if w.Code != 200 {
 			t.Fatalf("pairing %d status = %d, want 200: %.200s", i+1, w.Code, w.Body.String())
 		}
-		clearNodeTasks(t, app, node.ID)
+		handlertest.ClearNodeTasks(t, app, node.ID)
 	}
 }
 
@@ -162,11 +164,11 @@ func TestPairingSuccessClearsTheBudget(t *testing.T) {
 // Hub log keeps the distinction for the operator, reachable through the
 // operation_id the response carries.
 func TestPairingRefusalIsNotACodeOracle(t *testing.T) {
-	app, logs := testApp(t)
-	consumedNode, consumedCode := createPendingNode(t, app, "edge", "oracle-consumed", 8443, 2222)
-	requireStatus(t, pairJSON(t, app, consumedNode.ID, "edge", consumedCode), 200)
-	clearNodeTasks(t, app, consumedNode.ID)
-	expiredNode, expiredCode := createPendingNode(t, app, "edge", "oracle-expired", 8444, 2224)
+	app, logs := handlertest.TestApp(t)
+	consumedNode, consumedCode := handlertest.CreatePendingNode(t, app, "edge", "oracle-consumed", 8443, 2222)
+	handlertest.RequireStatus(t, handlertest.PairJSON(t, app, consumedNode.ID, "edge", consumedCode), 200)
+	handlertest.ClearNodeTasks(t, app, consumedNode.ID)
+	expiredNode, expiredCode := handlertest.CreatePendingNode(t, app, "edge", "oracle-expired", 8444, 2224)
 	if _, err := app.Store.DB.Exec(`UPDATE node_pairing SET expires=0 WHERE node_id=?`, expiredNode.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -187,9 +189,9 @@ func TestPairingRefusalIsNotACodeOracle(t *testing.T) {
 		body.Status = w.Code
 		return body
 	}
-	unknown := read(pairJSON(t, app, strings.Repeat("a", 32), "edge", strings.Repeat("A", 43)))
-	consumed := read(pairJSON(t, app, consumedNode.ID, "edge", consumedCode))
-	expired := read(pairJSON(t, app, expiredNode.ID, "edge", expiredCode))
+	unknown := read(handlertest.PairJSON(t, app, strings.Repeat("a", 32), "edge", strings.Repeat("A", 43)))
+	consumed := read(handlertest.PairJSON(t, app, consumedNode.ID, "edge", consumedCode))
+	expired := read(handlertest.PairJSON(t, app, expiredNode.ID, "edge", expiredCode))
 	if unknown != consumed || unknown != expired {
 		t.Fatalf("refusals differ and leak the code's history: unknown=%+v consumed=%+v expired=%+v", unknown, consumed, expired)
 	}
@@ -208,13 +210,13 @@ func TestPairingRefusalIsNotACodeOracle(t *testing.T) {
 // reported as a rejected code: the operator must not reissue a code that was
 // never the problem.
 func TestPairingRefusesAnUnavailableDatabaseAsItself(t *testing.T) {
-	app, _ := testApp(t)
-	node, code := createPendingNode(t, app, "edge", "pair-db", 8443, 2222)
+	app, _ := handlertest.TestApp(t)
+	node, code := handlertest.CreatePendingNode(t, app, "edge", "pair-db", 8443, 2222)
 	if err := app.Store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w := pairJSON(t, app, node.ID, "edge", code)
-	requireStatus(t, w, 503)
+	w := handlertest.PairJSON(t, app, node.ID, "edge", code)
+	handlertest.RequireStatus(t, w, 503)
 	if !strings.Contains(w.Body.String(), "DATABASE_UNAVAILABLE") {
 		t.Fatalf("outage was reported as a code rejection: %.200s", w.Body.String())
 	}

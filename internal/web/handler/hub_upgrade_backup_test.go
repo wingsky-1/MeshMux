@@ -62,7 +62,7 @@ func TestHubBackupReceipt(t *testing.T) {
 			DBSchema: 10, IntegrityOK: true,
 		}, nil
 	})
-	receipt := decodeHubBackup(t, b.post(hubBackupPath,
+	receipt := decodeHubBackup(t, b.Post(hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "staged" || receipt.OperationID != operationID ||
 		receipt.FromVersion != "1.0.0" || receipt.DBSchema != 10 || !receipt.IntegrityOK {
@@ -81,13 +81,13 @@ func TestHubBackupReceipt(t *testing.T) {
 
 	// The mutation boundary stays the existing one: session, exact Origin and
 	// CSRF are all still required.
-	requireStatus(t, b.req("POST", hubBackupPath,
+	requireStatus(t, b.Req("POST", hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}}, nil), http.StatusForbidden)
-	requireStatus(t, b.req("POST", hubBackupPath,
+	requireStatus(t, b.Req("POST", hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}, "csrf": {b.csrf}},
 		http.Header{"Origin": {"https://evil.example.invalid"}}), http.StatusForbidden)
 	anonymous := &browser{app: app}
-	requireStatus(t, anonymous.req("POST", hubBackupPath,
+	requireStatus(t, anonymous.Req("POST", hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}, "csrf": {b.csrf}}, nil), http.StatusUnauthorized)
 }
 
@@ -102,7 +102,7 @@ func TestHubBackupRejectsMalformedTarget(t *testing.T) {
 		return hubupgrade.BackupReceipt{}, nil
 	})
 	for _, target := range []string{"", "latest", "1.0", "../1.0.1", "1.0.1/../../etc"} {
-		receipt := decodeHubBackup(t, b.post(hubBackupPath,
+		receipt := decodeHubBackup(t, b.Post(hubBackupPath,
 			url.Values{"target_version": {target}}), http.StatusBadRequest)
 		if receipt.OK || receipt.ErrorCode != "MANIFEST_UNAVAILABLE" {
 			t.Fatalf("target %q receipt: %+v", target, receipt)
@@ -131,7 +131,7 @@ func TestHubBackupFailureCodes(t *testing.T) {
 			app.upgradeServer.SetHubBackupForTest(func(context.Context, hubupgrade.BackupConfig) (hubupgrade.BackupReceipt, error) {
 				return hubupgrade.BackupReceipt{}, &hubBackupError{tc.err}
 			})
-			receipt := decodeHubBackup(t, b.post(hubBackupPath,
+			receipt := decodeHubBackup(t, b.Post(hubBackupPath,
 				url.Values{"target_version": {"1.0.1"}}), tc.status)
 			if receipt.OK || receipt.Status == "staged" ||
 				receipt.ErrorCode != strings.SplitN(tc.err, ":", 2)[0] {
@@ -158,7 +158,7 @@ func TestHubBackupCallbacksUseTheStore(t *testing.T) {
 		got = cfg
 		return hubupgrade.BackupReceipt{Status: "staged", OperationID: strings.Repeat("b", 32)}, nil
 	})
-	decodeHubBackup(t, b.post(hubBackupPath, url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
+	decodeHubBackup(t, b.Post(hubBackupPath, url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
 
 	ctx := context.Background()
 	dst := filepath.Join(t.TempDir(), backup.SingleDBName)
@@ -200,7 +200,7 @@ func TestHubBackupRouteDoesNotReadTheApprovalBit(t *testing.T) {
 		got = cfg
 		return hubupgrade.BackupReceipt{Status: "staged", OperationID: strings.Repeat("e", 32), IntegrityOK: true}, nil
 	})
-	receipt := decodeHubBackup(t, b.post(hubBackupPath,
+	receipt := decodeHubBackup(t, b.Post(hubBackupPath,
 		url.Values{"target_version": {"1.0.1"}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "staged" {
 		t.Fatalf("receipt with an approved record: %+v", receipt)

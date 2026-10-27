@@ -65,7 +65,7 @@ func TestRestoreReceipt(t *testing.T) {
 	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StateFailed)
 
-	receipt := decodeHubRestore(t, b.post(hubRestorePath,
+	receipt := decodeHubRestore(t, b.Post(hubRestorePath,
 		url.Values{"operation_id": {operationID}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "restoring" || receipt.OperationID != operationID {
 		t.Fatalf("receipt: %+v", receipt)
@@ -80,10 +80,10 @@ func TestRestoreReceipt(t *testing.T) {
 	}
 
 	// The successful receipt still required the existing mutation boundary.
-	requireStatus(t, b.req("POST", hubRestorePath,
+	requireStatus(t, b.Req("POST", hubRestorePath,
 		url.Values{"operation_id": {operationID}}, nil), http.StatusForbidden)
 	anonymous := &browser{app: app}
-	requireStatus(t, anonymous.req("POST", hubRestorePath,
+	requireStatus(t, anonymous.Req("POST", hubRestorePath,
 		url.Values{"operation_id": {operationID}, "csrf": {b.csrf}},
 		http.Header{"Origin": {"https://evil.example.invalid"}}), http.StatusForbidden)
 }
@@ -98,7 +98,7 @@ func TestRestoreSecondRequestBusy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	receipt := decodeHubRestore(t, b.post(hubRestorePath,
+	receipt := decodeHubRestore(t, b.Post(hubRestorePath,
 		url.Values{"operation_id": {operationID}}), http.StatusConflict)
 	if receipt.OK || receipt.ErrorCode != "HUB_HANDOFF_BUSY" || receipt.NextAction == "" {
 		t.Fatalf("busy receipt: %+v", receipt)
@@ -114,7 +114,7 @@ func TestRestoreRejectsLiveOperation(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
 			app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 			operationID, _ := plantHubRestoreOperation(t, app, state)
-			receipt := decodeHubRestore(t, b.post(hubRestorePath,
+			receipt := decodeHubRestore(t, b.Post(hubRestorePath,
 				url.Values{"operation_id": {operationID}}), http.StatusConflict)
 			if receipt.OK || receipt.ErrorCode != "HUB_UPGRADE_BUSY" {
 				t.Fatalf("state %s receipt: %+v", state, receipt)
@@ -147,7 +147,7 @@ func TestRestoreRouteDoesNotListRequestDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(app.upgradeServer.HubRequestDirValueForTest(), 0730) })
 
-	receipt := decodeHubRestore(t, b.post(hubRestorePath,
+	receipt := decodeHubRestore(t, b.Post(hubRestorePath,
 		url.Values{"operation_id": {operationID}}), http.StatusOK)
 	if receipt.Status != "restoring" {
 		t.Fatalf("receipt: %+v", receipt)
@@ -157,7 +157,7 @@ func TestRestoreRouteDoesNotListRequestDir(t *testing.T) {
 	}
 
 	// A request already at the known name is busy without listing the dir.
-	busy := decodeHubRestore(t, b.post(hubRestorePath,
+	busy := decodeHubRestore(t, b.Post(hubRestorePath,
 		url.Values{"operation_id": {operationID}}), http.StatusConflict)
 	if busy.ErrorCode != "HUB_HANDOFF_BUSY" {
 		t.Fatalf("existing request receipt: %+v", busy)
@@ -175,7 +175,7 @@ func TestRestoreRejectsCarriedRecord(t *testing.T) {
 	if err := writeTestRestoredMarker(app, marker); err != nil {
 		t.Fatal(err)
 	}
-	receipt := decodeHubRestore(t, b.post(hubRestorePath,
+	receipt := decodeHubRestore(t, b.Post(hubRestorePath,
 		url.Values{"operation_id": {operationID}}), http.StatusConflict)
 	if receipt.OK || receipt.ErrorCode != "HUB_RESTORE_CARRIED_SOURCE" {
 		t.Fatalf("carried record receipt: %+v", receipt)
@@ -200,7 +200,7 @@ func TestRestoreRejectsMalformedOperation(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 	for _, id := range []string{"", "latest", strings.Repeat("A", 32), strings.Repeat("a", 31)} {
-		receipt := decodeHubRestore(t, b.post(hubRestorePath,
+		receipt := decodeHubRestore(t, b.Post(hubRestorePath,
 			url.Values{"operation_id": {id}}), http.StatusBadRequest)
 		if receipt.ErrorCode != "HUB_HANDOFF_REQUEST_INVALID" {
 			t.Fatalf("operation %q receipt: %+v", id, receipt)

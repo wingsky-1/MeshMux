@@ -65,7 +65,7 @@ func TestUpgradePageShowsManifestAndStagedVersusActive(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	w := b.req("GET", "/tasks", nil, nil)
+	w := b.Req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 200)
 	body := w.Body.String()
 	for _, want := range []string{"meshmux-release/v1", node.CurrentAgentVersion(), "2.11.7", "0.29.5",
@@ -88,7 +88,7 @@ func TestUpgradePageShowsManifestAndStagedVersusActive(t *testing.T) {
 			t.Fatalf("page does not declare %q", want)
 		}
 	}
-	if w = (&browser{app: app}).req("GET", "/tasks", nil, nil); w.Code != http.StatusUnauthorized {
+	if w = (&browser{app: app}).Req("GET", "/tasks", nil, nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated /tasks status=%d, want 401", w.Code)
 	}
 }
@@ -100,7 +100,7 @@ func TestUpgradePageWithoutNodesIsExplicit(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	w := b.req("GET", "/tasks", nil, nil)
+	w := b.Req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "尚未纳管节点") {
 		t.Fatal("empty Hub did not state that there is nothing to show")
@@ -131,7 +131,7 @@ func TestStagedReadbackRequiresAStoredCandidate(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	w := b.req("GET", "/tasks", nil, nil)
+	w := b.Req("GET", "/tasks", nil, nil)
 	requireStatus(t, w, 503)
 	if !strings.Contains(w.Body.String(), "UPGRADE_SNAPSHOT_UNAVAILABLE") {
 		t.Fatal("page did not refuse an undecodable staged readback")

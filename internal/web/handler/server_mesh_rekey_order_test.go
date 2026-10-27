@@ -56,7 +56,7 @@ func TestMeshRekeyHeadscaleFailureKeepsOldKey(t *testing.T) {
 	before := meshIOLiveKey(t, app, device.ID, now)
 
 	fake.failWith["users.list"] = meshnet.CodeUnavailable
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if !strings.Contains(w.Body.String(), meshnet.CodeUnavailable) {
 		t.Fatalf("control-plane refusal lost its code: %.300s", w.Body.String())
@@ -96,7 +96,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name": {"phone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
@@ -119,7 +119,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if !strings.Contains(w.Body.String(), store.CodeDatabaseUnavailable) {
 		t.Fatalf("apply failure lost its code: %.400s", w.Body.String())
@@ -149,7 +149,7 @@ func TestMeshRekeySwapFailureKeepsOldKey(t *testing.T) {
 		t.Fatalf("failed apply wrote key rows: %+v", keys)
 	}
 	// And the device is still usable: the next attempt succeeds.
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	meshIOLiveKey(t, app, device.ID, app.Now())
 }
@@ -163,7 +163,7 @@ func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name": {"phone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
@@ -181,7 +181,7 @@ func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("preauthkeys.create") != 0 {
 		t.Fatalf("a refused preflight minted a Headscale key: %v", fake.calls)
@@ -243,7 +243,7 @@ func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 	// A Headscale refusal keeps it expired: no status moved, no key minted.
 	fake.failWith["users.list"] = meshnet.CodeUnavailable
 	fake.resetCalls()
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	still, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -257,7 +257,7 @@ func TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus(t *testing.T) {
 	}
 
 	delete(fake.failWith, "users.list")
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	reenrolled, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -298,7 +298,7 @@ func TestMeshRekeyLapsesOldKeyWithoutClaimingAWithdrawal(t *testing.T) {
 	// Move the clock past the first key's window without touching its row: that
 	// is exactly the "lapsed but still issued" state the issue path retires.
 	app.Now = func() time.Time { return base.Add(mesh.KeyTTL + time.Minute) }
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	if strings.Contains(body, "旧 Key 已作废") {
@@ -338,7 +338,7 @@ func TestMeshRekeyNeverLeavesTwoLiveKeys(t *testing.T) {
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
 	now := app.Now()
 	for attempt := 0; attempt < 3; attempt++ {
-		w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+		w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 		requireStatus(t, w, http.StatusOK)
 		meshIOLiveKey(t, app, device.ID, now)
 	}
@@ -375,7 +375,7 @@ func TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), mesh.CodeNodeNameDuplicate) {
 		t.Fatalf("name conflict lost its code: %.400s", w.Body.String())
@@ -400,7 +400,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	device, firstSecret := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
 	now := app.Now()
 	fake.failWith["users.list"] = meshnet.CodeUnavailable
-	requireStatus(t, b.post("/mesh/rekey", url.Values{"device_id": {device.ID}}), http.StatusServiceUnavailable)
+	requireStatus(t, b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}}), http.StatusServiceUnavailable)
 	delete(fake.failWith, "users.list")
 
 	// The first secret is still the live one and still spends: the failed
@@ -414,7 +414,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	}
 	// Registration consumed the surviving key, so the next attempt starts from
 	// a device with no live key — the legacy shape a second rekey must handle.
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshDeviceNotReenrollable) {
 		t.Fatalf("registered device accepted a rekey: %.300s", w.Body.String())
@@ -423,7 +423,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	if _, err := app.Store.RecordMeshObservation(device.ID, 0, now.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	match := meshKeyPattern.FindStringSubmatch(w.Body.String())
 	if len(match) != 2 || match[1] == firstSecret {
@@ -439,7 +439,7 @@ func TestMeshRekeyAuditEventsFollowWhatHappened(t *testing.T) {
 	app, b, fake, logs := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
 	logs.Reset()
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(logs.String(), "MESH_DEVICE_ENROLLMENT_KEY_REVOKED") {
 		t.Fatalf("a withdrawn key logged no revocation: %s", logs.String())
@@ -453,7 +453,7 @@ func TestMeshRekeyAuditEventsFollowWhatHappened(t *testing.T) {
 	base := app.Now()
 	app.Now = func() time.Time { return base.Add(mesh.KeyTTL + time.Minute) }
 	logs.Reset()
-	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(logs.String(), "MESH_DEVICE_ENROLLMENT_KEY_EXPIRED") {
 		t.Fatalf("a lapsed key logged no expiry: %s", logs.String())
@@ -468,7 +468,7 @@ func TestMeshRekeyAuditEventsFollowWhatHappened(t *testing.T) {
 func TestMeshRekeyPageNeverRepeatsAKey(t *testing.T) {
 	_, b, fake, logs := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusOK)
 	match := meshKeyPattern.FindStringSubmatch(w.Body.String())
 	if len(match) != 2 {
@@ -477,7 +477,7 @@ func TestMeshRekeyPageNeverRepeatsAKey(t *testing.T) {
 	if strings.Count(w.Body.String(), match[1]) != 1 {
 		t.Fatalf("the reissued key appears %d times", strings.Count(w.Body.String(), match[1]))
 	}
-	page := b.req("GET", "/mesh", nil, nil)
+	page := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, http.StatusOK)
 	if strings.Contains(page.Body.String(), match[1]) {
 		t.Fatal("the following page replayed the key")
@@ -565,7 +565,7 @@ func TestMeshRekeyFailureMessageIsActionable(t *testing.T) {
 	_, b, fake, _ := meshTestApp(t)
 	device, _ := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
 	fake.failWith["users.list"] = meshnet.CodeUnavailable
-	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	body := w.Body.String()
 	if !strings.Contains(body, meshnet.CodeUnavailable) {

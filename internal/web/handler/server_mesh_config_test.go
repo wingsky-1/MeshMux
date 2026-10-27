@@ -49,7 +49,7 @@ func meshConvergedSubscriber(t *testing.T, app *Server, now time.Time) (subscrip
 	if err != nil {
 		t.Fatal(err)
 	}
-	enrollNodeIdentity(t, app.Store, created.ID, now)
+	storetest.EnrollNodeIdentity(t, app.Store, created.ID, now)
 	line := storetest.ConfigureLine(t, app.Store, created.ID, "line-a", now)
 	sub, _, err := app.Store.CreateSubscriber("alice", []string{created.ID}, now)
 	if err != nil {
@@ -62,7 +62,7 @@ func meshConvergedSubscriber(t *testing.T, app *Server, now time.Time) (subscrip
 	if len(credentials) != 1 {
 		t.Fatalf("credentials = %d", len(credentials))
 	}
-	publishConvergedCandidate(t, app.Store, created.ID, line, credentials, now)
+	storetest.PublishConvergedCandidate(t, app.Store, created.ID, line, credentials, now)
 	return sub, line
 }
 
@@ -88,7 +88,7 @@ func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
 	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
 
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name": {"alice-iphone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
@@ -113,13 +113,13 @@ func TestMeshCreateProxyDeviceShowsConfigOnceAndNeverReplaysIt(t *testing.T) {
 		t.Fatal("config issue audit event missing")
 	}
 	// The next page is a plain GET: it must not replay the config or key.
-	next := b.req("GET", "/mesh", nil, nil)
+	next := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, next, 200)
 	if strings.Contains(next.Body.String(), "headscale-preauth-example-once") || strings.Contains(next.Body.String(), "meshmux-ts") {
 		t.Fatal("a page render replayed the one-shot config")
 	}
 	// There is deliberately no GET route for config generation.
-	get := b.req("GET", "/mesh/config", nil, nil)
+	get := b.Req("GET", "/mesh/config", nil, nil)
 	if get.Code == http.StatusOK {
 		t.Fatalf("GET /mesh/config answered 200: %.300s", get.Body.String())
 	}
@@ -141,7 +141,7 @@ func TestMeshConfigRegeneratesForAPendingProxyDevice(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name": {"alice-iphone"}, "purpose": {"proxy_mesh"},
 		"platform": {"ios"}, "subscriber_id": {sub.ID},
 	})
@@ -154,7 +154,7 @@ func TestMeshConfigRegeneratesForAPendingProxyDevice(t *testing.T) {
 		t.Fatalf("devices = %d", len(devices))
 	}
 	fake.resetCalls()
-	w = b.post("/mesh/config", url.Values{"device_id": {devices[0].ID}})
+	w = b.Post("/mesh/config", url.Values{"device_id": {devices[0].ID}})
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "meshmux-ts") {
 		t.Fatalf("regenerated config missing: %.400s", w.Body.String())
@@ -188,7 +188,7 @@ func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w := b.post("/mesh/config", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/config", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointPurposeUnsupported) {
 		t.Fatalf("purpose refusal lost its code: %.400s", w.Body.String())
@@ -239,7 +239,7 @@ func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w := b.post("/mesh/config", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/config", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointControlURLUnavailable) {
 		t.Fatalf("control URL refusal lost its code: %.400s", w.Body.String())
@@ -261,7 +261,7 @@ func TestMeshConfigRefusesInactiveSubscriberBeforeKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w := b.post("/mesh/config", url.Values{"device_id": {device.ID}})
+	w := b.Post("/mesh/config", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointSubscriberUnavailable) {
 		t.Fatalf("subscriber refusal lost its code: %.400s", w.Body.String())
@@ -317,7 +317,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 		t.Fatalf("fixture key: %v", err)
 	}
 
-	page := b.req("GET", "/mesh", nil, nil)
+	page := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
 	if !strings.Contains(page.Body.String(), "待认领") || !strings.Contains(page.Body.String(), "77") {
 		t.Fatalf("unclaimed same-name node was not offered: %.800s", page.Body.String())
@@ -331,7 +331,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 		t.Fatalf("page render changed the device: %+v", before)
 	}
 
-	w := b.post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"77"}})
+	w := b.Post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"77"}})
 	requireStatus(t, w, http.StatusOK)
 	after, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
@@ -360,13 +360,13 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	if !strings.Contains(logs.String(), "MESH_DEVICE_CLAIMED") {
 		t.Fatal("claim audit event missing")
 	}
-	page = b.req("GET", "/mesh", nil, nil)
+	page = b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
 	if strings.Contains(page.Body.String(), "待认领") {
 		t.Fatal("claimed node is still offered as unclaimed")
 	}
 	// Repeating the same explicit claim is an idempotent success.
-	w = b.post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"77"}})
+	w = b.Post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"77"}})
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "无需再次认领") {
 		t.Fatalf("repeat claim was not idempotent: %.300s", w.Body.String())
@@ -381,7 +381,7 @@ func TestMeshClaimRefusesNodeNameMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 88, Name: "another-node", UserName: mesh.DefaultHeadscaleUser}}
-	w := b.post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"88"}})
+	w := b.Post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"88"}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshClaimNodeMismatch) {
 		t.Fatalf("mismatch refusal lost its code: %.400s", w.Body.String())

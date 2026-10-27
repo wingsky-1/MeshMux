@@ -41,7 +41,7 @@ func TestMeshDeviceRowActions(t *testing.T) {
 
 	// Add-device modal with the three required fields, reusing the existing
 	// create flow (no new endpoint).
-	w := b.req("GET", "/mesh", nil, nil)
+	w := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	if !strings.Contains(body, `id="mesh-add-modal"`) {
@@ -56,7 +56,7 @@ func TestMeshDeviceRowActions(t *testing.T) {
 	// One pending subnet_router with no observed node: approval must be
 	// present but greyed out, never an actionable approve form.
 	router := meshCreateRouter(t, b, "nas-row", "192.168.10.0/24")
-	page := b.req("GET", "/mesh", nil, nil)
+	page := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, http.StatusOK)
 	row := meshRowSlice(t, page.Body.String(), router.ID)
 	for _, want := range []string{"nas-row", "子网路由", "192.168.10.0/24"} {
@@ -96,7 +96,7 @@ func TestMeshDeviceRowActions(t *testing.T) {
 
 	// Key disclosure appears exactly once in the create response and never
 	// again; it is a plain section, not a dialog.
-	created := b.post("/mesh", url.Values{
+	created := b.Post("/mesh", url.Values{
 		"display_name": {"key-row"}, "purpose": {"mesh_only"},
 		"platform": {"ios"}, "subscriber_id": {""},
 	})
@@ -112,7 +112,7 @@ func TestMeshDeviceRowActions(t *testing.T) {
 	if got := strings.Count(disclosed, match[1]); got != 1 {
 		t.Fatalf("one-time secret appears %d times, want 1", got)
 	}
-	again := b.req("GET", "/mesh", nil, nil)
+	again := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, again, http.StatusOK)
 	if strings.Contains(again.Body.String(), match[1]) {
 		t.Fatal("one-time secret replayed on a later render")
@@ -134,7 +134,7 @@ func TestMeshApproveModalRendersForObservedDevice(t *testing.T) {
 		AvailableRoutes: []string{"192.168.20.0/24"},
 	}}
 
-	w := b.req("GET", "/mesh", nil, nil)
+	w := b.Req("GET", "/mesh", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	modalID := `id="mesh-approve-modal-` + router.ID + `-0"`

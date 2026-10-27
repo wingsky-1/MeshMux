@@ -88,7 +88,7 @@ func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 	refuseMeshRouteIntentUpdates(t, app)
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if !strings.Contains(w.Body.String(), store.CodeDatabaseUnavailable) {
 		t.Fatalf("compensated failure lost its code: %.500s", w.Body.String())
@@ -137,7 +137,7 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 	refuseMeshRouteIntentUpdates(t, app)
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusInternalServerError)
 	body := w.Body.String()
 	if !strings.Contains(body, meshh.CodeMeshRouteApprovalPartial) {
@@ -185,7 +185,7 @@ func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 	refuseMeshRouteIntentUpdates(t, app)
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
 	if !strings.Contains(w.Body.String(), store.CodeDatabaseUnavailable) {
 		t.Fatalf("compensated withdrawal lost its code: %.500s", w.Body.String())
@@ -232,7 +232,7 @@ func TestMeshRouteRevokePartialWhenClearRevertFails(t *testing.T) {
 	refuseMeshRouteIntentUpdates(t, app)
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusInternalServerError)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshRouteWithdrawPartial) {
 		t.Fatalf("partial withdrawal lost its code: %.500s", w.Body.String())

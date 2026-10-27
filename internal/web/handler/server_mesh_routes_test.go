@@ -19,7 +19,7 @@ import (
 // prefixes the form now requires.
 func meshCreateRouter(t *testing.T, b *browser, displayName string, prefixes ...string) store.MeshDeviceRecord {
 	t.Helper()
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name":      {displayName},
 		"purpose":           {"subnet_router"},
 		"platform":          {"nas"},
@@ -69,7 +69,7 @@ func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.resetCalls()
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name": {"nas"}, "purpose": {"subnet_router"}, "platform": {"nas"},
 		"subscriber_id": {sub.ID}, "declared_prefixes": {"192.168.1.0/24"},
 	})
@@ -94,7 +94,7 @@ func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 		t.Fatalf("devices = %d", len(devices))
 	}
 	fake.resetCalls()
-	w = b.post("/mesh/config", url.Values{"device_id": {devices[0].ID}})
+	w = b.Post("/mesh/config", url.Values{"device_id": {devices[0].ID}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointPurposeUnsupported) {
 		t.Fatalf("config refusal lost its code: %.400s", w.Body.String())
@@ -106,7 +106,7 @@ func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 
 func TestMeshCreateSubnetRouterRequiresPrefix(t *testing.T) {
 	_, b, _, _ := meshTestApp(t)
-	w := b.post("/mesh", url.Values{
+	w := b.Post("/mesh", url.Values{
 		"display_name": {"nas"}, "purpose": {"subnet_router"},
 		"platform": {"nas"}, "subscriber_id": {""}, "declared_prefixes": {""},
 	})
@@ -202,7 +202,7 @@ func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 	}}
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.list") != 2 { // one pre-read, one page render
 		t.Fatalf("approval calls = %v", fake.calls)
@@ -237,7 +237,7 @@ func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 	// Repeating the approval is a no-op: the first transition owns the audit key
 	// and no second Headscale mutation is sent.
 	fake.resetCalls()
-	w = b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w = b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.approve-routes") != 0 {
 		t.Fatalf("repeat approval called Headscale again: %v", fake.calls)
@@ -299,7 +299,7 @@ func TestMeshRouteApproveSurvivesAnUnsendableApprovedPrefix(t *testing.T) {
 	}}
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.approve-routes") != 1 {
 		t.Fatalf("approval calls = %v", fake.calls)
@@ -322,7 +322,7 @@ func TestMeshRouteApproveReadbackMismatchLeavesAdvertised(t *testing.T) {
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, AvailableRoutes: []string{"192.168.1.0/24"}}}
 	app.meshServer.SetClient(&routeReadbackLosingHeadscale{fake})
 
-	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), meshh.CodeMeshRouteApprovalUnconfirmed) {
 		t.Fatalf("unconfirmed readback lost its code: %.400s", w.Body.String())
@@ -350,7 +350,7 @@ func TestMeshRouteRevokeSendsDifference(t *testing.T) {
 		AvailableRoutes: []string{"192.168.1.0/24", "10.5.0.0/16"}}}
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.approve-routes") != 1 || fake.callsOf("nodes.clear-routes") != 0 {
 		t.Fatalf("withdrawal calls = %v, want one set operation", fake.calls)
@@ -379,7 +379,7 @@ func TestMeshRouteRevokeClearsWhenNothingRemains(t *testing.T) {
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
 	fake.resetCalls()
 
-	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.clear-routes") != 1 || fake.callsOf("nodes.approve-routes") != 0 {
 		t.Fatalf("empty remaining set calls = %v, want clear", fake.calls)
@@ -401,7 +401,7 @@ func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
 		SubnetRoutes:    []string{"192.168.1.0/24"},
 	}}
-	w := b.post("/mesh/reconcile", url.Values{})
+	w := b.Post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, http.StatusOK)
 	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
 	if err != nil {
@@ -432,7 +432,7 @@ func TestMeshRevokeClearsApprovedRoutesBeforeDelete(t *testing.T) {
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
 	fake.resetCalls()
 
-	w := b.post("/mesh/revoke", url.Values{"device_id": {router.ID}})
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {router.ID}})
 	requireStatus(t, w, http.StatusOK)
 	calls := fake.resetCalls()
 	clearAt := routeCallIndex(calls, "nodes.clear-routes")
@@ -468,7 +468,7 @@ func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 	fake.resetCalls()
 	logs.Reset()
 
-	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.approve-routes") != 1 {
 		t.Fatalf("approval never reached Headscale: %v", fake.calls)
@@ -517,7 +517,7 @@ func TestMeshRouteWithdrawDropsUnsendableApprovedPrefix(t *testing.T) {
 	fake.resetCalls()
 	logs.Reset()
 
-	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.approve-routes") != 1 || fake.callsOf("nodes.clear-routes") != 0 {
 		t.Fatalf("withdrawal calls = %v, want one set operation", fake.calls)
@@ -558,7 +558,7 @@ func TestMeshRouteWithdrawClearsWhenOnlyUnsendableRemains(t *testing.T) {
 	fake.resetCalls()
 	logs.Reset()
 
-	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
+	w := b.Post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusOK)
 	if fake.callsOf("nodes.clear-routes") != 1 || fake.callsOf("nodes.approve-routes") != 0 {
 		t.Fatalf("calls = %v, want one clear", fake.calls)

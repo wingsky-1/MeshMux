@@ -11,9 +11,10 @@ package policy
 // literal form value `irreversible_confirm=1` is refused and writes nothing.
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 )
 
 const (

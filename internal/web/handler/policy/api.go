@@ -14,9 +14,10 @@ package policy
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/web/view"

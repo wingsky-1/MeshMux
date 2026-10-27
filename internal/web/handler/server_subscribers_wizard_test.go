@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
+	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
@@ -63,7 +64,7 @@ func TestWizardPageRendersFourGroupsAndExecutionBoundary(t *testing.T) {
 	lineID := wizardLine(t, app, "hk-01")
 	outID := wizardOut(t, app, "out-01")
 
-	w := b.req("GET", "/subscribers/wizard", nil, nil)
+	w := b.Req("GET", "/subscribers/wizard", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{
@@ -86,14 +87,14 @@ func TestWizardPageRendersFourGroupsAndExecutionBoundary(t *testing.T) {
 	// The wizard is admin-only like every other management surface.
 	app2, _ := testApp(t)
 	anonymous := &browser{app: app2}
-	requireStatus(t, anonymous.req("GET", "/subscribers/wizard", nil, nil), http.StatusUnauthorized)
+	requireStatus(t, anonymous.Req("GET", "/subscribers/wizard", nil, nil), http.StatusUnauthorized)
 }
 
 func TestWizardPreviewWritesNothingAndRemindsOnRecordedGroups(t *testing.T) {
 	app, b, verifier := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
 
-	w := b.post("/subscribers/wizard/preview", url.Values{
+	w := b.Post("/subscribers/wizard/preview", url.Values{
 		"display_name":                     {"alice"},
 		"line_" + lineID:                   {"1"},
 		"device_" + wizardDeviceID(t, app): {"1"},
@@ -134,7 +135,7 @@ func TestWizardSaveApprovesArtifactAndDownloadServesIt(t *testing.T) {
 	outID := wizardOut(t, app, "out-01")
 	seedActivePolicyPins(t, app)
 
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":           {"alice"},
 		"line_" + lineID:         {"1"},
 		"out_id":                 {outID},
@@ -172,7 +173,7 @@ func TestWizardSaveApprovesArtifactAndDownloadServesIt(t *testing.T) {
 	}
 	// The convergence gate still runs first, so an unconverged Line refuses
 	// the download; that ordering is proven by the dedicated download tests.
-	if w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json"); w.Code != http.StatusNotFound {
+	if w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json"); w.Code != http.StatusNotFound {
 		t.Fatalf("unconverged download status %d, want 404", w.Code)
 	}
 }
@@ -184,7 +185,7 @@ func TestWizardSaveRefusesBlockingPreviewWithoutWriting(t *testing.T) {
 
 	// An Out with no proxy rule is the "selected Out, Line route unchanged"
 	// case: the Line route would never use the Out, so the save is refused.
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
 		"out_id":         {outID},
@@ -208,7 +209,7 @@ func TestWizardSaveRefusesGateFailure(t *testing.T) {
 	verifier.RejectSingBoxAt = 1
 	lineID := wizardLine(t, app, "hk-01")
 
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
 	})
@@ -229,7 +230,7 @@ func TestWizardSaveRefusesOutConflictWithExistingSubscription(t *testing.T) {
 	seedActivePolicyPins(t, app)
 
 	// The first subscription records the Line without an Out.
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
 	})
@@ -237,7 +238,7 @@ func TestWizardSaveRefusesOutConflictWithExistingSubscription(t *testing.T) {
 
 	// A second subscription on the same Line cannot add an Out: the Line
 	// publishes one route, so the choices must agree.
-	w = b.post("/subscribers/wizard/save", url.Values{
+	w = b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":           {"bob"},
 		"line_" + lineID:         {"1"},
 		"out_id":                 {outID},
@@ -263,7 +264,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 	// response is the one-time bearer page, so the reminder is asserted on the
 	// re-save that renders the wizard.
 	verifier.MissingMihomo = true
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
 	})
@@ -272,7 +273,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
-	w = b.post("/subscribers/wizard/save", url.Values{
+	w = b.Post("/subscribers/wizard/save", url.Values{
 		"subscriber_id":  {subs[0].ID},
 		"line_" + lineID: {"1"},
 	})
@@ -289,7 +290,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 	verifier.MissingMihomo = false
 	verifier.RejectMihomoAt = 3
 	other := wizardLine(t, app, "hk-02")
-	w = b.post("/subscribers/wizard/save", url.Values{
+	w = b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":  {"carol"},
 		"line_" + other: {"1"},
 	})
@@ -305,7 +306,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 func TestDownloadRefusesDriftedOrUnapprovedArtifact(t *testing.T) {
 	app, b, _ := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
 	})
@@ -317,7 +318,7 @@ func TestDownloadRefusesDriftedOrUnapprovedArtifact(t *testing.T) {
 	bearer := match[1]
 	// The convergence gate refuses before the artifact check, which is the
 	// documented order; the artifact path itself is proven in the store test.
-	if w := subscriptionRequest(app, "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json"); w.Code != http.StatusNotFound {
+	if w := testhttp.SubscriptionRequest(app.Handler(), "GET", "admin.example.invalid", "/subscription/"+bearer+"/sing-box.json"); w.Code != http.StatusNotFound {
 		t.Fatalf("unconverged download status %d, want 404", w.Code)
 	}
 }
@@ -329,7 +330,7 @@ func TestWizardMeshGroupRefusesRevokedDevice(t *testing.T) {
 	lineID := wizardLine(t, app, "hk-01")
 	deviceID := wizardDeviceID(t, app)
 
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":       {"alice"},
 		"line_" + lineID:     {"1"},
 		"device_" + deviceID: {"1"},
@@ -348,7 +349,7 @@ func TestWizardMeshGroupRefusesRevokedDevice(t *testing.T) {
 	}
 	// A revoked device is history: selecting it again is refused.
 	other := wizardLine(t, app, "hk-02")
-	w = b.post("/subscribers/wizard/save", url.Values{
+	w = b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":       {"bob"},
 		"line_" + other:      {"1"},
 		"device_" + deviceID: {"1"},
@@ -375,7 +376,7 @@ func TestWizardSelectionRestoresSavedChoice(t *testing.T) {
 	app, b, _ := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
 	seedActivePolicyPins(t, app)
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":            {"alice"},
 		"line_" + lineID:          {"1"},
 		"rule_preset-direct-cn@1": {"1"},
@@ -385,7 +386,7 @@ func TestWizardSelectionRestoresSavedChoice(t *testing.T) {
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
-	w = b.req("GET", "/subscribers/wizard?subscriber_id="+subs[0].ID, nil, nil)
+	w = b.Req("GET", "/subscribers/wizard?subscriber_id="+subs[0].ID, nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{"alice", "checked", "preset-direct-cn@1"} {
@@ -459,7 +460,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 
 	// 2. End to end: repeated saves of the same set store the same positions and
 	//    compose byte-identical documents.
-	w := b.post("/subscribers/wizard/save", fields)
+	w := b.Post("/subscribers/wizard/save", fields)
 	require2xx(t, w)
 	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
@@ -481,7 +482,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 		}
 		delete(repeat, "display_name")
 		repeat.Set("subscriber_id", subID)
-		w = b.post("/subscribers/wizard/save", repeat)
+		w = b.Post("/subscribers/wizard/save", repeat)
 		require2xx(t, w)
 		selection, _, err := app.Store.SubscriptionSelection(subID)
 		if err != nil {
@@ -512,7 +513,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 func TestWizardSaveKeepsExistingCredentialOnReSave(t *testing.T) {
 	app, b, _ := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":   {"alice"},
 		"line_" + lineID: {"1"},
 	})
@@ -522,7 +523,7 @@ func TestWizardSaveKeepsExistingCredentialOnReSave(t *testing.T) {
 	if err != nil || len(before) != 1 {
 		t.Fatalf("credentials = %d err=%v", len(before), err)
 	}
-	w = b.post("/subscribers/wizard/save", url.Values{
+	w = b.Post("/subscribers/wizard/save", url.Values{
 		"subscriber_id":  {subs[0].ID},
 		"line_" + lineID: {"1"},
 	})
@@ -541,7 +542,7 @@ func TestWizardSaveKeepsExistingCredentialOnReSave(t *testing.T) {
 func TestWizardRequiresCSRFAndOrigin(t *testing.T) {
 	app, b, _ := wizardApp(t)
 	lineID := wizardLine(t, app, "hk-01")
-	w := b.req("POST", "/subscribers/wizard/save", url.Values{
+	w := b.Req("POST", "/subscribers/wizard/save", url.Values{
 		"csrf": {"wrong"}, "display_name": {"mallory"}, "line_" + lineID: {"1"},
 	}, nil)
 	requireStatus(t, w, http.StatusForbidden)
@@ -566,7 +567,7 @@ func TestWizardGateUsesRealSingBox(t *testing.T) {
 	lineID := wizardLine(t, app, "hk-01")
 	seedActivePolicyPins(t, app)
 
-	w := b.post("/subscribers/wizard/save", url.Values{
+	w := b.Post("/subscribers/wizard/save", url.Values{
 		"display_name":            {"alice"},
 		"line_" + lineID:          {"1"},
 		"rule_preset-direct-cn@1": {"1"},

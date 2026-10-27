@@ -1,4 +1,4 @@
-package handler
+package policy_test
 
 import (
 	"encoding/json"
@@ -7,12 +7,13 @@ import (
 	"testing"
 
 	corepolicy "github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
 	handlerpolicy "github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 )
 
-func previewServerPolicy(t *testing.T, b *browser, body string) (handlerpolicy.PolicyServerPreviewResponse, int) {
+func previewServerPolicy(t *testing.T, b *handlertest.Browser, body string) (handlerpolicy.PolicyServerPreviewResponse, int) {
 	t.Helper()
-	w := b.post("/policies/server/preview", url.Values{"preview": {body}})
+	w := b.Post("/policies/server/preview", url.Values{"preview": {body}})
 	var response handlerpolicy.PolicyServerPreviewResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || response.OperationID == "" {
 		t.Fatalf("preview body = %.300s err=%v", w.Body.String(), err)
@@ -21,10 +22,10 @@ func previewServerPolicy(t *testing.T, b *browser, body string) (handlerpolicy.P
 }
 
 func TestPoliciesServerPreview(t *testing.T) {
-	app, _ := testApp(t)
-	b := &browser{app: app}
-	initialize(t, b)
-	loginAs(t, b, testPassword)
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	handlertest.Initialize(t, b)
+	handlertest.LoginAs(t, b, handlertest.Password)
 	cases := []struct {
 		body     string
 		status   int

@@ -78,7 +78,7 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 		if got := app.upgradeServer.HubIdentity(now).Code; got != wantCode {
 			t.Fatalf("identity code = %q, want %q", got, wantCode)
 		}
-		w := b.req("GET", "/healthz", nil, nil)
+		w := b.Req("GET", "/healthz", nil, nil)
 		requireStatus(t, w, wantStatus)
 		if wantStatus == 200 && w.Body.String() != "{\"status\":\"ok\"}\n" {
 			t.Fatalf("health body = %q, want the fixed SELECT 1 shape", w.Body.String())
@@ -107,7 +107,7 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 	if err := app.Store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
-	requireStatus(t, b.req("GET", "/healthz", nil, nil), 503)
+	requireStatus(t, b.Req("GET", "/healthz", nil, nil), 503)
 }
 
 // TestReadbackNeverWrites is the review gate for the "health path never writes"

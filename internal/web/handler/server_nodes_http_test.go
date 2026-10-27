@@ -21,7 +21,7 @@ func TestHTTPProxyCreateThroughNodesPage(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 
-	w := b.post("/nodes", url.Values{
+	w := b.Post("/nodes", url.Values{
 		"role":         {"http"},
 		"display_name": {"办公室代理"},
 		"proxy_url":    {"http://alice:s3cret@proxy.example.invalid:8080"},
@@ -40,7 +40,7 @@ func TestHTTPProxyCreateThroughNodesPage(t *testing.T) {
 		t.Fatal("an external HTTP proxy was issued a pairing code")
 	}
 
-	w = b.req("GET", "/api/nodes", nil, nil)
+	w = b.Req("GET", "/api/nodes", nil, nil)
 	requireStatus(t, w, 200)
 	var listed struct {
 		Nodes []struct {
@@ -74,7 +74,7 @@ func TestHTTPProxyCreateRejectsBadURL(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 
-	w := b.post("/nodes", url.Values{
+	w := b.Post("/nodes", url.Values{
 		"role":         {"http"},
 		"display_name": {"办公室代理"},
 		"proxy_url":    {"https://proxy.example.invalid:8080"},
@@ -97,7 +97,7 @@ func TestWizardOffersHTTPProxyAsExternalEgress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := b.req("GET", "/subscribers/wizard", nil, nil)
+	w := b.Req("GET", "/subscribers/wizard", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	body := w.Body.String()
 	for _, want := range []string{proxy.ID, "办公室代理", "proxy.example.invalid:8080", "外部声明 · HTTP 代理"} {
@@ -134,7 +134,7 @@ func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
 	}
 	storetest.EnableOutForLine(t, app.Store, proxy.ID, lineNode.ID, app.Now())
 
-	w := browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
+	w := browserState.Post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), "SUBSCRIPTION_OUT_CONFLICT") && !strings.Contains(w.Body.String(), "OUT_REFERENCED_BY_SUBSCRIPTIONS") {
 		t.Fatalf("referenced http proxy delete = %.300s", w.Body.String())
@@ -144,7 +144,7 @@ func TestHTTPProxyDeleteIsUsedByInterlockedOnNodesPage(t *testing.T) {
 	}
 
 	storetest.ClearOutForLine(t, app.Store, lineNode.ID, app.Now())
-	w = browserState.post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
+	w = browserState.Post("/nodes/out-delete", url.Values{"out_id": {proxy.ID}, "confirm": {"1"}})
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "HTTP 代理节点已彻底删除") {
 		t.Fatalf("http proxy delete notice = %.300s", w.Body.String())
@@ -174,7 +174,7 @@ func TestHTTPProxyUpdateThroughNodesPage(t *testing.T) {
 		}
 	}
 
-	w := b.post("/nodes/http-proxy", url.Values{
+	w := b.Post("/nodes/http-proxy", url.Values{
 		"out_id":    {proxy.ID},
 		"proxy_url": {"http://bob:n3w@edge.example.invalid:3128"},
 	})
@@ -190,7 +190,7 @@ func TestHTTPProxyUpdateThroughNodesPage(t *testing.T) {
 	}
 
 	// A malformed URL is refused with the stable proxy code and writes nothing.
-	w = b.post("/nodes/http-proxy", url.Values{"out_id": {proxy.ID}, "proxy_url": {"https://edge.example.invalid:3128"}})
+	w = b.Post("/nodes/http-proxy", url.Values{"out_id": {proxy.ID}, "proxy_url": {"https://edge.example.invalid:3128"}})
 	requireStatus(t, w, http.StatusBadRequest)
 	if !strings.Contains(w.Body.String(), "HTTP_PROXY_INVALID") {
 		t.Fatalf("bad proxy URL refusal = %.300s", w.Body.String())
@@ -209,7 +209,7 @@ func TestHTTPProxyUpdateThroughNodesPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w = b.post("/nodes/http-proxy", url.Values{"out_id": {outNode.ID}, "proxy_url": {"http://edge.example.invalid:3128"}})
+	w = b.Post("/nodes/http-proxy", url.Values{"out_id": {outNode.ID}, "proxy_url": {"http://edge.example.invalid:3128"}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), "OUT_ROLE_INVALID") {
 		t.Fatalf("proxy update on a managed out = %.300s", w.Body.String())
@@ -229,7 +229,7 @@ func TestHTTPProxyUnbindIsAnExplicitNoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := b.post("/nodes/out-unbind", url.Values{"out_id": {proxy.ID}})
+	w := b.Post("/nodes/out-unbind", url.Values{"out_id": {proxy.ID}})
 	requireStatus(t, w, 200)
 	body := w.Body.String()
 	if !strings.Contains(body, "OUT_SYNC_NOT_APPLICABLE") {

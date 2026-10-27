@@ -24,10 +24,11 @@ package node
 import (
 	"encoding/json"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/control/store"
-	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 )
 
 // CodeBindingAPIRetired is the stable refusal of the two retired endpoints.

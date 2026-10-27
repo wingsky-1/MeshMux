@@ -29,7 +29,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	storetest.MarkLineOnline(t, app.Store, node.ID, app.Now())
 
 	for _, name := range []string{"alice", "bob"} {
-		w := b.post("/subscribers", url.Values{"display_name": {name}, "line_" + node.ID: {"1"}})
+		w := b.Post("/subscribers", url.Values{"display_name": {name}, "line_" + node.ID: {"1"}})
 		require2xx(t, w)
 	}
 	subs, err := app.Store.ListSubscribers()
@@ -62,7 +62,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	// withheld by the drain instead.
 	before := subscriberPublicationSnapshot(t, app.Store, node.ID)
 
-	w := b.post("/lines", url.Values{
+	w := b.Post("/lines", url.Values{
 		"node_id": {node.ID}, "display_name": {"line-a-renamed"}, "sort_order": {"1"},
 		"server": {"line.example.invalid"}, "port": {"8443"},
 		"server_name":      {"handshake.example.invalid"},
@@ -109,7 +109,7 @@ func TestLinesSaveFansOutToEveryCredentialSubscriber(t *testing.T) {
 	}
 
 	// The API projection exposes the same precise sync evidence as the page.
-	api := b.req("GET", "/api/subscribers", nil, nil)
+	api := b.Req("GET", "/api/subscribers", nil, nil)
 	requireStatus(t, api, http.StatusOK)
 	var body struct {
 		Subscribers []struct {

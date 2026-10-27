@@ -208,7 +208,7 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	w := b.post("/nodes/"+f.lineID+"/revoke", nil)
+	w := b.Post("/nodes/"+f.lineID+"/revoke", nil)
 	requireStatus(t, w, 200)
 
 	allowed, err = app.Store.DeriveOutAllowlist(f.outID)
