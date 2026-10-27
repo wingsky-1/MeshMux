@@ -518,7 +518,7 @@ func (s *Store) ReconcileNode(nodeID string, now time.Time) (candidatepkg.Stored
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
 		return candidatepkg.Stored{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
-	candidate, err := s.BuildLineCandidateTx(tx, nodeID, revision)
+	candidate, err := BuildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
 		return candidatepkg.Stored{}, nil, err
 	}

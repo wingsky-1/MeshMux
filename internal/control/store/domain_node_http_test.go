@@ -121,7 +121,7 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	candidate, err := s.BuildLineCandidateTx(tx, lineID, 3)
+	candidate, err := store.BuildLineCandidateTx(tx, lineID, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,14 +174,14 @@ func TestHTTPProxyEgressIsExcludedFromOutAuthorizationGate(t *testing.T) {
 	// No Out node is enrolled at all: the HTTP proxy still gives the Line a
 	// configured, available egress, so the policy may keep the out tag without
 	// an OUT_NOT_AUTHORIZED / OUT_OFFLINE_FAIL_CLOSED refusal.
-	facts, err := s.OutEgressFactsTx(tx, lineID, now)
+	facts, err := store.OutEgressFactsTx(tx, lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !facts.Configured || !facts.Available || facts.OutID != proxyID || facts.Code != "" {
 		t.Fatalf("http egress facts = %+v", facts)
 	}
-	state, code, err := s.LineOutEgressStatusTx(tx, lineID, now)
+	state, code, err := store.LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}

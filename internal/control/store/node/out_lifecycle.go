@@ -173,7 +173,7 @@ func (s *Store) clearOutACLBeforeDeleteTx(tx *sql.Tx, outID string, now time.Tim
 		if nextErr != nil {
 			return false, nextErr
 		}
-		candidate, buildErr := s.BuildLineCandidateTx(tx, outID, revision)
+		candidate, buildErr := BuildLineCandidateTx(tx, outID, revision)
 		if buildErr != nil {
 			return false, buildErr
 		}

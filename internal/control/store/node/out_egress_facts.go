@@ -13,13 +13,7 @@ import (
 // the single derivation both the read-only OutEgressFacts projection and the
 // route resolver use, so the publish gate, the composer and an implicit route
 // publication can never disagree about whether the Out is usable.
-func (s *Store) OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
-	return OutEgressFactsTxTx(tx, lineID, now)
-}
-
-// OutEgressFactsTxTx is the handle-free spelling of OutEgressFactsTx: the
-// projection reads only tables, so a caller with no assembled handle can use it.
-func OutEgressFactsTxTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
+func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -70,7 +64,7 @@ func OutEgressFactsTxTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFact
 			return facts, nil
 		}
 	}
-	state, code, err := LineOutEgressStatusTxTx(tx, lineID, now)
+	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
 		return OutEgressFacts{}, err
 	}

@@ -88,7 +88,7 @@ func LineServerRouteTx(tx *sql.Tx, nodeID string, now time.Time) (json.RawMessag
 	if err != nil {
 		return nil, err
 	}
-	facts, err := storenode.OutEgressFactsTxTx(tx, nodeID, now)
+	facts, err := storenode.OutEgressFactsTx(tx, nodeID, now)
 	if err != nil {
 		return nil, err
 	}

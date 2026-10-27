@@ -449,7 +449,7 @@ func (s *Store) DeriveOutAllowlist(outID string) ([]string, error) {
 // so the digest is built at the exact revision under test instead of being
 // treated as revision independent.
 func outCandidateAtRevisionTx(tx *sql.Tx, outID string, revision int64) (string, error) {
-	candidate, err := BuildLineCandidateTxTx(tx, outID, revision)
+	candidate, err := BuildLineCandidateTx(tx, outID, revision)
 	if err != nil {
 		return "", err
 	}
@@ -664,13 +664,7 @@ func requireOutRoleTx(tx *sql.Tx, outID string) error {
 // selected Out has to have confirmed the membership authorization: the Hub refuses to
 // publish the Line while the Out path would drop its traffic, and the Web projection
 // shows the same state instead of a false healthy.
-func (s *Store) LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
-	return LineOutEgressStatusTxTx(tx, lineID, now)
-}
-
-// LineOutEgressStatusTxTx is the handle-free spelling of
-// LineOutEgressStatusTx: it reads only tables.
-func LineOutEgressStatusTxTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
+func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
 	selected, err := selectedEgressIDsForLineTx(tx, lineID)
 	if err != nil {
 		return LineEgressPartial, common.CodeDatabaseUnavailable, err
@@ -723,13 +717,8 @@ func LineOutEgressStatusTxTx(tx *sql.Tx, lineID string, now time.Time) (string, 
 // healthy would claim a path the Out never confirmed. The gate is a no-op for a
 // Line that no active subscription pairs with an Out, so an Out-free deployment is
 // unchanged.
-func (s *Store) LineOutPublishGateTx(tx *sql.Tx, lineID string, now time.Time) error {
-	return LineOutPublishGateTxTx(tx, lineID, now)
-}
-
-// LineOutPublishGateTxTx is the handle-free spelling of LineOutPublishGateTx.
-func LineOutPublishGateTxTx(tx *sql.Tx, lineID string, now time.Time) error {
-	state, code, err := LineOutEgressStatusTxTx(tx, lineID, now)
+func LineOutPublishGateTx(tx *sql.Tx, lineID string, now time.Time) error {
+	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
 		return err
 	}
@@ -763,7 +752,7 @@ func (s *Store) outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (O
 	if len(selected) == 0 {
 		readback.Allowlist = LineEgressDirect
 	} else {
-		state, code, err := LineOutEgressStatusTxTx(tx, lineID, now)
+		state, code, err := LineOutEgressStatusTx(tx, lineID, now)
 		if err != nil {
 			return OutEgressReadback{}, err
 		}
@@ -934,7 +923,7 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 	if err != nil {
 		return outDrainNoop, err
 	}
-	candidate, err := BuildLineCandidateTxTx(tx, outID, revision)
+	candidate, err := BuildLineCandidateTx(tx, outID, revision)
 	if err != nil {
 		return outDrainNoop, err
 	}

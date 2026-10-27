@@ -62,5 +62,5 @@ func (s *Store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, er
 		return OutEgressFacts{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
-	return s.OutEgressFactsTx(tx, lineID, now)
+	return OutEgressFactsTx(tx, lineID, now)
 }

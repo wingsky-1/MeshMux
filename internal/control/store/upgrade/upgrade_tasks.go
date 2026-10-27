@@ -225,7 +225,7 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest coredomain.Manifest, mani
 	if err != nil {
 		return ApprovedUpgrade{}, err
 	}
-	candidate, err := s.Nodes.BuildLineCandidateTx(tx, nodeID, revision)
+	candidate, err := storenode.BuildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
 		return ApprovedUpgrade{}, err
 	}

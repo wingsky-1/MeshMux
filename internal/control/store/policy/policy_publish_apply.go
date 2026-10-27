@@ -23,6 +23,7 @@ import (
 
 	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storenode "github.com/wingsky-1/MeshMux/internal/control/store/node"
 )
 
 // Stable publication-step refusals.
@@ -131,7 +132,7 @@ func (s *Store) PublishTargetTx(tx *sql.Tx, target PublishTarget, now time.Time)
 // transaction and compares it with the gated target. Only the route is allowed
 // to differ, because the publication itself adds it.
 func (s *Store) sameSnapshotCandidateTx(tx *sql.Tx, target PublishTarget) bool {
-	rebuilt, err := s.Nodes.BuildLineCandidateTx(tx, target.LineID, target.Candidate.Revision)
+	rebuilt, err := storenode.BuildLineCandidateTx(tx, target.LineID, target.Candidate.Revision)
 	if err != nil {
 		return false
 	}

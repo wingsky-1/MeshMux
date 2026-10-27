@@ -376,7 +376,7 @@ func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool
 	if err != nil {
 		return PublishTarget{}, err
 	}
-	candidate, err := s.Nodes.BuildLineCandidateTx(tx, lineID, revision)
+	candidate, err := storenode.BuildLineCandidateTx(tx, lineID, revision)
 	if err != nil {
 		return PublishTarget{}, err
 	}

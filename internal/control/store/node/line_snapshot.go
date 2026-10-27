@@ -32,15 +32,9 @@ import (
 // The function is read-only. It never commits, mutates subscribers or
 // publishes tasks; the caller owns the transaction and the candidate revision.
 // BuildLineCandidateTx assembles the complete desired candidate of one node in
-// the caller's transaction.
-func (s *Store) BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain.Candidate, error) {
-	return BuildLineCandidateTxTx(tx, nodeID, revision)
-}
-
-// BuildLineCandidateTxTx is the handle-free spelling of BuildLineCandidateTx.
-// The snapshot reads only tables and needs no store state, so a caller that has
-// no handle (a CLI fixture, a migration check) can still build one.
-func BuildLineCandidateTxTx(tx *sql.Tx, nodeID string, revision int64) (coredomain.Candidate, error) {
+// the caller's transaction. It reads only tables, so a caller with no assembled
+// handle (a CLI fixture, a migration check) can use it directly.
+func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain.Candidate, error) {
 	var role string
 	var vlessPort int
 	err := tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, nodeID).Scan(&role, &vlessPort)

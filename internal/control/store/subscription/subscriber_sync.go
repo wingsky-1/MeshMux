@@ -88,7 +88,7 @@ func SubscriberLineNodeOfflineTx(tx *sql.Tx, nodeID string, now time.Time) (bool
 // change therefore cannot keep a route alive that the current policy and Out
 // facts no longer justify.
 func lineSyncCandidateTx(tx *sql.Tx, nodeID string, revision int64, now time.Time) (nodedomain.Candidate, error) {
-	candidate, err := storenode.BuildLineCandidateTxTx(tx, nodeID, revision)
+	candidate, err := storenode.BuildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
 		return nodedomain.Candidate{}, err
 	}
@@ -154,7 +154,7 @@ func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 	}
 
 	if hasCandidate && latestDigest == desiredDigest {
-		candidate, buildErr := storenode.BuildLineCandidateTxTx(tx, nodeID, latestRevision)
+		candidate, buildErr := storenode.BuildLineCandidateTx(tx, nodeID, latestRevision)
 		if buildErr != nil {
 			return buildErr
 		}
@@ -213,7 +213,7 @@ func drainSubscriberNodeIntentTx(tx *sql.Tx, nodeID string, now time.Time, allow
 	// Line may publish: a published snapshot would make clients use an egress
 	// the Out guard still drops. A Line without an enabled binding is not
 	// affected, so an Out-free deployment is unchanged.
-	if err := storenode.LineOutPublishGateTxTx(tx, nodeID, now); err != nil {
+	if err := storenode.LineOutPublishGateTx(tx, nodeID, now); err != nil {
 		return err
 	}
 
@@ -440,11 +440,11 @@ func (s *Store) LineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string
 func SubscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string, string, error) {
 	return subscriberLineSyncViewTx(tx, nodeID, now, func(tx *sql.Tx, lineID string, now time.Time) (string, error) {
 		return DesiredLineDigestTx(tx, lineID, now)
-	}, storenode.LineOutEgressStatusTxTx)
+	}, storenode.LineOutEgressStatusTx)
 }
 
 func (s *Store) SubscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time) (string, string, error) {
-	return subscriberLineSyncViewTx(tx, nodeID, now, DesiredLineDigestTx, s.Nodes.LineOutEgressStatusTx)
+	return subscriberLineSyncViewTx(tx, nodeID, now, DesiredLineDigestTx, storenode.LineOutEgressStatusTx)
 }
 
 func subscriberLineSyncViewTx(tx *sql.Tx, nodeID string, now time.Time,

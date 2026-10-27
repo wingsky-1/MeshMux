@@ -345,7 +345,7 @@ func SubscriberLineChainHealthyTx(tx *sql.Tx, nodeID string, revision int64) (bo
 
 // BuildLineCandidateTx assembles the complete desired candidate of one node.
 func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candidate, error) {
-	return storenode.BuildLineCandidateTxTx(tx, nodeID, revision)
+	return storenode.BuildLineCandidateTx(tx, nodeID, revision)
 }
 
 // LineServerRouteTx returns the route fragment a Line must publish now.
@@ -355,7 +355,12 @@ func LineServerRouteTx(tx *sql.Tx, nodeID string, now time.Time) (json.RawMessag
 
 // LineOutEgressStatusTx reports whether a Line may use its selected Out path.
 func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
-	return storenode.LineOutEgressStatusTxTx(tx, lineID, now)
+	return storenode.LineOutEgressStatusTx(tx, lineID, now)
+}
+
+// OutEgressFactsTx is the transaction-scoped Out projection of one Line.
+func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
+	return storenode.OutEgressFactsTx(tx, lineID, now)
 }
 
 // OutReadbackAllowlistTx reads the allowlist the newest chain of one Out
