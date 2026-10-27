@@ -387,7 +387,7 @@ func TestCandidateBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 11 {
+	if len(files) != 12 {
 		t.Fatalf("unexpected files: %d", len(files))
 	}
 	caddy := files["/etc/meshmux/Caddyfile"]

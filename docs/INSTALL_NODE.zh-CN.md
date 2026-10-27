@@ -135,6 +135,7 @@ CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功�
 | `/etc/systemd/system/meshmux-sing-box.service` | 独立 non-root kernel 服务 |
 | `/etc/systemd/system/meshmux-out-acl.service` | Out ACL oneshot |
 | `/etc/fail2ban/jail.d/meshmux-node-ssh.local` | MeshMux 专属 SSH jail |
+| `/etc/systemd/journald.conf.d/99-meshmux.conf` | 宿主级 journald 配额 drop-in（`SystemMaxUse=1G`、`RuntimeMaxUse=512M`、`MaxFileSec=30day`）；共置 Line 复用 Hub 的同一副本，不重复写入 |
 | `/var/lib/meshmux-installer/state.json` | installer state 与 owned paths 台账 |
 | `/var/lib/meshmux-installer/operations/<operation-id>/events.jsonl` | operation journal |
 | `/var/cache/meshmux-installer/<operation-id>/` | 暂存与下载 cache |

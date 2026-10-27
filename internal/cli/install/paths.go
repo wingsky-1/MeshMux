@@ -25,6 +25,14 @@ const (
 	fail2banFilterDir = "/etc/fail2ban/filter.d"
 	sshJailFileName   = "meshmux-ssh.local"
 	webFilterName     = "meshmux-web.conf"
+
+	// journaldDropInPath is the one host-level journald drop-in MeshMux owns.
+	// The "99-" prefix sorts last inside journald.conf.d, so the quota wins over
+	// distribution drop-ins while the main journald.conf is never rewritten. The
+	// file is host-level, not per-role: the Hub always writes it, a standalone
+	// Line writes it, and a co-located Line reuses the Hub's copy so exactly one
+	// ledger owns the path.
+	journaldDropInPath = "/etc/systemd/journald.conf.d/99-meshmux.conf"
 )
 
 // unitPath returns the installed unit file of one unit name.

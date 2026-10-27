@@ -65,6 +65,19 @@ func writeLocalLineHubLedger(t *testing.T, root string, sshPorts []int) (Install
 	if err := os.WriteFile(jail, []byte("[meshmux-sshd]\nenabled = true\nport = 2222\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// The Hub also owns the host-level journald drop-in; a co-located Line must
+	// reuse it and never claim the path in its own ledger.
+	journald := rooted(root, journaldDropInPath)
+	if err := os.MkdirAll(filepath.Dir(journald), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(journald, []byte(journaldDropIn), 0644); err != nil {
+		t.Fatal(err)
+	}
+	journaldHash, err := sha256File(journald)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hub := InstallState{
 		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "installed",
 		Config: Config{
@@ -77,6 +90,7 @@ func writeLocalLineHubLedger(t *testing.T, root string, sshPorts []int) (Install
 			hubSSHJailPath:           strings.Repeat("2", 64),
 			runtimeBinaryPath:        runtimeHash,
 			"/etc/meshmux/Caddyfile": strings.Repeat("3", 64),
+			journaldDropInPath:       journaldHash,
 		},
 		Artifacts: map[string]string{},
 		SSHPorts:  append([]int(nil), sshPorts...),

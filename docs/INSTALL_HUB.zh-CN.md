@@ -85,6 +85,7 @@ go build -o ./bin/meshmux ./cmd/meshmux
 | `/etc/systemd/system/meshmux-{web,headscale,caddy}.service` | 隔离非 root 服务身份；Caddy 唯一持有 80/443 绑定能力 |
 | `/etc/fail2ban/jail.d/meshmux-ssh.local` | 使用当前真实 SSH 端口；默认 nftables action，未经验证不得激活 |
 | `/etc/fail2ban/jail.d/meshmux-web.local`、`/etc/fail2ban/filter.d/meshmux-web.conf` | Web jail 默认禁用，仅在 `--direct-caddy` 时启用；filter 的 `datepattern` 支持 RFC3339Nano 的 1-9 位小数 |
+| `/etc/systemd/journald.conf.d/99-meshmux.conf` | 唯一一条宿主级 journald 配额（`SystemMaxUse=1G`、`RuntimeMaxUse=512M`、`MaxFileSec=30day`）；只含配额项，不改主 `journald.conf`，下一次 `systemd-journald` 启动生效 |
 
 Headscale 模板按官方 v0.29.5 标签的 `config-example.yaml` 字段构建，非从 my-sub 复制。Hub Web 使用 Issue #2 已实现的 Argon2id/SQLite/CSRF/限速、`/healthz` 和本机初始化令牌。Web 的公网证书由 Caddy 默认 HTTP-01/TLS-ALPN-01 管理，不需要 Cloudflare DNS 插件或 Zero Trust。Web Fail2ban jail 默认禁用，仅在 Caddy 直接面向客户端且显式传入 `--direct-caddy` 时启用；使用 CDN/Cloudflare 或多层代理时**不能**启用依赖真实客户端 IP 的 Web Fail2ban jail，应用限速始终启用。
 
