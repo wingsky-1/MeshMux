@@ -1,17 +1,19 @@
-package store
+package store_test
 
 import (
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	policy "github.com/wingsky-1/MeshMux/internal/core/policy"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // The Task-3 storage leg: a fresh database migrates to schema 12 and carries
 // the versioned preset seed bundle; reopening replays idempotently.
 func TestSchema12RuleLibraryAndPresetSeeds(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
+	s, err := store.OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,10 +22,10 @@ func TestSchema12RuleLibraryAndPresetSeeds(t *testing.T) {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != DatabaseSchemaVersion {
-		t.Fatalf("user_version = %d, want %d", version, DatabaseSchemaVersion)
+	if version != store.DatabaseSchemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, store.DatabaseSchemaVersion)
 	}
-	lib := policy.New(s.DB, RuleUsageSource())
+	lib := policy.New(s.DB, store.RuleUsageSource())
 	presets, err := lib.ListRules("preset")
 	if err != nil {
 		t.Fatalf("ListRules(preset): %v", err)
@@ -51,7 +53,7 @@ func TestSchema12RuleLibraryAndPresetSeeds(t *testing.T) {
 // untouched and the next open retries the whole leg instead of skipping a
 // half-seeded library.
 func TestSchema12MigrationRecoversFromSeedFailure(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
+	s, err := store.OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,10 +76,10 @@ func TestSchema12MigrationRecoversFromSeedFailure(t *testing.T) {
 	if err := s.Migrate(); err != nil {
 		t.Fatalf("replay Migrate(): %v", err)
 	}
-	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != DatabaseSchemaVersion {
-		t.Fatalf("version after replay = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
+	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("version after replay = %d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
-	if presets, err := policy.New(s.DB, RuleUsageSource()).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
+	if presets, err := policy.New(s.DB, store.RuleUsageSource()).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
 		t.Fatalf("presets after replay = %d %v, want %d", len(presets), err, len(policy.Presets))
 	}
 }
@@ -87,7 +89,7 @@ func TestSchema12MigrationRecoversFromSeedFailure(t *testing.T) {
 // schema, and the migration creates no 11d mirror table: the operation
 // journal is authoritative (D3).
 func TestSchema11MigratesWithoutMirror(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "state"))
+	s, err := store.OpenStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,10 +103,10 @@ func TestSchema11MigratesWithoutMirror(t *testing.T) {
 		t.Fatalf("Migrate() from 11: %v", err)
 	}
 	var version int
-	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != DatabaseSchemaVersion {
-		t.Fatalf("version after 11→12+ = %d err=%v, want %d", version, err, DatabaseSchemaVersion)
+	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
+		t.Fatalf("version after 11→12+ = %d err=%v, want %d", version, err, store.DatabaseSchemaVersion)
 	}
-	if presets, err := policy.New(s.DB, RuleUsageSource()).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
+	if presets, err := policy.New(s.DB, store.RuleUsageSource()).ListRules("preset"); err != nil || len(presets) != len(policy.Presets) {
 		t.Fatalf("presets after 11→12+ = %d %v, want %d", len(presets), err, len(policy.Presets))
 	}
 	var tables int

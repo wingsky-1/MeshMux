@@ -1,4 +1,4 @@
-package store
+package store_test
 
 // Drift guards between the composer's own small rule model and the rule library
 // it consumes.
@@ -14,12 +14,12 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
-	"github.com/wingsky-1/MeshMux/internal/core/subscription"
+	subdomain "github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 func TestComposerActionsMatchTheRuleLibrary(t *testing.T) {
 	library := []policy.Action{policy.ActionDirect, policy.ActionProxy, policy.ActionReject}
-	composer := []subscription.Action{subscription.ActionDirect, subscription.ActionProxy, subscription.ActionReject}
+	composer := []subdomain.Action{subdomain.ActionDirect, subdomain.ActionProxy, subdomain.ActionReject}
 	if len(library) != len(composer) {
 		t.Fatalf("library actions = %d, composer actions = %d", len(library), len(composer))
 	}
@@ -35,9 +35,9 @@ func TestComposerMatcherKindsMatchTheRuleLibrary(t *testing.T) {
 		policy.MatcherDomain, policy.MatcherDomainSuffix, policy.MatcherIPCIDR,
 		policy.MatcherGeoSite, policy.MatcherGeoIP, policy.MatcherRuleSet,
 	}
-	composer := []subscription.MatcherKind{
-		subscription.MatcherDomain, subscription.MatcherDomainSuffix, subscription.MatcherIPCIDR,
-		subscription.MatcherGeoSite, subscription.MatcherGeoIP, subscription.MatcherRuleSet,
+	composer := []subdomain.MatcherKind{
+		subdomain.MatcherDomain, subdomain.MatcherDomainSuffix, subdomain.MatcherIPCIDR,
+		subdomain.MatcherGeoSite, subdomain.MatcherGeoIP, subdomain.MatcherRuleSet,
 	}
 	if len(library) != len(composer) {
 		t.Fatalf("library matcher kinds = %d, composer matcher kinds = %d", len(library), len(composer))
@@ -54,7 +54,7 @@ func TestComposerMatcherKindsMatchTheRuleLibrary(t *testing.T) {
 // gate uses. A divergence would let a subscription render an artifact the gate
 // would have refused.
 func TestComposerPinsMatchTheRouteVersionLock(t *testing.T) {
-	good := subscription.RuleSetPin{
+	good := subdomain.RuleSetPin{
 		Source:  "https://rulesets.example.invalid/2026-10-26.srs",
 		Version: "20261026",
 		SHA256:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -62,7 +62,7 @@ func TestComposerPinsMatchTheRouteVersionLock(t *testing.T) {
 	if err := good.Validate(); err != nil {
 		t.Fatalf("the composer refused a valid pin: %v", err)
 	}
-	cases := []subscription.RuleSetPin{
+	cases := []subdomain.RuleSetPin{
 		{Source: "http://rulesets.example.invalid/a.srs", Version: "1", SHA256: good.SHA256},
 		{Source: "https://rulesets.example.invalid/a.srs?x=1", Version: "1", SHA256: good.SHA256},
 		{Source: "https://rulesets.example.invalid/a.srs", Version: "latest", SHA256: good.SHA256},
@@ -93,6 +93,6 @@ func TestComposerPinsMatchTheRouteVersionLock(t *testing.T) {
 }
 
 // composerPinOf converts a route pin into the composer's pin shape.
-func composerPinOf(pin policy.RulesetPin) subscription.RuleSetPin {
-	return subscription.RuleSetPin{Source: pin.Source, Version: pin.Version, SHA256: pin.SHA256}
+func composerPinOf(pin policy.RulesetPin) subdomain.RuleSetPin {
+	return subdomain.RuleSetPin{Source: pin.Source, Version: pin.Version, SHA256: pin.SHA256}
 }

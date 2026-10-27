@@ -1,4 +1,4 @@
-package store
+package store_test
 
 // Ruling R11: an HTTP proxy is a Hub-visible external egress node. It has no
 // Agent, pairing, candidate or readback (status is always "external"), its
@@ -17,12 +17,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // httpProxyFixture creates one configured Line, one external HTTP proxy and
 // one active subscriber selecting the Line. It returns their ids.
-func httpProxyFixture(t *testing.T, s *Store, now time.Time) (string, string, string) {
+func httpProxyFixture(t *testing.T, s *store.Store, now time.Time) (string, string, string) {
 	t.Helper()
 	lineNode, _, err := s.CreateNode("edge", "line", 8443, 2222, now)
 	if err != nil {
@@ -49,7 +51,7 @@ func TestHTTPProxyNodeIsExternalAndHasNoAgentState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proxy.Role != string(node.RoleHTTP) || proxy.Status != "external" {
+	if proxy.Role != string(nodedomain.RoleHTTP) || proxy.Status != "external" {
 		t.Fatalf("proxy node = role %q status %q", proxy.Role, proxy.Status)
 	}
 	if proxy.VlessPort != 0 || proxy.SSHPort != 0 {
@@ -108,7 +110,7 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
-	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
 		t.Fatalf("http egress selection rejected: %v", err)
 	}
 	if usedBy, err := s.OutUsedBy(proxyID); err != nil || len(usedBy) != 1 {
@@ -119,11 +121,11 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	candidate, err := BuildLineCandidateTx(tx, lineID, 3)
+	candidate, err := store.BuildLineCandidateTx(tx, lineID, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Out == nil || candidate.Out.Type != node.OutEgressHTTP ||
+	if candidate.Out == nil || candidate.Out.Type != nodedomain.OutEgressHTTP ||
 		candidate.Out.Server != "proxy.example.invalid" || candidate.Out.Port != 8080 ||
 		candidate.Out.Username != "alice" || candidate.Out.Password != "s3cret" {
 		t.Fatalf("line candidate egress = %+v", candidate.Out)
@@ -141,14 +143,14 @@ func TestHTTPProxySelectionRendersHTTPEgressInLineCandidate(t *testing.T) {
 	}
 	// The rendered candidate is a v3 document carrying the http egress, not a
 	// route-free or link-key shape.
-	document, err := json.Marshal(node.NewCandidateDocument(candidate))
+	document, err := json.Marshal(nodedomain.NewCandidateDocument(candidate))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(document), `"type":"http"`) {
 		t.Fatalf("candidate document carries no http egress: %s", document)
 	}
-	var decoded node.CandidateDocument
+	var decoded nodedomain.CandidateDocument
 	if err := json.Unmarshal(document, &decoded); err != nil {
 		t.Fatalf("rendered candidate does not decode: %v", err)
 	}
@@ -161,7 +163,7 @@ func TestHTTPProxyEgressIsExcludedFromOutAuthorizationGate(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
-	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := s.DB.Begin()
@@ -172,18 +174,18 @@ func TestHTTPProxyEgressIsExcludedFromOutAuthorizationGate(t *testing.T) {
 	// No Out node is enrolled at all: the HTTP proxy still gives the Line a
 	// configured, available egress, so the policy may keep the out tag without
 	// an OUT_NOT_AUTHORIZED / OUT_OFFLINE_FAIL_CLOSED refusal.
-	facts, err := outEgressFactsTx(tx, lineID, now)
+	facts, err := store.OutEgressFactsTx(tx, lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !facts.Configured || !facts.Available || facts.OutID != proxyID || facts.Code != "" {
 		t.Fatalf("http egress facts = %+v", facts)
 	}
-	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
+	state, code, err := store.LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state != LineEgressExternal || code != "" {
+	if state != store.LineEgressExternal || code != "" {
 		t.Fatalf("line egress state = %q/%q, want external", state, code)
 	}
 }
@@ -192,17 +194,17 @@ func TestHTTPProxyDeleteIsThoroughAndInterlocked(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
-	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
 		t.Fatal(err)
 	}
 	err := s.DeleteOutAt(proxyID, now)
-	if err == nil || !strings.Contains(err.Error(), CodeOutReferenced) {
-		t.Fatalf("referenced http proxy delete = %v, want %s", err, CodeOutReferenced)
+	if err == nil || !strings.Contains(err.Error(), s.Subscribers.OutReferencedCode()) {
+		t.Fatalf("referenced http proxy delete = %v, want %s", err, s.Subscribers.OutReferencedCode())
 	}
 	if _, err := s.GetNodeAt(proxyID, now); err != nil {
 		t.Fatalf("refused delete removed the node: %v", err)
 	}
-	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}}, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteOutAt(proxyID, now); err != nil {
@@ -228,7 +230,7 @@ func TestSchema16RebuildPreservesNodesAndChildren(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, proxyID, subID := httpProxyFixture(t, s, now)
-	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: proxyID}, now); err != nil {
 		t.Fatal(err)
 	}
 	edge, err := s.GetNodeAt(lineID, now)
@@ -242,7 +244,7 @@ func TestSchema16RebuildPreservesNodesAndChildren(t *testing.T) {
 		t.Fatalf("schema 16 replay: %v", err)
 	}
 	var version int
-	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != DatabaseSchemaVersion {
+	if err := s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != store.DatabaseSchemaVersion {
 		t.Fatalf("version after replay = %d err=%v", version, err)
 	}
 	if stored, err := s.GetNodeAt(lineID, now); err != nil || stored.Role != edge.Role || stored.DisplayName != edge.DisplayName {
@@ -328,10 +330,10 @@ func TestHTTPProxyEgressComposesAndSurvivesArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier := &selectionVerifier{}
-	result, err := s.ApproveSubscriptionSelection(t.Context(), subID, "", SelectionSpec{
+	result, err := s.ApproveSubscriptionSelection(t.Context(), subID, "", store.SelectionSpec{
 		LineIDs: []string{lineID},
 		OutID:   proxyID,
-		Rules:   []RuleRevision{{StableKey: "custom-proxy-http", Version: 1}},
+		Rules:   []store.RuleRevision{{StableKey: "custom-proxy-http", Version: 1}},
 	}, verifier, now)
 	if err != nil {
 		t.Fatalf("approve: %v", err)

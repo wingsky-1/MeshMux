@@ -1,4 +1,4 @@
-package store
+package store_test
 
 // The orchestration split's public contract:
 //
@@ -13,13 +13,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
 func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
-	if _, err := s.SaveSubscriptionSelection(subID, SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now); err != nil {
 		t.Fatal(err)
 	}
 	second, _, err := s.CreateSubscriber("bob", []string{lineID}, now)
@@ -31,19 +35,19 @@ func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
 
 	// A conflicting Out choice is exactly the save's refusal, reported before
 	// anything is written.
-	impact, err := s.PreviewSelectionImpact(second.ID, SelectionSpec{LineIDs: []string{lineID}}, now)
+	impact, err := s.PreviewSelectionImpact(second.ID, store.SelectionSpec{LineIDs: []string{lineID}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !impact.Blocking() || impact.Code() != CodeOutSelectionConflict {
-		t.Fatalf("impact = %+v, want a blocking %s", impact, CodeOutSelectionConflict)
+	if !impact.Blocking() || impact.Code() != store.CodeOutSelectionConflict {
+		t.Fatalf("impact = %+v, want a blocking %s", impact, store.CodeOutSelectionConflict)
 	}
 	if len(impact.AffectedSubscribers) != 1 || impact.AffectedSubscribers[0] != "alice" {
 		t.Fatalf("affected = %v, want [alice]", impact.AffectedSubscribers)
 	}
 
 	// The agreeing choice is a reminder about the shared Line, not a refusal.
-	agreeing, err := s.PreviewSelectionImpact(second.ID, SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now)
+	agreeing, err := s.PreviewSelectionImpact(second.ID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +69,7 @@ func TestPreviewSelectionImpactOnTheCreateForm(t *testing.T) {
 	lineID, _, _ := selectionFixture(t, s, now)
 	// No subscriber yet: the create form must still answer, and it must not
 	// conflict with itself.
-	impact, err := s.PreviewSelectionImpact("", SelectionSpec{LineIDs: []string{lineID}}, now)
+	impact, err := s.PreviewSelectionImpact("", store.SelectionSpec{LineIDs: []string{lineID}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +77,7 @@ func TestPreviewSelectionImpactOnTheCreateForm(t *testing.T) {
 		t.Fatalf("create-form impact = %+v, want no blocking finding", impact)
 	}
 	// A reference that does not exist is a blocking finding with the save code.
-	unknown, err := s.PreviewSelectionImpact("", SelectionSpec{LineIDs: []string{"ffffffffffffffffffffffffffffffff"}}, now)
+	unknown, err := s.PreviewSelectionImpact("", store.SelectionSpec{LineIDs: []string{"ffffffffffffffffffffffffffffffff"}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +90,7 @@ func TestBatchApproveSucceedsPerSubscriber(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, first := selectionFixture(t, s, now)
-	if _, err := s.SaveSubscriptionSelection(first, SelectionSpec{LineIDs: []string{lineID}}, now); err != nil {
+	if _, err := s.SaveSubscriptionSelection(first, store.SelectionSpec{LineIDs: []string{lineID}}, now); err != nil {
 		t.Fatal(err)
 	}
 	// A second subscriber with a saved-but-unapproved selection: it can be
@@ -122,17 +126,17 @@ func TestBatchApproveSucceedsPerSubscriber(t *testing.T) {
 	if len(result.Outcomes) != 3 {
 		t.Fatalf("outcomes = %d, want 3", len(result.Outcomes))
 	}
-	status := map[string]BatchApproveOutcome{}
+	status := map[string]store.BatchApproveOutcome{}
 	for _, outcome := range result.Outcomes {
 		status[outcome.SubscriberID] = outcome
 	}
-	if status[first].Status != BatchSaved || status[first].ArtifactID == "" {
+	if status[first].Status != store.BatchSaved || status[first].ArtifactID == "" {
 		t.Fatalf("first outcome = %+v, want saved with a digest", status[first])
 	}
-	if status[second].Status != BatchSaved || status[second].ArtifactID == "" {
+	if status[second].Status != store.BatchSaved || status[second].ArtifactID == "" {
 		t.Fatalf("second outcome = %+v, want saved with a digest", status[second])
 	}
-	if status[third].Status != BatchBlocked || status[third].Code != "LINE_NOT_CONFIGURED" {
+	if status[third].Status != store.BatchBlocked || status[third].Code != "LINE_NOT_CONFIGURED" {
 		t.Fatalf("third outcome = %+v, want blocked LINE_NOT_CONFIGURED (its Line transport is gone)", status[third])
 	}
 	// The two successful members really are approved and downloadable.
@@ -156,16 +160,16 @@ func TestBatchApproveRefusesBadInputBeforeAnyWork(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	if _, err := s.BatchApproveSubscriptions(context.Background(), nil, &selectionVerifier{}, now); err == nil ||
-		!strings.HasPrefix(err.Error(), CodeSelectionInvalid) {
-		t.Fatalf("empty batch = %v, want %s", err, CodeSelectionInvalid)
+		!strings.HasPrefix(err.Error(), store.CodeSelectionInvalid) {
+		t.Fatalf("empty batch = %v, want %s", err, store.CodeSelectionInvalid)
 	}
-	tooMany := make([]string, 0, maxBatchSubscribers+1)
-	for index := range maxBatchSubscribers + 1 {
+	tooMany := make([]string, 0, common.MaxBatchSubscribers+1)
+	for index := range common.MaxBatchSubscribers + 1 {
 		tooMany = append(tooMany, strings.Repeat("a", 31)+string(rune('0'+index%10)))
 	}
 	if _, err := s.BatchApproveSubscriptions(context.Background(), tooMany, &selectionVerifier{}, now); err == nil ||
-		!strings.HasPrefix(err.Error(), CodeSelectionInvalid) {
-		t.Fatalf("oversized batch = %v, want %s", err, CodeSelectionInvalid)
+		!strings.HasPrefix(err.Error(), store.CodeSelectionInvalid) {
+		t.Fatalf("oversized batch = %v, want %s", err, store.CodeSelectionInvalid)
 	}
 	if _, err := s.BatchApproveSubscriptions(context.Background(), []string{"nope"}, &selectionVerifier{}, now); err == nil ||
 		!strings.HasPrefix(err.Error(), "SUBSCRIBER_ID_INVALID") {
@@ -179,7 +183,7 @@ func TestArtifactDownloadRejectsAChangedSelection(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
 	if err != nil || !result.Saved {
 		t.Fatalf("approve: %+v err=%v", result, err)
 	}
@@ -188,8 +192,8 @@ func TestArtifactDownloadRejectsAChangedSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := s.SubscriptionArtifact(subID); err == nil ||
-		!strings.HasPrefix(err.Error(), CodeArtifactDrift) {
-		t.Fatalf("artifact after a stale digest = %v, want %s", err, CodeArtifactDrift)
+		!strings.HasPrefix(err.Error(), store.CodeArtifactDrift) {
+		t.Fatalf("artifact after a stale digest = %v, want %s", err, store.CodeArtifactDrift)
 	}
 }
 
@@ -205,7 +209,7 @@ func TestBlockingSaveLeavesEveryTableUntouched(t *testing.T) {
 		before[table] = countRows(t, s, table)
 	}
 	// A refusing kernel gate is a blocking diagnostic, not an error.
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{failSingBox: true}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{failSingBox: true}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +227,7 @@ func TestBlockingSaveLeavesEveryTableUntouched(t *testing.T) {
 // value cannot smuggle a duplicate, a non-canonical id or an unbounded list past
 // the public entry points.
 func TestSelectionSpecNormalizeIsTheAntiCorruptionBoundary(t *testing.T) {
-	spec := SelectionSpec{
+	spec := store.SelectionSpec{
 		LineIDs: []string{"  " + strings.Repeat("a", 32) + " ", strings.Repeat("a", 32)},
 		OutID:   " ",
 	}
@@ -242,17 +246,17 @@ func TestSelectionSpecNormalizeIsTheAntiCorruptionBoundary(t *testing.T) {
 	if spec.LineIDs[0] == "mutated" {
 		t.Fatal("Normalize returned a slice aliasing the caller's input")
 	}
-	if _, err := (SelectionSpec{LineIDs: []string{"A" + strings.Repeat("a", 31)}}).Normalize(); err == nil {
+	if _, err := (store.SelectionSpec{LineIDs: []string{"A" + strings.Repeat("a", 31)}}).Normalize(); err == nil {
 		t.Fatal("a non-canonical id was accepted")
 	}
-	if _, err := (SelectionSpec{LineIDs: []string{strings.Repeat("a", 32)}, OutID: "nope"}).Normalize(); err == nil ||
-		!strings.HasPrefix(err.Error(), CodeSelectionInvalid) {
-		t.Fatalf("bad out id = %v, want %s", err, CodeSelectionInvalid)
+	if _, err := (store.SelectionSpec{LineIDs: []string{strings.Repeat("a", 32)}, OutID: "nope"}).Normalize(); err == nil ||
+		!strings.HasPrefix(err.Error(), store.CodeSelectionInvalid) {
+		t.Fatalf("bad out id = %v, want %s", err, store.CodeSelectionInvalid)
 	}
 }
 
 // countRows is the shared row counter of this file.
-func countRows(t *testing.T, s *Store, table string) int {
+func countRows(t *testing.T, s *store.Store, table string) int {
 	t.Helper()
 	var count int
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
@@ -266,7 +270,7 @@ func countRows(t *testing.T, s *Store, table string) int {
 // store's input boundary.
 func TestParseSelectionSpecIsAnAntiCorruptionBoundary(t *testing.T) {
 	line := strings.Repeat("a", 32)
-	spec, err := ParseSelectionSpec([]byte(`{"line_ids":["` + line + `"],"rules":[{"stable_key":"preset-direct-cn","version":1}]}`))
+	spec, err := store.ParseSelectionSpec([]byte(`{"line_ids":["` + line + `"],"rules":[{"stable_key":"preset-direct-cn","version":1}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,8 +287,8 @@ func TestParseSelectionSpecIsAnAntiCorruptionBoundary(t *testing.T) {
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseSelectionSpec([]byte(body)); err == nil {
-				t.Fatalf("ParseSelectionSpec(%q) accepted the body", body)
+			if _, err := store.ParseSelectionSpec([]byte(body)); err == nil {
+				t.Fatalf("store.ParseSelectionSpec(%q) accepted the body", body)
 			}
 		})
 	}

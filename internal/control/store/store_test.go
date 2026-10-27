@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
 func TestPrivateStateAndSchema(t *testing.T) {
@@ -67,27 +69,27 @@ func TestPrivateStateAndSchema(t *testing.T) {
 }
 
 func TestPasswordHashPolicy(t *testing.T) {
-	hash, err := HashPassword("test-only-long-password-47!")
+	hash, err := common.HashPassword("test-only-long-password-47!")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := HashPassword("test-only-long-password-47!")
+	other, err := common.HashPassword("test-only-long-password-47!")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if hash == other || strings.Contains(hash, "test-only-long-password-47!") {
 		t.Fatal("missing random salt")
 	}
-	if !VerifyPassword(hash, "test-only-long-password-47!") || VerifyPassword(hash, "wrong") {
+	if !common.VerifyPassword(hash, "test-only-long-password-47!") || common.VerifyPassword(hash, "wrong") {
 		t.Fatal("password mismatch")
 	}
 	for _, bad := range []string{"short", "", strings.Repeat("x", 257)} {
-		if _, err := HashPassword(bad); err == nil {
+		if _, err := common.HashPassword(bad); err == nil {
 			t.Fatal("weak/oversize accepted")
 		}
 	}
-	for _, bad := range []string{"", "$argon2id$v=19$m=999999999,t=99,p=99$abc$def", PasswordPrefix + "bad$hash", PasswordPrefix + "AA$AA$AA"} {
-		if VerifyPassword(bad, "test-only-long-password-47!") {
+	for _, bad := range []string{"", "$argon2id$v=19$m=999999999,t=99,p=99$abc$def", common.PasswordPrefix + "bad$hash", common.PasswordPrefix + "AA$AA$AA"} {
+		if common.VerifyPassword(bad, "test-only-long-password-47!") {
 			t.Fatal("corrupt hash accepted")
 		}
 	}

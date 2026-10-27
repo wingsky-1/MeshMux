@@ -1,4 +1,4 @@
-package store
+package store_test
 
 // The aggregation invariants that this package owns, proven at the
 // orchestration layer rather than in the composer:
@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 func TestRuleWithoutAnActivePinBlocksApproval(t *testing.T) {
@@ -25,9 +27,9 @@ func TestRuleWithoutAnActivePinBlocksApproval(t *testing.T) {
 	// exists yet, so the pin source is empty and the composer refuses it: the
 	// approval must therefore block and write nothing.
 	verifier := &selectionVerifier{}
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", SelectionSpec{
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{
 		LineIDs: []string{lineID},
-		Rules:   []RuleRevision{{StableKey: "preset-direct-cn", Version: 1}},
+		Rules:   []store.RuleRevision{{StableKey: "preset-direct-cn", Version: 1}},
 	}, verifier, now)
 	if err != nil {
 		t.Fatalf("a missing pin must be a diagnostic, not an error: %v", err)
@@ -50,7 +52,7 @@ func TestSnapshotStoresNoRenderedByte(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
 	if err != nil || !result.Saved {
 		t.Fatalf("approve: %+v err=%v", result, err)
 	}
@@ -77,7 +79,7 @@ func TestArtifactDownloadKeepsTheConvergenceGate(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, _, subID := selectionFixture(t, s, now)
-	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
+	result, err := s.ApproveSubscriptionSelection(context.Background(), subID, "", store.SelectionSpec{LineIDs: []string{lineID}}, &selectionVerifier{}, now)
 	if err != nil || !result.Saved {
 		t.Fatalf("approve: %+v err=%v", result, err)
 	}
