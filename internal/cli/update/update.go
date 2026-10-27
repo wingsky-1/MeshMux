@@ -431,11 +431,11 @@ func ValidateTarget(m upgrade.Manifest, target string) (upgrade.Component, error
 
 // trustedSource restores the source-class rule the running-build table check
 // used to provide: a release comes from a GitHub release URL, a dev build from
-// a local or intranet source, and both must be a dev- build exactly when Dev is
-// set. A digest alone never makes an arbitrary URL executable.
+// a local source, and both must be a dev build exactly when Dev is set. A digest
+// alone never makes an arbitrary URL executable.
 func trustedSource(c upgrade.Component) bool {
 	if c.Dev {
-		return strings.HasPrefix(c.Version, "dev-") &&
+		return versions.IsDevVersion(c.Version) &&
 			(strings.HasPrefix(c.Source, "file://") || strings.HasPrefix(c.Source, "https://"))
 	}
 	return strings.HasPrefix(c.Source, "https://github.com/")

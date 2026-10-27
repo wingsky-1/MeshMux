@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
@@ -14,7 +15,8 @@ import (
 // TestForArchPinsEveryComponent pins the #11a manifest contract: one MeshMux
 // version, the five fixed components with source/architecture/SHA-256, and the
 // policy schema of this binary. meshmuxd is the pre-release dev build, so its
-// pin is a dev- version with a file:// source rather than a GitHub release.
+// pin is a dev pre-release version with a file:// source rather than a GitHub
+// release.
 func TestForArchPinsEveryComponent(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {
 		m, err := ForArch(arch)
@@ -25,7 +27,7 @@ func TestForArchPinsEveryComponent(t *testing.T) {
 			t.Fatalf("%s: header = %+v", arch, m)
 		}
 		want := map[string]string{"caddy": "2.11.7", "headscale": meshnet.HeadscaleVersion,
-			"sing-box": node.KernelVersion, "mihomo": node.MihomoVersion, "meshmuxd": "dev-20261023"}
+			"sing-box": node.KernelVersion, "mihomo": node.MihomoVersion, "meshmuxd": buildinfo.Version}
 		if len(m.Components) != len(want) {
 			t.Fatalf("%s: components = %+v", arch, m.Components)
 		}
@@ -34,7 +36,7 @@ func TestForArchPinsEveryComponent(t *testing.T) {
 				t.Fatalf("%s: unpinned component %+v", arch, c)
 			}
 			if c.Dev {
-				if !strings.HasPrefix(c.Version, "dev-") || !strings.HasPrefix(c.Source, "file://") {
+				if !versions.IsDevVersion(c.Version) || !strings.HasPrefix(c.Source, "file://") {
 					t.Fatalf("%s: unpinned dev component %+v", arch, c)
 				}
 				continue
@@ -135,8 +137,9 @@ func TestManifestRequiresMeshmuxd(t *testing.T) {
 }
 
 // TestManifestAcceptsDevFileSource pins the pre-release dev build rule: a Dev
-// component carries a dev- version and a file:// source but still a SHA-256.
-// The same component without Dev is a release claim and must be refused.
+// component carries a dev pre-release version and a file:// source but still a
+// SHA-256. The same component without Dev is a release claim and must be
+// refused.
 func TestManifestAcceptsDevFileSource(t *testing.T) {
 	m, err := ForArch("amd64")
 	if err != nil {
@@ -152,7 +155,7 @@ func TestManifestAcceptsDevFileSource(t *testing.T) {
 		t.Fatal("manifest has no meshmuxd component")
 	}
 	dev := m.Components[index]
-	if !dev.Dev || !strings.HasPrefix(dev.Version, "dev-") ||
+	if !dev.Dev || !versions.IsDevVersion(dev.Version) ||
 		!strings.HasPrefix(dev.Source, "file://") || !digestSHA.MatchString(dev.SHA256) {
 		t.Fatalf("meshmuxd dev pin = %+v", dev)
 	}
@@ -287,7 +290,7 @@ func TestManifestSetValidateRejectsTampering(t *testing.T) {
 func TestVersionSingleSource(t *testing.T) {
 	original := buildinfo.Version
 	t.Cleanup(func() { buildinfo.Version = original })
-	for _, version := range []string{"1.0.0", "1.4.2", "2.0.0-rc.1"} {
+	for _, version := range []string{"1.0.0-dev.0", "1.0.0-dev.20261027", "1.4.2-dev.7"} {
 		buildinfo.Version = version
 		if got := node.CurrentAgentVersion(); got != version {
 			t.Fatalf("node.CurrentAgentVersion() = %q, want %q", got, version)
@@ -315,6 +318,14 @@ func TestVersionSingleSource(t *testing.T) {
 		if !bytes.Contains(body, []byte(`"version":"`+version+`"`)) {
 			t.Fatalf("canonical manifest does not carry the injected version: %s", body)
 		}
+	}
+	// A release build has no dev drop to pin and no published asset table until
+	// 12e lands, so it serves no executor manifest rather than naming an
+	// unverified artifact. The refusal is the honest 12e boundary, not a gap in
+	// the single-source rule.
+	buildinfo.Version = "1.0.0"
+	if _, err := ForArch("amd64"); err == nil || !strings.Contains(err.Error(), "MANIFEST_ARCH_INVALID") {
+		t.Fatalf("release build served an executor manifest: %v", err)
 	}
 	buildinfo.Version = original
 	if got := node.CurrentAgentVersion(); got != original {

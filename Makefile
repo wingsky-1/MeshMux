@@ -31,13 +31,35 @@ DUPL_VERSION ?= v1.1.0
 DUPL_THRESHOLD ?= 100
 DUPL = $(GO) run github.com/mibk/dupl@$(DUPL_VERSION)
 
+# Development artifacts (#12e dev lane).
+#
+# A dev build pins the bytes it actually produced: the executor artifact drop
+# plus a sha256sum document that names it. Nothing here is a release and nothing
+# here may be published as one; the artifacts only make the Hub self-upgrade
+# chain testable end to end on an isolated host.
+#
+#   DEV_VERSION   SemVer pre-release of this build. The default is
+#                 1.0.0-dev.<UTC date>.<git commit count>; override it only to
+#                 reproduce an older build.
+#   DEV_ARCHES    the fixed architecture matrix, from internal/cli/versions.
+#   DEV_OUT_DIR   where the artifacts land before they are deployed.
+DEV_ARCHES ?= amd64 arm64
+DEV_OUT_DIR ?= dist/dev
+DEV_VERSION ?= 1.0.0-dev.$(shell date -u +%Y%m%d).$(shell git rev-list --count HEAD)
+
+# Reproducibility: -trimpath and -buildvcs=false keep the artifact bytes a
+# function of the source tree, so the same commit and version yield the same
+# digest. The version is injected exactly as a release build injects it.
+DEV_BUILD_FLAGS = -trimpath -buildvcs=false
+DEV_LDFLAGS = -X github.com/wingsky-1/MeshMux/internal/cli/buildinfo.Version=$(DEV_VERSION)
+
 .DEFAULT_GOAL := verify
 
 # Never run targets in parallel: test/race share the module cache and the
 # build outputs, and parallel runs would interleave their logs.
 .NOTPARALLEL:
 
-.PHONY: verify fmt vet staticcheck dupl test race build
+.PHONY: verify fmt vet staticcheck dupl test race build dev-artifacts dev-checksums clean-dev-artifacts
 
 verify: fmt vet staticcheck dupl test race build
 
@@ -72,3 +94,33 @@ race:
 build:
 	$(GO) build -o $(BUILD_DIR)/meshmux ./cmd/meshmux
 	$(GO) build -o $(BUILD_DIR)/meshmux-web ./cmd/meshmux-web
+
+# dev-artifacts builds the executor artifact of every supported architecture and
+# writes the sha256sum document the dev pin reads. It refuses to run without a
+# dev version: a release build must come from the 12e release pipeline, not from
+# a developer's machine.
+dev-artifacts:
+	@case "$(DEV_VERSION)" in \
+	  *-dev.*) ;; \
+	  *) echo "DEV_VERSION=$(DEV_VERSION) is not a dev pre-release (want X.Y.Z-dev.N)"; exit 1 ;; \
+	esac
+	@mkdir -p $(DEV_OUT_DIR)
+	@for arch in $(DEV_ARCHES); do \
+	  echo "building $(DEV_VERSION) for linux/$$arch"; \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build $(DEV_BUILD_FLAGS) \
+	    -ldflags "$(DEV_LDFLAGS)" -o $(DEV_OUT_DIR)/meshmuxd-linux-$$arch ./cmd/meshmux || exit 1; \
+	done
+	@cd $(DEV_OUT_DIR) && sha256sum $(addprefix meshmuxd-linux-,$(DEV_ARCHES)) > SHA256SUMS
+	@echo "dev artifacts in $(DEV_OUT_DIR):"
+	@cat $(DEV_OUT_DIR)/SHA256SUMS
+	@echo "deploy with: sudo scripts/dev-artifacts-deploy.sh $(DEV_OUT_DIR)"
+
+# dev-checksums re-derives the digest document from artifacts already in
+# DEV_OUT_DIR. It is the same command the build ran, kept separate so an
+# operator can re-verify a copied directory without rebuilding.
+dev-checksums:
+	@cd $(DEV_OUT_DIR) && sha256sum $(addprefix meshmuxd-linux-,$(DEV_ARCHES)) > SHA256SUMS
+	@cat $(DEV_OUT_DIR)/SHA256SUMS
+
+clean-dev-artifacts:
+	rm -rf $(DEV_OUT_DIR)
