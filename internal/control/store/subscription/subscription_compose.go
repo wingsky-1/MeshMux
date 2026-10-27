@@ -102,8 +102,8 @@ type SubscriptionDraft struct {
 //
 // Flow: Normalize (shape, dedupe) -> one read transaction -> subscriber identity
 // (new identity for the create form, stored record for an existing one) ->
-// reference validation -> same-Line Out agreement -> credential material ->
-// composer inputs -> snapshot model. Nothing is INSERTed, UPDATEd or DELETEd.
+// reference validation -> credential material -> composer inputs -> snapshot
+// model. Nothing is INSERTed, UPDATEd or DELETEd.
 func (s *Store) DraftSubscriptionSelection(subscriberID, displayName string, spec SelectionSpec) (SubscriptionDraft, error) {
 	spec, err := spec.Normalize()
 	if err != nil {
@@ -172,12 +172,6 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 		if err := validateSelectionDeviceTx(tx, deviceID); err != nil {
 			return SubscriptionDraft{}, err
 		}
-	}
-	// The same-Line Out rule applies to a create as well: the new subscriber is
-	// not persisted yet, so every existing row on these Lines is a potential
-	// conflict and must already agree with the submitted Out choice.
-	if err := enforceSameLineOutTx(tx, draft.Subscriber.ID, spec.LineIDs, spec.OutID); err != nil {
-		return SubscriptionDraft{}, err
 	}
 
 	// The credentials are minted now and written unchanged after the gate, so
@@ -353,10 +347,9 @@ func (s *Store) SaveSubscriptionDraft(draft SubscriptionDraft, artifactID string
 	if err = tx.Commit(); err != nil {
 		return "", errors.New(common.CodeDatabaseUnavailable)
 	}
-	// The save ends here on purpose (Ruling R10): a subscription selection is not an
-	// ACL input, so it must not republish any Out. The Line's own publication is
-	// driven by the caller's PrepareSubscriberSync, and the Out allowlist follows
-	// node lifecycle events only.
+	// The save ends here on purpose: a subscription selection changes no Out, so it
+	// must not republish one. The Line's own publication is driven by the caller's
+	// PrepareSubscriberSync, and an Out follows its own lifecycle events only.
 	return bearer, nil
 }
 

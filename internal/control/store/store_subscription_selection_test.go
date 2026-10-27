@@ -234,36 +234,33 @@ func TestSaveSubscriptionSelectionKeepsCredentialPerLine(t *testing.T) {
 	}
 }
 
-func TestSaveSubscriptionSelectionRefusesSecondOutAndOutConflict(t *testing.T) {
+func TestSaveSubscriptionSelectionKeepsOneOutSlotPerSubscriber(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
 
-	// 1.0 single Out: the table constraint enforces position=0 and one row.
+	// 1.0 single Out: the table constraint enforces position=0 and one row per
+	// subscriber.
 	if _, err := s.DB.Exec(`INSERT INTO subscription_outs(subscriber_id, out_id, position, out_revision, created_at) VALUES(?,?,1,0,0)`, subID, outID); err == nil {
 		t.Fatal("a second Out row was accepted")
 	}
 
-	// The first subscription records the Line's Out choice.
+	// One subscription records its Out choice.
 	if _, err := s.SaveSubscriptionSelection(subID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now); err != nil {
 		t.Fatalf("first Out selection: %v", err)
 	}
-	// A later subscription on the same Line cannot silently keep the Line
-	// direct: the Line publishes one route, so the choices must agree.
+	// A second subscription on the same Line may choose a different egress: the
+	// Out is part of its own client document, so there is no server-side route
+	// for the two to disagree about.
 	second, _, err := s.CreateSubscriber("bob", []string{lineID}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.SaveSubscriptionSelection(second.ID, store.SelectionSpec{LineIDs: []string{lineID}}, now)
-	if err == nil || !strings.HasPrefix(err.Error(), store.CodeOutSelectionConflict) {
-		t.Fatalf("conflicting Out selection = %v, want %s", err, store.CodeOutSelectionConflict)
+	if _, err := s.SaveSubscriptionSelection(second.ID, store.SelectionSpec{LineIDs: []string{lineID}}, now); err != nil {
+		t.Fatalf("a direct selection next to an Out selection: %v", err)
 	}
-	if !strings.Contains(err.Error(), "alice") {
-		t.Fatalf("conflict does not name the existing subscription: %v", err)
-	}
-	// Selecting the same Out is accepted.
 	if _, err := s.SaveSubscriptionSelection(second.ID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now); err != nil {
-		t.Fatalf("matching Out selection: %v", err)
+		t.Fatalf("re-selecting the same Out: %v", err)
 	}
 }
 

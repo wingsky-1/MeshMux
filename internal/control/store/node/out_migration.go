@@ -12,15 +12,14 @@ package node
 //	          can actually be deleted (Ruling R9).
 //
 // Both legs run inside the single Migrate transaction, so a database that starts
-// at 4 never observes a state in which the binding table is the only
-// authorization source: the version that drops the table is the version whose code
-// derives the allowlist without it. That is what makes the switch atomic instead of a
-// two-release migration with an authorization window.
+// at 4 never observes a state in which the binding table is the only relation
+// between a Line and an Out. That is what makes the switch atomic instead of a
+// two-release migration with a half-written window.
 //
 // The drop is irreversible by design and is declared as such for the 11d gate. No
-// operator-entered data is lost: the binding row only ever mirrored a relation the Hub
-// now owns outright, and the authorization is node membership (Ruling R10) — every
-// enrolled Line is accepted by every enrolled Out, with no per-relation record needed.
+// operator-entered data is lost: the binding row only ever mirrored a relation the
+// Hub no longer needs — an Out admits clients by its link key, so no per-relation
+// record decides admission.
 
 import (
 	"database/sql"
@@ -54,15 +53,15 @@ PRAGMA user_version=5;
 // migrateSchema14 drops the Out binding table and its index.
 //
 // It is the only destructive migration of the aggregation rebuild and it is
-// irreversible: from this version on the authorization is node membership (Ruling R10),
-// which needs no table at all. Dropping the table together with the code that read it is
+// irreversible: from this version on an Out admits by link key, which needs no
+// relation table at all. Dropping the table together with the code that read it is
 // what makes the switch atomic — an older binary refuses the newer file
 // (SCHEMA_TOO_NEW) instead of reading a table that no longer exists, and a newer binary
 // never looks at a table it does not read.
 //
 // The DDL is idempotent so a replay (a fixture that starts from a pre-14 file whose
 // table was already dropped by hand) cannot fail on its own earlier write.
-// MigrateSchema14 drops the Out binding table: membership is the authorization.
+// MigrateSchema14 drops the Out binding table; admission is the link key.
 func MigrateSchema14(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 DROP INDEX IF EXISTS out_bindings_line;

@@ -12,8 +12,9 @@ import (
 )
 
 // Out transport: the operator-entered dial address of one Out node plus the
-// Hub-issued SS link key the Line presents when it egresses through that Out
-// (Ruling R7: the double-hop is Shadowsocks, never bare VLESS).
+// Hub-issued SS link key that Out admits clients with (Ruling R7: the hop is
+// Shadowsocks, never bare VLESS). The key is the only admission: there is no
+// source allowlist.
 //
 // The table is created idempotently without a user_version bump: the
 // subscription-aggregation schema numbers (12/13/14) are reserved for Task
@@ -115,14 +116,13 @@ type OutTransport struct {
 // external HTTP proxy (Ruling R11). It carries the node identity, its dial
 // parameters when configured, and the Lines a subscription selects it for. It
 // is the selection datasource the wizard consumes; it carries no credential,
-// no link key, no proxy password and no allowlist.
+// no link key and no proxy password.
 //
 // LineIDs is plural because one egress may be selected by several subscriptions
 // serving different Lines, and the pool has to show all of them. Enabled is true
 // when at least one active subscription serves at least one Line through this
-// egress; it is a wizard/UI signal only — it does NOT authorize anything. The
-// source authorization is node membership (Ruling R10): every enrolled Line is
-// accepted by every enrolled Out regardless of any selection.
+// egress; it is a wizard/UI signal only — it authorizes nothing. An Out admits
+// any client that presents the link key its own candidate publishes.
 type OutPoolEntry struct {
 	OutID               string   `json:"out_id"`
 	DisplayName         string   `json:"display_name"`
@@ -218,21 +218,18 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 	if err = tx.Commit(); err != nil {
 		return OutTransport{}, errors.New(common.CodeDatabaseUnavailable)
 	}
-	// A changed dial address invalidates every Line candidate that renders
-	// this Out: each bound Line republishes with the new endpoint. The drains
-	// own their own transactions and never fail the mutation.
-	if lines, err := s.lineIDsForOut(outID); err == nil {
-		for _, lineID := range lines {
-			s.Subscribers.DrainNode(lineID, now)
-		}
-	}
+	// A changed dial address changes the Out's own candidate (its link-key
+	// listener document): republish it. Lines embed nothing of the Out, so no
+	// Line has to converge. The drain owns its own transaction and never fails
+	// the mutation.
+	s.drainOutNode(outID, now)
 	return OutTransport{OutID: outID, Server: server, Port: port, UpdatedAt: stamp}, nil
 }
 
 // outEgressTx is the single derivation of one Out's dial body for candidate
 // rendering: the configured server/port plus the Hub-issued link key. The
-// boolean is false when the Out has no transport yet; callers render the
-// fail-closed block stub in that case instead of inventing an endpoint.
+// boolean is false when the Out has no transport yet; callers render the frozen
+// baseline in that case instead of inventing an endpoint.
 func outEgressTx(tx *sql.Tx, outID string) (coredomain.OutEgress, bool, error) {
 	var egress coredomain.OutEgress
 	err := tx.QueryRow(`SELECT server, port, link_key FROM out_settings WHERE node_id=?`, outID).
@@ -250,17 +247,14 @@ func outEgressTx(tx *sql.Tx, outID string) (coredomain.OutEgress, bool, error) {
 }
 
 // OutPool lists every enrolled Out node with its dial address and the Lines a
-// subscription selects it for, at one clock. It never returns a key: the link key
-// stays in the private table and only enters the paired Line candidates and the
-// Out's own v4 document.
+// subscription selects it for, at one clock. It never returns a key: the link
+// key stays in the private table and only enters the Out's own v4 document and
+// the subscription document composed for a client.
 //
-// The selection is a projection of the subscription edges: which Out the wizard may
-// offer, and which Lines currently route through it. The ACL is NOT read from here —
-// under Ruling R10 it is node membership (every enrolled Line is accepted by every
-// enrolled Out), so the two are independent by construction rather than by sharing a
-// query. Consequence a reader must not get wrong: a subscriber that is not active still
-// contributes no Line to this projection, but the Lines it serves remain authorized at
-// every Out (pausing a subscription never narrows an allowlist).
+// The selection is a projection of the subscription edges: which Out the wizard
+// may offer, and which Lines currently route through it. Nothing here authorizes
+// anything — an Out admits by link key — so a paused subscription simply stops
+// contributing Lines to this projection.
 func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
 	rows, err := s.DB.Query(`
 SELECT n.id, n.role, n.display_name, n.vless_port, n.status, n.last_heartbeat,

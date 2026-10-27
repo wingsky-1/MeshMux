@@ -19,7 +19,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
-func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
+func TestPreviewSelectionImpactWritesNothingAndNamesAffectedSubscribers(t *testing.T) {
 	s := selectionStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	lineID, outID, subID := selectionFixture(t, s, now)
@@ -33,29 +33,19 @@ func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
 	edgesBefore := countRows(t, s, "subscription_lines")
 	snapshotsBefore := countRows(t, s, "subscription_snapshots")
 
-	// A conflicting Out choice is exactly the save's refusal, reported before
-	// anything is written.
+	// A different Out choice on the same Line is not a conflict: the egress is
+	// part of the subscriber's own client document. The preview reports the
+	// other subscription because the shared Line is republished, and nothing
+	// blocks.
 	impact, err := s.PreviewSelectionImpact(second.ID, store.SelectionSpec{LineIDs: []string{lineID}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !impact.Blocking() || impact.Code() != store.CodeOutSelectionConflict {
-		t.Fatalf("impact = %+v, want a blocking %s", impact, store.CodeOutSelectionConflict)
+	if impact.Blocking() {
+		t.Fatalf("impact = %+v, want no blocking finding", impact)
 	}
 	if len(impact.AffectedSubscribers) != 1 || impact.AffectedSubscribers[0] != "alice" {
 		t.Fatalf("affected = %v, want [alice]", impact.AffectedSubscribers)
-	}
-
-	// The agreeing choice is a reminder about the shared Line, not a refusal.
-	agreeing, err := s.PreviewSelectionImpact(second.ID, store.SelectionSpec{LineIDs: []string{lineID}, OutID: outID}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agreeing.Blocking() {
-		t.Fatalf("agreeing impact = %+v, want no blocking finding", agreeing)
-	}
-	if len(agreeing.AffectedSubscribers) != 1 || agreeing.AffectedSubscribers[0] != "alice" {
-		t.Fatalf("agreeing affected = %v, want [alice]", agreeing.AffectedSubscribers)
 	}
 
 	if countRows(t, s, "subscription_lines") != edgesBefore || countRows(t, s, "subscription_snapshots") != snapshotsBefore {

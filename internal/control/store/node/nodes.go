@@ -310,19 +310,20 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 		if _, err = tx.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID); err != nil {
 			return "", errors.New(common.CodeDatabaseUnavailable)
 		}
-		if err = candidatepkg.SeedInitialTasksTx(tx, nodeID, now, OutAuthorizationTx); err != nil {
+		if err = candidatepkg.SeedInitialTasksTx(tx, nodeID, now); err != nil {
 			return "", err
 		}
 		if err = tx.Commit(); err != nil {
 			return "", errors.New(common.CodeDatabaseUnavailable)
 		}
-		// Enrollment is the ACL event (Ruling R10): this node just became a member.
-		// A Line joining a Hub is added to every Out's allowlist, and an Out joining
-		// is given every Line that already exists. Both directions are the same
-		// reconciliation because the derivation is the membership set.
+		// Pairing reconciles the Out pool after the commit: an Out that just
+		// enrolled or rotated its identity republishes its own link-key chain.
+		// A Line never changes what any Out publishes, so this is a bounded
+		// no-op for a Line.
 		//
-		// It runs after the commit and never fails the pairing: the issued identity is
-		// durable, and the next Out event completes a deferred publication.
+		// It runs after the commit and never fails the pairing: the issued
+		// identity is durable, and the next Out event completes a deferred
+		// publication.
 		s.RepublishOutAuthorizations(now)
 		return token, nil
 	}
@@ -370,11 +371,10 @@ func (s *Store) Heartbeat(nodeID, agentVersion, kernelVersion string, now time.T
 	if n, _ := res.RowsAffected(); n != 1 {
 		return common.ErrNodeNotFound
 	}
-	// A reconnecting Line picks up the persisted subscriber intent even if
-	// the Hub crashed before the tasks of a change were enqueued. The
-	// coordination is bidirectional: the Line event also lets every Out that
-	// serves it authorize the Line, and an Out event republishes its allowlist
-	// before the Lines it serves are drained.
+	// A reconnecting Line picks up the persisted subscriber intent even if the
+	// Hub crashed before the tasks of a change were enqueued. An Out event
+	// republishes that Out's own link-key chain; a Line event republishes the
+	// Line. Neither waits for the other.
 	s.drainNodeCoordination(nodeID, now)
 	return nil
 }
@@ -423,11 +423,9 @@ func (s *Store) ReissuePairing(nodeID string, now time.Time) (string, error) {
 		return "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	// A reissued identity is deliberately not a retirement: the Line is coming
-	// back, and the derivation already excludes a non-current identity from
-	// every allowlist on its own. Forcing a reclaim here would republish an
-	// empty allowlist on every re-pair and interrupt a Line that is only
-	// rotating its credential. Once the Line re-pairs, its own heartbeat or
-	// poll restores the authorization at the Out (drainOutsForLine).
+	// back, and no Out authorization depends on it any more. Once the Line
+	// re-pairs, its own heartbeat or poll republishes its snapshot
+	// (DrainOutsForLine is a bounded no-op for a Line event).
 	return code, nil
 }
 
@@ -466,15 +464,13 @@ func (s *Store) RevokeIdentity(nodeID string, now time.Time) error {
 	if err = tx.Commit(); err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
-	// Revoking an identity removes a member from the ACL (Ruling R10): the Hub can no
-	// longer vouch for the Line's source address, so every Out has to republish the
-	// remaining membership. Revoking an Out has no ACL consequence of its own — it is
-	// the receiving side — but the pool is reconciled either way, so a revoked Out
-	// also stops being a candidate egress for the publish gate.
+	// A revoked identity changes only that node's own publication. An Out
+	// republishes its link-key chain when it can no longer be reached; a Line
+	// republishes its listener and user set. No source authorization is derived
+	// any more, so no allowlist has to converge.
 	//
-	// A failure here does not undo the revocation (which is already recorded and is
-	// itself the security boundary): the derivation excludes a revoked Line from every
-	// allowlist, so the state stays honest and the next Out or Line event retries the
+	// A failure here does not undo the revocation (which is already recorded and
+	// is itself the security boundary): the next Out or Line event retries the
 	// republish.
 	s.RepublishOutAuthorizations(now)
 	return nil
@@ -525,18 +521,10 @@ func (s *Store) ReconcileNode(nodeID string, now time.Time) (candidatepkg.Stored
 	if candidate.Role != coredomain.Role(role) || candidate.VLESSPort != vless {
 		return candidatepkg.Stored{}, nil, errors.New("CANDIDATE_MISMATCH: candidate does not match the node")
 	}
-	// An Out candidate always carries its source authorization, including the
-	// explicit empty one; an Edge candidate never does.
-	var tasks []protocol.Task
-	if candidate.Role == coredomain.RoleOut {
-		allowed, authErr := OutAuthorizationTx(tx, nodeID)
-		if authErr != nil {
-			return candidatepkg.Stored{}, nil, authErr
-		}
-		tasks, err = candidatepkg.PublishOutTx(tx, nodeID, candidate, now, allowed)
-	} else {
-		tasks, err = candidatepkg.PublishTx(tx, nodeID, candidate, now)
-	}
+	// One publication path for every role: the task envelope carries the
+	// revision only, and an Out's admission lives in the link key its own
+	// candidate carries.
+	tasks, err := candidatepkg.PublishTx(tx, nodeID, candidate, now)
 	if err != nil {
 		return candidatepkg.Stored{}, nil, err
 	}
@@ -690,10 +678,9 @@ func (s *Store) ReportResultAudited(nodeID string, res protocol.TaskResult, now 
 	}
 	// A finished chain may make the persisted subscriber intent publishable
 	// (removal of a deleted subscriber, follow-up after a changed snapshot).
-	// It is also the Out-side readback event: a confirmed Out allowlist
-	// releases the Lines it serves, and a confirmed Line egress is what lets
-	// the pair report healthy. The drain owns its transaction and never fails
-	// the recorded result.
+	// It is also the Out-side readback event: a confirmed Out revision is what
+	// lets that Out report healthy. The drain owns its transaction and never
+	// fails the recorded result.
 	s.drainNodeCoordination(nodeID, now)
 	return true, nil
 }
@@ -734,9 +721,10 @@ func validateReadbackTx(tx *sql.Tx, nodeID string, configRevision int64, readbac
 	if document.NodeID != nodeID || string(document.Role) != role || document.VLESSPort != vlessPort {
 		return errors.New("READBACK_ROLE_MISMATCH")
 	}
-	if document.Role == coredomain.RoleOut && !readback.OutDefaultDeny {
-		return errors.New("READBACK_ACL_NOT_ENFORCED")
-	}
+	// `observed_out_default_deny` is still recorded and reported, but it is no
+	// longer an admission gate: the `inet meshmux_out` table is retired, so an
+	// Out's reachability is proven by its link-key listener and readback, not by
+	// a source allowlist.
 	return nil
 }
 

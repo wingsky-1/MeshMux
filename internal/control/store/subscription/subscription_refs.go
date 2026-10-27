@@ -8,17 +8,15 @@ package subscription
 //	validateSelectionOutTx        -> OUT_NOT_FOUND / OUT_NOT_CONFIGURED / OUT_ROLE_INVALID
 //	validateRuleRevisionTx        -> RULE_NOT_FOUND
 //	validateSelectionDeviceTx     -> MESH_DEVICE_NOT_FOUND / MESH_DEVICE_STATUS_INVALID
-//	enforceSameLineOutTx          -> SUBSCRIPTION_OUT_CONFLICT
 //
-// The same-Line refusal is also offered as plain conflict data
-// (lineOutConflictsTx) so the impact preview can report it before anything is
-// written, without duplicating the query.
+// There is no same-Line Out agreement here: the client chains itself to the
+// Out its own subscription names, so two subscriptions on one Line may choose
+// different egresses without disagreeing about any server-side route.
 
 import (
 	"database/sql"
 	"errors"
 	"sort"
-	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
@@ -97,54 +95,6 @@ func validateSelectionDeviceTx(tx *sql.Tx, deviceID string) error {
 		return errors.New("MESH_DEVICE_STATUS_INVALID: the device is no longer selectable")
 	}
 	return nil
-}
-
-// enforceSameLineOutTx refuses a selection that disagrees with an existing
-// subscription on the same Line. The Line publishes one server route, so two
-// subscriptions cannot ask for different egresses; the refusal names the
-// conflicting subscriptions and the Line.
-func enforceSameLineOutTx(tx *sql.Tx, subscriberID string, lineIDs []string, outID string) error {
-	for _, nodeID := range lineIDs {
-		conflicts, err := lineOutConflictsTx(tx, subscriberID, nodeID, outID)
-		if err != nil {
-			return err
-		}
-		if len(conflicts) > 0 {
-			return errors.New(CodeOutSelectionConflict + ": line " + nodeID +
-				" is already served with another out choice by " + strings.Join(conflicts, "、") +
-				"; all subscriptions on one line must select the same out")
-		}
-	}
-	return nil
-}
-
-// lineOutConflictsTx names the other subscriptions that serve one Line with a
-// different Out choice (including "no Out"). The result is sorted and never
-// contains the caller's own subscriber.
-func lineOutConflictsTx(tx *sql.Tx, subscriberID, lineID, outID string) ([]string, error) {
-	rows, err := tx.Query(`SELECT DISTINCT s.display_name
-	  FROM subscription_lines l
-	  JOIN subscribers s ON s.id=l.subscriber_id
-	  LEFT JOIN subscription_outs o ON o.subscriber_id=l.subscriber_id
-	  WHERE l.node_id=? AND l.subscriber_id<>? AND COALESCE(o.out_id,'')<>?
-	  ORDER BY s.display_name, s.id`, lineID, subscriberID, outID)
-	if err != nil {
-		return nil, errors.New(common.CodeDatabaseUnavailable)
-	}
-	defer rows.Close()
-	conflicts := []string{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New(common.CodeDatabaseUnavailable)
-		}
-		conflicts = append(conflicts, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New(common.CodeDatabaseUnavailable)
-	}
-	sort.Strings(conflicts)
-	return conflicts, nil
 }
 
 // lineSubscribersTx names the other active subscriptions that reference any of

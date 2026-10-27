@@ -188,19 +188,16 @@ func (s *Store) CreateHTTPProxyNode(displayName, proxyURL string, now time.Time)
 	}, nil
 }
 
-// SetHTTPProxy replaces the dial body of one external HTTP proxy. It is the
-// exact twin of SetOutTransport (Ruling R11): the two egress forms are handled
-// the same way, so a proxy URL change converges the Lines that render it
-// instead of leaving a stale endpoint in their last candidate.
+// SetHTTPProxy replaces the dial body of one external HTTP proxy. The URL is
+// validated by the same parser that created the node, so a stored row can never
+// hold a shape the renderer refuses. Credentials are replaced together with the
+// URL: an operator who resubmits a credential-free URL removes the old Basic
+// auth instead of keeping a secret the UI no longer shows.
 //
-// The URL is validated by the same parser that created the node, so a stored
-// row can never hold a shape the renderer refuses. Credentials are replaced
-// together with the URL: an operator who resubmits a credential-free URL
-// removes the old Basic auth instead of keeping a secret the UI no longer
-// shows.
-//
-// The relayed drain happens after the commit and never fails the mutation: each
-// Line publication owns its own transaction, and the next event retries it.
+// No node candidate has to converge: a Line publishes its listener and user set
+// only, and the client document that carries this proxy endpoint is composed at
+// download time from the stored row. The update is therefore complete when the
+// transaction commits.
 func (s *Store) SetHTTPProxy(proxyID, proxyURL string, now time.Time) (HTTPProxy, error) {
 	proxyID = strings.TrimSpace(proxyID)
 	if !validNodeID(proxyID) {
@@ -241,15 +238,6 @@ func (s *Store) SetHTTPProxy(proxyID, proxyURL string, now time.Time) (HTTPProxy
 	if err = tx.Commit(); err != nil {
 		return HTTPProxy{}, errors.New(common.CodeDatabaseUnavailable)
 	}
-	// A changed dial body invalidates every Line candidate that renders this
-	// proxy: the exact post-commit drain SetOutTransport performs for a managed
-	// Out. No Out chain is involved (there is no Agent), so the Lines are the
-	// only state to converge.
-	if lines, err := s.lineIDsForOut(proxyID); err == nil {
-		for _, lineID := range lines {
-			s.Subscribers.DrainNode(lineID, now)
-		}
-	}
 	return HTTPProxy{ProxyID: proxyID, Server: egress.Server, Port: egress.Port, UpdatedAt: stamp}, nil
 }
 
@@ -288,27 +276,4 @@ func httpProxyTx(tx *sql.Tx, nodeID string) (coredomain.OutEgress, bool, error) 
 		return coredomain.OutEgress{}, false, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return egress, true, nil
-}
-
-// lineEgressBodyTx resolves one selected egress node into the candidate dial
-// body: an Out link key or an HTTP proxy credential. The boolean is false when
-// the egress has no configured endpoint; callers keep the fail-closed block
-// stub in that case.
-func lineEgressBodyTx(tx *sql.Tx, nodeID string) (coredomain.OutEgress, bool, error) {
-	var role string
-	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return coredomain.OutEgress{}, false, errors.New("EGRESS_NOT_FOUND: unknown egress node")
-	}
-	if err != nil {
-		return coredomain.OutEgress{}, false, errors.New(common.CodeDatabaseUnavailable)
-	}
-	switch coredomain.Role(role) {
-	case coredomain.RoleOut:
-		return outEgressTx(tx, nodeID)
-	case coredomain.RoleHTTP:
-		return httpProxyTx(tx, nodeID)
-	default:
-		return coredomain.OutEgress{}, false, nil
-	}
 }

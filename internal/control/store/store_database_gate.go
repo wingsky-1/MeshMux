@@ -64,9 +64,10 @@ const (
 	// DatabaseSchemaVersion is the storage schema this binary owns. Task 3 of
 	// the subscription aggregation rebuild adds version 12 (rule library +
 	// preset seeds), Task 4 adds version 13 (subscription edge tables +
-	// selection snapshot), Task 5 adds version 14 (drop out_bindings now that the
-	// Out authorization is node membership) and version 15 (narrow the candidate
-	// immutability trigger so a node can be deleted); Task 8 adds version 16
+	// selection snapshot), Task 5 adds version 14 (drop out_bindings; the
+	// retired source allowlist has no stored relation) and version 15 (narrow
+	// the candidate immutability trigger so a node can be deleted); Task 8 adds
+	// version 16
 	// (the external HTTP proxy node role and the private node_http_proxy table);
 	// Task 6 adds version 17 (strip the retired exceptions/ssids keys from
 	// stored route policy payloads). Version 11 stays reserved for 11d, whose

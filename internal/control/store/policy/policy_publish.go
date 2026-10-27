@@ -1,11 +1,19 @@
 package policy
 
-// Publication assembly for issue #10 (10d-2b). The pipeline has one order and
-// no shortcut:
+// Publication assembly.
 //
-//	active revision -> Validate -> ResolveServerPolicy (fail-closed Out)
-//	-> RuleSetPins.Validate -> RenderServerRoute / RenderSingBox / RenderMihomo
-//	-> kernel gate (sing-box check, mihomo -t) -> candidate publication
+// Under the client-chain model the Hub publishes proxy ports and credentials
+// only: a Line candidate carries its listener and user set, and every routing
+// rule lives in the client document a subscriber downloads. A publication
+// therefore validates the active intent and gates the client preview documents;
+// it never renders a server route and never writes a Line candidate.
+//
+//	active revision -> Validate -> RenderSingBox / RenderMihomo (preview)
+//	-> kernel gate (sing-box check, mihomo -t) -> receipt
+//
+// The fields `RouteFragment` and `Targets` stay on PolicyAssembly for wire
+// compatibility and are always empty: their producer (the server-route
+// delivery chain) is retired.
 //
 // Nothing here executes a shell: both kernels are reached through the fixed
 // verifier wrapper of common/publish_verifier.go, which runs one argv without a
@@ -16,13 +24,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
 	storenode "github.com/wingsky-1/MeshMux/internal/control/store/node"
 
-	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/clientdoc"
@@ -58,7 +64,9 @@ const (
 	PolicyEgressMixed = "mixed"
 )
 
-// PublishTarget is one Line the assembled server route is published to.
+// PublishTarget is retired with the server-route delivery chain. The type is
+// kept so a receipt or a caller that still names the shape compiles; no
+// publication produces one any more.
 type PublishTarget struct {
 	LineID     string
 	Candidate  node.Candidate
@@ -79,16 +87,16 @@ type PolicyAssembly struct {
 	// own state in Targets.
 	EgressState string
 	EgressCode  string
-	// RouteFragment is the shared route fragment when every target Line
-	// resolved to the same bytes; nil when the Lines rendered different routes
-	// (for example a Line fallback next to a healthy Out), because one field
-	// cannot honestly stand for several fragments.
+	// RouteFragment is retired: the server never renders or delivers a route, so
+	// the field is always nil.
 	RouteFragment []byte
 	// ClientDocument and MihomoDocument are the rendered preview documents of
 	// the client layer. They are gated as evidence and never stored: the
 	// client layer has no consumer in the standard subscription export.
-	ClientDocument       []byte
-	MihomoDocument       []byte
+	ClientDocument []byte
+	MihomoDocument []byte
+	// Targets is retired: a publication writes no Line candidate any more, so
+	// the slice is always empty.
 	Targets              []PublishTarget
 	ClientRevision       int64
 	ServerRevision       int64
@@ -215,13 +223,16 @@ func (s *Store) AssemblePolicyPublication(ctx context.Context, verifier common.P
 		assembly.RoutePolicyRevisions[string(PolicyLayerClient)] = revision
 	}
 	if publishServer {
-		fragment, revision, egress, code, targets, err := s.publishServerRoute(request.FallbackToLine, request.OperationID, now)
+		revision, egress, code, err := s.assembleServerLayer()
 		if err != nil {
 			return assembly, err
 		}
-		assembly.ServerRevision, assembly.RouteFragment = revision, fragment
+		// The server layer is a validated record only. No route fragment and no
+		// Line candidate are produced, so nothing routing-related reaches an
+		// Agent; the egress reported for the server side is direct by
+		// construction.
+		assembly.ServerRevision = revision
 		assembly.EgressState, assembly.EgressCode = egress, code
-		assembly.Targets = targets
 		assembly.RoutePolicyRevisions[string(PolicyLayerServer)] = revision
 	}
 	if assembly.ClientRevision == 0 && assembly.ServerRevision == 0 {
@@ -271,124 +282,27 @@ func (s *Store) publishClientDocuments() (int64, []byte, []byte, error) {
 	return record.Revision, singBox, mihomo, nil
 }
 
-// publishServerRoute resolves the active server revision per Line and renders
-// one route fragment per Line.
+// assembleServerLayer validates the active server revision and reports the
+// server-side egress state.
 //
-// The Out facts are read per Line: no enabled binding is a configured direct
-// egress, while an unhealthy bound Out fails closed unless the caller opted in.
-// The operation id reaches the resolver so an explicit fallback is auditable.
+// The server publishes proxy ports and credentials only (iron rule ①): no route
+// fragment is rendered, no Line candidate is written and no `out` selection is
+// resolved, so a policy revision can never deliver routing rules to an Agent.
+// From the server's own point of view every Line egresses directly — the client
+// chooses the hop in its own document.
 //
-// The returned egress state is the aggregate of every Line, never the first
-// one: Lines that do not agree read as "mixed" while each target keeps its own
-// state, and a fail-closed Line is never summarized away. The shared fragment
-// is returned only while every Line rendered the same bytes.
-func (s *Store) publishServerRoute(fallbackToLine bool, operationID string, now time.Time) ([]byte, int64, string, string, []PublishTarget, error) {
+// Validation is kept because a corrupt or hand-edited active payload must still
+// be refused with a stable code instead of being published as healthy intent.
+func (s *Store) assembleServerLayer() (int64, string, string, error) {
 	record, intent, err := s.ActivePolicyIntent(PolicyLayerServer)
 	if err != nil {
-		return nil, 0, "", "", nil, err
+		return 0, "", "", err
 	}
-	pins, err := DecodePins(record.Pins)
-	if err != nil {
-		return nil, record.Revision, "", "", nil, err
+	serverIntent := coredomain.ServerPolicy{Default: intent.Default, Rules: intent.Rules}
+	if err := serverIntent.Validate(); err != nil {
+		return record.Revision, "", "", err
 	}
-	lines, err := s.Nodes.ListLines()
-	if err != nil {
-		return nil, record.Revision, "", "", nil, err
-	}
-	lineIDs := make([]string, 0, len(lines))
-	for _, line := range lines {
-		lineIDs = append(lineIDs, line.NodeID)
-	}
-	sort.Strings(lineIDs)
-	if len(lineIDs) == 0 {
-		return nil, record.Revision, "", "", nil, errors.New(CodePublishNoLines + ": no line carries stored transport")
-	}
-	var fragment []byte
-	fragmentsMatch := true
-	states := make([]string, 0, len(lineIDs))
-	codes := make([]string, 0, len(lineIDs))
-	targets := make([]PublishTarget, 0, len(lineIDs))
-	for _, lineID := range lineIDs {
-		facts, err := s.Nodes.OutEgressFacts(lineID, now)
-		if err != nil {
-			return nil, record.Revision, "", "", nil, err
-		}
-		serverIntent := coredomain.ServerPolicy{
-			Default:        intent.Default,
-			Rules:          intent.Rules,
-			OutConfigured:  facts.Configured,
-			OutAvailable:   facts.Available,
-			FallbackToLine: fallbackToLine && facts.Configured && !facts.Available,
-			OperationID:    operationID,
-		}
-		state, code := policyEgressState(facts, serverIntent.FallbackToLine)
-		resolved, err := coredomain.ResolveServerPolicy(serverIntent)
-		if err != nil {
-			return nil, record.Revision, state, code, nil, err
-		}
-		if err := pins.Validate(resolved.Rules); err != nil {
-			return nil, record.Revision, state, code, nil, err
-		}
-		lineFragment, err := coredomain.RenderServerRoute(resolved, pins)
-		if err != nil {
-			return nil, record.Revision, state, code, nil, err
-		}
-		// Every Line keeps its own fragment: a fallback next to a healthy Out
-		// renders different bytes, so the shared field is only filled while all
-		// Lines still agree.
-		switch {
-		case fragment == nil:
-			fragment = lineFragment
-		case !bytes.Equal(fragment, lineFragment):
-			fragmentsMatch = false
-		}
-		states = append(states, state)
-		codes = append(codes, code)
-		target, err := s.PublishTarget(lineID, lineFragment, facts.Configured, state, code)
-		if err != nil {
-			return nil, record.Revision, state, code, nil, err
-		}
-		targets = append(targets, target)
-	}
-	if !fragmentsMatch {
-		// One field cannot stand for several fragments; the per-Line targets
-		// above are the publication's real artifact.
-		fragment = nil
-	}
-	egressState, egressCode := AggregatePolicyEgress(states, codes)
-	return fragment, record.Revision, egressState, egressCode, targets, nil
-}
-
-// PublishTarget builds the next candidate of one Line with the route embedded
-// and compiles it exactly the way the Agent compiles it, so the gate checks the
-// bytes the node would run.
-//
-// The candidate revision read here is advisory: the publication transaction
-// recomputes it under the write lock, so a concurrent subscriber change is
-// never overwritten.
-func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool, egressState, egressCode string) (PublishTarget, error) {
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return PublishTarget{}, errors.New(common.CodeDatabaseUnavailable)
-	}
-	defer tx.Rollback()
-	revision, err := storecandidate.NextCandidateRevisionTx(tx, lineID)
-	if err != nil {
-		return PublishTarget{}, err
-	}
-	candidate, err := storenode.BuildLineCandidateTx(tx, lineID, revision)
-	if err != nil {
-		return PublishTarget{}, err
-	}
-	candidate.Route = json.RawMessage(fragment)
-	config, err := node.CompileCandidateWithRoute(candidate, json.RawMessage(fragment), outConfigured)
-	if err != nil {
-		return PublishTarget{}, err
-	}
-	return PublishTarget{
-		LineID: lineID, Candidate: candidate, Config: config,
-		ConfigHash: coredomain.Hash(config), Egress: egressState, EgressCode: egressCode,
-	}, nil
+	return record.Revision, coredomain.AIEgressLine, "", nil
 }
 
 // gatePolicyAssembly runs the fixed kernel gates. A missing or unusable kernel
@@ -421,28 +335,6 @@ func (s *Store) gatePolicyAssembly(ctx context.Context, verifier common.PublishV
 	}
 	assembly.Checks = evidence
 	return nil
-}
-
-// policyEgressState maps the Out facts onto the documented states.
-//
-// An external HTTP proxy keeps the "out" state because the rendered route does
-// select the out egress, but it carries LINE_EGRESS_EXTERNAL_DECLARED: the
-// state is the operator's declaration, not a proof, and a receipt that shows
-// "out" with no code would read as a confirmed managed egress.
-func policyEgressState(facts storenode.OutEgressFacts, fallback bool) (string, string) {
-	if !facts.Configured {
-		return coredomain.AIEgressLine, ""
-	}
-	if facts.Available {
-		if facts.ExternalDeclared {
-			return coredomain.AIEgressOut, storenode.CodeLineEgressExternalDeclared
-		}
-		return coredomain.AIEgressOut, ""
-	}
-	if fallback {
-		return coredomain.AIEgressLineFallback, coredomain.CodeOutOfflineFailClosed
-	}
-	return PolicyEgressFailClosed, coredomain.CodeOutOfflineFailClosed
 }
 
 // AggregatePolicyEgress reduces the per-Line states of one publication to the

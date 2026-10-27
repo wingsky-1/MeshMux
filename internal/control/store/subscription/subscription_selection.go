@@ -42,9 +42,11 @@ import (
 
 // Stable selection refusals. Only the code (before ": ") is stable.
 const (
-	// CodeOutSelectionConflict: another subscription that already serves one
-	// of the selected Lines chose a different Out (including "no Out"). The
-	// Line publishes one route, so two subscriptions cannot disagree.
+	// CodeOutSelectionConflict is retired: the egress is part of each
+	// subscriber's own client document, so two subscriptions on one Line may
+	// choose different Outs. It stays declared because a stored diagnosis row,
+	// the frozen error-code vocabulary and an older page still name it; nothing
+	// produces it any more.
 	CodeOutSelectionConflict = "SUBSCRIPTION_OUT_CONFLICT"
 	// CodeOutReferenced: an Out is still selected by subscriptions.
 	CodeOutReferenced = "OUT_REFERENCED_BY_SUBSCRIPTIONS"
@@ -131,7 +133,7 @@ PRAGMA user_version=13;
 // Line), then the snapshot with an empty artifact digest.
 //
 // Flow: Normalize (shape) -> draft builder inside one transaction (references,
-// same-Line Out agreement, credentials) -> one write transaction. It is the
+// credentials) -> one write transaction. It is the
 // direct edge save; the wizard uses the explicit Draft/Preview/Approve/Save
 // steps instead, and both share the same builder and writer so they cannot
 // drift.

@@ -34,8 +34,6 @@
 //   - node needs the subscriber convergence view, the delete finalization, the
 //     selection used-by projections and the drain. It declares them as
 //     node.Subscribers and subscription satisfies the port.
-//   - candidate must not know how an Out source authorization is derived, so the
-//     caller that owns it passes the allowlist in.
 //
 // wire.go is the only place those two are joined, once, after the database
 // opens. boundary_test.go pins the import graph, so a package that reaches
@@ -60,8 +58,7 @@
 // flow is one order, and every step is a separate public function:
 //
 //	spec           SelectionSpec.Normalize — the input boundary
-//	refs           reference validation: existence, egress role whitelist,
-//	               same-Line Out agreement
+//	refs           reference validation: existence, egress role whitelist
 //	inputs         the one composer-input builder (draft and download share it)
 //	compose        draft -> preview -> approve -> save, snapshot read-back
 //	selection      persistence only: the edge tables, the snapshot row, used-by
@@ -71,18 +68,18 @@
 //
 // The invariants that must not regress: a preview or a blocked save writes
 // nothing at all; only an approved digest is stored, and the snapshot never
-// stores a rendered byte; the download re-composes and compares; same-Line
-// subscriptions must agree on the Out; the convergence gate runs before an
-// approved artifact is served.
+// stores a rendered byte; the download re-composes and compares; the
+// convergence gate runs before an approved artifact is served.
 //
-// # Out authorization (ADR-0008 §3, Ruling R10)
+// # Out egress (client chain)
 //
-// The Out allowlist is node membership — every Line that holds a current pairing
-// identity — never a stored binding and never a subscription. The node domain
-// owns the derivation, the publication/readback chain and the publish gate; the
-// delete path is total (Ruling R9). There is no second authorization source: a
-// subscription selects which egress a client document names, and creating,
-// editing, pausing or deleting one never republishes an Out.
+// The Out is an ordinary Shadowsocks endpoint that admits any client presenting
+// its link key: there is no source allowlist, no per-Line authorization and no
+// Line publish gate. A subscription selects which egress its own client document
+// names, so two subscriptions on one Line may choose different Outs. The node
+// domain owns the Out's own publication/readback chain; the delete path is total
+// (Ruling R9), and creating, editing, pausing or deleting a subscription never
+// republishes an Out.
 //
 // # Single source of shared literals
 //

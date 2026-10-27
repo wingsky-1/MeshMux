@@ -19,8 +19,8 @@ package subscription
 //     fields do not exist in this value type at all, and a JSON-facing caller
 //     is required to decode with DisallowUnknownFields before it gets here.
 //
-// Normalize performs no I/O: existence, role and same-Line agreement are
-// checked against the database in store_subscription_refs.go.
+// Normalize performs no I/O: existence and role are checked against the
+// database in subscription_refs.go.
 
 import (
 	"bytes"

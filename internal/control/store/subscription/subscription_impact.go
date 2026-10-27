@@ -9,9 +9,8 @@ package subscription
 // Flow:
 //
 //	SelectionSpec -> Normalize (shape) -> one read transaction:
-//	  same-Line Out conflicts (the save would be refused)
 //	  other active subscriptions on the selected Lines (their Line publication
-//	    changes, because a Line publishes one route for every subscriber)
+//	    changes, because a Line publishes one listener for every subscriber)
 //	  selected Out reachability (configured? managed Out or HTTP proxy?)
 //	  rule revisions and devices that no longer exist
 //	-> SelectionImpact (plain data, no write, no task, no audit row)
@@ -20,6 +19,10 @@ package subscription
 // would return; a warning is informational. Splitting "would this save be
 // refused" from "what else changes" is what lets the page show both before the
 // operator presses save.
+//
+// There is no same-Line Out conflict to report: the egress is part of the
+// client document the subscriber downloads, so two subscriptions on one Line
+// may name different Outs without contradicting each other.
 
 import (
 	"database/sql"
@@ -127,35 +130,14 @@ func buildImpactTx(tx *sql.Tx, subscriberID string, spec SelectionSpec) (Selecti
 		impact.Existing = len(stored.Lines) > 0 || stored.Out != nil || len(stored.Rules) > 0 || len(stored.Networks) > 0
 	}
 
-	// The same-Line Out agreement: the only finding that refuses the save.
-	conflicts := map[string]struct{}{}
-	for _, lineID := range spec.LineIDs {
-		names, err := lineOutConflictsTx(tx, subscriberID, lineID, spec.OutID)
-		if err != nil {
-			return SelectionImpact{}, err
-		}
-		for _, name := range names {
-			conflicts[name] = struct{}{}
-		}
-	}
-	if len(conflicts) > 0 {
-		names := sortedKeys(conflicts)
-		impact.Findings = append(impact.Findings, ImpactFinding{
-			Level: coredomain.DiagnosticBlocking, Code: CodeOutSelectionConflict,
-			Detail: "所选 Line 已被以下订阅以不同 Out 选择：",
-		})
-		impact.Findings[len(impact.Findings)-1].Detail += joinNames(names)
-		impact.AffectedSubscribers = names
-	}
-
 	// Who else publishes these Lines. This is a change, not a defect: a Line
-	// serves one route for every subscriber attached to it.
+	// serves one listener for every subscriber attached to it.
 	affected, err := lineSubscribersTx(tx, subscriberID, spec.LineIDs)
 	if err != nil {
 		return SelectionImpact{}, err
 	}
 	impact.AffectedSubscribers = mergeNames(impact.AffectedSubscribers, affected)
-	if len(impact.AffectedSubscribers) > 0 && len(conflicts) == 0 {
+	if len(impact.AffectedSubscribers) > 0 {
 		impact.Findings = append(impact.Findings, ImpactFinding{
 			Level: coredomain.DiagnosticReminder, Code: "SUBSCRIPTION_IMPACT_LINES",
 			Detail: "保存后将重新发布这些订阅所使用的 Line：" + joinNames(impact.AffectedSubscribers),
@@ -183,16 +165,6 @@ func buildImpactTx(tx *sql.Tx, subscriberID string, spec SelectionSpec) (Selecti
 		}
 	}
 	return impact, nil
-}
-
-// sortedKeys returns the sorted keys of one string set.
-func sortedKeys(set map[string]struct{}) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // mergeNames unions two name lists without duplicates, keeping sort order.

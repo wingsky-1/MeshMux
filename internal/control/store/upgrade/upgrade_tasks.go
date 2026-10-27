@@ -229,31 +229,18 @@ func (s *Store) ApproveUpgrade(nodeID string, manifest coredomain.Manifest, mani
 	if err != nil {
 		return ApprovedUpgrade{}, err
 	}
-	// An approval must not silently drop the route the live policy resolves for
-	// this node, and it must not resurrect one the policy no longer justifies:
-	// the route is re-derived from the active server revision and the current
-	// Out facts, exactly like a policy publication. An Out that was unbound,
-	// deleted or went offline therefore invalidates the old route instead of
-	// being republished by an upgrade, and a policy that selects it fails closed
-	// here with the policy package's own code.
-	serverRoute, err := s.Policies.LineServerRouteTx(tx, nodeID, now)
-	if err != nil {
-		return ApprovedUpgrade{}, err
-	}
-	candidate.Route = serverRoute
+	// A Line candidate carries its listener and user set only: the server
+	// publishes no route, no egress and no policy. An approval therefore
+	// republishes the same snapshot the subscriber path would, and the Agent
+	// never receives routing rules.
 	if err := MixedVersionGate(candidate, observed); err != nil {
 		return ApprovedUpgrade{}, err
 	}
 	var tasks []protocol.Task
-	if candidate.Role == node.RoleOut {
-		allowed, authErr := storenode.OutAuthorizationTx(tx, nodeID)
-		if authErr != nil {
-			return ApprovedUpgrade{}, authErr
-		}
-		tasks, err = storecandidate.PublishOutTx(tx, nodeID, candidate, now, allowed)
-	} else {
-		tasks, err = storecandidate.PublishTx(tx, nodeID, candidate, now)
-	}
+	// One publication path for every role: the task envelope carries the
+	// revision only, and a Line candidate no longer embeds a route or an
+	// egress.
+	tasks, err = storecandidate.PublishTx(tx, nodeID, candidate, now)
 	if err != nil {
 		return ApprovedUpgrade{}, err
 	}
