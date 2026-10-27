@@ -17,6 +17,11 @@ const (
 	// CodeManifestUnavailable means the target manifest cannot be fetched or
 	// authenticated on this host.
 	CodeManifestUnavailable = "MANIFEST_UNAVAILABLE"
+	// CodeDatabaseUnavailable means a store could not read or write its
+	// database, so the refusal is unavailability rather than an answer about
+	// the requested data. Both the core rule library and the control store
+	// emit it, so it lives here instead of in either layer.
+	CodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
 )
 
 // StableCodePattern is the frozen lexical shape of every operator-visible

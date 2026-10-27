@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 	_ "modernc.org/sqlite"
 )
 
@@ -184,18 +185,18 @@ func TestUsedByAndDeleteGuardShareOneSource(t *testing.T) {
 
 func TestUsedByFailClosedOnUnknownEdgeShape(t *testing.T) {
 	db := openPolicyTestDB(t)
-	s := New(db, &fakeUsage{err: errors.New("DATABASE_UNAVAILABLE")})
+	s := New(db, &fakeUsage{err: errors.New(versions.CodeDatabaseUnavailable)})
 	now := time.Now()
 	if _, err := s.CreateCustomRule("proxy-ai", "AI 走代理", ActionProxy, MatcherRuleSet, []string{"ai"}, now); err != nil {
 		t.Fatal(err)
 	}
 	// C1: an unreadable edge table (a partial migration, a broken reader) is
 	// doubt, never "nobody references this".
-	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
-		t.Fatalf("unreadable used-by = %v, want DATABASE_UNAVAILABLE", err)
+	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), versions.CodeDatabaseUnavailable) {
+		t.Fatalf("unreadable used-by = %v, want %s", err, versions.CodeDatabaseUnavailable)
 	}
-	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
-		t.Fatalf("unreadable delete = %v, want DATABASE_UNAVAILABLE", err)
+	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), versions.CodeDatabaseUnavailable) {
+		t.Fatalf("unreadable delete = %v, want %s", err, versions.CodeDatabaseUnavailable)
 	}
 	if _, err := s.GetRule("proxy-ai", 1); err != nil {
 		t.Fatalf("failed delete removed the row: %v", err)
@@ -210,11 +211,11 @@ func TestUsedByWithoutReaderFailsClosed(t *testing.T) {
 	}
 	// A missing used-by port cannot prove the revision is unused, so both the
 	// answer and the delete guard fail closed instead of guessing.
-	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
-		t.Fatalf("missing reader used-by = %v, want DATABASE_UNAVAILABLE", err)
+	if _, err := s.RuleUsedBy("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), versions.CodeDatabaseUnavailable) {
+		t.Fatalf("missing reader used-by = %v, want %s", err, versions.CodeDatabaseUnavailable)
 	}
-	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE") {
-		t.Fatalf("missing reader delete = %v, want DATABASE_UNAVAILABLE", err)
+	if err := s.DeleteRule("proxy-ai", 1); err == nil || !strings.HasPrefix(err.Error(), versions.CodeDatabaseUnavailable) {
+		t.Fatalf("missing reader delete = %v, want %s", err, versions.CodeDatabaseUnavailable)
 	}
 	if _, err := s.GetRule("proxy-ai", 1); err != nil {
 		t.Fatalf("failed delete removed the row: %v", err)

@@ -1,6 +1,10 @@
 package store
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
+)
 
 // Error-code handling on the web boundary.
 //
@@ -13,10 +17,10 @@ import "strings"
 // CodeDatabaseUnavailable marks an unusable database. It is the one store
 // failure the pages report separately from an ordinary refusal.
 //
-// Single source: every store file refers to this constant instead of spelling
-// the literal, so a page mapping or a test cannot drift from the value. The
-// literal appears exactly once in this package, here.
-const CodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
+// Single source: the literal lives in the versions leaf because the core rule
+// library and this package both emit it. This alias keeps the store-local name
+// without a second copy of the value.
+const CodeDatabaseUnavailable = versions.CodeDatabaseUnavailable
 
 // errorCodeOf returns the code segment of err: the text before the first colon,
 // or the whole message when there is none. A nil error has no code.

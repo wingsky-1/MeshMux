@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
 // SchemaDDL creates the rule library table. Rows are immutable by contract:
@@ -107,7 +109,7 @@ func scanRule(row interface{ Scan(...any) error }) (Rule, error) {
 		return Rule{}, errors.New(CodeNotFound + ": unknown rule revision")
 	}
 	if err != nil {
-		return Rule{}, errors.New("DATABASE_UNAVAILABLE")
+		return Rule{}, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	var values []string
 	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
@@ -145,7 +147,7 @@ func (s *Store) CreateCustomRule(stableKey, name string, action Action, kind Mat
 		if uniqueConflict(err) {
 			return Rule{}, errors.New(CodeConflict + ": stable_key " + r.StableKey + " already exists; revise it for a new version")
 		}
-		return Rule{}, errors.New("DATABASE_UNAVAILABLE")
+		return Rule{}, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	return s.GetRule(r.StableKey, 1)
 }
@@ -180,7 +182,7 @@ func (s *Store) ReviseCustomRule(stableKey, name string, action Action, kind Mat
 		if uniqueConflict(err) {
 			return Rule{}, errors.New(CodeConflict + ": rule " + key + " was revised concurrently")
 		}
-		return Rule{}, errors.New("DATABASE_UNAVAILABLE")
+		return Rule{}, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	return s.GetRule(key, latest.Version+1)
 }
@@ -220,7 +222,7 @@ func (s *Store) ListRules(origin string) ([]Rule, error) {
 	}
 	rows, err := s.db.Query(query+` ORDER BY stable_key, version DESC`, args...)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	var out []Rule
@@ -232,7 +234,7 @@ func (s *Store) ListRules(origin string) ([]Rule, error) {
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	if out == nil {
 		out = []Rule{}
@@ -247,7 +249,7 @@ func (s *Store) LatestRules() ([]Rule, error) {
 	  FROM policy_rules p WHERE p.version=(SELECT MAX(version) FROM policy_rules WHERE stable_key=p.stable_key)
 	  ORDER BY CASE p.origin WHEN 'preset' THEN 0 ELSE 1 END, p.stable_key`)
 	if err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []Rule{}
@@ -259,7 +261,7 @@ func (s *Store) LatestRules() ([]Rule, error) {
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -273,7 +275,7 @@ func (s *Store) LatestRules() ([]Rule, error) {
 func (s *Store) DeleteRule(stableKey string, version int) error {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(versions.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	r, err := getRule(tx, stableKey, version)
@@ -298,14 +300,14 @@ func (s *Store) DeleteRule(stableKey string, version int) error {
 	}
 	result, err := tx.Exec(`DELETE FROM policy_rules WHERE stable_key=? AND version=?`, stableKey, version)
 	if err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(versions.CodeDatabaseUnavailable)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil || affected != 1 {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(versions.CodeDatabaseUnavailable)
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New("DATABASE_UNAVAILABLE")
+		return errors.New(versions.CodeDatabaseUnavailable)
 	}
 	return nil
 }
@@ -324,7 +326,7 @@ func (s *Store) RuleUsedBy(stableKey string, version int) ([]RuleUsage, error) {
 // "nobody references this" (C1).
 func (s *Store) ruleUsedBy(q Querier, stableKey string, version int) ([]RuleUsage, error) {
 	if s.usage == nil {
-		return nil, errors.New("DATABASE_UNAVAILABLE")
+		return nil, errors.New(versions.CodeDatabaseUnavailable)
 	}
 	return s.usage.RuleUsedBy(q, stableKey, version)
 }
