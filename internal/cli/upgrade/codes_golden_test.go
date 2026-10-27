@@ -94,6 +94,7 @@ var goldenErrorCodeValues = []string{
 	// so the Web producer and the root executor name one value each; they are
 	// frozen here from this commit on.
 	"HUB_BACKUP_IDENTITY_MISSING",
+	"HUB_BACKUP_POINTER_FAILED",
 	"HUB_HANDOFF_BUSY",
 	"HUB_HANDOFF_INVALID_STATE",
 	"HUB_HANDOFF_REQUEST_INVALID",

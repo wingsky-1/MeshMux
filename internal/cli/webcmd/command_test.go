@@ -184,8 +184,8 @@ func TestRunSurfacesSchemaTooNewRecord(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(recordPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	// Existence is the whole check for the old binary, so even an unreadable
-	// future record must be named.
+	// A record this binary cannot verify is still named by path, so even an
+	// unreadable future record must not be hidden.
 	if err := os.WriteFile(recordPath, []byte(`{"schema":99}`), 0600); err != nil {
 		t.Fatal(err)
 	}

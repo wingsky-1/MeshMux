@@ -43,6 +43,16 @@ const (
 	// AgentUpgradeBackupsDir is the Node rollback store.
 	AgentUpgradeBackupsDir = AgentRoot + "/upgrade-backups"
 
+	// HubDataDir is the fixed Hub data directory (the Web service account's
+	// home). The installer and the Web must agree on it: the pre-migration
+	// database snapshot and its flat pointer live below it, and the installer's
+	// rollback note reads the same store.
+	HubDataDir = "/var/lib/meshmux"
+	// HubDatabaseBackupDir is the Hub database backup store below HubDataDir:
+	// one <op32hex>/{record.json,payload} generation per backup, plus the flat
+	// record.json pointer the downgraded binary names.
+	HubDatabaseBackupDir = "database-backup"
+
 	// RuntimeBinaryPath is the installed MeshMux runtime binary (Hub/Agent).
 	RuntimeBinaryPath = "/usr/local/libexec/meshmuxd"
 )

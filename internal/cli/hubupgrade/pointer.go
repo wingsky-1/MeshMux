@@ -4,13 +4,15 @@ package hubupgrade
 // record is committed, one byte-identical copy is published at
 // <data-dir>/database-backup/record.json.
 //
-// It exists for exactly one reader: the frozen `schemaTooNew` check of 11c-3
-// (internal/control/store/store_database_gate.go) does an existence-only Lstat of that
-// flat path, so an old binary must still be able to point an operator at a
-// verified backup record after the store moved to per-operation directories.
-// Nothing in 11d reads it: Read/Verify/Confirm/GC/restore/dispatcher/approve all
-// work on <op32hex>/record.json. A stale or missing pointer therefore loses a
-// diagnostic hint, never a rollback source.
+// It exists for exactly one reader: the database gate of 11c-3
+// (internal/control/store/store_database_gate.go) names the flat path, so a
+// binary that meets a database written by a newer release can point the operator
+// at a verified backup record after the store moved to per-operation directories.
+// The read half now lives in the record layer (backup.ReadFlatPointer), because
+// the installer needs the same chain and only that leaf package is importable by
+// both. Nothing in the Web upgrade handoff reads it: Read/Verify/Confirm/GC/
+// restore/dispatcher/approve all work on <op32hex>/record.json. A stale or
+// missing pointer therefore loses a diagnostic hint, never a rollback source.
 //
 // The copy is taken from the committed per-operation record bytes, not
 // re-encoded, so the two files cannot disagree about the record they name. The
@@ -27,7 +29,7 @@ import (
 )
 
 // PointerName is the flat pointer file inside DatabaseBackupDir. It is the path
-// the frozen schemaTooNew Lstat names and the only flat path 11d writes.
+// the database gate names and the only flat path 11d writes.
 const PointerName = backup.RecordName
 
 // Pointer failure codes. Both are non-fatal for the operation (the journal stays

@@ -25,9 +25,16 @@ package store
 // consumes the row.
 //
 // A database newer than this binary names the verified Hub database backup
-// record, never a table of the newer schema. The downgraded binary may not be
-// able to parse that record's schema, so its check is existence-only. The same
-// fixed record carries the Web irreversible-migration confirmation bit
+// record, never a table of the newer schema. The record schema (1) is frozen, so
+// the gate can read the record's from_version/db_schema and must use them: a
+// backup taken from another release is a different generation, and pointing an
+// operator at it as "the" restore source would mislead. The check therefore
+// resolves the flat pointer through the shared producer's reader, verifies the
+// per-operation generation and its copy, and only claims "restore this" when
+// from_version is this binary, with a database at or below this binary's schema.
+// A damaged or future record is still named by path (never silently hidden), but
+// without the claim that it is a matching restore source. The same fixed record
+// carries the Web irreversible-migration confirmation bit
 // (`irreversible_approved`) required before 11d applies a destructive step; the
 // bit lives on the record and no approval table is added.
 
@@ -171,14 +178,30 @@ func LastGoodDatabaseVersionFrom(db *sql.DB) (DatabaseVersion, bool, error) {
 	return out, true, nil
 }
 
-// schemaTooNew builds the refusal for a database written by a newer binary. The
-// record check is existence-only: this binary cannot know the newer record's
-// fields, and parsing them would be exactly the silent interpretation the gate
-// exists to prevent.
+// schemaTooNew builds the refusal for a database written by a newer binary.
+//
+// The guidance must name a backup that really exists, and it must not pretend
+// that any generation is the right one: the pre-migration snapshot records the
+// release that last opened the database and the schema it was at. Only a record
+// whose from_version is this binary (and whose schema this binary can open) is
+// offered as "restore this"; a newer or foreign generation is named for
+// diagnosis with its actual identities so the operator restores the matching
+// binary instead. A record this binary cannot parse is still named by path — a
+// future record schema must never be silently dropped — but never presented as
+// verified.
 func (s *Store) schemaTooNew(version int) error {
 	recordPath := filepath.Join(s.Dir, DatabaseBackupDirName, DatabaseBackupRecordName)
+	if pointer, err := backup.ReadFlatPointer(filepath.Join(s.Dir, DatabaseBackupDirName), os.Geteuid()); err == nil {
+		record := pointer.Record
+		if record.FromVersion == buildinfo.Version && record.DBSchema <= DatabaseSchemaVersion {
+			return fmt.Errorf("SCHEMA_TOO_NEW: database user_version %d is newer than this binary (%d); restore the verified database backup record %s (from_version %s, db_schema %d; copy %s) with this binary, and do not downgrade in place",
+				version, DatabaseSchemaVersion, recordPath, record.FromVersion, record.DBSchema, pointer.PayloadPath)
+		}
+		return fmt.Errorf("SCHEMA_TOO_NEW: database user_version %d is newer than this binary (%d); the newest database backup record %s names from_version %s and db_schema %d, which is not this binary (%s, db_schema %d); restore the binary that wrote this database or a backup taken from this binary, and do not downgrade in place",
+			version, DatabaseSchemaVersion, recordPath, record.FromVersion, record.DBSchema, buildinfo.Version, DatabaseSchemaVersion)
+	}
 	if info, err := os.Lstat(recordPath); err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() {
-		return fmt.Errorf("SCHEMA_TOO_NEW: database user_version %d is newer than this binary (%d); restore the verified database backup record %s (from_version and db_schema name the last good state); do not downgrade in place",
+		return fmt.Errorf("SCHEMA_TOO_NEW: database user_version %d is newer than this binary (%d); a database backup record exists at %s but this binary cannot verify its from_version/db_schema (damaged or future record); restore the binary that wrote this database, and do not downgrade in place",
 			version, DatabaseSchemaVersion, recordPath)
 	}
 	return fmt.Errorf("SCHEMA_TOO_NEW: database user_version %d is newer than this binary (%d); no verified database backup record exists at %s; restore a matching binary and database, do not downgrade in place",
@@ -388,4 +411,56 @@ func (s *Store) LiveDatabaseSchemaVersion(ctx context.Context) (int64, error) {
 		return 0, errors.New("HUB_BACKUP_SCHEMA_FAILED: the database reports no schema version")
 	}
 	return version, nil
+}
+
+// The pre-migration snapshot (P0 of the installer upgrade path).
+//
+// OpenStore runs Migrate before the Web serves one request. The first startup of
+// a newer binary rewrites the database to its own storage schema, and that move
+// is one-way: a failed start sends the installer back to the previous package,
+// whose gate then refuses the file with SCHEMA_TOO_NEW. Before this snapshot
+// existed, no copy of the pre-migration database was ever produced, so that
+// refusal named a backup record which could not exist.
+//
+// The snapshot is taken here, by the process that owns the SQLite handle, right
+// before the first migration step:
+//
+//   - it is not an installer step, so one implementation covers an installer
+//     --repair upgrade, a manual binary replacement and a Web self-upgrade;
+//   - VACUUM INTO on the live connection is a transaction-consistent copy, so no
+//     service stop and no second database driver is needed;
+//   - the copy goes through the shared Hub backup producer (layout, record
+//     schema 1, flat pointer). No second record format is introduced.
+//
+// The snapshot is conditional: a database already at this build's schema is only
+// opened, never copied again, so ordinary restarts do not grow the store. The
+// producer keeps every previous generation byte-identical on failure; a failed
+// snapshot refuses startup with its own stable code and the migration never
+// starts, so the database is provably unchanged.
+
+// unknownFromVersion records a database that never confirmed a build (it predates
+// database_versions). It is a plain string the record grammar accepts and can
+// never equal a release identity, so the SCHEMA_TOO_NEW gate will not claim it
+// matches the running binary.
+const unknownFromVersion = "unknown"
+
+// snapshotBeforeMigration writes and verifies the copy of the database as it is
+// before this build's first migration step. It returns the producer's stable
+// code on failure; the caller must not migrate.
+func (s *Store) snapshotBeforeMigration() error {
+	fromVersion := unknownFromVersion
+	if last, ok, err := LastGoodDatabaseVersionFrom(s.DB); err == nil && ok && last.Version != "" {
+		fromVersion = last.Version
+	}
+	digest, err := buildinfo.Digest()
+	if err != nil {
+		return err
+	}
+	_, err = hubupgrade.CreateMigrationSnapshot(context.Background(), hubupgrade.MigrationSnapshotConfig{
+		DataDir: s.Dir, FromVersion: fromVersion, TargetVersion: buildinfo.Version,
+		PackageSHA256: digest,
+		Vacuum:        s.VacuumDatabaseCopy, Integrity: s.IntegrityCheckCopy,
+		Schema: s.LiveDatabaseSchemaVersion, Space: hubupgrade.CheckFreeSpace,
+	})
+	return err
 }

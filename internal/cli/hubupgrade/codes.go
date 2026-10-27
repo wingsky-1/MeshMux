@@ -21,6 +21,10 @@ const (
 	// CodeBackupIdentityMissing means the running digest or its ledger entry
 	// cannot be proven.
 	CodeBackupIdentityMissing = "HUB_BACKUP_IDENTITY_MISSING"
+	// CodeMigrationBackupPointer means the flat pointer of the pre-migration
+	// database snapshot could not be published, so the schema migration must not
+	// run (the downgraded binary's SCHEMA_TOO_NEW guidance needs that record).
+	CodeMigrationBackupPointer = "HUB_BACKUP_POINTER_FAILED"
 	// CodeRestoreBinaryMissing means the old package a restore must start does
 	// not exist.
 	CodeRestoreBinaryMissing = "HUB_RESTORE_BINARY_MISSING"

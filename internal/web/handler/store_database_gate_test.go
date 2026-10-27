@@ -9,8 +9,10 @@ package handler
 //
 // A database newer than this binary is never opened and never migrated down.
 // The refusal names the verified Hub database backup record, because that is the
-// only supported way back; the old binary may not be able to parse the record's
-// schema, so it only checks that the fixed record file exists.
+// only supported way back. The record schema (1) is frozen, so the gate reads its
+// from_version/db_schema and only offers the generation as "restore this" when it
+// belongs to this binary; a damaged or future record is still named by path, but
+// without that claim.
 
 import (
 	"database/sql"
@@ -58,7 +60,8 @@ func userVersion(t *testing.T, dir string) int {
 // and the irreversible-confirmation action read. It is metadata only and 0600;
 // the payload is one private database copy, because an approval must never
 // confirm a record that holds nothing to restore. The record lives at
-// <data-dir>/database-backup/<op32hex>/record.json, never in the flat pointer.
+// <data-dir>/database-backup/<op32hex>/record.json; the flat pointer copy that
+// the SCHEMA_TOO_NEW gate resolves is written by the backup producer, not here.
 func hubDatabaseRecord(t *testing.T, dataDir, operationID string, mutate func(*backup.Record)) (string, backup.Record) {
 	t.Helper()
 	root := filepath.Join(dataDir, store.DatabaseBackupDirName)
@@ -119,8 +122,8 @@ func TestSchemaTooNewNamesTheBackupRecord(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(recordPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	// Deliberately not a valid record: the old binary must not parse a schema it
-	// cannot know, so existence is the whole check.
+	// Deliberately not a valid record: the gate must still name the fixed path
+	// for a record it cannot verify, without claiming it is a restore source.
 	if err := os.WriteFile(recordPath, []byte(`{"schema":99,"future":"unknown"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +187,8 @@ func TestOldBinaryRefusesNewSchema(t *testing.T) {
 		t.Fatalf("missing-record refusal is not explicit: %v", err)
 	}
 
-	// The same binary must name the record once one exists, without reading it.
+	// A record file that cannot be verified is still named, but never as a
+	// matching restore source.
 	recordPath := filepath.Join(dir, store.DatabaseBackupDirName, store.DatabaseBackupRecordName)
 	if err := os.MkdirAll(filepath.Dir(recordPath), 0700); err != nil {
 		t.Fatal(err)

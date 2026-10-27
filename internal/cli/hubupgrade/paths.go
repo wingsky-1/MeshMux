@@ -34,7 +34,7 @@ import (
 const (
 	// DatabaseBackupDir is the per-operation Hub backup store: one
 	// <op32hex>/{record.json,payload} generation per backup (spec C1, D1).
-	DatabaseBackupDir = "database-backup"
+	DatabaseBackupDir = versions.HubDatabaseBackupDir
 	// UpgradeDir stages the old and target Hub packages.
 	UpgradeDir = "upgrade"
 	// HubUpgradeDir carries the operation journal and, after a restore, the

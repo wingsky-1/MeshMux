@@ -20,6 +20,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
 type fakeInstallerRunner struct {
@@ -621,4 +625,75 @@ func proberCert(t *testing.T, domain string) *tls.Certificate {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
+}
+
+// plantHubDatabaseBackup writes the pre-migration snapshot chain the new Web
+// binary leaves in the Hub data directory: a committed per-operation record, its
+// verified database copy and the flat pointer the downgraded binary names.
+func plantHubDatabaseBackup(t *testing.T, root string) (recordPath, payloadPath string) {
+	t.Helper()
+	backupRoot := filepath.Join(rooted(root, versions.HubDataDir), versions.HubDatabaseBackupDir)
+	operationID := strings.Repeat("9", 32)
+	dir, err := backup.Dir(backupRoot, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join(dir, backup.PayloadPart)
+	if err := os.Mkdir(part, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(part, backup.SingleDBName), []byte("pre-migration copy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backup.Write(backupRoot, backup.Spec{
+		OperationID: operationID, FromVersion: "1.0.0", TargetVersion: buildinfo.Version,
+		DBSchema: 16, PolicySchema: 8,
+		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("b", 64),
+	}, backup.Payload{Kind: backup.PayloadSingleDB, Check: func(string) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := backup.ReadRecordBytes(dir, operationID, os.Geteuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordPath = filepath.Join(backupRoot, backup.RecordName)
+	if err := os.WriteFile(recordPath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return recordPath, filepath.Join(dir, backup.PayloadDir, backup.SingleDBName)
+}
+
+// TestHubRollbackNamesThePreMigrationDatabaseBackup is the rollback half of the
+// installer upgrade P0: a failed repair that rolls back the package must say
+// where the database copy of the new binary's migration is, because the restored
+// old binary will refuse the migrated file with SCHEMA_TOO_NEW.
+func TestHubRollbackNamesThePreMigrationDatabaseBackup(t *testing.T) {
+	f := makeInstallerFixture(t)
+	if result, err := invokeInstaller(t, f, strings.Repeat("5", 32), false); err != nil || result.Status != "installed" {
+		t.Fatalf("first install = %+v, %v", result, err)
+	}
+	recordPath, payloadPath := plantHubDatabaseBackup(t, f.root)
+	f.opts.Verify = func(context.Context, Config, CommandRunner, func(context.Context, string) error) error {
+		return &InstallError{Stage: "verify", Code: "WEB_HEALTH_FAILED", Recovery: "Check meshmux-web.service, the loopback Web port, and the private SQLite directory."}
+	}
+	result, err := invokeInstaller(t, f, strings.Repeat("6", 32), true)
+	if err == nil || result.Status != "rolled_back" {
+		t.Fatalf("failed repair = %+v, %v", result, err)
+	}
+	for _, want := range []string{recordPath, payloadPath, "from_version 1.0.0", "db_schema 16"} {
+		if !strings.Contains(result.Recovery, want) {
+			t.Fatalf("rollback recovery does not name %q: %s", want, result.Recovery)
+		}
+	}
+	var ie *InstallError
+	if !errors.As(err, &ie) || !strings.Contains(ie.Recovery, recordPath) {
+		t.Fatalf("the error the CLI prints lost the backup path: %v", err)
+	}
+	journal, readErr := os.ReadFile(filepath.Join(f.root, "var/lib/meshmux-installer/operations", strings.Repeat("6", 32), "events.jsonl"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(journal), "hub_database_backup") || !strings.Contains(string(journal), recordPath) {
+		t.Fatalf("operation journal does not record the backup: %s", journal)
+	}
 }
