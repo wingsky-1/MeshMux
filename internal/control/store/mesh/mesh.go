@@ -1,4 +1,4 @@
-package store
+package mesh
 
 import (
 	"database/sql"
@@ -9,13 +9,13 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 
-	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	coredomain "github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // Store-level codes for the mesh persistence boundary. Domain refusals keep
-// their mesh.Code* value; these only describe a missing row, which the pure
+// their coredomain.Code* value; these only describe a missing row, which the pure
 // domain package does not model.
 const (
 	CodeMeshDeviceNotFound        = "MESH_DEVICE_NOT_FOUND"
@@ -28,7 +28,7 @@ const (
 // observation. The embedded MeshDevice stays the single source of the
 // identity, purpose, binding, node-name and lifecycle rules.
 type MeshDeviceRecord struct {
-	mesh.MeshDevice
+	coredomain.MeshDevice
 	RevokeReason      string `json:"revoke_reason,omitempty"`
 	RevokeRequestedAt int64  `json:"revoke_requested_at,omitempty"`
 	ObservedAt        int64  `json:"observed_at,omitempty"`
@@ -41,12 +41,12 @@ type MeshDeviceRecord struct {
 // digest, and a consumed key has cleared it, so no read path can hand out
 // replay material.
 type MeshEnrollmentKeyRecord struct {
-	ID         string        `json:"id"`
-	DeviceID   string        `json:"device_id"`
-	State      mesh.KeyState `json:"state"`
-	IssuedAt   int64         `json:"issued_at"`
-	ExpiresAt  int64         `json:"expires_at"`
-	ConsumedAt int64         `json:"consumed_at,omitempty"`
+	ID         string              `json:"id"`
+	DeviceID   string              `json:"device_id"`
+	State      coredomain.KeyState `json:"state"`
+	IssuedAt   int64               `json:"issued_at"`
+	ExpiresAt  int64               `json:"expires_at"`
+	ConsumedAt int64               `json:"consumed_at,omitempty"`
 }
 
 const meshDeviceSelect = `SELECT d.id, d.display_name, d.purpose, d.platform, COALESCE(d.subscriber_id,''),
@@ -82,9 +82,9 @@ func scanMeshDevice(row common.RowScanner) (MeshDeviceRecord, error) {
 		&record.RevokeReason, &record.RevokeRequestedAt, &record.ObservedAt, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return MeshDeviceRecord{}, err
 	}
-	record.Purpose = mesh.Purpose(purpose)
-	record.Platform = mesh.Platform(platform)
-	record.Status = mesh.Status(status)
+	record.Purpose = coredomain.Purpose(purpose)
+	record.Platform = coredomain.Platform(platform)
+	record.Status = coredomain.Status(status)
 	// A stored row has to satisfy the same domain rules the write path applied;
 	// otherwise a hand-edited database would be rendered as a valid device.
 	if err := record.MeshDevice.Validate(); err != nil {
@@ -122,12 +122,12 @@ func meshDeviceTx(tx *sql.Tx, deviceID string) (MeshDeviceRecord, error) {
 // occupy the name, so revoked, expired and failed devices release it. A missing
 // subscriber binding is stored as NULL, never as an empty string, so the
 // foreign key and the purpose CHECK stay enforceable.
-func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDeviceRecord, error) {
-	device, err := mesh.NewMeshDevice(spec)
+func (s *Store) CreateMeshDevice(spec coredomain.DeviceSpec, now time.Time) (MeshDeviceRecord, error) {
+	device, err := coredomain.NewMeshDevice(spec)
 	if err != nil {
 		return MeshDeviceRecord{}, err
 	}
-	prefixes, err := mesh.NormalizeDeclaredPrefixes(device.Purpose, spec.DeclaredRoutes)
+	prefixes, err := coredomain.NormalizeDeclaredPrefixes(device.Purpose, spec.DeclaredRoutes)
 	if err != nil {
 		return MeshDeviceRecord{}, err
 	}
@@ -141,13 +141,13 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 		var state string
 		err = tx.QueryRow(`SELECT state FROM subscribers WHERE id=?`, device.SubscriberID).Scan(&state)
 		if errors.Is(err, sql.ErrNoRows) {
-			return MeshDeviceRecord{}, MeshError(mesh.CodeSubscriberBindingInvalid, "the subscriber does not exist")
+			return MeshDeviceRecord{}, MeshError(coredomain.CodeSubscriberBindingInvalid, "the subscriber does not exist")
 		}
 		if err != nil {
 			return MeshDeviceRecord{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		if state == string(subscription.StateDeleting) || state == string(subscription.StateDeleted) {
-			return MeshDeviceRecord{}, MeshError(mesh.CodeSubscriberBindingInvalid, "a deleting or deleted subscriber cannot own a mesh device")
+			return MeshDeviceRecord{}, MeshError(coredomain.CodeSubscriberBindingInvalid, "a deleting or deleted subscriber cannot own a mesh device")
 		}
 		subscriber = device.SubscriberID
 	}
@@ -157,7 +157,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 		device.ID, device.DisplayName, string(device.Purpose), string(device.Platform), subscriber,
 		device.HeadscaleUser, device.NodeName, now.Unix(), now.Unix()); err != nil {
 		if meshNodeNameConflict(err) {
-			return MeshDeviceRecord{}, MeshError(mesh.CodeNodeNameDuplicate, "the node name is already occupied for this headscale user")
+			return MeshDeviceRecord{}, MeshError(coredomain.CodeNodeNameDuplicate, "the node name is already occupied for this headscale user")
 		}
 		return MeshDeviceRecord{}, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -175,7 +175,7 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 			return MeshDeviceRecord{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		if err = recordMeshRouteEventTx(tx, device.ID, prefix, RouteEventDeclared,
-			"", string(mesh.RouteDesiredAdvertised), "", "", "", now); err != nil {
+			"", string(coredomain.RouteDesiredAdvertised), "", "", "", now); err != nil {
 			return MeshDeviceRecord{}, err
 		}
 	}
@@ -191,11 +191,11 @@ func (s *Store) CreateMeshDevice(spec mesh.DeviceSpec, now time.Time) (MeshDevic
 // tombstone and keeps its last label.
 func (s *Store) RenameMeshDevice(deviceID, displayName string, now time.Time) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshDeviceRecord{}, MeshError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
 	name, err := subscription.NormalizeDisplayName(displayName)
 	if err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDisplayNameInvalid, "use 1-80 normalized printable characters")
+		return MeshDeviceRecord{}, MeshError(coredomain.CodeDisplayNameInvalid, "use 1-80 normalized printable characters")
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -206,8 +206,8 @@ func (s *Store) RenameMeshDevice(deviceID, displayName string, now time.Time) (M
 	if err != nil {
 		return MeshDeviceRecord{}, err
 	}
-	if record.Status == mesh.StatusRevoked {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeStatusTransitionInvalid, "a revoked device is a tombstone and cannot be renamed")
+	if record.Status == coredomain.StatusRevoked {
+		return MeshDeviceRecord{}, MeshError(coredomain.CodeStatusTransitionInvalid, "a revoked device is a tombstone and cannot be renamed")
 	}
 	if record.DisplayName != name {
 		if _, err = tx.Exec(`UPDATE mesh_devices SET display_name=?, updated_at=? WHERE id=?`, name, now.Unix(), deviceID); err != nil {
@@ -238,7 +238,7 @@ func meshKeySingleActiveConflict(err error) bool {
 // getMeshDevice returns one stored device.
 func (s *Store) GetMeshDevice(deviceID string) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshDeviceRecord{}, MeshError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
 	record, err := scanMeshDevice(s.DB.QueryRow(meshDeviceSelect+` WHERE d.id=?`, deviceID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -279,45 +279,45 @@ func (s *Store) ListMeshDevices() ([]MeshDeviceRecord, error) {
 // expired in the same transaction, and the partial unique index refuses a
 // second issued row for the same device. A device that is not pending cannot
 // receive a key at all.
-func (s *Store) IssueMeshEnrollmentKey(deviceID string, now time.Time) (mesh.EnrollmentKey, string, error) {
+func (s *Store) IssueMeshEnrollmentKey(deviceID string, now time.Time) (coredomain.EnrollmentKey, string, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeKeyDeviceIDInvalid, common.Hex32Shape)
+		return coredomain.EnrollmentKey{}, "", MeshError(coredomain.CodeKeyDeviceIDInvalid, common.Hex32Shape)
 	}
-	key, secret, err := mesh.NewEnrollmentKey(deviceID, now.UTC().Truncate(time.Second))
+	key, secret, err := coredomain.NewEnrollmentKey(deviceID, now.UTC().Truncate(time.Second))
 	if err != nil {
-		return mesh.EnrollmentKey{}, "", err
+		return coredomain.EnrollmentKey{}, "", err
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
+		return coredomain.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var status string
 	err = tx.QueryRow(`SELECT status FROM mesh_devices WHERE id=?`, deviceID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return mesh.EnrollmentKey{}, "", MeshError(CodeMeshDeviceNotFound, "unknown mesh device")
+		return coredomain.EnrollmentKey{}, "", MeshError(CodeMeshDeviceNotFound, "unknown mesh device")
 	}
 	if err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
+		return coredomain.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
 	}
-	if mesh.Status(status) != mesh.StatusPending {
-		return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeStatusTransitionInvalid, "only a pending device can receive an enrollment key")
+	if coredomain.Status(status) != coredomain.StatusPending {
+		return coredomain.EnrollmentKey{}, "", MeshError(coredomain.CodeStatusTransitionInvalid, "only a pending device can receive an enrollment key")
 	}
 	// A lapsed key keeps the issued state until someone retires it. Retiring it
 	// here keeps one unusable row from silently blocking a fresh key.
 	if _, err = tx.Exec(`UPDATE mesh_enrollment_keys SET state='expired'
  WHERE device_id=? AND state='issued' AND expires_at<=?`, deviceID, key.IssuedAt.Unix()); err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
+		return coredomain.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	if _, err = tx.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
  VALUES(?,?,?,'issued',?,?,0)`, key.ID, key.DeviceID, key.Hash, key.IssuedAt.Unix(), key.ExpiresAt.Unix()); err != nil {
 		if meshKeySingleActiveConflict(err) {
-			return mesh.EnrollmentKey{}, "", MeshError(mesh.CodeKeyAlreadyActive, "the device already holds an issued enrollment key")
+			return coredomain.EnrollmentKey{}, "", MeshError(coredomain.CodeKeyAlreadyActive, "the device already holds an issued enrollment key")
 		}
-		return mesh.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
+		return coredomain.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	if err = tx.Commit(); err != nil {
-		return mesh.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
+		return coredomain.EnrollmentKey{}, "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	return key, secret, nil
 }
@@ -349,15 +349,15 @@ type meshRekeyApply struct {
 // holds exactly the new key, on failure it keeps the state and key it had. A
 // lapsed issued row is retired as expired rather than revoked, because revoking
 // it would report an early withdrawal that never happened.
-func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time.Time) (meshRekeyApply, error) {
+func (s *Store) ApplyMeshRekey(deviceID string, key coredomain.EnrollmentKey, now time.Time) (meshRekeyApply, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return meshRekeyApply{}, MeshError(mesh.CodeKeyDeviceIDInvalid, common.Hex32Shape)
+		return meshRekeyApply{}, MeshError(coredomain.CodeKeyDeviceIDInvalid, common.Hex32Shape)
 	}
 	if key.DeviceID != deviceID {
-		return meshRekeyApply{}, MeshError(mesh.CodeKeyDeviceMismatch, "the staged key belongs to another device")
+		return meshRekeyApply{}, MeshError(coredomain.CodeKeyDeviceMismatch, "the staged key belongs to another device")
 	}
-	if key.State != mesh.KeyIssued {
-		return meshRekeyApply{}, MeshError(mesh.CodeKeyTransitionInvalid, "only an issued key can be installed")
+	if key.State != coredomain.KeyIssued {
+		return meshRekeyApply{}, MeshError(coredomain.CodeKeyTransitionInvalid, "only an issued key can be installed")
 	}
 	if err := key.Validate(); err != nil {
 		return meshRekeyApply{}, err
@@ -373,10 +373,10 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
 	}
 	var apply meshRekeyApply
 	switch record.Status {
-	case mesh.StatusPending:
+	case coredomain.StatusPending:
 		// Already ready for a fresh attempt.
-	case mesh.StatusExpired:
-		next, err := record.MeshDevice.Transition(mesh.StatusPending)
+	case coredomain.StatusExpired:
+		next, err := record.MeshDevice.Transition(coredomain.StatusPending)
 		if err != nil {
 			return meshRekeyApply{}, err
 		}
@@ -384,16 +384,16 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
  WHERE id=? AND status='expired'`, string(next.Status), next.HeadscaleNodeID, now.Unix(), deviceID)
 		if err != nil {
 			if meshNodeNameConflict(err) {
-				return meshRekeyApply{}, MeshError(mesh.CodeNodeNameDuplicate, "the node name was taken while the device was expired")
+				return meshRekeyApply{}, MeshError(coredomain.CodeNodeNameDuplicate, "the node name was taken while the device was expired")
 			}
 			return meshRekeyApply{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
-			return meshRekeyApply{}, MeshError(mesh.CodeStatusTransitionInvalid, "the mesh device is no longer expired")
+			return meshRekeyApply{}, MeshError(coredomain.CodeStatusTransitionInvalid, "the mesh device is no longer expired")
 		}
 		apply.Reenrolled = true
 	default:
-		return meshRekeyApply{}, MeshError(mesh.CodeStatusTransitionInvalid, "only a pending or expired device can receive an enrollment key")
+		return meshRekeyApply{}, MeshError(coredomain.CodeStatusTransitionInvalid, "only a pending or expired device can receive an enrollment key")
 	}
 	res, err := tx.Exec(`UPDATE mesh_enrollment_keys SET state='expired'
  WHERE device_id=? AND state='issued' AND expires_at<=?`, deviceID, key.IssuedAt.Unix())
@@ -409,7 +409,7 @@ func (s *Store) ApplyMeshRekey(deviceID string, key mesh.EnrollmentKey, now time
 	if _, err = tx.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
  VALUES(?,?,?,'issued',?,?,0)`, key.ID, key.DeviceID, key.Hash, key.IssuedAt.Unix(), key.ExpiresAt.Unix()); err != nil {
 		if meshKeySingleActiveConflict(err) {
-			return meshRekeyApply{}, MeshError(mesh.CodeKeyAlreadyActive, "the device already holds an issued enrollment key")
+			return meshRekeyApply{}, MeshError(coredomain.CodeKeyAlreadyActive, "the device already holds an issued enrollment key")
 		}
 		return meshRekeyApply{}, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -446,11 +446,11 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 	if err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
-	key := mesh.EnrollmentKey{
+	key := coredomain.EnrollmentKey{
 		ID:        keyID,
 		DeviceID:  deviceID,
 		Hash:      hash,
-		State:     mesh.KeyIssued,
+		State:     coredomain.KeyIssued,
 		IssuedAt:  time.Unix(issuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(expiresAt, 0).UTC(),
 	}
@@ -466,7 +466,7 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 			return errors.New(common.CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
-			return MeshError(mesh.CodeKeyTransitionInvalid, "the enrollment key was no longer issued")
+			return MeshError(coredomain.CodeKeyTransitionInvalid, "the enrollment key was no longer issued")
 		}
 	case key.Expired(now):
 		if _, err = key.Expire(now); err != nil {
@@ -494,7 +494,7 @@ func spendMeshEnrollmentKeyTx(tx *sql.Tx, deviceID string, now time.Time) error 
 // older database keeps.
 func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, now time.Time) (MeshDeviceRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, MeshError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshDeviceRecord{}, MeshError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -508,31 +508,31 @@ func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, n
 	next := record.MeshDevice
 	if headscaleNodeID != 0 {
 		switch record.Status {
-		case mesh.StatusPending:
+		case coredomain.StatusPending:
 			next, err = record.MeshDevice.MarkRegistered(headscaleNodeID)
-		case mesh.StatusRegistered:
+		case coredomain.StatusRegistered:
 			if record.HeadscaleNodeID != headscaleNodeID {
-				return MeshDeviceRecord{}, MeshError(mesh.CodeHeadscaleNodeIDInvalid, "the observed node id does not match the registered node")
+				return MeshDeviceRecord{}, MeshError(coredomain.CodeHeadscaleNodeIDInvalid, "the observed node id does not match the registered node")
 			}
-		case mesh.StatusRevoking:
+		case coredomain.StatusRevoking:
 			// Headscale still reports the node, so the removal is not confirmed
 			// yet. The device stays revoking; the observed reference is kept so
 			// a retried removal names the same node. A contradiction is refused.
 			if record.HeadscaleNodeID == 0 {
 				next.HeadscaleNodeID = headscaleNodeID
 			} else if record.HeadscaleNodeID != headscaleNodeID {
-				return MeshDeviceRecord{}, MeshError(mesh.CodeHeadscaleNodeIDInvalid, "the observed node id does not match the node being removed")
+				return MeshDeviceRecord{}, MeshError(coredomain.CodeHeadscaleNodeIDInvalid, "the observed node id does not match the node being removed")
 			}
 		default:
-			return MeshDeviceRecord{}, MeshError(mesh.CodeStatusTransitionInvalid, "an observed node id cannot be attached to this status")
+			return MeshDeviceRecord{}, MeshError(coredomain.CodeStatusTransitionInvalid, "an observed node id cannot be attached to this status")
 		}
 	} else {
 		switch record.Status {
-		case mesh.StatusRegistered:
-			next, err = record.MeshDevice.Transition(mesh.StatusExpired)
-		case mesh.StatusRevoking:
-			next, err = record.MeshDevice.Transition(mesh.StatusRevoked)
-		case mesh.StatusPending, mesh.StatusExpired, mesh.StatusRevoked, mesh.StatusFailed:
+		case coredomain.StatusRegistered:
+			next, err = record.MeshDevice.Transition(coredomain.StatusExpired)
+		case coredomain.StatusRevoking:
+			next, err = record.MeshDevice.Transition(coredomain.StatusRevoked)
+		case coredomain.StatusPending, coredomain.StatusExpired, coredomain.StatusRevoked, coredomain.StatusFailed:
 			// No node was observed and the status already agrees.
 		}
 	}
@@ -542,7 +542,7 @@ func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, n
 	// Proven registration spends the key that authorized this attempt, in the
 	// same transaction as the evidence that proves it. A repeat observation of
 	// an already registered device finds no issued row and changes nothing.
-	if next.Status == mesh.StatusRegistered {
+	if next.Status == coredomain.StatusRegistered {
 		if err = spendMeshEnrollmentKeyTx(tx, deviceID, now); err != nil {
 			return MeshDeviceRecord{}, err
 		}
@@ -563,9 +563,9 @@ func (s *Store) RecordMeshObservation(deviceID string, headscaleNodeID uint64, n
 // them, and an already revoked device stays terminal. It never touches a
 // subscriber, a proxy credential or a subscription token: revoking one mesh
 // device must not disable the whole subscriber (ADR-0004).
-func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Time) (MeshDeviceRecord, mesh.RevokeOutcome, error) {
+func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Time) (MeshDeviceRecord, coredomain.RevokeOutcome, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshDeviceRecord{}, "", MeshError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshDeviceRecord{}, "", MeshError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -576,18 +576,18 @@ func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Ti
 	if err != nil {
 		return MeshDeviceRecord{}, "", err
 	}
-	next, outcome, err := record.MeshDevice.ApplyRevoke(mesh.RevokeIntent{DeviceID: deviceID, Reason: reason})
+	next, outcome, err := record.MeshDevice.ApplyRevoke(coredomain.RevokeIntent{DeviceID: deviceID, Reason: reason})
 	if err != nil {
 		return MeshDeviceRecord{}, "", err
 	}
-	if outcome == mesh.RevokeRequested {
+	if outcome == coredomain.RevokeRequested {
 		res, err := tx.Exec(`UPDATE mesh_devices SET status=?, revoke_reason=?, revoke_requested_at=?, updated_at=?
  WHERE id=? AND status=?`, string(next.Status), reason, now.Unix(), now.Unix(), deviceID, string(record.Status))
 		if err != nil {
 			return MeshDeviceRecord{}, "", errors.New(common.CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
-			return MeshDeviceRecord{}, "", MeshError(mesh.CodeStatusTransitionInvalid, "the mesh device status changed concurrently")
+			return MeshDeviceRecord{}, "", MeshError(coredomain.CodeStatusTransitionInvalid, "the mesh device status changed concurrently")
 		}
 	}
 	// The device and every one of its live prefixes settle in one transaction:
@@ -613,7 +613,7 @@ func (s *Store) RequestMeshDeviceRevocation(deviceID, reason string, now time.Ti
 // own and reporting it as revoked would misstate the audit trail.
 func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, error) {
 	if err := subscription.ValidateID(keyID); err != nil {
-		return MeshEnrollmentKeyRecord{}, MeshError(mesh.CodeKeyIDInvalid, common.Hex32Shape)
+		return MeshEnrollmentKeyRecord{}, MeshError(coredomain.CodeKeyIDInvalid, common.Hex32Shape)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -625,15 +625,15 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 		return MeshEnrollmentKeyRecord{}, err
 	}
 	switch record.State {
-	case mesh.KeyRevoked:
+	case coredomain.KeyRevoked:
 		if err = tx.Commit(); err != nil {
 			return MeshEnrollmentKeyRecord{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		return record, nil
-	case mesh.KeyConsumed:
-		return MeshEnrollmentKeyRecord{}, MeshError(mesh.CodeKeyTransitionInvalid, "a consumed key cannot be revoked")
-	case mesh.KeyExpired:
-		return MeshEnrollmentKeyRecord{}, MeshError(mesh.CodeKeyTransitionInvalid, "an expired key cannot be revoked")
+	case coredomain.KeyConsumed:
+		return MeshEnrollmentKeyRecord{}, MeshError(coredomain.CodeKeyTransitionInvalid, "a consumed key cannot be revoked")
+	case coredomain.KeyExpired:
+		return MeshEnrollmentKeyRecord{}, MeshError(coredomain.CodeKeyTransitionInvalid, "an expired key cannot be revoked")
 	}
 	var hash []byte
 	var issuedAt, expiresAt int64
@@ -641,7 +641,7 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 		Scan(&hash, &issuedAt, &expiresAt); err != nil {
 		return MeshEnrollmentKeyRecord{}, errors.New(common.CodeDatabaseUnavailable)
 	}
-	key := mesh.EnrollmentKey{
+	key := coredomain.EnrollmentKey{
 		ID:        record.ID,
 		DeviceID:  record.DeviceID,
 		Hash:      hash,
@@ -658,7 +658,7 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 	if err = tx.Commit(); err != nil {
 		return MeshEnrollmentKeyRecord{}, errors.New(common.CodeDatabaseUnavailable)
 	}
-	record.State = mesh.KeyRevoked
+	record.State = coredomain.KeyRevoked
 	return record, nil
 }
 
@@ -668,7 +668,7 @@ func (s *Store) RevokeMeshEnrollmentKey(keyID string) (MeshEnrollmentKeyRecord, 
 // proves the enrollment, or an explicit revoke/expire.
 func (s *Store) ListMeshEnrollmentKeys(deviceID string) ([]MeshEnrollmentKeyRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return nil, MeshError(mesh.CodeKeyDeviceIDInvalid, common.Hex32Shape)
+		return nil, MeshError(coredomain.CodeKeyDeviceIDInvalid, common.Hex32Shape)
 	}
 	rows, err := s.DB.Query(`SELECT id, device_id, state, issued_at, expires_at, consumed_at
  FROM mesh_enrollment_keys WHERE device_id=? ORDER BY issued_at ASC, id ASC`, deviceID)
@@ -685,7 +685,7 @@ func (s *Store) ListMeshEnrollmentKeys(deviceID string) ([]MeshEnrollmentKeyReco
 		if err := rows.Scan(&record.ID, &record.DeviceID, &state, &record.IssuedAt, &record.ExpiresAt, &record.ConsumedAt); err != nil {
 			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
-		record.State = mesh.KeyState(state)
+		record.State = coredomain.KeyState(state)
 		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
@@ -709,7 +709,7 @@ func meshEnrollmentKeyTx(tx *sql.Tx, keyID string) (MeshEnrollmentKeyRecord, err
 	if err != nil {
 		return MeshEnrollmentKeyRecord{}, errors.New(common.CodeDatabaseUnavailable)
 	}
-	record.State = mesh.KeyState(state)
+	record.State = coredomain.KeyState(state)
 	if err := record.State.Validate(); err != nil {
 		return MeshEnrollmentKeyRecord{}, err
 	}
@@ -726,7 +726,9 @@ func meshEnrollmentKeyTx(tx *sql.Tx, keyID string) (MeshEnrollmentKeyRecord, err
 // Headscale user only while the device still occupies it (pending, registered
 // or revoking). The trigger makes consumed, expired and revoked keys terminal at
 // the storage boundary, so a stray UPDATE cannot revive a spent key.
-func migrateSchema6(tx *sql.Tx) error {
+// MigrateSchema6 creates the mesh device, enrollment-key and observation
+// tables.
+func MigrateSchema6(tx *sql.Tx) error {
 	if _, err := tx.Exec(fmt.Sprintf(`
 CREATE TABLE mesh_devices (
   id TEXT PRIMARY KEY,
@@ -778,14 +780,14 @@ BEGIN
   SELECT RAISE(ABORT, 'MESH_ENROLLMENT_KEY_TERMINAL');
 END;
 PRAGMA user_version=6;
-`, int64(mesh.KeyTTL/time.Second))); err != nil {
+`, int64(coredomain.KeyTTL/time.Second))); err != nil {
 		return err
 	}
 	return nil
 }
 
 // Store-level codes for the subnet route persistence boundary. Domain refusals
-// keep their mesh.Code* value; these describe the storage-only facts the pure
+// keep their coredomain.Code* value; these describe the storage-only facts the pure
 // domain package does not model: a missing row, a prefix another device already
 // holds, a corrupt row and a prefix Headscale reports without a declaration.
 const (
@@ -814,14 +816,14 @@ const (
 // reported; the two are stored apart so an observation can never approve a
 // prefix and an approval never claims the prefix is actually served.
 type MeshRouteRecord struct {
-	DeviceID    string             `json:"device_id"`
-	Prefix      string             `json:"prefix"`
-	Desired     mesh.RouteDesired  `json:"desired"`
-	Observed    mesh.RouteObserved `json:"observed,omitempty"`
-	Source      mesh.RouteSource   `json:"source"`
-	OperationID string             `json:"operation_id,omitempty"`
-	CreatedAt   int64              `json:"created_at"`
-	UpdatedAt   int64              `json:"updated_at"`
+	DeviceID    string                   `json:"device_id"`
+	Prefix      string                   `json:"prefix"`
+	Desired     coredomain.RouteDesired  `json:"desired"`
+	Observed    coredomain.RouteObserved `json:"observed,omitempty"`
+	Source      coredomain.RouteSource   `json:"source"`
+	OperationID string                   `json:"operation_id,omitempty"`
+	CreatedAt   int64                    `json:"created_at"`
+	UpdatedAt   int64                    `json:"updated_at"`
 }
 
 // meshRouteSelect is the single read projection of one route row. No column is
@@ -857,12 +859,12 @@ func scanMeshRoute(row common.RowScanner) (MeshRouteRecord, error) {
 		&record.OperationID, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return MeshRouteRecord{}, err
 	}
-	record.Desired = mesh.RouteDesired(desired)
-	record.Observed = mesh.RouteObserved(observed)
-	record.Source = mesh.RouteSource(source)
+	record.Desired = coredomain.RouteDesired(desired)
+	record.Observed = coredomain.RouteObserved(observed)
+	record.Source = coredomain.RouteSource(source)
 	// A stored row has to satisfy the same rules the write path applied, so a
 	// hand-edited prefix or state is reported instead of rendered.
-	if err := (mesh.MeshRoute{
+	if err := (coredomain.MeshRoute{
 		DeviceID: record.DeviceID,
 		Prefix:   record.Prefix,
 		Desired:  record.Desired,
@@ -907,11 +909,11 @@ func (s *Store) GetMeshRoute(deviceID, prefix string) (MeshRouteRecord, error) {
 // prefix in a non-revoked state is MESH_ROUTE_CONFLICT, and the partial unique
 // index refuses it even if the pre-check were bypassed. A revoked device is a
 // tombstone and cannot declare anything.
-func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSource, operationID string, now time.Time) (MeshRouteRecord, error) {
+func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source coredomain.RouteSource, operationID string, now time.Time) (MeshRouteRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshRouteRecord{}, meshRouteError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
-	prefix, err := mesh.NormalizeRoutePrefix(rawPrefix)
+	prefix, err := coredomain.NormalizeRoutePrefix(rawPrefix)
 	if err != nil {
 		return MeshRouteRecord{}, err
 	}
@@ -942,23 +944,23 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 			return MeshRouteRecord{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		if err = recordMeshRouteEventTx(tx, deviceID, prefix, RouteEventDeclared,
-			"", string(mesh.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
+			"", string(coredomain.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
 			return MeshRouteRecord{}, err
 		}
 	case err != nil:
 		return MeshRouteRecord{}, meshRouteReadError(err)
-	case existing.Desired == mesh.RouteDesiredRevoked:
+	case existing.Desired == coredomain.RouteDesiredRevoked:
 		if operationID == "" {
-			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "reviving a revoked prefix needs an audit operation id")
+			return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "reviving a revoked prefix needs an audit operation id")
 		}
 		if operationID == existing.OperationID {
-			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "reviving a revoked prefix needs a new audit operation id")
+			return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "reviving a revoked prefix needs a new audit operation id")
 		}
 		// The audit event is written first, because the revival trigger only
 		// accepts a DECLARED event carrying this exact operation id. A failed
 		// update rolls the event back with the transaction.
 		if err = recordMeshRouteEventTx(tx, deviceID, prefix, RouteEventDeclared,
-			string(mesh.RouteDesiredRevoked), string(mesh.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
+			string(coredomain.RouteDesiredRevoked), string(coredomain.RouteDesiredAdvertised), "", "", operationID, now); err != nil {
 			return MeshRouteRecord{}, err
 		}
 		res, execErr := tx.Exec(`UPDATE mesh_routes SET desired='advertised', operation_id=?, updated_at=?
@@ -967,7 +969,7 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 			return MeshRouteRecord{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
-			return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
+			return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
 		}
 	default:
 		// advertised or approved: the declaration already stands. The first
@@ -991,11 +993,11 @@ func (s *Store) UpsertMeshRoute(deviceID, rawPrefix string, source mesh.RouteSou
 // Every real change needs an audit operation id; the row's operation_id becomes
 // that key and one append-only event records the edge. An empty id is refused
 // here and by the database trigger, so no path can change intent unaudited.
-func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.RouteDesired, operationID string, now time.Time) (MeshRouteRecord, error) {
+func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired coredomain.RouteDesired, operationID string, now time.Time) (MeshRouteRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshRouteRecord{}, meshRouteError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
-	prefix, err := mesh.NormalizeRoutePrefix(rawPrefix)
+	prefix, err := coredomain.NormalizeRoutePrefix(rawPrefix)
 	if err != nil {
 		return MeshRouteRecord{}, err
 	}
@@ -1021,14 +1023,14 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 		}
 		return existing, nil
 	}
-	if existing.Desired == mesh.RouteDesiredRevoked {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "a revoked prefix is revived by declaring it again")
+	if existing.Desired == coredomain.RouteDesiredRevoked {
+		return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "a revoked prefix is revived by declaring it again")
 	}
-	if !mesh.RouteTransitionAllowed(existing.Desired, desired) {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the requested route desired-state transition is not allowed")
+	if !coredomain.RouteTransitionAllowed(existing.Desired, desired) {
+		return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "the requested route desired-state transition is not allowed")
 	}
 	if operationID == "" {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "changing the desired route state needs an audit operation id")
+		return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "changing the desired route state needs an audit operation id")
 	}
 	res, err := tx.Exec(`UPDATE mesh_routes SET desired=?, operation_id=?, updated_at=?
  WHERE device_id=? AND prefix=? AND desired=?`,
@@ -1037,13 +1039,13 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 		return MeshRouteRecord{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if affected, _ := res.RowsAffected(); affected != 1 {
-		return MeshRouteRecord{}, meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
+		return MeshRouteRecord{}, meshRouteError(coredomain.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
 	}
 	kind := RouteEventWithdrawn
 	switch desired {
-	case mesh.RouteDesiredApproved:
+	case coredomain.RouteDesiredApproved:
 		kind = RouteEventApproved
-	case mesh.RouteDesiredRevoked:
+	case coredomain.RouteDesiredRevoked:
 		kind = RouteEventRevoked
 	}
 	if err = recordMeshRouteEventTx(tx, deviceID, prefix, kind,
@@ -1073,11 +1075,11 @@ func (s *Store) SetMeshRouteDesired(deviceID, rawPrefix string, desired mesh.Rou
 // An empty observed value means "Headscale reported nothing". It is stored as
 // such and never reverts desired: a prefix that stops being advertised stays
 // approved in MeshMux's intent until an operator revokes it.
-func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed mesh.RouteObserved, operationID string, now time.Time) (MeshRouteRecord, bool, error) {
+func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed coredomain.RouteObserved, operationID string, now time.Time) (MeshRouteRecord, bool, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return MeshRouteRecord{}, false, meshRouteError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return MeshRouteRecord{}, false, meshRouteError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
-	parsed, err := mesh.ParseRoutePrefix(rawPrefix)
+	parsed, err := coredomain.ParseRoutePrefix(rawPrefix)
 	if err != nil {
 		return MeshRouteRecord{}, false, err
 	}
@@ -1137,7 +1139,7 @@ func (s *Store) RecordMeshRouteObservation(deviceID, rawPrefix string, observed 
 // served lists; the store never derives one list from another.
 type MeshRouteObservation struct {
 	Prefix   string
-	Observed mesh.RouteObserved
+	Observed coredomain.RouteObserved
 }
 
 // MeshRouteReconcileResult summarises one reconcile pass over a device's
@@ -1162,7 +1164,7 @@ type MeshRouteReconcileResult struct {
 func (s *Store) ReconcileMeshRoutes(deviceID string, observations []MeshRouteObservation, operationID string, now time.Time) (MeshRouteReconcileResult, error) {
 	var result MeshRouteReconcileResult
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return result, meshRouteError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return result, meshRouteError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
 	if err := meshRouteDeviceExists(s.DB, deviceID); err != nil {
 		return result, err
@@ -1171,7 +1173,7 @@ func (s *Store) ReconcileMeshRoutes(deviceID string, observations []MeshRouteObs
 	if err != nil {
 		return result, err
 	}
-	previous := make(map[string]mesh.RouteObserved, len(before))
+	previous := make(map[string]coredomain.RouteObserved, len(before))
 	for _, route := range before {
 		previous[route.Prefix] = route.Observed
 	}
@@ -1197,7 +1199,7 @@ func (s *Store) ReconcileMeshRoutes(deviceID string, observations []MeshRouteObs
 // revoked ones included: a withdrawn prefix is history, not a deleted row.
 func (s *Store) ListMeshRoutes(deviceID string) ([]MeshRouteRecord, error) {
 	if err := subscription.ValidateID(deviceID); err != nil {
-		return nil, meshRouteError(mesh.CodeDeviceIDInvalid, common.Hex32Shape)
+		return nil, meshRouteError(coredomain.CodeDeviceIDInvalid, common.Hex32Shape)
 	}
 	rows, err := s.DB.Query(meshRouteSelect+` WHERE device_id=? ORDER BY prefix ASC`, deviceID)
 	if err != nil {
@@ -1265,14 +1267,14 @@ func meshRouteDeviceWritableTx(tx *sql.Tx, deviceID string) error {
 	if err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
-	switch mesh.Status(status) {
-	case mesh.StatusRevoking:
-		return meshRouteError(mesh.CodeRouteTransitionInvalid, "a device being revoked cannot declare subnet routes")
-	case mesh.StatusRevoked:
-		return meshRouteError(mesh.CodeRouteTransitionInvalid, "a revoked device cannot declare subnet routes")
+	switch coredomain.Status(status) {
+	case coredomain.StatusRevoking:
+		return meshRouteError(coredomain.CodeRouteTransitionInvalid, "a device being revoked cannot declare subnet routes")
+	case coredomain.StatusRevoked:
+		return meshRouteError(coredomain.CodeRouteTransitionInvalid, "a revoked device cannot declare subnet routes")
 	}
-	if mesh.Purpose(purpose) != mesh.PurposeSubnetRouter {
-		return meshRouteError(mesh.CodeRouteDeclarationInvalid, "only a subnet_router device can declare subnet routes")
+	if coredomain.Purpose(purpose) != coredomain.PurposeSubnetRouter {
+		return meshRouteError(coredomain.CodeRouteDeclarationInvalid, "only a subnet_router device can declare subnet routes")
 	}
 	return nil
 }
@@ -1304,7 +1306,7 @@ func meshRoutePrefixConflict(err error) bool {
 // evidence appends nothing, so the audit trail records changes rather than
 // polls. No route row is created: an untracked advertisement is evidence for the
 // operator, never an implicit declaration or approval.
-func recordUntrackedObservationTx(tx *sql.Tx, deviceID, prefix string, observed mesh.RouteObserved, operationID string, now time.Time) error {
+func recordUntrackedObservationTx(tx *sql.Tx, deviceID, prefix string, observed coredomain.RouteObserved, operationID string, now time.Time) error {
 	var last string
 	err := tx.QueryRow(`SELECT to_observed FROM mesh_route_events
  WHERE device_id=? AND prefix=? AND kind=? ORDER BY id DESC LIMIT 1`,
@@ -1384,10 +1386,10 @@ func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Tim
 			return errors.New(common.CodeDatabaseUnavailable)
 		}
 		if affected, _ := res.RowsAffected(); affected != 1 {
-			return meshRouteError(mesh.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
+			return meshRouteError(coredomain.CodeRouteTransitionInvalid, "the subnet route state changed concurrently")
 		}
 		if err := recordMeshRouteEventTx(tx, deviceID, route.prefix, RouteEventRevoked,
-			route.desired, string(mesh.RouteDesiredRevoked), "", "", operationID, now); err != nil {
+			route.desired, string(coredomain.RouteDesiredRevoked), "", "", operationID, now); err != nil {
 			return err
 		}
 	}
@@ -1409,7 +1411,9 @@ func revokeDeviceRoutesTx(tx *sql.Tx, deviceID, operationID string, now time.Tim
 //     initial state;
 //   - the audit table is append-only, so the history of an approval cannot be
 //     rewritten after the fact.
-func migrateSchema7(tx *sql.Tx) error {
+//
+// MigrateSchema7 creates the subnet-route and route-event tables.
+func MigrateSchema7(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 CREATE TABLE mesh_routes (
   device_id TEXT NOT NULL REFERENCES mesh_devices(id) ON DELETE CASCADE,

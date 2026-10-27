@@ -392,7 +392,7 @@ func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool
 // is a refusal with its own code; it is never treated as a passing check.
 func (s *Store) gatePolicyAssembly(ctx context.Context, verifier common.PublishVerifier, assembly *PolicyAssembly) error {
 	if verifier == nil {
-		return errors.New(common.CodePublishGate + ": no kernel verifier is configured")
+		return errors.New(common.PublishGateCode + ": no kernel verifier is configured")
 	}
 	evidence := make([]PolicyCheckEvidence, 0, len(assembly.Targets)+2)
 	for _, target := range assembly.Targets {
@@ -491,7 +491,7 @@ var publishRefusalCodes = []string{
 	policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited,
 	policy.CodeRulesetFetchFailed, policy.CodeRulesetPinInvalid,
 	"OUT_BINDING_INVALID", CodeOutNotAuthorized,
-	CodePublishNoLines, common.CodePublishGate,
+	CodePublishNoLines, common.PublishGateCode,
 	node.CodePublishSingBoxMissing, node.CodePublishCheckSingBox,
 	node.CodePublishMihomoMissing, node.CodePublishMihomoVersion, node.CodePublishCheckMihomo,
 	CodePublishRevisionChanged, CodePublishTasksInProgress, codePublishCandidateChanged,
@@ -514,7 +514,7 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		}
 	}
 	if !known {
-		return 500, common.CodePublishGate, "发布未完成，且失败原因不在已登记的错误码内。"
+		return 500, common.PublishGateCode, "发布未完成，且失败原因不在已登记的错误码内。"
 	}
 	status := 422
 	switch code {
@@ -533,7 +533,7 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		// (409) so a future publication path that does validate a write answers
 		// with the stable code instead of becoming a 500 PUBLISH_GATE_FAILED.
 		status = 409
-	case common.CodePublishGate, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
+	case common.PublishGateCode, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
 		status = 503
 	}
 	return status, code, detail

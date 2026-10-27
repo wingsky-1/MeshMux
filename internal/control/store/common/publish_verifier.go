@@ -66,7 +66,7 @@ func NewPublishVerifier(cfg PublishGateConfig, dir string) (PublishVerifier, err
 		cfg.Runner = node.ExecRunner{}
 	}
 	if dir == "" || !filepath.IsAbs(dir) {
-		return nil, errors.New(CodePublishGate + ": the gate needs an absolute scratch directory")
+		return nil, errors.New(PublishGateCode + ": the gate needs an absolute scratch directory")
 	}
 	return &execPublishVerifier{cfg: cfg, dir: dir, name: randomGateName}, nil
 }
@@ -92,7 +92,7 @@ func randomGateName() (string, error) {
 	// crypto/rand.Read crashes the process on a broken entropy source in Go
 	// 1.27; io.ReadFull lets this gate report the failure instead.
 	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
-		return "", errors.New(CodePublishGate + ": the gate scratch name could not be generated")
+		return "", errors.New(PublishGateCode + ": the gate scratch name could not be generated")
 	}
 	return hex.EncodeToString(b[:]), nil
 }
@@ -132,11 +132,11 @@ func (v *execPublishVerifier) CheckMihomo(ctx context.Context, document []byte) 
 // a path, and the directory is created 0700.
 func (v *execPublishVerifier) write(kernel string, document []byte) (string, func(), error) {
 	if len(document) == 0 || len(document) > 4<<20 {
-		return "", func() {}, errors.New(CodePublishGate + ": the document is empty or too large")
+		return "", func() {}, errors.New(PublishGateCode + ": the document is empty or too large")
 	}
 	dir := filepath.Join(v.dir, gateDirName)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", func() {}, errors.New(CodePublishGate + ": the gate scratch directory is unavailable")
+		return "", func() {}, errors.New(PublishGateCode + ": the gate scratch directory is unavailable")
 	}
 	ext := ".json"
 	if kernel == KernelMihomo {
@@ -149,7 +149,7 @@ func (v *execPublishVerifier) write(kernel string, document []byte) (string, fun
 	path := filepath.Join(dir, kernel+"-"+name+ext)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return "", func() {}, errors.New(CodePublishGate + ": the gate scratch file was not created")
+		return "", func() {}, errors.New(PublishGateCode + ": the gate scratch file was not created")
 	}
 	cleanup := func() { _ = os.Remove(path) }
 	if _, err = f.Write(document); err == nil {
@@ -160,7 +160,7 @@ func (v *execPublishVerifier) write(kernel string, document []byte) (string, fun
 	}
 	if err != nil {
 		cleanup()
-		return "", func() {}, errors.New(CodePublishGate + ": the gate scratch file was not written")
+		return "", func() {}, errors.New(PublishGateCode + ": the gate scratch file was not written")
 	}
 	return path, cleanup, nil
 }

@@ -25,7 +25,7 @@ func TestGateScratchNameRefusesEntropyFailure(t *testing.T) {
 	if err == nil || name != "" {
 		t.Fatalf("randomGateName = %q, %v; want an empty name and an error", name, err)
 	}
-	if !strings.Contains(err.Error(), CodePublishGate) {
+	if !strings.Contains(err.Error(), PublishGateCode) {
 		t.Fatalf("error %q does not carry PUBLISH_GATE_FAILED", err)
 	}
 
@@ -33,7 +33,7 @@ func TestGateScratchNameRefusesEntropyFailure(t *testing.T) {
 	if _, cleanup, err := v.write(KernelSingBox, []byte(`{"log":{}}`)); err == nil {
 		cleanup()
 		t.Fatal("gate wrote a scratch file without entropy")
-	} else if !strings.Contains(err.Error(), CodePublishGate) {
+	} else if !strings.Contains(err.Error(), PublishGateCode) {
 		t.Fatalf("write error %q does not carry PUBLISH_GATE_FAILED", err)
 	}
 }

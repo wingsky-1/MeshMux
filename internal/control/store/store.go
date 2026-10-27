@@ -12,6 +12,7 @@ import (
 
 	storecandidate "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storemesh "github.com/wingsky-1/MeshMux/internal/control/store/mesh"
 
 	_ "modernc.org/sqlite"
 )
@@ -35,14 +36,22 @@ const (
 // embedded handle, so a caller reads the same methods it always has while every
 // implementation lives in its own package. The fields here are the ones the
 // root owns: the connection, the data directory and the process lock.
+// The embedded handles, aliased so each field has a distinct name.
+type (
+	candidateHandle = storecandidate.Store
+	meshHandle      = storemesh.Store
+)
+
 type Store struct {
 	DB   *sql.DB
 	lock *os.File
 	Dir  string
 
-	// The candidate/task leaf. Its Out authorization is wired after the
-	// database opens, once the Out domain exists.
-	*storecandidate.Store
+	// The domain handles. Each one owns the methods of its package and shares
+	// this connection, so a caller keeps calling s.CreateMeshDevice and never
+	// sees the split. The aliases give every embedded field a distinct name.
+	*candidateHandle
+	*meshHandle
 }
 type Session struct {
 	Hash    []byte
@@ -96,7 +105,7 @@ func OpenStore(dir string) (*Store, error) {
 		lock.Close()
 		return nil, errors.New("DATA_LOCKED: another Web process uses this directory")
 	}
-	s := &Store{lock: lock, Dir: abs, Store: &storecandidate.Store{}}
+	s := &Store{lock: lock, Dir: abs, candidateHandle: &storecandidate.Store{}, meshHandle: &storemesh.Store{}}
 	f, err := os.OpenFile(filepath.Join(abs, databaseFileName), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		s.Close()
@@ -110,7 +119,8 @@ func OpenStore(dir string) (*Store, error) {
 		return nil, err
 	}
 	s.DB.SetMaxOpenConns(1)
-	s.Store.DB = s.DB
+	s.candidateHandle.DB = s.DB
+	s.meshHandle.DB = s.DB
 	if err = s.Migrate(); err != nil {
 		s.Close()
 		return nil, err
@@ -136,7 +146,7 @@ func OpenStore(dir string) (*Store, error) {
 // writes its check documents there, so they never leave the private boundary.
 func (s *Store) ScratchDir() (string, error) {
 	if s.Dir == "" || !filepath.IsAbs(s.Dir) {
-		return "", errors.New(common.CodePublishGate + ": the hub data directory is unavailable")
+		return "", errors.New(common.PublishGateCode + ": the hub data directory is unavailable")
 	}
 	return s.Dir, nil
 }
@@ -241,13 +251,13 @@ func (s *Store) migrateSchemaChain() error {
 		version = 5
 	}
 	if version == 5 {
-		if err = migrateSchema6(tx); err != nil {
+		if err = storemesh.MigrateSchema6(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 6
 	}
 	if version == 6 {
-		if err = migrateSchema7(tx); err != nil {
+		if err = storemesh.MigrateSchema7(tx); err != nil {
 			return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 		}
 		version = 7

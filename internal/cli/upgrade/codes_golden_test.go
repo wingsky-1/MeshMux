@@ -33,6 +33,14 @@ import (
 // constant keeps its value. internal/web is not a single package any more, so
 // its handler/store/view packages are listed by name as well.
 //
+// A package name is not always unique: internal/core/mesh and
+// internal/control/store/mesh are both package mesh, and internal/core/
+// subscription and internal/control/store/subscription are both package
+// subscription. Freezing the whole name would pull in values that were never
+// part of this contract, so a store subpackage is listed by PATH in
+// errorCodeDomainPaths instead. The two maps are unioned; a package matched by
+// either one is scanned.
+//
 // agent, hub and upgrade are the destination package names Task 6/7 plan to
 // use, listed up front so a moved constant stays frozen without a second edit
 // here. internal/upgrade/backup is deliberately absent: the backup record codes
@@ -55,6 +63,23 @@ var errorCodeDomains = map[string]bool{
 	"agent":      true,
 	"hub":        true,
 	"upgrade":    true,
+}
+
+// errorCodeDomainPaths is the path-scoped half of the domain set, for the
+// packages whose name is shared with a core domain that is not part of this
+// golden. The store split gave each domain its own package under
+// internal/control/store, and three of those names (mesh, subscription and
+// common) already exist under internal/core or internal/web. Listing the path
+// keeps this golden over the store's vocabulary and does not silently adopt
+// another layer's codes.
+var errorCodeDomainPaths = map[string]bool{
+	"internal/control/store/common":       true,
+	"internal/control/store/candidate":    true,
+	"internal/control/store/mesh":         true,
+	"internal/control/store/node":         true,
+	"internal/control/store/policy":       true,
+	"internal/control/store/subscription": true,
+	"internal/control/store/upgrade":      true,
 }
 
 // goldenErrorCodeValues is the frozen, sorted, de-duplicated set of Code*
@@ -218,11 +243,12 @@ func collectErrorCodeDeclarations(t *testing.T) []errorCodeDeclaration {
 		if listErr != "" {
 			t.Fatalf("%s: go list error: %s", importPath, listErr)
 		}
-		if !errorCodeDomains[packageName] {
+		relativePath := strings.TrimPrefix(importPath, modulePath+"/")
+		if !errorCodeDomains[packageName] && !errorCodeDomainPaths[relativePath] {
 			continue
 		}
 		matched++
-		directory := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(importPath, modulePath+"/")))
+		directory := filepath.Join(root, filepath.FromSlash(relativePath))
 		for _, name := range strings.Fields(files) {
 			declarations = append(declarations, parseErrorCodeConstants(t, root, directory, name)...)
 		}
