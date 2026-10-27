@@ -20,9 +20,11 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/web/handler"
 	handlerpolicy "github.com/wingsky-1/MeshMux/internal/web/handler/policy"
+	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/web/testhttp"
 )
 
@@ -173,4 +175,132 @@ func ReportJSON(t *testing.T, app *handler.Server, token string, result protocol
 func FixedTasksForRevision(t *testing.T, app *handler.Server, nodeID string, revision int64) []protocol.Task {
 	t.Helper()
 	return testhttp.FixedTasksForRevision(t, app.Store, nodeID, revision)
+}
+
+// SubscriptionAppWithOrigin opens a Web runtime with an optional dedicated
+// download origin, the single-host development default when it is empty.
+func SubscriptionAppWithOrigin(t *testing.T, subscriptionOrigin string) (*handler.Server, *bytes.Buffer) {
+	t.Helper()
+	return TestAppWithConfig(t, handler.Config{
+		Listen:             "127.0.0.1:9080",
+		Origin:             Origin,
+		SubscriptionOrigin: subscriptionOrigin,
+		DataDir:            t.TempDir() + "/state",
+	})
+}
+
+// PostPolicy posts one route-policy payload.
+func PostPolicy(t *testing.T, b *Browser, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return b.Post(path, url.Values{"policy": {body}})
+}
+
+// PolicyReceipt decodes one route-policy write receipt.
+func PolicyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) handlerpolicy.PolicyWriteResponse {
+	t.Helper()
+	RequireStatus(t, w, status)
+	var out handlerpolicy.PolicyWriteResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("write response: %v %.300s", err, w.Body.String())
+	}
+	return out
+}
+
+// NodesPageBody renders the Nodes page through the assembled handler.
+func NodesPageBody(t *testing.T, b *Browser) string {
+	t.Helper()
+	w := b.Req("GET", "/nodes", nil, nil)
+	RequireStatus(t, w, 200)
+	return w.Body.String()
+}
+
+// HeartbeatJSON posts one Agent heartbeat.
+func HeartbeatJSON(t *testing.T, app *handler.Server, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(protocol.HeartbeatRequest{AgentVersion: "meshmux-agent test", KernelVersion: node.KernelVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return BearerReq(app, "POST", "/api/agent/heartbeat", token, body)
+}
+
+// DatabaseMigrationApprovePath is the irreversible-confirmation route.
+const DatabaseMigrationApprovePath = "/tasks/db-migration/approve"
+
+// CreatePairedWebNode creates one node and drives the real pairing endpoint, so
+// a test uses a node with the same non-revoked identity production issues.
+func CreatePairedWebNode(t *testing.T, app *handler.Server, role, name string, vless, ssh int) store.Node {
+	t.Helper()
+	return testhttp.CreatePairedWebNode(t, app.Handler(), app.Store, role, name, vless, ssh)
+}
+
+// Require2xx fails unless the response carries a success status.
+func Require2xx(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code < 200 || w.Code > 299 {
+		t.Fatalf("status %d want 2xx (operation_id %q)", w.Code, w.Header().Get("X-Operation-ID"))
+	}
+}
+
+// UpgradeApproveFixture builds one paired edge node whose observed agent version
+// is observed, with a logged-in console.
+func UpgradeApproveFixture(t *testing.T, observed string) (b *Browser, app *handler.Server, nodeID, token string) {
+	t.Helper()
+	app, _ = TestApp(t)
+	created, code := CreatePendingNode(t, app, "edge", "upgrade-approve", 8443, 2222)
+	pairing := PairJSON(t, app, created.ID, "edge", code)
+	RequireStatus(t, pairing, http.StatusOK)
+	var paired struct {
+		IdentityToken string `json:"identity_token"`
+	}
+	if err := json.Unmarshal(pairing.Body.Bytes(), &paired); err != nil || paired.IdentityToken == "" {
+		t.Fatalf("pairing did not issue an identity: %.200s", pairing.Body.String())
+	}
+	storetest.ConfirmChain(t, app.Store, created.ID, app.Now())
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_agent_version=?, observed_at=? WHERE id=?`,
+		observed, app.Now().Unix(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	b = &Browser{App: app}
+	Initialize(t, b)
+	LoginAs(t, b, Password)
+	return b, app, created.ID, paired.IdentityToken
+}
+
+// LatestRevision returns the newest stored candidate revision of one node.
+func LatestRevision(t *testing.T, app *handler.Server, nodeID string) int64 {
+	t.Helper()
+	stored, err := app.Store.LatestCandidate(nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored.Revision
+}
+
+// CountStamped counts the Agent tasks of one node that carry a target version.
+func CountStamped(t *testing.T, app *handler.Server, nodeID string) int {
+	t.Helper()
+	var count int
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND target_version<>''`,
+		nodeID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// DecodeApprove decodes one upgrade approval receipt.
+func DecodeApprove(t *testing.T, w *httptest.ResponseRecorder, status int) handlerupgrade.ApproveReceipt {
+	t.Helper()
+	RequireStatus(t, w, status)
+	var receipt handlerupgrade.ApproveReceipt
+	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
+		t.Fatalf("approval receipt: %v %.300s", err, w.Body.String())
+	}
+	return receipt
+}
+
+// ApproveUpgrade posts one node upgrade approval.
+func ApproveUpgrade(t *testing.T, b *Browser, nodeID, version string) *httptest.ResponseRecorder {
+	t.Helper()
+	return b.Post("/tasks/approve", url.Values{"node_id": {nodeID}, "version": {version}})
 }

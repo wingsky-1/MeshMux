@@ -257,30 +257,30 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 // operator-facing event, which is the affordance the node retry route acts on.
 // A field that is computed but never emitted cannot guide a retry.
 func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
-	f := newPairedWebOutSyncApp(t)
+	f := outSyncApp(t)
 	app := f.app
 	now := time.Now()
 
 	// The Out is a member and its guard is confirmed (Ruling R10: enrollment publishes
 	// it), and the Line routes through it because the subscription selected it.
 	app.Store.RepublishOutAuthorizations(now)
-	storetest.SettleTasks(t, app.Store, f.outID)
-	storetest.ConfirmChain(t, app.Store, f.outID, now)
-	storetest.EnableOutForLine(t, app.Store, f.outID, f.lineID, now)
-	if err := app.Store.PrepareSubscriberSync(f.subscriberIDForTest(t), now); err != nil {
+	storetest.SettleTasks(t, app.Store, f.OutID)
+	storetest.ConfirmChain(t, app.Store, f.OutID, now)
+	storetest.EnableOutForLine(t, app.Store, f.OutID, f.LineID, now)
+	if err := app.Store.PrepareSubscriberSync(f.SubscriberID(t), now); err != nil {
 		t.Fatalf("publish the line: %v", err)
 	}
-	storetest.SettleTasks(t, app.Store, f.lineID)
-	storetest.ConfirmChain(t, app.Store, f.lineID, now)
+	storetest.SettleTasks(t, app.Store, f.LineID)
+	storetest.ConfirmChain(t, app.Store, f.LineID, now)
 	// Fail the Out chain, then heartbeat: the readback event must carry
 	// retry_pending=true together with the stable failure code.
-	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, f.outID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, f.OutID); err != nil {
 		t.Fatal(err)
 	}
-	w := heartbeatJSON(t, app, f.outToken)
+	w := heartbeatJSON(t, app, f.OutToken)
 	requireStatus(t, w, 200)
 
-	failureEvent := outReadbackEvents(f.logsForTest())
+	failureEvent := outReadbackEvents(f.LogsForTest())
 	if len(failureEvent) != 1 {
 		t.Fatalf("out_readback events after the failure = %d, want 1", len(failureEvent))
 	}
@@ -296,14 +296,14 @@ func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
 
 	// A converged pair emits retry_pending=false, so the flag is meaningful in
 	// both directions and not a constant.
-	storetest.ConfirmChain(t, app.Store, f.outID, now)
-	if err := storetest.PrepareSubscriberSyncForLine(app.Store, f.lineID, now); err != nil {
+	storetest.ConfirmChain(t, app.Store, f.OutID, now)
+	if err := storetest.PrepareSubscriberSyncForLine(app.Store, f.LineID, now); err != nil {
 		t.Fatal(err)
 	}
-	storetest.ConfirmChain(t, app.Store, f.lineID, now)
-	before := len(outReadbackEvents(f.logsForTest()))
-	requireStatus(t, heartbeatJSON(t, app, f.lineToken), 200)
-	events := outReadbackEvents(f.logsForTest())
+	storetest.ConfirmChain(t, app.Store, f.LineID, now)
+	before := len(outReadbackEvents(f.LogsForTest()))
+	requireStatus(t, heartbeatJSON(t, app, f.LineToken), 200)
+	events := outReadbackEvents(f.LogsForTest())
 	if len(events) != before+1 {
 		t.Fatalf("out_readback events after the converged heartbeat = %d, want %d", len(events), before+1)
 	}

@@ -31,6 +31,10 @@ func TestHandlerPackageBoundaries(t *testing.T) {
 		// point at a package this one does not import back, so no cycle exists.
 		"subscriber": {"infra", "subscription"},
 	}
+	// handlertest and internal/web/testhttp are test support, not domains: they
+	// exist so a domain's tests can drive the assembled root, so they import it
+	// and the domains they build fixtures from. Guarding their edges would pin
+	// the fixture layering instead of the production dependency direction.
 	depguard.AssertSubpackages(t, "github.com/wingsky-1/MeshMux/internal/web/handler", cases, "handler")
 }
 
@@ -38,7 +42,9 @@ func TestHandlerPackageBoundaries(t *testing.T) {
 // package holds no route body. Every non-test file there is the package doc, the
 // assembly (router, constructor, lifecycle) or the cross-domain bridges, so a
 // handler added back to the root is visible as a new file rather than an
-// unnoticed helper.
+// unnoticed helper. The root's tests follow the same rule by hand: it keeps only
+// the ones that need two domains at once, and fixtures_test.go is the shared
+// fixture those need.
 func TestRootHandlerIsAssemblyOnly(t *testing.T) {
 	out, err := exec.Command("go", "list", "-f", "{{join .GoFiles \"\\n\"}}", ".").Output()
 	if err != nil {

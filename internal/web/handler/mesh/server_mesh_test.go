@@ -1,0 +1,685 @@
+package mesh_test
+
+import (
+	"context"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/handlertest"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
+
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+)
+
+var meshKeyPattern = regexp.MustCompile(`<pre class="sub-secret">([^<]+)</pre>`)
+
+func TestMeshRoutesRequireAuthentication(t *testing.T) {
+	app, _ := handlertest.TestApp(t)
+	b := &handlertest.Browser{App: app}
+	for _, path := range []string{"/mesh"} {
+		w := b.Req("GET", path, nil, http.Header{"Accept": {"text/html"}})
+		handlertest.RequireStatus(t, w, http.StatusUnauthorized)
+		if !strings.Contains(w.Body.String(), "AUTH_REQUIRED") {
+			t.Fatalf("%s did not require authentication", path)
+		}
+	}
+	for _, path := range []string{"/mesh", "/mesh/rekey", "/mesh/reconcile", "/mesh/revoke", "/mesh/retry"} {
+		w := b.Req("POST", path, url.Values{"csrf": {"x"}, "device_id": {"ffffffffffffffffffffffffffffffff"}}, nil)
+		handlertest.RequireStatus(t, w, http.StatusUnauthorized)
+		if !strings.Contains(w.Body.String(), "SESSION_INVALID") {
+			t.Fatalf("%s did not report SESSION_INVALID", path)
+		}
+	}
+	devices, err := app.Store.ListMeshDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("unauthenticated request created %d devices", len(devices))
+	}
+}
+
+func TestMeshPageRequiresCSRFOnMutations(t *testing.T) {
+	app, b, _, _ := handlertest.MeshTestApp(t)
+	w := b.Req("POST", "/mesh", url.Values{"csrf": {"wrong"}, "display_name": {"phone"}, "purpose": {"mesh_only"}, "platform": {"ios"}}, nil)
+	handlertest.RequireStatus(t, w, http.StatusForbidden)
+	if !strings.Contains(w.Body.String(), "CSRF_REJECTED") {
+		t.Fatal("wrong CSRF was not rejected")
+	}
+	devices, err := app.Store.ListMeshDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("rejected request created %d devices", len(devices))
+	}
+}
+
+// TestMeshPageOwnsNavigationRoute proves the placeholder navigation page no
+// longer competes with the real mesh page: the response is the device
+// workspace, not the "尚未实现" filler.
+func TestMeshPageOwnsNavigationRoute(t *testing.T) {
+	_, b, _, _ := handlertest.MeshTestApp(t)
+	w := b.Req("GET", "/mesh", nil, nil)
+	handlertest.RequireStatus(t, w, 200)
+	body := w.Body.String()
+	if !strings.Contains(body, "新增 Mesh 设备") || !strings.Contains(body, "重新核对全部设备") {
+		t.Fatalf("mesh page missing its own controls: %.400s", body)
+	}
+	if strings.Contains(body, "将在后续开发阶段开放") {
+		t.Fatal("placeholder page still owns /mesh")
+	}
+	if !strings.Contains(body, "尚未创建 Mesh 设备") {
+		t.Fatal("empty state is not shown honestly")
+	}
+	if !strings.Contains(body, "0 台") {
+		t.Fatal("device count badge missing")
+	}
+	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+	// The page's own stylesheet is embedded with the rest of the assets, so the
+	// page never depends on a remote stylesheet (the CSP forbids one).
+	handlertest.RequireStatus(t, b.Req("GET", "/assets/mesh.css", nil, nil), 200)
+}
+
+// TestMeshCreateShowsKeyOnceAndNeverLeaksIt covers the disclosure contract: the
+// plaintext appears in the POST body exactly once, the response is not cacheable
+// or reusable, and the key stays out of the URL, the following page and the
+// service log.
+func TestMeshCreateShowsKeyOnceAndNeverLeaksIt(t *testing.T) {
+	app, b, fake, logs := handlertest.MeshTestApp(t)
+
+	w := b.Post("/mesh", url.Values{"display_name": {"alice-iphone"}, "purpose": {"mesh_only"}, "platform": {"ios"}, "subscriber_id": {""}})
+	handlertest.RequireStatus(t, w, http.StatusOK)
+	if got := w.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want private, no-store", got)
+	}
+	if got := w.Header().Get("Location"); got != "" {
+		t.Fatalf("key response redirected to %q; a redirect would put state in a URL", got)
+	}
+	match := meshKeyPattern.FindStringSubmatch(w.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("no one-time key in the response: %.400s", w.Body.String())
+	}
+	secret := match[1]
+	if len(secret) != 43 {
+		t.Fatalf("disclosed secret has %d characters, want 43", len(secret))
+	}
+	// The plaintext is never reflected into a header (a Location or a cookie
+	// would move it into a URL or a handlertest.Browser store).
+	for name, values := range w.Header() {
+		for _, value := range values {
+			if strings.Contains(value, secret) {
+				t.Fatalf("the plaintext key leaked into header %q", name)
+			}
+		}
+	}
+	// The key exists only in that one response body, exactly once: a second
+	// occurrence would mean it was also reflected into a URL, a hidden field or
+	// a data attribute.
+	if got := strings.Count(w.Body.String(), secret); got != 1 {
+		t.Fatalf("the plaintext key appears %d times in the response, want 1", got)
+	}
+	next := b.Req("GET", "/mesh", nil, nil)
+	handlertest.RequireStatus(t, next, 200)
+	if strings.Contains(next.Body.String(), secret) {
+		t.Fatal("the following page rendered the plaintext key again")
+	}
+	if strings.Contains(logs.String(), secret) {
+		t.Fatal("the plaintext key reached the service log")
+	}
+	// No log line carries a key-shaped value at all: the 43-character base64url
+	// form is the only shape a key has, so a pass here is the sentinel that the
+	// enrollment boundary is not logged.
+	if keyShaped := regexp.MustCompile(`[A-Za-z0-9_-]{43,}`).FindString(logs.String()); keyShaped != "" {
+		t.Fatalf("a key-shaped value reached the log: %q", keyShaped)
+	}
+	if !strings.Contains(logs.String(), "MESH_DEVICE_ENROLLMENT_KEY_ISSUED") {
+		t.Fatal("the key issue audit event was not recorded")
+	}
+	// Only the digest is stored; the plaintext column does not exist.
+	var digests int
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
+		t.Fatal(err)
+	}
+	if digests != 1 {
+		t.Fatalf("stored %d key digests, want 1", digests)
+	}
+	// The user was resolved through the fixed default user, and no pre-auth key
+	// was minted: this slice issues Hub-side keys only.
+	if fake.CallsOf("preauthkeys.create") != 0 {
+		t.Fatal("web handlers minted a Headscale pre-auth key")
+	}
+}
+
+// createMeshOnlyDevice posts one mesh-only device through the page and returns
+// the rendered body, so the disclosure tests differ only in their configuration
+// and their assertions.
+func createMeshOnlyDevice(t *testing.T, b *handlertest.Browser, displayName, platform string) string {
+	t.Helper()
+	w := b.Post("/mesh", url.Values{"display_name": {displayName}, "purpose": {"mesh_only"}, "platform": {platform}, "subscriber_id": {""}})
+	handlertest.RequireStatus(t, w, http.StatusOK)
+	return w.Body.String()
+}
+
+// TestMeshOnlyDisclosureShowsStandardJoinCommand proves a mesh-only device gets
+// a concrete Tailscale join command (login-server + auth-key placeholder +
+// no invented routes), while the secret itself still appears exactly once.
+func TestMeshOnlyDisclosureShowsStandardJoinCommand(t *testing.T) {
+	app, b, _, _ := handlertest.MeshTestApp(t)
+	app.Cfg.HeadscaleOrigin = "https://headscale.example.invalid"
+
+	body := createMeshOnlyDevice(t, b, "carol-nas", "linux")
+	if !strings.Contains(body, "tailscale up --login-server=https://headscale.example.invalid --auth-key=") {
+		t.Fatalf("standard join command missing: %.600s", body)
+	}
+	if strings.Contains(body, "--advertise-routes=") {
+		t.Fatal("mesh-only join command must not advertise routes")
+	}
+}
+
+// TestMeshDisclosureWithoutOriginAsksForConfiguration proves the page says plainly
+// that the join command needs --headscale-origin instead of inventing a control
+// plane (never the SaaS default).
+func TestMeshDisclosureWithoutOriginAsksForConfiguration(t *testing.T) {
+	app, b, _, _ := handlertest.MeshTestApp(t)
+	app.Cfg.HeadscaleOrigin = ""
+
+	body := createMeshOnlyDevice(t, b, "dave-phone", "android")
+	if !strings.Contains(body, "--headscale-origin") {
+		t.Fatalf("missing-origin hint absent: %.600s", body)
+	}
+	if strings.Contains(body, "controlplane.tailscale.com") {
+		t.Fatal("must never fall back to the SaaS control plane")
+	}
+}
+
+// TestMeshReconcilePersistsOnlyOnExplicitAction proves a page render is not a
+// reconciliation: the observation timestamp moves only when the operator asks.
+func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
+	app, b, fake, _ := handlertest.MeshTestApp(t)
+	device, _ := handlertest.MeshCreateDevice(t, b, fake, "nas", "mesh_only", "nas", "")
+	if device.ObservedAt != 0 {
+		t.Fatalf("creation already recorded an observation: %+v", device)
+	}
+	// A device that never registered carries no node id, so a live Headscale
+	// node with a matching name is not evidence: the row stays "未注册" and no
+	// address is attributed to it.
+	fake.Nodes = []meshnet.Node{{ID: 77, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.7"}}}
+	page := b.Req("GET", "/mesh", nil, nil)
+	handlertest.RequireStatus(t, page, 200)
+	afterRender, err := b.App.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRender.ObservedAt != 0 || afterRender.Status != mesh.StatusPending {
+		t.Fatalf("a page render recorded an observation: %+v", afterRender)
+	}
+	if !strings.Contains(page.Body.String(), "尚未观测到") {
+		t.Fatal("an unobserved device was not shown as unobserved")
+	}
+	if strings.Contains(page.Body.String(), "100.64.0.7") {
+		t.Fatal("a hostname match was rendered as this device's Tailnet address")
+	}
+
+	// The explicit action records an observation. A device with no node id is
+	// still not registered by it, because no Headscale node id was observed.
+	w := b.Post("/mesh/reconcile", url.Values{})
+	handlertest.RequireStatus(t, w, 200)
+	reconciled, err := b.App.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.ObservedAt == 0 {
+		t.Fatal("explicit reconcile did not persist an observation")
+	}
+	if reconciled.Status != mesh.StatusPending {
+		t.Fatalf("reconcile invented a registration: %+v", reconciled)
+	}
+
+	// A registered device is annotated with the live address on a plain render,
+	// and the render still writes nothing.
+	measured, err := b.App.Store.RecordMeshObservation(device.ID, 77, app.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := measured.ObservedAt
+	page = b.Req("GET", "/mesh", nil, nil)
+	handlertest.RequireStatus(t, page, 200)
+	if !strings.Contains(page.Body.String(), "100.64.0.7") {
+		t.Fatal("the live Tailnet address was not shown even though Headscale reported it")
+	}
+	if !strings.Contains(page.Body.String(), "在线") {
+		t.Fatal("the live online evidence was not shown")
+	}
+	after, err := b.App.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ObservedAt != before || after.Status != mesh.StatusRegistered {
+		t.Fatalf("a page render changed the record: %+v", after)
+	}
+}
+
+func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
+	app, b, fake, _ := handlertest.MeshTestApp(t)
+	fake.Users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	records, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := app.Store.RecordMeshObservation(records.ID, 42, app.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registered.Status != mesh.StatusRegistered {
+		t.Fatalf("fixture not registered: %+v", registered)
+	}
+	// Headscale reports nothing, so the confirmed disappearance moves the device
+	// to expired instead of leaving a stale "registered".
+	fake.Nodes = nil
+	w := b.Post("/mesh/reconcile", url.Values{})
+	handlertest.RequireStatus(t, w, 200)
+	expired, err := app.Store.GetMeshDevice(records.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Status != mesh.StatusExpired {
+		t.Fatalf("disappearance not recorded: %+v", expired)
+	}
+	// A Headscale outage is reported, never rendered as "expired".
+	fake.FailWith["nodes.list"] = meshnet.CodeUnavailable
+	w = b.Post("/mesh/reconcile", url.Values{})
+	handlertest.RequireStatus(t, w, http.StatusServiceUnavailable)
+	if !strings.Contains(w.Body.String(), meshnet.CodeUnavailable) {
+		t.Fatalf("outage lost its stable code: %.300s", w.Body.String())
+	}
+}
+
+// TestMeshReconcileConsumesLingeringKey proves the one-time key is settled by
+// the path that proves registration: a database written before keys were spent
+// on registration keeps a live issued row for an already registered device, and
+// the next explicit reconcile turns it into the terminal consumed state with its
+// digest cleared. Nothing accepts the secret back, so the observation is what
+// retires it.
+func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
+	app, b, fake, _ := handlertest.MeshTestApp(t)
+	now := app.Now()
+	device, err := app.Store.CreateMeshDevice(storetest.MeshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.Store.RecordMeshObservation(device.ID, 42, now); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := mesh.NewEnrollmentSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID := strings.Repeat("a", 32)
+	if _, err = app.Store.DB.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
+ VALUES(?,?,?,'issued',?,?,0)`, keyID, device.ID, mesh.EnrollmentKeyHash(secret), now.Unix(), now.Add(mesh.KeyTTL).Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.Nodes = []meshnet.Node{{ID: 42, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser}}
+	w := b.Post("/mesh/reconcile", url.Values{})
+	handlertest.RequireStatus(t, w, 200)
+
+	var (
+		state      string
+		hash       []byte
+		consumedAt int64
+	)
+	if err = app.Store.DB.QueryRow(`SELECT state, secret_hash, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
+		Scan(&state, &hash, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(mesh.KeyConsumed) || hash != nil || consumedAt == 0 {
+		t.Fatalf("reconcile left the key %q hash=%v consumed_at=%d, want consumed/NULL/set", state, hash, consumedAt)
+	}
+	// A second check finds no issued row and changes nothing.
+	w = b.Post("/mesh/reconcile", url.Values{})
+	handlertest.RequireStatus(t, w, 200)
+	if err = app.Store.DB.QueryRow(`SELECT state, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
+		Scan(&state, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(mesh.KeyConsumed) || consumedAt == 0 {
+		t.Fatalf("repeat reconcile rewrote the consumed key: state %q consumed_at %d", state, consumedAt)
+	}
+}
+
+// TestMeshRevokeIsIdempotentAndIsolated covers the two guarantees a device
+// deletion must keep: repeating it is a no-op, and it never disables the bound
+// subscriber, its credentials or its subscription token.
+func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
+	app, b, fake, _ := handlertest.MeshTestApp(t)
+	fake.Users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	now := app.Now()
+	line := storetest.CreateEdgeNode(t, app.Store, now)
+	storetest.ConfigureLine(t, app.Store, line, "line-a", now)
+	subscriber, token, err := app.Store.CreateSubscriber("alice", []string{line}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, _ := handlertest.MeshCreateDevice(t, b, fake, "alice-iphone", "proxy_mesh", "ios", subscriber.ID)
+	if device.SubscriberID != subscriber.ID {
+		t.Fatalf("subscriber binding = %q, want %q", device.SubscriberID, subscriber.ID)
+	}
+	// A second device of the same subscriber must survive the first one's
+	// deletion: one device is one identity, not the whole subscription.
+	second, _ := handlertest.MeshCreateDevice(t, b, fake, "alice-ipad", "proxy_mesh", "ios", subscriber.ID)
+	registered, err := app.Store.RecordMeshObservation(device.ID, 42, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registered.Status != mesh.StatusRegistered {
+		t.Fatalf("fixture not registered: %+v", registered)
+	}
+	fake.Nodes = []meshnet.Node{{ID: 42, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.9"}}}
+	fake.ResetCalls()
+
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	handlertest.RequireStatus(t, w, 200)
+	revoked, err := app.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Status != mesh.StatusRevoked {
+		t.Fatalf("revoke did not settle the device: %+v", revoked)
+	}
+	if revoked.RevokeReason != "USER_DELETE" || revoked.RevokeRequestedAt == 0 {
+		t.Fatalf("revoke intent not audited: %+v", revoked)
+	}
+	// The removal expired and deleted the node in that order. The list render
+	// that follows reads users and nodes, which write nothing.
+	calls := fake.ResetCalls()
+	want := []string{"nodes.expire", "nodes.delete"}
+	if len(calls) < len(want) {
+		t.Fatalf("remote calls = %v, want at least %v", calls, want)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("remote calls = %v, want %v first", calls, want)
+		}
+	}
+
+	// Repeating the deletion is a success and performs no remote change: the
+	// page render that follows reads users and nodes only.
+	w = b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	handlertest.RequireStatus(t, w, 200)
+	if !strings.Contains(w.Body.String(), "无需再次操作") {
+		t.Fatalf("repeat revoke was not reported as a no-op: %.300s", w.Body.String())
+	}
+	for _, call := range fake.ResetCalls() {
+		if call != "users.list" && call != "nodes.list" {
+			t.Fatalf("repeat revoke performed a remote change: %v", call)
+		}
+	}
+	again, err := app.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Status != mesh.StatusRevoked || again.RevokeRequestedAt != revoked.RevokeRequestedAt {
+		t.Fatalf("repeat revoke rewrote the audit record: %+v", again)
+	}
+
+	// The subscriber and every credential/token of it survive untouched.
+	stored, err := app.Store.GetSubscriber(subscriber.ID)
+	if err != nil {
+		t.Fatalf("subscriber lost: %v", err)
+	}
+	if stored.State != "active" {
+		t.Fatalf("subscriber state = %q, want active", stored.State)
+	}
+	credentials, err := app.Store.ListSubscriberCredentials(subscriber.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(credentials) == 0 {
+		t.Fatal("subscriber credentials disappeared with the mesh device")
+	}
+	if _, err = storetest.ResolveBearer(t, app.Store, token); err != nil {
+		t.Fatalf("subscription token stopped working: %v", err)
+	}
+	// The sibling device of the same subscriber is untouched.
+	sibling, err := app.Store.GetMeshDevice(second.ID)
+	if err != nil {
+		t.Fatalf("sibling device lost: %v", err)
+	}
+	if sibling.Status != mesh.StatusPending || sibling.RevokeReason != "" || sibling.SubscriberID != subscriber.ID {
+		t.Fatalf("sibling device changed: %+v", sibling)
+	}
+}
+
+// TestMeshRevokeRetriesRemoteFailure proves a Headscale refusal leaves a
+// retryable intent instead of a settled record with a live node.
+func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
+	app, b, fake, _ := handlertest.MeshTestApp(t)
+	fake.Users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	device, _ := handlertest.MeshCreateDevice(t, b, fake, "tablet", "mesh_only", "android", "")
+	if _, err := app.Store.RecordMeshObservation(device.ID, 55, app.Now()); err != nil {
+		t.Fatal(err)
+	}
+	fake.FailWith["nodes.delete"] = meshnet.CodeCommandFailed
+
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {device.ID}})
+	handlertest.RequireStatus(t, w, 200)
+	pending, err := app.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Status != mesh.StatusRevoking {
+		t.Fatalf("failed remote removal settled the device: %+v", pending)
+	}
+	if !strings.Contains(w.Body.String(), meshnet.CodeCommandFailed) {
+		t.Fatalf("failure code not reported: %.300s", w.Body.String())
+	}
+
+	// The retry button is the same intent route; once Headscale answers, the
+	// device settles.
+	delete(fake.FailWith, "nodes.delete")
+	w = b.Post("/mesh/retry", url.Values{"device_id": {device.ID}})
+	handlertest.RequireStatus(t, w, 200)
+	settled, err := app.Store.GetMeshDevice(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Status != mesh.StatusRevoked {
+		t.Fatalf("retry did not settle the device: %+v", settled)
+	}
+}
+
+func TestMeshUnknownDeviceIs404(t *testing.T) {
+	_, b, _, _ := handlertest.MeshTestApp(t)
+	missing := "ffffffffffffffffffffffffffffffff"
+	for _, path := range []string{"/mesh/revoke", "/mesh/retry", "/mesh/rekey"} {
+		w := b.Post(path, url.Values{"device_id": {missing}})
+		handlertest.RequireStatus(t, w, http.StatusNotFound)
+		if !strings.Contains(w.Body.String(), "MESH_DEVICE_NOT_FOUND") {
+			t.Fatalf("%s did not report MESH_DEVICE_NOT_FOUND: %.300s", path, w.Body.String())
+		}
+		// Every failure carries the operation id the audit log uses.
+		if !strings.Contains(w.Body.String(), w.Header().Get("X-Operation-ID")) {
+			t.Fatalf("%s failure page lost its operation id", path)
+		}
+	}
+	// A malformed identifier is a client error, not a missing record.
+	w := b.Post("/mesh/revoke", url.Values{"device_id": {"not-an-id"}})
+	handlertest.RequireStatus(t, w, http.StatusBadRequest)
+	if !strings.Contains(w.Body.String(), mesh.CodeDeviceIDInvalid) {
+		t.Fatalf("malformed id lost its code: %.300s", w.Body.String())
+	}
+}
+
+// TestMeshRekeyWithdrawsOldKey proves a reissue never leaves two live secrets:
+// the swap installs the new key and revokes the previous issued one in the same
+// transaction, so after the response exactly one row is live.
+func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
+	app, b, fake, _ := handlertest.MeshTestApp(t)
+	device, firstSecret := handlertest.MeshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
+	firstKeys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstKeys) != 1 || firstKeys[0].State != mesh.KeyIssued {
+		t.Fatalf("unexpected initial keys: %+v", firstKeys)
+	}
+
+	w := b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	handlertest.RequireStatus(t, w, 200)
+	match := meshKeyPattern.FindStringSubmatch(w.Body.String())
+	if len(match) != 2 || match[1] == firstSecret {
+		t.Fatal("reissue did not disclose a fresh key")
+	}
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var issued, revoked int
+	for _, key := range keys {
+		switch key.State {
+		case mesh.KeyIssued:
+			issued++
+		case mesh.KeyRevoked:
+			revoked++
+		}
+	}
+	if issued != 1 || revoked != 1 {
+		t.Fatalf("after reissue: issued=%d revoked=%d, want 1/1", issued, revoked)
+	}
+	// The live key is the one the list reports; an older revoked record does not
+	// hide it.
+	if label, _, _ := meshh.MeshKeyState(keys, app.Now()); label != "已签发 · 未使用" {
+		t.Fatalf("key column rendered %q after reissue", label)
+	}
+	// Registration spends only the live key: the withdrawn row stays revoked in
+	// the audit trail and is never rewired into a consumption.
+	if _, err = app.Store.RecordMeshObservation(device.ID, 42, app.Now()); err != nil {
+		t.Fatal(err)
+	}
+	keys, err = app.Store.ListMeshEnrollmentKeys(device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, revoked = 0, 0
+	var consumed int
+	for _, key := range keys {
+		switch key.State {
+		case mesh.KeyIssued:
+			issued++
+		case mesh.KeyConsumed:
+			consumed++
+		case mesh.KeyRevoked:
+			revoked++
+		}
+	}
+	if issued != 0 || consumed != 1 || revoked != 1 {
+		t.Fatalf("after registration: issued=%d consumed=%d revoked=%d, want 0/1/1", issued, consumed, revoked)
+	}
+	// Rekeying a revoked device is refused with its own stable code.
+	if _, _, err = app.Store.RequestMeshDeviceRevocation(device.ID, "USER_DELETE", app.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w = b.Post("/mesh/rekey", url.Values{"device_id": {device.ID}})
+	handlertest.RequireStatus(t, w, http.StatusConflict)
+	if !strings.Contains(w.Body.String(), "MESH_DEVICE_NOT_REENROLLABLE") {
+		t.Fatalf("revoked device accepted a reissue: %.300s", w.Body.String())
+	}
+}
+
+func TestMeshCreateRejectsBindingMismatch(t *testing.T) {
+	_, b, fake, _ := handlertest.MeshTestApp(t)
+	fake.Users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
+	w := b.Post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"proxy_mesh"}, "platform": {"ios"}, "subscriber_id": {""}})
+	handlertest.RequireStatus(t, w, http.StatusBadRequest)
+	if !strings.Contains(w.Body.String(), mesh.CodeSubscriberBindingInvalid) {
+		t.Fatalf("binding mismatch lost its code: %.300s", w.Body.String())
+	}
+	devices, err := b.App.Store.ListMeshDevices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("rejected binding created %d devices", len(devices))
+	}
+}
+
+// TestMeshCreateCreatesDefaultUserIdempotently covers D2: the shared default
+// user is created when missing and an "already exists" answer is success, so a
+// repeated creation is not an error.
+func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
+	_, b, fake, _ := handlertest.MeshTestApp(t)
+	fake.Users = nil
+	device, _ := handlertest.MeshCreateDevice(t, b, fake, "smoke", "mesh_only", "other", "")
+	if device.HeadscaleUser != mesh.DefaultHeadscaleUser {
+		t.Fatalf("headscale user = %q, want %q", device.HeadscaleUser, mesh.DefaultHeadscaleUser)
+	}
+	if fake.CallsOf("users.create") != 1 {
+		t.Fatalf("default user was not created once: %v", fake.Calls)
+	}
+	fake.ResetCalls()
+	// A second creation finds the user and does not create it again.
+	handlertest.MeshCreateDevice(t, b, fake, "smoke2", "mesh_only", "other", "")
+	if fake.CallsOf("users.create") != 0 {
+		t.Fatalf("default user was created again: %v", fake.Calls)
+	}
+	// Creating the user again because Headscale raced the list is still success.
+	fake.Users = nil
+	fake.FailWith["users.create"] = meshnet.CodeAlreadyExists
+	if _, err := b.App.MeshDomainForTest().EnsureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
+		t.Fatalf("already-exists user creation failed: %v", err)
+	}
+	// A name other than the shared default is never minted from a form field.
+	if _, err := b.App.MeshDomainForTest().EnsureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), meshh.CodeMeshHeadscaleUserUnknown) {
+		t.Fatalf("an arbitrary headscale user was created: %v", err)
+	}
+	if fake.CallsOf("users.create") != 1 {
+		t.Fatalf("unexpected user creations: %v", fake.ResetCalls())
+	}
+}
+
+// TestMeshNodeNameFallsBackForNonLatinLabels proves the assigned node name is
+// canonical even when the display label has no ASCII characters, and that it is
+// unique per Headscale user.
+func TestMeshNodeNameFallsBackForNonLatinLabels(t *testing.T) {
+	if got := meshh.MeshNodeName("客厅 NAS"); got != "mesh-nas" {
+		t.Fatalf("node name = %q, want mesh-nas", got)
+	}
+	if got := meshh.MeshNodeName("客厅"); got != "mesh" {
+		t.Fatalf("node name = %q, want mesh", got)
+	}
+	if got := meshh.MeshNodeName(strings.Repeat("a", 200)); len(got) > 63 {
+		t.Fatalf("node name length = %d", len(got))
+	}
+	if err := mesh.ValidateNodeName(meshh.MeshNodeName("  -- ")); err != nil {
+		t.Fatalf("fallback node name invalid: %v", err)
+	}
+}
+
+// TestMeshKeyStateLabels keeps the key column honest about a lapsed key that was
+// never retired.
+func TestMeshKeyStateLabels(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	lapsed := store.MeshEnrollmentKeyRecord{State: mesh.KeyIssued, IssuedAt: now.Unix(), ExpiresAt: now.Add(-time.Minute).Unix()}
+	label, class, _ := meshh.MeshKeyState([]store.MeshEnrollmentKeyRecord{lapsed}, now)
+	if label != "已过期 · 待回收" || class != "badge" {
+		t.Fatalf("lapsed key rendered as %q/%q", label, class)
+	}
+	live := store.MeshEnrollmentKeyRecord{State: mesh.KeyIssued, IssuedAt: now.Unix(), ExpiresAt: now.Add(time.Minute).Unix()}
+	if label, _, _ = meshh.MeshKeyState([]store.MeshEnrollmentKeyRecord{live}, now); label != "已签发 · 未使用" {
+		t.Fatalf("live key rendered as %q", label)
+	}
+	if label, _, _ = meshh.MeshKeyState(nil, now); label != "尚无 Key" {
+		t.Fatalf("missing key rendered as %q", label)
+	}
+}

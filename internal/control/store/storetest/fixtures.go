@@ -19,7 +19,6 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
-	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 	subdomain "github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -94,47 +93,47 @@ func SubscriberStore(t *testing.T) (*store.Store, time.Time) {
 // ResolveBearer is the test-side read of the bearer contract: only an active
 // token of an active subscriber resolves. The production download path resolves
 // the same rows inside one snapshot transaction.
-func ResolveBearer(t *testing.T, s *store.Store, token string) (subscription.Subscriber, error) {
+func ResolveBearer(t *testing.T, s *store.Store, token string) (subdomain.Subscriber, error) {
 	t.Helper()
-	if err := subscription.ValidateToken(token); err != nil {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+	if err := subdomain.ValidateToken(token); err != nil {
+		return subdomain.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
 	}
 	var subscriberID string
 	err := s.DB.QueryRow(`SELECT subscriber_id FROM subscription_tokens WHERE token_hash=? AND revoked=0`,
-		subscription.TokenHash(token)).Scan(&subscriberID)
+		subdomain.TokenHash(token)).Scan(&subscriberID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+		return subdomain.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
 	}
 	if err != nil {
-		return subscription.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
+		return subdomain.Subscriber{}, errors.New("DATABASE_UNAVAILABLE")
 	}
 	sub, err := s.GetSubscriber(subscriberID)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "SUBSCRIBER_NOT_FOUND") {
-			return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+			return subdomain.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
 		}
-		return subscription.Subscriber{}, err
+		return subdomain.Subscriber{}, err
 	}
-	if sub.State != subscription.StateActive {
-		return subscription.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
+	if sub.State != subdomain.StateActive {
+		return subdomain.Subscriber{}, errors.New("TOKEN_INVALID: unknown or expired subscription token")
 	}
 	return sub, nil
 }
 
 // ReadStoredLine returns one stored Line through the production list path. It
 // keeps the old single-row assertions while the single-row getter is gone.
-func ReadStoredLine(t *testing.T, s *store.Store, nodeID string) (subscription.Line, error) {
+func ReadStoredLine(t *testing.T, s *store.Store, nodeID string) (subdomain.Line, error) {
 	t.Helper()
 	lines, err := s.ListLines()
 	if err != nil {
-		return subscription.Line{}, err
+		return subdomain.Line{}, err
 	}
 	for _, line := range lines {
 		if line.NodeID == nodeID {
 			return line, nil
 		}
 	}
-	return subscription.Line{}, errors.New("LINE_NOT_FOUND: unknown line")
+	return subdomain.Line{}, errors.New("LINE_NOT_FOUND: unknown line")
 }
 
 // CreateEdgeNode inserts one edge node so it can be used as a proxy Line.
@@ -160,16 +159,16 @@ func CreateOutNode(t *testing.T, s *store.Store, now time.Time) string {
 
 // TestLine returns a valid Line transport for one node. The port matches the
 // VLESS port of the fixture nodes.
-func TestLine(nodeID, name string) subscription.Line {
-	pair, err := subscription.NewRealityKeyPair()
+func TestLine(nodeID, name string) subdomain.Line {
+	pair, err := subdomain.NewRealityKeyPair()
 	if err != nil {
 		panic(err)
 	}
-	shortID, err := subscription.NewShortID()
+	shortID, err := subdomain.NewShortID()
 	if err != nil {
 		panic(err)
 	}
-	return subscription.Line{
+	return subdomain.Line{
 		NodeID:          nodeID,
 		DisplayName:     name,
 		Server:          "line.example.invalid",
@@ -185,7 +184,7 @@ func TestLine(nodeID, name string) subscription.Line {
 }
 
 // ConfigureLine stores a Line transport for one edge node.
-func ConfigureLine(t *testing.T, s *store.Store, nodeID, name string, now time.Time) subscription.Line {
+func ConfigureLine(t *testing.T, s *store.Store, nodeID, name string, now time.Time) subdomain.Line {
 	t.Helper()
 	line, err := s.SetLine(TestLine(nodeID, name), now)
 	if err != nil {
@@ -266,7 +265,7 @@ func EnrollNodeIdentity(t *testing.T, s *store.Store, nodeID string, now time.Ti
 		t.Fatal(err)
 	}
 }
-func PublishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line subscription.Line, credentials []subscription.Credential, now time.Time) {
+func PublishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line subdomain.Line, credentials []subdomain.Credential, now time.Time) {
 	t.Helper()
 	users := make([]node.VLESSUser, 0, len(credentials))
 	for _, credential := range credentials {
@@ -312,17 +311,17 @@ func PublishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line
 
 // downloadLineFixture returns a valid Line transport for one node. The port
 // matches the VLESS port of the fixture nodes.
-func DownloadLineFixture(t *testing.T, nodeID, name string) subscription.Line {
+func DownloadLineFixture(t *testing.T, nodeID, name string) subdomain.Line {
 	t.Helper()
-	pair, err := subscription.NewRealityKeyPair()
+	pair, err := subdomain.NewRealityKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	shortID, err := subscription.NewShortID()
+	shortID, err := subdomain.NewShortID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return subscription.Line{
+	return subdomain.Line{
 		NodeID:          nodeID,
 		DisplayName:     name,
 		Server:          "line.example.invalid",
@@ -339,62 +338,10 @@ func DownloadLineFixture(t *testing.T, nodeID, name string) subscription.Line {
 
 // publishConvergedCandidate writes the next candidate revision of one Line
 // and records the matching readback evidence on the node.
-func publishConvergedCandidate(t *testing.T, s *store.Store, nodeID string, line subscription.Line, credentials []subscription.Credential, now time.Time) {
-	t.Helper()
-	users := make([]node.VLESSUser, 0, len(credentials))
-	for _, credential := range credentials {
-		users = append(users, node.VLESSUser{CredentialID: credential.ID, UUID: credential.UUID})
-	}
-	reality := &node.RealityConfig{
-		ServerName:      line.ServerName,
-		HandshakeServer: line.HandshakeServer,
-		HandshakePort:   line.HandshakePort,
-		PrivateKey:      line.PrivateKey,
-		ShortID:         line.ShortID,
-	}
-	var revision int64
-	if err := s.DB.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		t.Fatal(err)
-	}
-	candidate := node.Candidate{
-		NodeID:        nodeID,
-		Role:          node.RoleEdge,
-		Revision:      revision,
-		VLESSPort:     8443,
-		KernelVersion: node.KernelVersion,
-		Users:         users,
-		Reality:       reality,
-	}
-	document, err := json.Marshal(node.NewCandidateDocument(candidate))
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := store.CandidateSHA256(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.DB.Exec(`INSERT INTO node_candidates(node_id, revision, candidate_json, config_sha256, created_at) VALUES(?,?,?,?,?)`,
-		nodeID, candidate.Revision, document, digest, now.Unix()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.DB.Exec(`UPDATE nodes SET status='paired', last_heartbeat=?, observed_revision=?, observed_config_sha256=?,
-	 observed_at=?, updated_at=? WHERE id=?`, now.Unix(), candidate.Revision, digest, now.Unix(), now.Unix(), nodeID); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // enrollNodeIdentity records a valid, unrevoked Agent identity for one node.
 // A Line without an identity is not enrolled and can never serve a
 // credential.
-func enrollNodeIdentity(t *testing.T, s *store.Store, nodeID string, now time.Time) {
-	t.Helper()
-	if _, err := s.DB.Exec(`INSERT INTO node_identities(node_id, token_hash, created_at, revoked) VALUES(?,?,?,0)`,
-		nodeID, store.TokenHash(store.RandomToken()), now.Unix()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func DownloadFixture(t *testing.T, s *store.Store, now time.Time) (string, subscription.Line, subscription.Subscriber, string, subscription.Credential) {
+func DownloadFixture(t *testing.T, s *store.Store, now time.Time) (string, subdomain.Line, subdomain.Subscriber, string, subdomain.Credential) {
 	t.Helper()
 	created, _, err := s.CreateNode("edge", "line", 8443, 2222, now)
 	if err != nil {

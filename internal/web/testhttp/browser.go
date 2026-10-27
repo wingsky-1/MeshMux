@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store/storetest"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
@@ -118,6 +120,14 @@ func RequireStatus(t *testing.T, w *httptest.ResponseRecorder, status int) {
 	}
 }
 
+// Require2xx fails unless the response carries a success status.
+func Require2xx(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code < 200 || w.Code > 299 {
+		t.Fatalf("status %d want 2xx (operation_id %q)", w.Code, w.Header().Get("X-Operation-ID"))
+	}
+}
+
 // Initialize runs the first-run setup with the bootstrap secret in dir.
 func Initialize(t *testing.T, b Requester, dir, password string) {
 	t.Helper()
@@ -207,6 +217,16 @@ func ReportJSON(t *testing.T, h http.Handler, token string, result protocol.Task
 	return BearerReq(h, "POST", "/api/agent/result", token, body)
 }
 
+// HeartbeatJSON posts one Agent heartbeat.
+func HeartbeatJSON(t *testing.T, h http.Handler, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(protocol.HeartbeatRequest{AgentVersion: "meshmux-agent test", KernelVersion: node.KernelVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return BearerReq(h, "POST", "/api/agent/heartbeat", token, body)
+}
+
 // FixedTasksForRevision returns the pending Agent tasks of one node whose params
 // point at exactly one candidate revision.
 func FixedTasksForRevision(t *testing.T, s *store.Store, nodeID string, revision int64) []protocol.Task {
@@ -248,6 +268,98 @@ func CreatePairedWebNode(t *testing.T, h http.Handler, s *store.Store, role, nam
 		t.Fatal(err)
 	}
 	return paired
+}
+
+// AgentToken returns the identity token of a paired node. The test app never
+// stores the plaintext token, so it is re-issued through the pairing endpoint
+// with the node's own immutable role.
+func AgentToken(t *testing.T, h http.Handler, s *store.Store, nodeID string) string {
+	t.Helper()
+	var role string
+	if err := s.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	code, err := s.ReissuePairing(nodeID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := PairJSON(t, h, nodeID, role, code)
+	if w.Code != 200 {
+		t.Fatalf("re-pair status=%d body=%.200s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["identity_token"] == "" {
+		t.Fatalf("re-pair body: %v %.200s", err, w.Body.String())
+	}
+	return body["identity_token"]
+}
+
+// OutSyncApp is one Hub with a paired Out, a paired Line with a literal address
+// and one subscriber, built through the real HTTP endpoints so the heartbeat and
+// result path is exercised end to end.
+type OutSyncApp struct {
+	Handler   http.Handler
+	Store     *store.Store
+	Logs      *bytes.Buffer
+	OutToken  string
+	LineToken string
+	OutID     string
+	LineID    string
+}
+
+// LogsForTest returns the audit log buffer, so a test can assert which fields an
+// event emitted.
+func (f OutSyncApp) LogsForTest() string {
+	if f.Logs == nil {
+		return ""
+	}
+	return f.Logs.String()
+}
+
+// SubscriberID returns the single subscriber the fixture created.
+func (f OutSyncApp) SubscriberID(t *testing.T) string {
+	t.Helper()
+	var id string
+	if err := f.Store.DB.QueryRow(`SELECT id FROM subscribers ORDER BY created_at ASC, id ASC LIMIT 1`).Scan(&id); err != nil {
+		t.Fatalf("read the fixture subscriber: %v", err)
+	}
+	return id
+}
+
+// NewOutSyncApp builds the fixture. Both nodes start with their initial
+// publication chain already settled, so a test only has to reason about the
+// chain its own action creates.
+func NewOutSyncApp(t *testing.T, h http.Handler, s *store.Store, logs *bytes.Buffer) OutSyncApp {
+	t.Helper()
+	now := time.Now()
+	out := CreatePairedWebNode(t, h, s, "out", "out-sync", 9443, 2223)
+	line := CreatePairedWebNode(t, h, s, "edge", "line-sync", 8443, 2222)
+	lineSettings := storetest.TestLine(line.ID, "line-sync")
+	lineSettings.Server = "203.0.113.7"
+	lineSettings.ServerName = "line.example.invalid"
+	if _, err := s.SetLine(lineSettings, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture Out always carries its dial address, so enabling a binding in
+	// a test exercises the egress path instead of the transport refusal.
+	storetest.ConfigureOut(t, s, out.ID, now)
+	// The tokens are issued after the roles are known. A reissue resets the node
+	// to pending, so both are marked online again afterwards and their seeded
+	// chains are settled, which lets the test attribute every later chain to its
+	// own action.
+	result := OutSyncApp{
+		Handler: h, Store: s, Logs: logs, OutID: out.ID, LineID: line.ID,
+		OutToken: AgentToken(t, h, s, out.ID), LineToken: AgentToken(t, h, s, line.ID),
+	}
+	for _, nodeID := range []string{out.ID, line.ID} {
+		storetest.MarkLineOnline(t, s, nodeID, now)
+		storetest.SettleTasks(t, s, nodeID)
+		storetest.ConfirmChain(t, s, nodeID, now)
+	}
+	return result
 }
 
 // SubscriptionRequest sends one raw request to the Web runtime. The target is
