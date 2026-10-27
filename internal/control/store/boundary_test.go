@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/depguard"
 )
 
 // TestStorePackageBoundaries pins the dependency order.
@@ -33,28 +35,7 @@ func TestStorePackageBoundaries(t *testing.T) {
 		"subscription": {"candidate", "common", "node", "policy"},
 		"upgrade":      {"candidate", "common", "node", "policy"},
 	}
-	root := "github.com/wingsky-1/MeshMux/internal/control/store"
-
-	for name, want := range cases {
-		t.Run(name, func(t *testing.T) {
-			out, err := exec.Command("go", "list", "-f", "{{join .Imports \"\\n\"}}", "./"+name).Output()
-			if err != nil {
-				t.Fatalf("go list ./%s: %v", name, err)
-			}
-			var got []string
-			for _, line := range strings.Split(string(out), "\n") {
-				line = strings.TrimSpace(line)
-				if after, ok := strings.CutPrefix(line, root+"/"); ok {
-					got = append(got, after)
-				}
-			}
-			sort.Strings(got)
-			sort.Strings(want)
-			if strings.Join(got, ",") != strings.Join(want, ",") {
-				t.Fatalf("store/%s imports %v; want exactly %v (domains must not reach sideways; the root package is the only meeting point)", name, got, want)
-			}
-		})
-	}
+	depguard.AssertSubpackages(t, "github.com/wingsky-1/MeshMux/internal/control/store", cases, "store")
 }
 
 // TestRootStoreIsAssemblyOnly pins the shape the split was for: the root holds no
