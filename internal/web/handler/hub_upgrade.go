@@ -5,25 +5,23 @@ package handler
 // token, a bounded form, and an operation id on every receipt.
 //
 // The Web process owns the SQLite handle, so it supplies the four database
-// callbacks while internal/hubupgrade owns the order and every file write. The
+// callbacks while internal/cli/hubupgrade owns the order and every file write. The
 // receipt only claims "staged": it names the operation and the verified
 // per-operation backup, never an applied upgrade. The irreversible approval bit
 // is not read here: single flight is journal-only (R2), and Task 5 re-reads the
 // bit before a destructive step.
-
 import (
 	"context"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // hubUpgradeReconcileInterval is the bounded reconcile period of the journal
@@ -31,10 +29,6 @@ import (
 // two never share a snapshot, because one writes journal files and the other is
 // read-only by construction.
 const hubUpgradeReconcileInterval = 30 * time.Second
-
-// hubTargetPattern mirrors the manifest and record target shape. It is checked
-// before the target can become part of a manifest path.
-var hubTargetPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 
 // hubBackupReceipt is the management receipt. OperationID is the upgrade
 // operation the operator carries to apply and approve; on a refusal it is the
@@ -53,7 +47,7 @@ type hubBackupReceipt struct {
 
 func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request, _ session) {
 	target := strings.TrimSpace(r.PostForm.Get("target_version"))
-	if !hubTargetPattern.MatchString(target) {
+	if !isValidReleaseVersion(target) {
 		app.event(r, "MANIFEST_UNAVAILABLE")
 		app.writeJSON(w, http.StatusBadRequest, hubBackupReceipt{
 			Status: "failed", ErrorCode: "MANIFEST_UNAVAILABLE", OperationID: operation(r),
@@ -146,7 +140,7 @@ type hubApplyReceipt struct {
 // queued is the honest maximum it can claim.
 func (app *Server) tasksHubUpgradeApply(w http.ResponseWriter, r *http.Request, _ session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
-	if !store.DatabaseBackupOperationPattern.MatchString(operationID) {
+	if !isValidOperationID(operationID) {
 		app.event(r, "HUB_HANDOFF_REQUEST_INVALID")
 		app.writeJSON(w, http.StatusBadRequest, hubApplyReceipt{
 			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: operation(r),
@@ -342,7 +336,7 @@ type hubRestoreReceipt struct {
 // byte, schema and pin check on the root side.
 func (app *Server) tasksHubUpgradeRestore(w http.ResponseWriter, r *http.Request, _ session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("operation_id"))
-	if !store.DatabaseBackupOperationPattern.MatchString(operationID) {
+	if !isValidOperationID(operationID) {
 		app.event(r, "HUB_HANDOFF_REQUEST_INVALID")
 		app.writeJSON(w, http.StatusBadRequest, hubRestoreReceipt{
 			Status: "failed", ErrorCode: "HUB_HANDOFF_REQUEST_INVALID", OperationID: operation(r),
@@ -432,7 +426,7 @@ func (app *Server) queueHubRestore(operationID string) (hubRestoreReceipt, error
 // requests with HUB_HANDOFF_BUSY, and the executor independently refuses while a
 // request exists).
 func hubRequestPending(dir, operationID string) (bool, error) {
-	if !store.DatabaseBackupOperationPattern.MatchString(operationID) {
+	if !isValidOperationID(operationID) {
 		return false, errors.New("HUB_HANDOFF_REQUEST_INVALID: the operation id is not 32 lowercase hex")
 	}
 	path := filepath.Join(dir, operationID+".json")

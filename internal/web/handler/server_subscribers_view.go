@@ -8,11 +8,11 @@ package handler
 // own.
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // renderSubscribers renders the subscriber page, optionally with a one-time
@@ -20,7 +20,7 @@ import (
 func (app *Server) renderSubscribers(w http.ResponseWriter, r *http.Request, sess session, disclosure *tokenDisclosure) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	if disclosure != nil {
@@ -46,7 +46,7 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 		return page, err
 	}
 	for _, node := range nodes {
-		if node.Role == "edge" {
+		if node.Role == nodeRoleEdge {
 			page.EdgeNodes = append(page.EdgeNodes, node)
 		}
 	}
@@ -129,30 +129,12 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 	return page, nil
 }
 
-// subscriberSelectedLineIDs returns the Lines that currently carry an active
-// credential for one subscriber.
-//
-// The store API exposes the credential inventory including historical,
-// deactivated rows, so the active selection is read from the same table with
-// an explicit active filter. The read is read-only and never touches a Line.
+// subscriberSelectedLineIDs returns the Lines the operator currently selects
+// for one subscriber. The selection edge (subscription_lines) is the
+// authoritative intent; the store owns that read and never treats a historical
+// credential row as "selected".
 func (app *Server) subscriberSelectedLineIDs(subscriberID string) ([]string, error) {
-	rows, err := app.store.DB.Query(`SELECT node_id FROM proxy_credentials WHERE subscriber_id=? AND active=1 ORDER BY node_id ASC`, subscriberID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var nodeID string
-		if err = rows.Scan(&nodeID); err != nil {
-			return nil, err
-		}
-		out = append(out, nodeID)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return app.store.SubscriberLineIDs(subscriberID)
 }
 
 // subscriberLineIntent renders the operator intent for one Line.

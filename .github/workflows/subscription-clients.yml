@@ -3,8 +3,8 @@ name: subscription-clients
 on:
   pull_request:
     paths:
-      - 'internal/subscription/**'
-      - 'internal/node/**'
+      - 'internal/core/subscription/**'
+      - 'internal/core/node/**'
       - 'scripts/ci-subscription-clients.sh'
       - '.github/workflows/subscription-clients.yml'
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
       - name: Build subscription test binary
         run: |
           mkdir -p .ci/bin
-          go test -c -o .ci/bin/subscription.test ./internal/subscription
+          go test -c -o .ci/bin/subscription.test ./internal/core/subscription
       # The container installs its own apt dependencies; the host is never
       # modified and no service is started on the runner.
       - name: Debian 13 subscription client import check

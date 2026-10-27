@@ -2,14 +2,14 @@ package handler
 
 import (
 	"context"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 // meshCreateRouter creates a subnet_router through the page form, including the
@@ -53,7 +53,7 @@ func routeCallIndex(calls []string, name string) int {
 // accept_routes=false, so it could not reach an advertised prefix anyway. The
 // page keeps the stock Tailscale client and its join command with the declared
 // prefixes; that client owns its own --accept-routes choice, which the Hub does
-// not set. The exporter's own purpose table is pinned in internal/subscription.
+// not set. The exporter's own purpose table is pinned in internal/core/subscription.
 func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 	app, b, fake, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := app.now()
@@ -174,7 +174,7 @@ func TestMeshRouteApprovalSetDropsUnsendableEntries(t *testing.T) {
 			// Whatever the builder returns must survive the adapter's own
 			// refusal, which is the property that ends the deadlock.
 			for _, prefix := range set {
-				if !headscale.ApprovableRoutePrefix(prefix) {
+				if !meshnet.ApprovableRoutePrefix(prefix) {
 					t.Fatalf("set carries an unsendable prefix %q", prefix)
 				}
 			}
@@ -192,7 +192,7 @@ func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"10.5.0.0/16"},
 		AvailableRoutes: []string{"10.5.0.0/16", "192.168.1.0/24"},
@@ -246,18 +246,18 @@ func TestMeshRouteApproveSendsFullSetAndPreservesUntracked(t *testing.T) {
 // cannot confirm the change.
 type routeReadbackLosingHeadscale struct{ *fakeHeadscale }
 
-func (f *routeReadbackLosingHeadscale) SetApprovedRoutes(_ context.Context, id uint64, _ []string) (headscale.Node, error) {
+func (f *routeReadbackLosingHeadscale) SetApprovedRoutes(_ context.Context, id uint64, _ []string) (meshnet.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("nodes.approve-routes"); err != nil {
-		return headscale.Node{}, err
+		return meshnet.Node{}, err
 	}
 	for _, node := range f.nodes {
 		if node.ID == id {
 			return node, nil
 		}
 	}
-	return headscale.Node{}, &headscale.Error{Code: headscale.CodeNotFound}
+	return meshnet.Node{}, &meshnet.Error{Code: meshnet.CodeNotFound}
 }
 
 // routeRefusingSendableOnlyHeadscale behaves like the production adapter: it
@@ -265,13 +265,13 @@ func (f *routeReadbackLosingHeadscale) SetApprovedRoutes(_ context.Context, id u
 // which is exactly the failure a stale exit route used to trigger.
 type routeRefusingSendableOnlyHeadscale struct{ *fakeHeadscale }
 
-func (f *routeRefusingSendableOnlyHeadscale) SetApprovedRoutes(ctx context.Context, id uint64, prefixes []string) (headscale.Node, error) {
+func (f *routeRefusingSendableOnlyHeadscale) SetApprovedRoutes(ctx context.Context, id uint64, prefixes []string) (meshnet.Node, error) {
 	for _, prefix := range prefixes {
-		if !headscale.ApprovableRoutePrefix(prefix) {
+		if !meshnet.ApprovableRoutePrefix(prefix) {
 			f.mu.Lock()
 			_ = f.record("nodes.approve-routes")
 			f.mu.Unlock()
-			return headscale.Node{}, &headscale.Error{Code: headscale.CodeRouteInvalid}
+			return meshnet.Node{}, &meshnet.Error{Code: meshnet.CodeRouteInvalid}
 		}
 	}
 	return f.fakeHeadscale.SetApprovedRoutes(ctx, id, prefixes)
@@ -289,7 +289,7 @@ func TestMeshRouteApproveSurvivesAnUnsendableApprovedPrefix(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"0.0.0.0/0"},
 		AvailableRoutes: []string{"192.168.1.0/24"},
@@ -316,7 +316,7 @@ func TestMeshRouteApproveReadbackMismatchLeavesAdvertised(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName, AvailableRoutes: []string{"192.168.1.0/24"}}}
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, AvailableRoutes: []string{"192.168.1.0/24"}}}
 	app.mesh = &routeReadbackLosingHeadscale{fake}
 
 	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
@@ -342,7 +342,7 @@ func TestMeshRouteRevokeSendsDifference(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24", "10.5.0.0/16"},
 		AvailableRoutes: []string{"192.168.1.0/24", "10.5.0.0/16"}}}
 	fake.resetCalls()
@@ -373,7 +373,7 @@ func TestMeshRouteRevokeClearsWhenNothingRemains(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
 	fake.resetCalls()
 
 	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
@@ -392,7 +392,7 @@ func TestMeshReconcileRecordsRouteEvidence(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		AvailableRoutes: []string{"192.168.1.0/24", "10.5.0.0/16"},
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
@@ -426,7 +426,7 @@ func TestMeshRevokeClearsApprovedRoutesBeforeDelete(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, ApprovedRoutes: []string{"192.168.1.0/24"}}}
 	fake.resetCalls()
 
 	w := b.post("/mesh/revoke", url.Values{"device_id": {router.ID}})
@@ -457,7 +457,7 @@ func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"10.5.0.0/16", "0.0.0.0/0", "::/0", "10.0.0.1/8"},
 		AvailableRoutes: []string{"10.5.0.0/16", "192.168.1.0/24"},
@@ -508,7 +508,7 @@ func TestMeshRouteWithdrawDropsUnsendableApprovedPrefix(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24", "10.5.0.0/16", "0.0.0.0/0"},
 		AvailableRoutes: []string{"192.168.1.0/24", "10.5.0.0/16"}}}
 	fake.resetCalls()
@@ -549,7 +549,7 @@ func TestMeshRouteWithdrawClearsWhenOnlyUnsendableRemains(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24", "0.0.0.0/0"},
 		AvailableRoutes: []string{"192.168.1.0/24"}}}
 	fake.resetCalls()

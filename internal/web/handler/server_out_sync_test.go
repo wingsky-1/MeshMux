@@ -3,15 +3,15 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // pairedWebOutSyncApp builds one Hub with a paired Out, a paired Line with a

@@ -3,15 +3,15 @@ package handler
 import (
 	"context"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 // refuseMeshRouteIntentUpdates makes the local intent write of a route action
@@ -48,22 +48,22 @@ func (f *routeCompensationRefusingHeadscale) refuse() bool {
 	return f.seen == f.failOn
 }
 
-func (f *routeCompensationRefusingHeadscale) SetApprovedRoutes(ctx context.Context, id uint64, prefixes []string) (headscale.Node, error) {
+func (f *routeCompensationRefusingHeadscale) SetApprovedRoutes(ctx context.Context, id uint64, prefixes []string) (meshnet.Node, error) {
 	if f.refuse() {
 		f.mu.Lock()
 		_ = f.record("nodes.approve-routes")
 		f.mu.Unlock()
-		return headscale.Node{}, &headscale.Error{Code: headscale.CodeUnavailable}
+		return meshnet.Node{}, &meshnet.Error{Code: meshnet.CodeUnavailable}
 	}
 	return f.fakeHeadscale.SetApprovedRoutes(ctx, id, prefixes)
 }
 
-func (f *routeCompensationRefusingHeadscale) ClearApprovedRoutes(ctx context.Context, id uint64) (headscale.Node, error) {
+func (f *routeCompensationRefusingHeadscale) ClearApprovedRoutes(ctx context.Context, id uint64) (meshnet.Node, error) {
 	if f.refuse() {
 		f.mu.Lock()
 		_ = f.record("nodes.clear-routes")
 		f.mu.Unlock()
-		return headscale.Node{}, &headscale.Error{Code: headscale.CodeUnavailable}
+		return meshnet.Node{}, &meshnet.Error{Code: meshnet.CodeUnavailable}
 	}
 	return f.fakeHeadscale.ClearApprovedRoutes(ctx, id)
 }
@@ -78,7 +78,7 @@ func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"10.5.0.0/16"},
 		AvailableRoutes: []string{"10.5.0.0/16", "192.168.1.0/24"},
@@ -125,7 +125,7 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"10.5.0.0/16"},
 		AvailableRoutes: []string{"10.5.0.0/16", "192.168.1.0/24"},
@@ -147,7 +147,7 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 	if !strings.Contains(logs.String(), codeMeshRouteApprovalPartial) {
 		t.Fatalf("partial approval was not audited: %.800s", logs.String())
 	}
-	if !strings.Contains(logs.String(), headscale.CodeUnavailable) {
+	if !strings.Contains(logs.String(), meshnet.CodeUnavailable) {
 		t.Fatalf("the refused revert lost its code: %.800s", logs.String())
 	}
 	// The control plane really is ahead of the Hub, which is what "partial"
@@ -177,7 +177,7 @@ func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24", "10.5.0.0/16"},
 		AvailableRoutes: []string{"192.168.1.0/24", "10.5.0.0/16"}}}
 	refuseMeshRouteIntentUpdates(t, app)
@@ -222,7 +222,7 @@ func TestMeshRouteRevokePartialWhenClearRevertFails(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
 		AvailableRoutes: []string{"192.168.1.0/24"}}}
 	refusing := &routeCompensationRefusingHeadscale{fakeHeadscale: fake, failOn: 2}
@@ -256,7 +256,7 @@ func TestMeshRoutePartialWhenTheHubRecordCannotBeRead(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, now); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
 		AvailableRoutes: []string{"192.168.1.0/24"}}}
 	if _, err := app.store.DB.Exec(`DROP TABLE mesh_routes`); err != nil {
@@ -308,7 +308,7 @@ func TestMeshRouteLocalFailureDoesNotRevertACommittedWrite(t *testing.T) {
 	if _, err := app.store.SetMeshRouteDesired(router.ID, "192.168.1.0/24", mesh.RouteDesiredApproved, "op-seed", now); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 7, Name: router.NodeName,
+	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName,
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
 		AvailableRoutes: []string{"192.168.1.0/24"}}}
 	fake.resetCalls()

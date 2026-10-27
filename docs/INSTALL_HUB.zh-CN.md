@@ -65,7 +65,7 @@ go build -o ./bin/meshmux ./cmd/meshmux
 
 ## 官方制品与版本锁
 
-`internal/install/artifacts.go` 锁定：
+`internal/cli/install/artifacts.go` 锁定：
 - Caddy v2.11.7：GitHub 官方 release 的 linux amd64/arm64 tar.gz，以及官方 release asset SHA-256。
 - Headscale v0.29.5：GitHub 官方 release 的 linux amd64/arm64 ELF，以及官方 release asset SHA-256。
 - `VerifyFile` 精确比对 SHA-256；`DownloadVerified` 只接受源码内已锁的制品清单，限制 128 MiB，采用 0700 私有目录/临时文件及校验后原子硬链接；校验失败拒绝返回文件路径。

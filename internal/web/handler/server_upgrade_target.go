@@ -23,6 +23,13 @@ import (
 // agentUpgradeTarget serves one stamped target to the node that owns the row.
 // Another node's row is not found, so the channel never discloses that some
 // other node is being upgraded.
+//
+// Flow: Bearer auth → reject query strings → validate the path's operation id
+// against the frozen grammar (isValidOperationID) → read the stamp → answer
+// one two-field JSON document. Both values were validated by
+// stampedStageTarget (SemVer + 64 lowercase hex), so encoding is a formality;
+// it is still the encoder rather than string concatenation, so a future field
+// can never break the document.
 func (s *Server) agentUpgradeTarget(w http.ResponseWriter, r *http.Request) {
 	n, ok := s.agentAuth(w, r)
 	if !ok {
@@ -33,7 +40,7 @@ func (s *Server) agentUpgradeTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	operationID := strings.TrimSpace(chi.URLParam(r, "operationID"))
-	if !agentOperationIDPattern.MatchString(operationID) {
+	if !isValidOperationID(operationID) {
 		s.agentFail(w, r, 400, "OPERATION_ID_INVALID", "操作编号不正确。", "请从固定任务获取 operation_id。")
 		return
 	}

@@ -30,7 +30,7 @@
 
 - [x] **PR A（只读，B 级）**：`install hub --plan` 严格域名验证、Debian 13/root/SSH socket/磁盘/时间/DNS/端口检查、官方 SHA-256 锁与未应用服务模板；现网无副作用，CI 通过。`public_https` / `public_stun` 保持 pending。
 - [x] **PR B 安装事务与回归（L1/B 级）**：官方完整制品与 Go Web 锁、check/stage/apply/readback、幂等/恢复、受管文件台账回滚一致性、apt 查询优先、健康探针 303/禁止重定向语义、Web Fail2ban 默认禁用与 `--direct-caddy` 启用、RFC3339Nano 日期模式，均有 Go 测试覆盖。[Go/web run 39216454974](https://github.com/wingsky-1/MeshMux/actions/runs/39216454974) 与 [Debian 13 组件 run 39216454901](https://github.com/wingsky-1/MeshMux/actions/runs/39216454901) 均为 head `c5be00c` PASS；该 head 的树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 相同。
-- [x] **PR B 全系统验收（C 级，amd64 自动化门禁）**：[L3 QEMU/systemd run 39216454882](https://github.com/wingsky-1/MeshMux/actions/runs/39216454882) 于 head `c5be00c` PASS，`internal/install/vm_test` 覆盖真实 systemd 服务与监听、本机内部证书 TLS 探针（非真实公网 ACME）、重启持久化、故障回滚以及 Fail2ban/nftables ban/unban；run head 的 Git 树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 完全相同，Hub 接口可被 #6 消费。#5 已关闭。
+- [x] **PR B 全系统验收（C 级，amd64 自动化门禁）**：[L3 QEMU/systemd run 39216454882](https://github.com/wingsky-1/MeshMux/actions/runs/39216454882) 于 head `c5be00c` PASS，`internal/cli/install/vm_test` 覆盖真实 systemd 服务与监听、本机内部证书 TLS 探针（非真实公网 ACME）、重启持久化、故障回滚以及 Fail2ban/nftables ban/unban；run head 的 Git 树 `8e08dfe5327fdf3ec0ecc0cb4daad54e5b6cd5c0` 与 `main` `17baaa1` 完全相同，Hub 接口可被 #6 消费。#5 已关闭。
 - [ ] **PR B 外部环境边界**：arm64 宿主机 L3、真实公网 ACME/TLS、云防火墙入站以及真实 DERP/STUN 跨 NAT 握手仍未测试，保持 pending；不得扩展宣称全平台或生产环境验收完成。
 
 阶段说明见 [Hub 安装](INSTALL_HUB.zh-CN.md)；单测与模板字符串校验不能代替服务实际健康或公网可达。
@@ -63,7 +63,7 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 - [x] **全仓自动化**：本地 `gofmt` 干净、`go vet ./...` 通过、`go build ./...` 通过；`go test` 分包全过（product/agent 52、node 46、install 85、web 56、cmd 三包 68），`go test -race` 全过（install/web/node/cmd 及 product/agent/webcmd 五包 120，无 DATA RACE）。
 - [x] **PR-B CI**：L2 [hub-components run 39372308917](https://github.com/wingsky-1/MeshMux/actions/runs/39372308917)（head `78e259b`，tree `e35fc88`）amd64/arm64 全绿；L3 [hub-vm run 39367683751](https://github.com/wingsky-1/MeshMux/actions/runs/39367683751)（同 head/tree）edge/out/hub 全 success。后续链接必须指向对应 head，并说明该 head 的 Git tree。
 - [ ] **#6 L3 外部边界**：真实公网入站、云安全组、真实协议握手和客户端可用未测；#6 baseline 无 TLS/REALITY、无用户、无订阅。#7 新实现及证据见下节。
-- [x] **Out ACL 语义（#8 源码已修复）**：ACL 已由 #8-B 改为空授权默认全拒绝（`inet meshmux_out` 只保留一条 `input` chain，`policy accept` 仅覆盖主机 SSH/回环/回程；VLESS 端口两条 `tcp/udp dport drop` 默认丢弃，仅 Hub 授权的 Line 源在 drop 之前 `accept`）。**仿真证据（隔离单测）**：`internal/node/render_acl_test.go`、`internal/node/runtime_readback_acl_test.go`、`internal/install/node_acl_test.go`（含有序 accept-before-drop、未对齐 CIDR 拒绝、`nft -j` 精确集合比对、注入 accept 拒绝、state 缺失退化为形状断言、repair 保留已授权 ACL）；`go test -race ./...` 全绿。
+- [x] **Out ACL 语义（#8 源码已修复）**：ACL 已由 #8-B 改为空授权默认全拒绝（`inet meshmux_out` 只保留一条 `input` chain，`policy accept` 仅覆盖主机 SSH/回环/回程；VLESS 端口两条 `tcp/udp dport drop` 默认丢弃，仅 Hub 授权的 Line 源在 drop 之前 `accept`）。**仿真证据（隔离单测）**：`internal/core/node/render_acl_test.go`、`internal/core/node/runtime_readback_acl_test.go`、`internal/cli/install/node_acl_test.go`（含有序 accept-before-drop、未对齐 CIDR 拒绝、`nft -j` 精确集合比对、注入 accept 拒绝、state 缺失退化为形状断言、repair 保留已授权 ACL）；`go test -race ./...` 全绿。
 - [x] **Out ACL 真实 L2+L3 证据（#8 收尾）**：`scripts/ci-node-components.sh` 在 `nft -c` 后执行真实 `nft -f` apply，并用 `nft -j list table inet meshmux_out` 断言至少 2 条 rule、归档 `nft list` 输出；容器无 `CAP_NET_ADMIN` 时显式 SKIP，不计为通过。L2 [hub-components run 39717249475](https://github.com/wingsky-1/MeshMux/actions/runs/39717249475)（head `9495730`、tree `5720b86`）amd64/arm64 全绿，amd64 日志实得 `nft apply/readback PASS`（2 rules，非 SKIP）；L3 [hub-vm run 39717249274](https://github.com/wingsky-1/MeshMux/actions/runs/39717249274)（同 head/tree）hub/edge/out 全 success，out 含 `TestNodeSystemVM` 真实 `nft list table inet meshmux_out` 回读断言。AI 双跳实际流量（已移交 #10）与客户端可用仍缺。
 - [x] **Out 缺失/故障语义与清理（#8-D，Task 6 后现状）**：`internal/route/out_ruleset.go` 提供 `RulesetPin{Source,Version,SHA256}` 与 `ResolveAIRuleset`（下载/大小/摘要失败统一 `RULESET_FETCH_FAILED`，可变通道 `RULESET_PIN_INVALID`）；AI 出口决策层已由 Task 6 删除并移交规则库/订阅组装器。`OutEgressFacts` 仍分离“无 Out = 直出配置态”与“Out 故障 = 不可用”，无 Opt-in 回退即 fail-closed；删除语义已被 Task 5 的 Ruling R9 取代（先清空 ACL 并读回，再彻底删除；失败 409 且不删任何内容）。**仿真证据（隔离单测）**：`internal/route/out_ruleset_test.go`、`internal/web/handler/store_out_ai_egress_test.go`（facts）、`internal/web/handler/store_out_sync_test.go` 与 Task 5 的 `TestOutDelete*`。
 - [x] **#6 自定义端口**：SSH 与 VLESS 端口不同；Fail2ban jail/action 与实际 SSH listener 匹配，nft 只替换 MeshMux 自有表。证据限于上述隔离 L2/L3 场景，不代表任意现网端口均已验证。
@@ -84,14 +84,14 @@ PR-B 的 CLI、installer、runtime、Web 固定操作与 CI 脚本已由 PR #18 
 
 ## Issue #9 PR-9a Mesh 设备生命周期验收（#9 已 CLOSED；9b/9c/9d 已随 PR #63 合入）
 
-PR-9a 分四个切片交付：9a-1 `internal/mesh` 纯领域模型、9a-2 `internal/headscale` 固定 argv 本地 CLI 适配器、9a-3 Web `/mesh` 页面与 schema 6 持久化（`store_mesh.go`），9a-4 Hub 的 Web↔Headscale socket 组边界与隔离 fixture。本行**只登记源码与自动化证据**，不构成发行验收。
+PR-9a 分四个切片交付：9a-1 `internal/core/mesh` 纯领域模型、9a-2 `internal/headscale` 固定 argv 本地 CLI 适配器、9a-3 Web `/mesh` 页面与 schema 6 持久化（`store_mesh.go`），9a-4 Hub 的 Web↔Headscale socket 组边界与隔离 fixture。本行**只登记源码与自动化证据**，不构成发行验收。
 
 | 层级 | 待验范围 | 状态 |
 | --- | --- | --- |
-| A | 领域与适配器边界：`internal/mesh` 无 I/O 且不 import `internal/web`/`internal/install`；`internal/headscale` 只经固定 binary/config 与固定 argv 表调用，无 shell、无 `preauthkeys list`、`nodes delete` 带 `--force`；Web 只经该接口读写 Headscale | [x] 源码评审 + 隔离单测 |
+| A | 领域与适配器边界：`internal/core/mesh` 无 I/O 且不 import `internal/web`/`internal/cli/install`；`internal/headscale` 只经固定 binary/config 与固定 argv 表调用，无 shell、无 `preauthkeys list`、`nodes delete` 带 `--force`；Web 只经该接口读写 Headscale | [x] 源码评审 + 隔离单测 |
 | B | 设备与 Key 生命周期：用途/绑定规则、NodeName 同用户占用唯一、`pending`/`registered` 只由观测到的 Node ID 推进、Key 15 分钟仅存 SHA-256 且单活/`consumed` 不可逆、注销先写意图再远端删除且幂等重试、撤销一台设备不影响订阅用户/凭据/Token | [x] `go test ./internal/web/ -run Mesh` 全绿（`store_mesh_test.go`、`server_mesh_test.go`、`mesh_fixture_test.go`）；`TestMeshHubFixture` 默认 SKIP |
 | B | Web 路由边界：`/mesh` 需认证；四个 mutation 需 CSRF；页面渲染只发 `users list`/`nodes list` 两次只读调用；Headscale 不可用时返回稳定 `HEADSCALE_*` 且不写入任何设备/Key | [x] `TestMeshRoutesRequireAuthentication`、`TestMeshPageRequiresCSRFOnMutations`、`TestMeshPageRenderOnlyReadsControlPlane`、`TestMeshWithoutHeadscaleRefusesBeforeWrites` |
-| B | 安装侧 socket 边界（9a-4）：`meshmux-web.service` 仅以 `SupplementaryGroups=meshmux-headscale` 穿过 0770 socket，数据目录仍 0700 且无 `Group=`/`ReadWritePaths` | [x] 模板断言 `internal/install/render_test.go`；**真实组权限链未验证** |
+| B | 安装侧 socket 边界（9a-4）：`meshmux-web.service` 仅以 `SupplementaryGroups=meshmux-headscale` 穿过 0770 socket，数据目录仍 0700 且无 `Group=`/`ReadWritePaths` | [x] 模板断言 `internal/cli/install/render_test.go`；**真实组权限链未验证** |
 | B | 一次性 Key 的消费语义（#113 2-4）：不存在接收 secret 的消费端点，`reconcile`/`claim` 证明注册（观测到 Headscale Node ID）时在同一事务消费该设备 live Key（`consumed`、摘要清空）；窗口已过的 Key 记为 `expired`，停留 `issued` 之外的记录不被改写 | [x] `TestMeshRegistrationConsumesKey`、`TestMeshEnrollmentKeySingleActive`、`TestMeshClaimBindsUnclaimedSameNameNodeExplicitly`、`TestMeshRekeyWithdrawsOldKey` |
 | B | 重签顺序（#113 2-3）：`/mesh/rekey` 按 validate → stage → apply → readback 执行——先解析 Headscale 用户并在内存中备好新 Key（proxy+mesh 另含 pre-auth key 与渲染文档），再用一次事务安装新 Key、作废旧 live Key；`expired → pending` 与安装 Key 同一事务。中途失败（Headscale 不可用、渲染失败、事务失败）不启用新 Key、不作废旧 Key，旧 Key 仍可用于入网；已过窗口的旧 Key 由该事务记为 `expired`，页面不称其为“已作废”；成功响应仍只出现一次新 Key | [x] `TestMeshRekeyHeadscaleFailureKeepsOldKey`、`TestMeshRekeySwapFailureKeepsOldKey`、`TestMeshRekeyExpiredDeviceGetsKeyWithItsStatus`、`TestMeshRekeyExpiredDeviceKeepsItsLapsedKeyOnNameConflict`、`TestMeshRekeyRenderFailureKeepsOldKeyUsable`、`TestMeshRekeyLapsesOldKeyWithoutClaimingAWithdrawal`、`TestMeshRekeyNeverLeavesTwoLiveKeys` |
 | C | 隔离 Debian 13 Hub VM：真实 Headscale 0.29.5 下 Web 账户经 socket 完成 `version`/`users list`/`nodes list`，页面创建设备并核对、注销，事件日志无 Key 明文 | [ ] 待执行：`MESHMUX_MESH_HUB_FIXTURE_DIR=... /tmp/web-handler.test -test.run '^TestMeshHubFixture$'`，需在干净 VM 内以 `meshmux` 账户运行；head/tree 与 run 链接待回填 |
@@ -105,7 +105,7 @@ PR-9b 只交付按前缀的子网路由声明、批准、撤销批准与观测�
 
 | 层级 | 待验范围 | 状态 |
 | --- | --- | --- |
-| B | 创建：`subnet_router` 表单强制至少一个规范 CIDR 前缀，前缀以 `advertised` 声明写入，批准前不产生 approved 意图；非子网路由用途不能声明前缀 | [x] `TestMeshCreateSubnetRouterRequiresPrefix`、`internal/web/store_mesh_routes_test.go` |
+| B | 创建：`subnet_router` 表单强制至少一个规范 CIDR 前缀，前缀以 `advertised` 声明写入，批准前不产生 approved 意图；非子网路由用途不能声明前缀 | [x] `TestMeshCreateSubnetRouterRequiresPrefix`、`internal/web/handler/store_mesh_routes_test.go` |
 | B | 批准：发送 Headscale 观测到的 approved 集合 ∪ 新前缀；可发送的未跟踪已批准前缀保留并记录 `MESH_ROUTE_UNTRACKED` 审计事件；Headscale 适配器会拒绝的条目（`0.0.0.0/0`、`::/0`、带主机位的 CIDR 等）不再原样回传——`approve-routes` 是整表替换，一条不可发送的条目会让每次合法前缀批准都被整体拒绝——而是移出集合、逐条记录 `MESH_ROUTE_UNTRACKED_DROPPED` 事件并在页面披露，合法前缀照常批准；命令失败或 readback 未确认时行保持 `advertised` 且返回稳定码 `MESH_ROUTE_APPROVAL_UNCONFIRMED` | [x] `TestMeshRouteApproveSendsFullSetAndPreservesUntracked`、`TestMeshRouteApproveDropsUnsendableApprovedPrefix`、`TestMeshRouteApprovalSetDropsUnsendableEntries`、`TestMeshRouteApproveReadbackMismatchLeavesAdvertised` |
 | B | 撤销批准：发送差集，差集为空时调用 `ClearApprovedRoutes`；不可发送的已批准条目同样移出差集并记录 `MESH_ROUTE_UNTRACKED_DROPPED`，只剩不可发送项时改走清空（同时撤销这些条目）；readback 仍含该前缀时不写回 `advertised` | [x] `TestMeshRouteRevokeSendsDifference`、`TestMeshRouteRevokeClearsWhenNothingRemains`、`TestMeshRouteWithdrawDropsUnsendableApprovedPrefix`、`TestMeshRouteWithdrawClearsWhenOnlyUnsendableRemains` |
 | B | 核对：同一 `nodes list` 循环按设备记录 `available`/`approved`/`served` 证据；未声明前缀只记事件，任何通过都不会自动批准；单设备失败报 partial，不隐藏其余设备 | [x] `TestMeshReconcileRecordsRouteEvidence`、`TestReconcileMeshRoutesNeverApprovesUntracked` |
@@ -128,7 +128,7 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 | --- | --- | --- |
 | B | 策略模型：客户端/服务端意图与 sing-box 1.14.3 JSON / Mihomo YAML 生成器分离；Geo/远端规则集复用 `RulesetPin`（HTTPS + 不可变版本 + SHA-256 + 8 MiB），未 pin 拒绝；确定性字节 + 哈希 | [x] `internal/compiler/*_test.go`（`TestGeneratorsFollowPolicyDataNotHardcodedLists`、`TestRulesetVersionLockAndChecksum`） |
 | B | 客户端策略：SSID（sing-box `wifi_ssid` 实测可用，Mihomo 无表达走 `RENDER_UNSUPPORTED`）、Tailnet/远端 LAN、CN 直连/国际走 Line、DNS 与出口一致；SSID 首条 direct 豁免、跨动作遮蔽 `POLICY_CONFLICT`；`ExplainHit` 四段链 | [x] `internal/compiler/client_policy_test.go`（正/反例 + 兜底 + 命中链） |
-| B | 服务端渲染：`RenderServerRoute`（AI 100/域名 200/CIDR 300 → `out`）+ `CompileCandidateWithRoute` + `meshmux-node/v3`（v1/v2 字节不变，route 白名单 `rules/rule_set/final`）；`final: out` 与无 Out 引 `out` 拒绝；候选按 route 声明 `direct`/`out`/`block` 出站，`out` 在 Out 接入路径落地前为 block stub（不静默直出），未知 egress 为 `CANDIDATE_ROUTE_INVALID` | [x] `internal/node/config_v3_test.go`、`render_route_test.go`（真实 `sing-box check -c` 覆盖有 Out/无 Out/block 三种路由）、`internal/web/publish_gate_kernel_test.go`（真实门禁跑存储的 Out 候选） |
+| B | 服务端渲染：`RenderServerRoute`（AI 100/域名 200/CIDR 300 → `out`）+ `CompileCandidateWithRoute` + `meshmux-node/v3`（v1/v2 字节不变，route 白名单 `rules/rule_set/final`）；`final: out` 与无 Out 引 `out` 拒绝；候选按 route 声明 `direct`/`out`/`block` 出站，`out` 在 Out 接入路径落地前为 block stub（不静默直出），未知 egress 为 `CANDIDATE_ROUTE_INVALID` | [x] `internal/core/node/config_v3_test.go`、`render_route_test.go`（真实 `sing-box check -c` 覆盖有 Out/无 Out/block 三种路由）、`internal/web/handler/publish_gate_kernel_test.go`（真实门禁跑存储的 Out 候选） |
 | B | 发布管线：active 装配 → fail-closed（无 opt-in 即 `OUT_OFFLINE_FAIL_CLOSED`，匿名回退 `OUT_FALLBACK_UNAUDITED`）→ 双内核门禁（缺件/版本错为显式拒绝）→ 同一事务写候选 + 四任务链（revision/快照/在途三守卫，整笔回滚）→ 回执 `queued` 永不谎报已应用 | [x] `store_policy_publish_test.go`（三态/门禁/v3/manifest）、`server_policies_publish_test.go`、`publish_check_test.go`（固定 argv/版本锁） |
 | B | Web：`/policies` 读 active 快照（失效回草案 + 冲突行）、validate 干跑、explain 查询、create/revise/activate/revoke（`operation_id` 强制）、publish（`policy_schema=8` + `route_policy_revisions` 供 #11 manifest 衔接）；schema 8 修订链 + append-only 审计 | [x] `server_policies_*_test.go`、`store_policies*_test.go`（状态机/触发器/迁移重放） |
 | B | 客户端层边界（#113 1-2）：发布真相仅服务端 route；客户端层只渲染 + 双内核门禁，回执 `status=gated` 明示“不写候选、不改变订阅下载内容”，`/policies` 标为“预览 · 不改变订阅”，混合发布回执同时说明客户端不写候选；Task 6 起客户端层**停写**（`POLICY_LAYER_RETIRED`），既有 revision 只读预览 | [x] `store_policy_publish_client_preview_test.go`（客户端发布/第二个客户端版本/混合发布后 sing-box 与 mihomo 下载字节不变；页面预览标注）、`server_policies_publish_test.go` |
@@ -142,7 +142,7 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 
 | 层级 | 待验范围 | 状态 |
 | --- | --- | --- |
-| B | 纯函数组装：`subscription.ComposeSubscription(lines, outs, rules, network)` 同输入同字节；返回内容摘要；两份客户端文档（sing-box JSON / Mihomo YAML）与每 Line 服务端 route 片段 | [x] `internal/subscription/compose_test.go`（`TestComposeSubscriptionIsByteDeterministic` 等） |
+| B | 纯函数组装：`subscription.ComposeSubscription(lines, outs, rules, network)` 同输入同字节；返回内容摘要；两份客户端文档（sing-box JSON / Mihomo YAML）与每 Line 服务端 route 片段 | [x] `internal/core/subscription/compose_test.go`（`TestComposeSubscriptionIsByteDeterministic` 等） |
 | B | 规则双内核：同一规则选择在 sing-box route 与 Mihomo rules 都出现；geo/ruleset 未 pin 为 `COMPOSE_RULESET_UNPINNED`；重复/重叠规则分别 `COMPOSE_RULE_DUPLICATE`/`COMPOSE_RULE_CONFLICT` | [x] `TestComposeSubscriptionRulesReachBothDocuments`（真实 `sing-box check` 通过）、`TestComposeSubscriptionRefusesUnpinnedRuleSet`、`TestComposeSubscriptionDuplicateRuleIsBlocking`、`TestComposeSubscriptionRejectsOverlappingRules` |
 | B | Out 约束：1.0 单订阅最多 1 个 Out（`COMPOSE_OUT_LIMIT`）；选 Out 后无代理规则即 `COMPOSE_OUT_WITHOUT_PROXY_RULE`；同一 Line 上既有订阅的 Out 选择不一致即 `SUBSCRIPTION_OUT_CONFLICT` 并列出订阅名 | [x] `TestComposeSubscriptionRefusesSecondOut`、`TestWizardSaveRefusesBlockingPreviewWithoutWriting`、`TestWizardSaveRefusesOutConflictWithExistingSubscription`、`TestSaveSubscriptionSelectionRefusesSecondOutAndOutConflict` |
 | B | 边表 + 快照：schema 13 的 `subscription_lines/outs/rules/networks`（`position` 组内唯一）与 `subscription_snapshots`（选择+版本+排序+已批准摘要，不存字节）；`proxy_credentials` 仍为凭据具现；保留 Line 沿用 UUID | [x] `TestSchema13CreatesSelectionTables`、`TestSaveSubscriptionSelectionWritesEdgesAndSnapshot`、`TestSaveSubscriptionSelectionKeepsCredentialPerLine`、`TestWizardSaveKeepsExistingCredentialOnReSave` |
@@ -199,7 +199,7 @@ NAS 既有 Tailnet 身份迁移到 MeshMux 纳管及 subnet_router 重装/换机
 ### T7 文档收口（stable codes 与 spec 偏差）
 
 - **LOSSY 位置**：`lossy=true` 与 `snapshot_at` 只存在于 `hub-upgrade/restored.json`（schema 1）和 `/tasks` 的 Hub 区块。**result schema 1 没有 `lossy` 字段**，不得声称 result 显示 LOSSY。
-- **标记清除时机**：由**下一次对账 pass**（`internal/hubupgrade/reconcile.go` 的 `clearSupersededMarker`，约 609-640 行）在见到新的已提交备份（journal `backed_up` 且 per-op 记录 `staged|confirmed` 可读）时清除；不是 backup producer 在提交瞬间清除。Web 停机期间标记会保留，这是有意的。
+- **标记清除时机**：由**下一次对账 pass**（`internal/cli/hubupgrade/reconcile.go` 的 `clearSupersededMarker`，约 609-640 行）在见到新的已提交备份（journal `backed_up` 且 per-op 记录 `staged|confirmed` 可读）时清除；不是 backup producer 在提交瞬间清除。Web 停机期间标记会保留，这是有意的。
 - **§5.5 偏差（记录在 T7 文档，不回写 spec）**：`HUB_BACKUP_STAGE_FAILED` 时 journal 保持 `backed_up`，不是 `failed`；只有 per-op 记录与载荷可复用、同一 `operation_id` 可重试。spec §5.5 的“任意失败 → 终态”不覆盖“尚未触碰主机、可安全重试”的暂存失败。
 - **指针稳定码**：`HUB_BACKUP_POINTER_STALE`（未发布新指针）与 `HUB_BACKUP_POINTER_UNFLUSHED`（已发布但未 fsync）都只记录、不回滚确认与 GC。
 - **活动数据目录**：恢复后的 `--data-dir` 是 `<原-data-dir>/restore-<op>-<unix>`；删除原目录会删除活动数据库（详见下方恢复警告）。
@@ -210,7 +210,7 @@ T1r 删除 layout 后，`TestRecordByteCompatNodeAndHub` 不再比较同一目�
 
 ### root 控制台恢复：执行前摘要（强制）
 
-在执行旧包前，root **必须先**从该操作的 per-op 记录读取 `from_agent_sha256`，并用 `sha256sum -c` 核对旧包字节。安装器只显式安装 `ca-certificates`/`fail2ban`/`nftables`（见 `internal/install/apply_shared.go`）；`grep`/`sha256sum`/`printf` 属于 Debian essential/coreutils，不能假设 `jq` 或 `python3` 一定存在。下列是固定形式（无新工具依赖）：
+在执行旧包前，root **必须先**从该操作的 per-op 记录读取 `from_agent_sha256`，并用 `sha256sum -c` 核对旧包字节。安装器只显式安装 `ca-certificates`/`fail2ban`/`nftables`（见 `internal/cli/install/apply_shared.go`）；`grep`/`sha256sum`/`printf` 属于 Debian essential/coreutils，不能假设 `jq` 或 `python3` 一定存在。下列是固定形式（无新工具依赖）：
 
 ```sh
 RECORD="<data-dir>/database-backup/<op32hex>/record.json"

@@ -23,7 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"sort"
@@ -32,9 +32,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // meshControlPlaneTimeout bounds the Headscale reads one request performs. A
@@ -459,7 +459,7 @@ func (app *Server) meshRouteRevoke(w http.ResponseWriter, r *http.Request, sess 
 	// previous is the sendable set the request found, used as the compensation
 	// target if the Hub cannot record the withdrawal after Headscale accepted it.
 	previous, _ := meshRouteApprovalSet(node.ApprovedRoutes, "", "")
-	var readback headscale.Node
+	var readback meshnet.Node
 	if len(prefixes) == 0 {
 		// Nothing sendable remains. Clearing is a superset of the difference the
 		// caller asked for, so a prefix the adapter refuses is withdrawn too
@@ -635,7 +635,7 @@ func (app *Server) compensateMeshRouteApproval(r *http.Request, nodeID uint64, p
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), meshControlPlaneTimeout)
 	defer cancel()
 	var (
-		node headscale.Node
+		node meshnet.Node
 		err  error
 	)
 	if len(previous) == 0 {
@@ -701,17 +701,17 @@ func (app *Server) meshRouteTarget(w http.ResponseWriter, r *http.Request) (stor
 
 // meshNode returns the one node a request is about from the same read the page
 // uses. Absence is reported separately from a failed read.
-func (app *Server) meshNode(ctx context.Context, nodeID uint64) (headscale.Node, bool, error) {
+func (app *Server) meshNode(ctx context.Context, nodeID uint64) (meshnet.Node, bool, error) {
 	nodes, err := app.mesh.ListNodes(ctx, "")
 	if err != nil {
-		return headscale.Node{}, false, err
+		return meshnet.Node{}, false, err
 	}
 	for _, node := range nodes {
 		if node.ID == nodeID {
 			return node, true, nil
 		}
 	}
-	return headscale.Node{}, false, nil
+	return meshnet.Node{}, false, nil
 }
 
 // meshRouteApprovalSet builds the complete approved set Headscale's set
@@ -745,7 +745,7 @@ func meshRouteApprovalSet(existing []string, add, remove string) (set, dropped [
 			continue
 		}
 		seen[prefix] = struct{}{}
-		if !headscale.ApprovableRoutePrefix(prefix) {
+		if !meshnet.ApprovableRoutePrefix(prefix) {
 			dropped = append(dropped, prefix)
 			continue
 		}
@@ -812,7 +812,7 @@ func meshRoutePrefixIn(list []string, prefix string) bool {
 // keeps from the three route lists one node reports. Served is the strongest
 // evidence, then approved, then advertised; absent means Headscale reported
 // nothing for the prefix.
-func meshRouteObservedFromNode(node headscale.Node, prefix string) mesh.RouteObserved {
+func meshRouteObservedFromNode(node meshnet.Node, prefix string) mesh.RouteObserved {
 	if meshRoutePrefixIn(node.SubnetRoutes, prefix) {
 		return mesh.RouteObservedServed
 	}
@@ -829,7 +829,7 @@ func meshRouteObservedFromNode(node headscale.Node, prefix string) mesh.RouteObs
 // reconcile pass. Every reported prefix is included, and a declared prefix the
 // node no longer reports is recorded as "nothing reported" so stale evidence
 // does not survive a read.
-func (app *Server) meshRouteObservations(deviceID string, node headscale.Node) ([]store.MeshRouteObservation, error) {
+func (app *Server) meshRouteObservations(deviceID string, node meshnet.Node) ([]store.MeshRouteObservation, error) {
 	tracked, err := app.store.ListMeshRoutes(deviceID)
 	if err != nil {
 		return nil, err
@@ -888,7 +888,7 @@ func meshRouteObservedRank(state mesh.RouteObserved) int {
 // approved prefix Headscale reported that no device declared. The prefix stays
 // in the approved set; only an audit event records that the Hub saw it without
 // adopting or approving it.
-func (app *Server) recordUntrackedApprovedRoutes(deviceID string, node headscale.Node, operationID string, now time.Time) error {
+func (app *Server) recordUntrackedApprovedRoutes(deviceID string, node meshnet.Node, operationID string, now time.Time) error {
 	tracked, err := app.store.ListMeshRoutes(deviceID)
 	if err != nil {
 		return err
@@ -938,7 +938,7 @@ func (app *Server) meshReconcile(w http.ResponseWriter, r *http.Request, sess se
 		app.meshControlPlaneFail(w, r, err, codeMeshReconcileFailed, "无法读取 Headscale 节点。", "请检查 Headscale 服务与 Web 服务组权限后重试。")
 		return
 	}
-	present := make(map[uint64]headscale.Node, len(nodes))
+	present := make(map[uint64]meshnet.Node, len(nodes))
 	for _, node := range nodes {
 		present[node.ID] = node
 	}
@@ -954,7 +954,7 @@ func (app *Server) meshReconcile(w http.ResponseWriter, r *http.Request, sess se
 			continue
 		}
 		observed := uint64(0)
-		var node headscale.Node
+		var node meshnet.Node
 		hasNode := false
 		if record.HeadscaleNodeID != 0 {
 			if found, ok := present[record.HeadscaleNodeID]; ok {
@@ -1049,7 +1049,7 @@ func (app *Server) meshRevoke(w http.ResponseWriter, r *http.Request, sess sessi
 	if record.HeadscaleNodeID != 0 {
 		ctx, cancel := context.WithTimeout(r.Context(), meshControlPlaneTimeout)
 		if len(routes) > 0 {
-			if _, clearErr := app.mesh.ClearApprovedRoutes(ctx, record.HeadscaleNodeID); clearErr != nil && headscale.CodeOf(clearErr) != headscale.CodeNotFound {
+			if _, clearErr := app.mesh.ClearApprovedRoutes(ctx, record.HeadscaleNodeID); clearErr != nil && meshnet.CodeOf(clearErr) != meshnet.CodeNotFound {
 				cancel()
 				app.event(r, meshErrorCode(clearErr))
 				app.renderMesh(w, r, sess, nil,
@@ -1085,10 +1085,10 @@ func (app *Server) meshRevoke(w http.ResponseWriter, r *http.Request, sess sessi
 // reversible half: even if the delete fails, the node is logged out. A node that
 // Headscale already reports as absent is treated as settled.
 func (app *Server) removeMeshNode(ctx context.Context, nodeID uint64) error {
-	if err := app.mesh.ExpireNode(ctx, nodeID); err != nil && headscale.CodeOf(err) != headscale.CodeNotFound {
+	if err := app.mesh.ExpireNode(ctx, nodeID); err != nil && meshnet.CodeOf(err) != meshnet.CodeNotFound {
 		return err
 	}
-	if err := app.mesh.DeleteNode(ctx, nodeID); err != nil && headscale.CodeOf(err) != headscale.CodeNotFound {
+	if err := app.mesh.DeleteNode(ctx, nodeID); err != nil && meshnet.CodeOf(err) != meshnet.CodeNotFound {
 		return err
 	}
 	return nil
@@ -1103,10 +1103,10 @@ func (app *Server) removeMeshNode(ctx context.Context, nodeID uint64) error {
 // request reshape the tailnet's user list, which is not what the page offers.
 // The returned user carries the id a pre-auth key needs, so callers never have
 // to guess it from the name.
-func (app *Server) ensureMeshUser(ctx context.Context, user string) (headscale.User, error) {
+func (app *Server) ensureMeshUser(ctx context.Context, user string) (meshnet.User, error) {
 	users, err := app.mesh.ListUsers(ctx)
 	if err != nil {
-		return headscale.User{}, err
+		return meshnet.User{}, err
 	}
 	for _, existing := range users {
 		if existing.Name == user {
@@ -1114,16 +1114,16 @@ func (app *Server) ensureMeshUser(ctx context.Context, user string) (headscale.U
 		}
 	}
 	if user != mesh.DefaultHeadscaleUser {
-		return headscale.User{}, store.MeshError(codeMeshHeadscaleUserUnknown, "the named headscale user does not exist")
+		return meshnet.User{}, store.MeshError(codeMeshHeadscaleUserUnknown, "the named headscale user does not exist")
 	}
 	created, err := app.mesh.CreateUser(ctx, user)
 	if err != nil {
-		if headscale.CodeOf(err) == headscale.CodeAlreadyExists {
+		if meshnet.CodeOf(err) == meshnet.CodeAlreadyExists {
 			// The user appeared between the list and the create. Read it back
 			// once so the caller has the id the pre-auth key needs.
 			users, listErr := app.mesh.ListUsers(ctx)
 			if listErr != nil {
-				return headscale.User{}, listErr
+				return meshnet.User{}, listErr
 			}
 			for _, existing := range users {
 				if existing.Name == user {
@@ -1133,9 +1133,9 @@ func (app *Server) ensureMeshUser(ctx context.Context, user string) (headscale.U
 			// A control plane that reports the user as existing but omits it
 			// from the list is still idempotent for the create contract. The
 			// caller will obtain the id from its own list before minting a key.
-			return headscale.User{Name: user}, nil
+			return meshnet.User{Name: user}, nil
 		}
-		return headscale.User{}, err
+		return meshnet.User{}, err
 	}
 	return created, nil
 }
@@ -1212,7 +1212,7 @@ func meshNodeSlug(displayName string) string {
 func (app *Server) renderMesh(w http.ResponseWriter, r *http.Request, sess session, disclosure *view.MeshKeyDisclosure, notice, noticeClass string) {
 	page, err := app.meshViewModel(r)
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取 Mesh 设备。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取 Mesh 设备。", "请检查数据库和服务日志。")
 		return
 	}
 	page.Disclosure = disclosure
@@ -1276,7 +1276,7 @@ func (app *Server) meshViewModel(r *http.Request) (view.MeshPageView, error) {
 		}
 		sort.Slice(page.Users, func(i, j int) bool { return page.Users[i].Name < page.Users[j].Name })
 	}
-	present := map[uint64]headscale.Node{}
+	present := map[uint64]meshnet.Node{}
 	if nodes, nodesErr := app.mesh.ListNodes(ctx, ""); nodesErr != nil {
 		page.NodesNotice = meshErrorCode(nodesErr)
 	} else {
@@ -1350,7 +1350,7 @@ func (app *Server) meshViewModel(r *http.Request) (view.MeshPageView, error) {
 // record. A prefix only Headscale reports is rendered as "未声明" and offers no
 // action, because adopting an advertisement automatically would defeat the
 // explicit-approval rule.
-func meshRouteViews(record store.MeshDeviceRecord, tracked []store.MeshRouteRecord, node headscale.Node, nodeKnown bool) []view.MeshRouteView {
+func meshRouteViews(record store.MeshDeviceRecord, tracked []store.MeshRouteRecord, node meshnet.Node, nodeKnown bool) []view.MeshRouteView {
 	entries := make(map[string]*view.MeshRouteView, len(tracked))
 	actionsAllowed := record.Status != mesh.StatusRevoked && record.Status != mesh.StatusRevoking && record.HeadscaleNodeID != 0
 	for _, route := range tracked {
@@ -1455,7 +1455,7 @@ func meshRouteRecordTime(updatedAt int64) string {
 // meshOnlineState reports what the single Headscale read shows. Absence is a
 // statement about the previous observation only: a device that never registered
 // has no node id, and a failed read is "未核对", never "离线".
-func meshOnlineState(record store.MeshDeviceRecord, present map[uint64]headscale.Node, readCode string) (string, string, string) {
+func meshOnlineState(record store.MeshDeviceRecord, present map[uint64]meshnet.Node, readCode string) (string, string, string) {
 	if readCode != "" {
 		return "未核对", "badge", "—"
 	}
@@ -1582,7 +1582,7 @@ func meshErrorCode(err error) string {
 	if errors.As(err, &domain) {
 		return meshCodeOrInternal(domain.Code)
 	}
-	var adapter *headscale.Error
+	var adapter *meshnet.Error
 	if errors.As(err, &adapter) {
 		return meshCodeOrInternal(adapter.Code)
 	}
@@ -1651,7 +1651,7 @@ func meshStatus(code string) int {
 // is the only detail that leaves the adapter, and only a registered one is
 // forwarded: a foreign error goes through meshFail's sanitizing path.
 func (app *Server) meshControlPlaneFail(w http.ResponseWriter, r *http.Request, err error, fallback, message, next string) {
-	code := headscale.CodeOf(err)
+	code := meshnet.CodeOf(err)
 	if _, ok := headscaleCodes[code]; !ok {
 		app.meshFail(w, r, err, fallback, message, next)
 		return

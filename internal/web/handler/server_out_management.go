@@ -24,7 +24,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"strings"
 )
@@ -37,14 +37,14 @@ const CodeBindingAPIRetired = "OUT_BINDING_API_RETIRED"
 // echoes database text or node identifiers beyond the code.
 func outBindingFailure(err error) (status int, code, message, next string) {
 	switch {
-	case strings.HasPrefix(err.Error(), "OUT_NOT_FOUND"):
-		return 404, "OUT_NOT_FOUND", "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
-	case strings.HasPrefix(err.Error(), "OUT_ROLE_INVALID"):
-		return 409, "OUT_ROLE_INVALID", "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
-	case strings.HasPrefix(err.Error(), "LINE_NOT_FOUND"):
-		return 404, "LINE_NOT_FOUND", "Line 节点不存在。", "请先在节点页纳管该 Line 后重试。"
-	case strings.HasPrefix(err.Error(), "LINE_ROLE_INVALID"):
-		return 409, "LINE_ROLE_INVALID", "所选节点不是 Line 角色。", "请选择角色为 Edge 的 Line。"
+	case strings.HasPrefix(err.Error(), codeOutNotFound):
+		return 404, codeOutNotFound, "Out 节点不存在。", "请先在节点页纳管该 Out 后重试。"
+	case strings.HasPrefix(err.Error(), codeOutRoleInvalid):
+		return 409, codeOutRoleInvalid, "所选节点不是 Out 角色。", "请选择角色为 Out 的节点。"
+	case strings.HasPrefix(err.Error(), codeLineNotFound):
+		return 404, codeLineNotFound, "Line 节点不存在。", "请先在节点页纳管该 Line 后重试。"
+	case strings.HasPrefix(err.Error(), codeLineRoleInvalid):
+		return 409, codeLineRoleInvalid, "所选节点不是 Line 角色。", "请选择角色为 Edge 的 Line。"
 	case strings.HasPrefix(err.Error(), store.CodeOutReferenced):
 		return 409, store.CodeOutReferenced, "该 Out 仍被订阅选中。", "请在订阅向导中先解除这些订阅的 Out 选择，再删除出口。"
 	case strings.HasPrefix(err.Error(), store.CodeOutSyncPending):
@@ -57,10 +57,10 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 		// only that the hub-side publication is still unconfirmed — under Ruling R10 the
 		// set being published is the node membership, not an empty authorization.
 		return 202, store.CodeOutSyncPending, "该 Out 授权的下发待同步。", "Out 上线后会自动完成；也可在节点页重试。"
-	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
-		return 400, "OUT_BINDING_INVALID", "Out 参数不正确。", "请检查 Out 标识后重试。"
-	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
-		return 503, "DATABASE_UNAVAILABLE", "无法读写 Out 状态。", "请检查数据库与服务日志后重试。"
+	case strings.HasPrefix(err.Error(), codeOutBindingInvalid):
+		return 400, codeOutBindingInvalid, "Out 参数不正确。", "请检查 Out 标识后重试。"
+	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
+		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 状态。", "请检查数据库与服务日志后重试。"
 	default:
 		return 500, "OUT_MANAGEMENT_FAILED", "Out 操作未完成。", "请凭操作编号检查服务日志。"
 	}

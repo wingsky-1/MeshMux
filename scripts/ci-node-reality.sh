@@ -18,7 +18,7 @@
 # .github/workflows/hub-components.yml.
 #
 # The pin is read from the repository fixture (releases.tsv), which is
-# rendered by internal/install/node_ci_test.go from internal/node/release.go.
+# rendered by internal/cli/install/node_ci_test.go from internal/core/node/release.go.
 # The script never hardcodes a second copy of the pin, so the two can not
 # drift apart.
 set -Eeuo pipefail
@@ -93,10 +93,10 @@ if [[ ! -x "${TEST_BINARY}" ]]; then
 fi
 
 # The pin is rendered by the node package itself, which reads the same
-# internal/node/release.go the compiler and the acceptance fixture use.
+# internal/core/node/release.go the compiler and the acceptance fixture use.
 #
 # --- Render the in-tree pin ------------------------------------------------
-# The fixture writes releases.tsv from internal/node/release.go, so the script
+# The fixture writes releases.tsv from internal/core/node/release.go, so the script
 # consumes the repository's own pin instead of a second hardcoded copy.
 PIN_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/meshmux-reality-pin.XXXXXX")" ||
   fail "could not create the pin fixture directory"

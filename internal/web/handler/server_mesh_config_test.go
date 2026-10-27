@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 const testHeadscaleOrigin = "https://headscale.example.invalid"
@@ -32,7 +32,7 @@ func meshEndpointTestApp(t *testing.T, headscaleOrigin string) (*Server, *browse
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { app.Close() })
-	fake := &fakeHeadscale{failWith: map[string]string{}, users: []headscale.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
+	fake := &fakeHeadscale{failWith: map[string]string{}, users: []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
 	app.mesh = fake
 	b := &browser{app: app}
 	initialize(t, b)
@@ -286,7 +286,7 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 	plan.Lines = append([]subscription.Line(nil), plan.Lines...)
 	plan.Lines[0].Server = "100.64.0.1"
 	fake.resetCalls()
-	_, err = app.meshConfig(context.Background(), plan, headscale.User{ID: 1, Name: mesh.DefaultHeadscaleUser}, now)
+	_, err = app.meshConfig(context.Background(), plan, meshnet.User{ID: 1, Name: mesh.DefaultHeadscaleUser}, now)
 	if err == nil || !strings.Contains(err.Error(), "EXPORT_MESH_LINE_IN_TAILNET") {
 		t.Fatalf("render failure = %v", err)
 	}
@@ -309,7 +309,7 @@ func TestMeshClaimBindsUnclaimedSameNameNodeExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 77, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser, Online: true}}
+	fake.nodes = []meshnet.Node{{ID: 77, Name: device.NodeName, UserName: mesh.DefaultHeadscaleUser, Online: true}}
 	if _, _, err = app.store.IssueMeshEnrollmentKey(device.ID, app.now()); err != nil {
 		t.Fatalf("fixture key: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestMeshClaimRefusesNodeNameMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{ID: 88, Name: "another-node", UserName: mesh.DefaultHeadscaleUser}}
+	fake.nodes = []meshnet.Node{{ID: 88, Name: "another-node", UserName: mesh.DefaultHeadscaleUser}}
 	w := b.post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"88"}})
 	requireStatus(t, w, http.StatusConflict)
 	if !strings.Contains(w.Body.String(), codeMeshClaimNodeMismatch) {

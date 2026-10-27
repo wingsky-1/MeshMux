@@ -1,7 +1,7 @@
 //go:generate go run github.com/a-h/templ/cmd/templ@v0.3.1070 generate
 package view
 
-import "github.com/wingsky-1/MeshMux/internal/web/store"
+import "github.com/wingsky-1/MeshMux/internal/control/store"
 
 type NavItem struct{ Path, Title, Icon string }
 

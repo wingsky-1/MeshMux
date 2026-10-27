@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/wingsky-1/MeshMux/internal/webcmd"
+	"github.com/wingsky-1/MeshMux/internal/cli/webcmd"
 )
 
 func run() int { return webcmd.Run(os.Args[1:]) }

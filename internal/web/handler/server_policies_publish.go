@@ -17,18 +17,26 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // policiesPublishHandle is the authenticated management endpoint.
+//
+// Flow: parse the strict publish intent → build the kernel verifier → ask the
+// store for a gated assembly (validate → resolve → pin → render → kernel
+// check) → store the assembly in one transaction → write the receipt. The
+// handler never renders a document itself, never touches SQL and never executes
+// a shell: the two kernels are reached through the fixed verifier wrapper. A
+// gate refusal stores nothing and returns the stable code, so a failed
+// publication leaves the previous revision live.
 func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ session) {
 	raw := strings.TrimSpace(r.PostForm.Get("publish"))
 	if raw == "" {
-		app.writePublishFailure(w, r, http.StatusBadRequest, "POLICY_PAYLOAD_INVALID", "缺少 publish 字段（JSON）。", "请提交 layer、operation_id 与可选 fallback_to_line。", operation(r))
+		app.writePublishFailure(w, r, http.StatusBadRequest, codePolicyPayloadInvalid, "缺少 publish 字段（JSON）。", "请提交 layer、operation_id 与可选 fallback_to_line。", operation(r))
 		return
 	}
 	request, err := store.ParsePolicyPublishRequest(json.RawMessage(raw))
@@ -53,7 +61,17 @@ func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ ses
 	}
 	receipt := store.PublicationReceipt(assembly, publication)
 	app.event(r, "POLICY_PUBLISHED")
-	store.WritePublicationReceipt(w, http.StatusOK, receipt, operation(r))
+	writePublicationReceipt(w, http.StatusOK, receipt, operation(r))
+}
+
+// writePublicationReceipt writes the stable publication receipt. It lives in
+// the handler: the store returns domain data and never touches an
+// http.ResponseWriter.
+func writePublicationReceipt(w http.ResponseWriter, status int, receipt store.PolicyPublishReceipt, operationID string) {
+	receipt.OperationID = operationID
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(receipt)
 }
 
 // publishVerifier builds the kernel verifier. The sing-box path is the
@@ -102,9 +120,6 @@ func (app *Server) writePublishFailure(w http.ResponseWriter, r *http.Request, s
 		ErrorCode:            code,
 		Detail:               message,
 		NextAction:           next,
-		OperationID:          operationID,
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	writePublicationReceipt(w, status, body, operationID)
 }

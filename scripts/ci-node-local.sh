@@ -48,7 +48,7 @@ dc() { docker exec -e http_proxy="http://$PROXY_HOST:$PROXY_PORT" -e https_proxy
 
 echo "--- build host test binaries"
 mkdir -p "$WORK/bin"
-( cd "$(dirname "$0")/.." && go test -c -o "$WORK/bin/install.test" ./internal/install )
+( cd "$(dirname "$0")/.." && go test -c -o "$WORK/bin/install.test" ./internal/cli/install )
 ( cd "$(dirname "$0")/.." && go test -c -o "$WORK/bin/web-handler.test" ./internal/web/handler )
 ( cd "$(dirname "$0")/.." && CGO_ENABLED=0 go build -o "$WORK/bin/meshmux" ./cmd/meshmux )
 

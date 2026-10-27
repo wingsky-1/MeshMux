@@ -3,14 +3,14 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 func createPendingNode(t *testing.T, app *Server, role, name string, vless, ssh int) (store.Node, string) {

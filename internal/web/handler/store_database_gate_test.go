@@ -16,16 +16,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 func setUserVersion(t *testing.T, dir string, version int) {

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 )
 
 const hubRestorePath = "/tasks/hub-upgrade/restore"

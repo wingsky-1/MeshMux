@@ -1,6 +1,6 @@
 package view
 
-import "github.com/wingsky-1/MeshMux/internal/web/store"
+import "github.com/wingsky-1/MeshMux/internal/control/store"
 
 // SubscriberView is the management view of one subscription user.
 type SubscriberView struct {

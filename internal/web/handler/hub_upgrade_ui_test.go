@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 )
 
 func plantHubUpgradePage(t *testing.T, app *Server, state hubupgrade.State) (string, backup.Record) {

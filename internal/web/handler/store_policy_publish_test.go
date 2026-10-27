@@ -6,15 +6,14 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/compiler"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
-	"github.com/wingsky-1/MeshMux/internal/route"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // publishFixture is one Hub with a paired Line, stored transport and an active
@@ -131,7 +130,7 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressLine || assembly.EgressCode != "" {
+	if assembly.EgressState != policy.AIEgressLine || assembly.EgressCode != "" {
 		t.Fatalf("egress = %s/%s, want line/none", assembly.EgressState, assembly.EgressCode)
 	}
 	if len(assembly.Targets) != 1 || assembly.Targets[0].LineID != f.line {
@@ -167,7 +166,7 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("out assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressOut {
+	if assembly.EgressState != policy.AIEgressOut {
 		t.Fatalf("egress = %s/%s, want out", assembly.EgressState, assembly.EgressCode)
 	}
 	if !strings.Contains(string(assembly.RouteFragment), `"outbound": "out"`) {
@@ -200,8 +199,8 @@ func TestPublishAssemblyOutStates(t *testing.T) {
 	verifier = &fixturePublishVerifier{}
 	candidatesBefore := candidateCount(t, f.store, f.line)
 	_, err = f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now)
-	if err == nil || !strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed) {
-		t.Fatalf("unhealthy Out assembly = %v, want %s", err, route.CodeOutOfflineFailClosed)
+	if err == nil || !strings.HasPrefix(err.Error(), policy.CodeOutOfflineFailClosed) {
+		t.Fatalf("unhealthy Out assembly = %v, want %s", err, policy.CodeOutOfflineFailClosed)
 	}
 	if singBox, mihomo := verifier.counts(); singBox != 0 || mihomo != 0 {
 		t.Fatalf("failed-closed assembly ran %d sing-box and %d mihomo checks", singBox, mihomo)
@@ -229,7 +228,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := f.store.AssemblePolicyPublication(context.Background(), &fixturePublishVerifier{}, request, f.now); err == nil ||
-		!strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed) {
+		!strings.HasPrefix(err.Error(), policy.CodeOutOfflineFailClosed) {
 		t.Fatalf("assembly without opt-in = %v, want fail-closed", err)
 	}
 	// With the opt-in the fallback resolves, and the receipt records both the
@@ -242,7 +241,7 @@ func TestPublishAssemblyFallbackNeedsOperationID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fallback assembly: %v", err)
 	}
-	if assembly.EgressState != route.AIEgressLineFallback || assembly.EgressCode != route.CodeOutOfflineFailClosed {
+	if assembly.EgressState != policy.AIEgressLineFallback || assembly.EgressCode != policy.CodeOutOfflineFailClosed {
 		t.Fatalf("fallback egress = %s/%s", assembly.EgressState, assembly.EgressCode)
 	}
 	if strings.Contains(string(assembly.RouteFragment), `"outbound": "out"`) {
@@ -312,14 +311,14 @@ func TestPublishAssemblyAggregatesEveryLineEgress(t *testing.T) {
 	if assembly.EgressState != store.PolicyEgressMixed {
 		t.Fatalf("egress_state = %q, want %q for a healthy and a fail-closed line", assembly.EgressState, store.PolicyEgressMixed)
 	}
-	if assembly.EgressCode != route.CodeOutOfflineFailClosed {
-		t.Fatalf("egress_code = %q, want %q", assembly.EgressCode, route.CodeOutOfflineFailClosed)
+	if assembly.EgressCode != policy.CodeOutOfflineFailClosed {
+		t.Fatalf("egress_code = %q, want %q", assembly.EgressCode, policy.CodeOutOfflineFailClosed)
 	}
 	perLine := map[string]string{}
 	for _, target := range assembly.Targets {
 		perLine[target.LineID] = target.Egress
 	}
-	if perLine[f.line] != route.AIEgressOut || perLine[second] != store.PolicyEgressFailClosed {
+	if perLine[f.line] != policy.AIEgressOut || perLine[second] != store.PolicyEgressFailClosed {
 		t.Fatalf("per-line egress = %v", perLine)
 	}
 }
@@ -385,11 +384,11 @@ func TestPublishAssemblyWithholdsSharedFragmentWhenLinesDiffer(t *testing.T) {
 	for _, target := range assembly.Targets {
 		perLine[target.LineID] = target
 	}
-	if perLine[f.line].Egress != route.AIEgressOut ||
+	if perLine[f.line].Egress != policy.AIEgressOut ||
 		!strings.Contains(string(perLine[f.line].Candidate.Route), `"outbound": "out"`) {
 		t.Fatalf("healthy line target = %+v", perLine[f.line])
 	}
-	if perLine[second].Egress != route.AIEgressLineFallback ||
+	if perLine[second].Egress != policy.AIEgressLineFallback ||
 		strings.Contains(string(perLine[second].Candidate.Route), `"outbound": "out"`) {
 		t.Fatalf("fallback line target = %+v", perLine[second])
 	}
@@ -407,16 +406,16 @@ func TestAggregatePolicyEgress(t *testing.T) {
 		code   string
 	}{
 		{"empty", nil, nil, "", ""},
-		{"one line", []string{route.AIEgressLine}, []string{""}, route.AIEgressLine, ""},
-		{"every line direct", []string{route.AIEgressLine, route.AIEgressLine}, []string{"", ""}, route.AIEgressLine, ""},
-		{"every line out", []string{route.AIEgressOut, route.AIEgressOut}, []string{"", ""}, route.AIEgressOut, ""},
-		{"healthy and fail-closed", []string{route.AIEgressOut, store.PolicyEgressFailClosed},
-			[]string{"", route.CodeOutOfflineFailClosed}, store.PolicyEgressMixed, route.CodeOutOfflineFailClosed},
-		{"fail-closed first", []string{store.PolicyEgressFailClosed, route.AIEgressOut},
-			[]string{route.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, route.CodeOutOfflineFailClosed},
-		{"out and line", []string{route.AIEgressOut, route.AIEgressLine}, []string{"", ""}, store.PolicyEgressMixed, ""},
-		{"fallback and out", []string{route.AIEgressLineFallback, route.AIEgressOut},
-			[]string{route.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, route.CodeOutOfflineFailClosed},
+		{"one line", []string{policy.AIEgressLine}, []string{""}, policy.AIEgressLine, ""},
+		{"every line direct", []string{policy.AIEgressLine, policy.AIEgressLine}, []string{"", ""}, policy.AIEgressLine, ""},
+		{"every line out", []string{policy.AIEgressOut, policy.AIEgressOut}, []string{"", ""}, policy.AIEgressOut, ""},
+		{"healthy and fail-closed", []string{policy.AIEgressOut, store.PolicyEgressFailClosed},
+			[]string{"", policy.CodeOutOfflineFailClosed}, store.PolicyEgressMixed, policy.CodeOutOfflineFailClosed},
+		{"fail-closed first", []string{store.PolicyEgressFailClosed, policy.AIEgressOut},
+			[]string{policy.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, policy.CodeOutOfflineFailClosed},
+		{"out and line", []string{policy.AIEgressOut, policy.AIEgressLine}, []string{"", ""}, store.PolicyEgressMixed, ""},
+		{"fallback and out", []string{policy.AIEgressLineFallback, policy.AIEgressOut},
+			[]string{policy.CodeOutOfflineFailClosed, ""}, store.PolicyEgressMixed, policy.CodeOutOfflineFailClosed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state, code := store.AggregatePolicyEgress(tc.states, tc.codes)
@@ -445,8 +444,8 @@ func TestPublishAssemblyRefusesUnpinnedAndInvalidPolicy(t *testing.T) {
 	}
 	verifier := &fixturePublishVerifier{}
 	if _, err := f.store.AssemblePolicyPublication(context.Background(), verifier, request, f.now); err == nil ||
-		!strings.HasPrefix(err.Error(), compiler.CodeRulesetUnpinned) {
-		t.Fatalf("unpinned ruleset = %v, want %s", err, compiler.CodeRulesetUnpinned)
+		!strings.HasPrefix(err.Error(), policy.CodeRulesetUnpinned) {
+		t.Fatalf("unpinned ruleset = %v, want %s", err, policy.CodeRulesetUnpinned)
 	}
 	if singBox, mihomo := verifier.counts(); singBox != 0 || mihomo != 0 {
 		t.Fatal("an unpinned ruleset reached the kernel gate")
@@ -639,7 +638,7 @@ func TestPublishCandidateRouteIsInCandidateDocument(t *testing.T) {
 	if !strings.Contains(string(compiled), "ai.example.invalid") {
 		t.Fatalf("compiled candidate lost the route: %s", compiled)
 	}
-	if compiler.Hash(compiled) != stored.ConfigSHA256 {
+	if policy.Hash(compiled) != stored.ConfigSHA256 {
 		t.Fatalf("stored digest %s does not match the compiled document", stored.ConfigSHA256)
 	}
 	// The four fixed task kinds are queued for the publication.

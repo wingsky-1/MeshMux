@@ -1,6 +1,11 @@
 package view
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+)
 
 // views_policies.go holds the display-only view model for the /policies page.
 // The server fills the snapshot from each layer's active revision, falling back
@@ -66,12 +71,172 @@ type PolicyPageView struct {
 	ServerDefault bool
 }
 
+// Extension seams of the /policies page (reserved, nothing renders them yet):
+//
+//   - 影响面预览组件: PolicyConflictView already carries the two facts an
+//     impact panel needs (the affected rows and whether saving is blocked),
+//     and PolicyHitResult already renders the per-target hit chain. A future
+//     impact panel adds a field here and renders it as one more independent
+//     block; it never folds into Server/Client rows.
+//   - 批量重批状态组件: the per-node batch status belongs on UpgradeSnapshot
+//     (see upgrades.go StagedVerdict/ApprovalNotes), not here — this page has
+//     no per-node rows.
+//
+// PolicyActionLabel renders one compiler action as the operator-facing word.
+// The mapping is display-only: a new action renders as its stored spelling
+// until this label learns it, never as an empty cell.
+func PolicyActionLabel(action policy.CompilerAction) string {
+	switch action {
+	case policy.CompilerActionDirect:
+		return "直连"
+	case policy.CompilerActionProxy:
+		return "走 Line"
+	case policy.CompilerActionTailscale:
+		return "直连（Tailnet）"
+	case policy.CompilerActionOut:
+		return "Out 直出（可选）"
+	default:
+		return string(action)
+	}
+}
+
+// policyMatcherLabel renders one matcher as a single display row title.
+func policyMatcherLabel(match policy.Match) string {
+	switch {
+	case len(match.SSIDs) > 0:
+		return "家庭 Wi-Fi SSID（" + strings.Join(match.SSIDs, "、") + "）"
+	case len(match.IPCIDRs) > 0:
+		return "Tailnet / 指定网段（" + strings.Join(match.IPCIDRs, "、") + "）"
+	case len(match.GeoSite) > 0:
+		return "地区规则（" + strings.Join(match.GeoSite, "、") + "）"
+	case len(match.GeoIP) > 0:
+		return "地区 IP（" + strings.Join(match.GeoIP, "、") + "）"
+	case len(match.RuleSets) > 0:
+		return "规则集（" + strings.Join(match.RuleSets, "、") + "）"
+	case len(match.DomainSuffixes) > 0:
+		return "域名后缀（" + strings.Join(match.DomainSuffixes, "、") + "）"
+	case len(match.Domains) > 0:
+		return "域名例外（" + strings.Join(match.Domains, "、") + "）"
+	default:
+		return "未配置匹配条件"
+	}
+}
+
+// policyRuleNote renders the one-line hit note of a rule.
+func policyRuleNote(rule policy.CompilerRule) string {
+	switch rule.Action {
+	case policy.CompilerActionTailscale:
+		return "Mesh 内网目标始终直连，防止私有网络流量绕出。"
+	case policy.CompilerActionDirect:
+		if rule.Match.DNS == policy.DNSDomestic {
+			return "按地区或例外直连，并使用境内 DNS 解析。"
+		}
+		return "命中后整体直连，流量不进入代理。"
+	default:
+		return "境外目标经 Line 转发；DNS 使用加密解析，解析出口与访问出口一致。"
+	}
+}
+
+// PolicyClientRows renders the client layer's read-only rows. The client layer
+// has no consumer in this release, so every row reads as preview instead of
+// claiming it is in effect.
+func PolicyClientRows(clientPolicy policy.ClientPolicy) []PolicyRuleView {
+	rows := make([]PolicyRuleView, 0, len(clientPolicy.Rules)+1)
+	for _, rule := range clientPolicy.Rules {
+		rows = append(rows, PolicyRuleView{
+			Match:  policyMatcherLabel(rule.Match),
+			Action: PolicyActionLabel(rule.Action),
+			Note:   policyRuleNote(rule),
+			State:  "预览",
+		})
+	}
+	return append(rows, PolicyRuleView{
+		Match:  "兜底（未命中任何规则）",
+		Action: PolicyActionLabel(clientPolicy.Default),
+		Note:   "客户端层兜底固定为 Line，规则停用后流量回到兜底而不是断网。",
+		State:  "预览",
+	})
+}
+
+// PolicyServerRows renders the server layer's rows under the Out tri-state.
+// An absent Out never promises one: the rows say Line 直出 and say why.
+func PolicyServerRows(serverIntent policy.ServerPolicy, out PolicyOutState) []PolicyRuleView {
+	action, note := "Line 直出", "未配置 Out 不是错误：AI 与指定分流按 Line 直出，不生成指向 Out 的规则。"
+	if out == PolicyOutActive {
+		action, note = "Out 直出（可选）", "经 Out 直出；Out 不可用时按 fail-closed 处理，不会自动改走 Line。"
+	}
+	if out == PolicyOutDegraded {
+		action, note = "Out 故障 · fail-closed", "Out 故障：指定到 Out 的分流进入 fail-closed，拒绝转发且不隐式回落 Line 直出。"
+	}
+	rows := make([]PolicyRuleView, 0, len(serverIntent.Rules)+1)
+	for _, rule := range serverIntent.Rules {
+		row := PolicyRuleView{Match: policyMatcherLabel(rule.Match), Action: "Line 直出", Note: note, State: "启用"}
+		if rule.Action == policy.CompilerActionOut {
+			row.Action = action
+		}
+		rows = append(rows, row)
+	}
+	return append(rows, PolicyRuleView{Match: "兜底（默认出口）", Action: "Line 直出", Note: "服务端层兜底固定为 Line；Out 故障只影响指定到 Out 的流量。", State: "启用"})
+}
+
+// PolicyConflictRows renders the client layer's conflict panel: one blocking
+// row when the intent fails re-validation, one passing row otherwise.
+func PolicyConflictRows(clientPolicy policy.ClientPolicy) []PolicyConflictView {
+	if err := clientPolicy.Validate(); err != nil {
+		return []PolicyConflictView{{Detail: PolicyErrorDetail(err), Blocked: true}}
+	}
+	return []PolicyConflictView{{Detail: "当前生效的客户端策略通过优先级重叠与 DNS 一致性校验。", Blocked: false}}
+}
+
+// PolicyErrorDetail splits a stable policy code from its detail and renders
+// "code · detail" for the page. The policy domain refuses with "CODE: detail";
+// an unrecognized shape is POLICY_INVALID with the whole message, never a code
+// invented from text.
+func PolicyErrorDetail(err error) string {
+	message := err.Error()
+	for _, code := range []string{
+		policy.CodePolicyConflict, policy.CodePolicyInvalid, policy.CodePolicyNodeUnknown,
+	} {
+		if prefix := code + ": "; strings.HasPrefix(message, prefix) {
+			return code + " · " + strings.TrimPrefix(message, prefix)
+		}
+	}
+	return policy.CodePolicyInvalid + " · " + message
+}
+
 // PolicyCountLabel marks a layer without an active revision as default preview.
 func PolicyCountLabel(count int, fallback bool) string {
 	if fallback {
 		return fmt.Sprintf("默认预览 · %d 条", count)
 	}
 	return fmt.Sprintf("%d 条", count)
+}
+
+// PolicyHitResult renders one hit-explanation chain in the operator's four-stage
+// order (规则 → 动作 → 实际出口 → DNS). It is a pure display transform: the
+// policy domain states the facts, this function states the words. A priority of
+// zero is the fallback row, and the DNS phrasing follows the resolved resolver.
+func PolicyHitResult(hit policy.HitExplanation, target string) PolicyHitView {
+	rule := fmt.Sprintf("优先级 %d · %s", hit.Priority, hit.Matcher)
+	title := "命中说明：" + target
+	if hit.Priority == 0 {
+		rule = "未命中任何显式规则，使用兜底"
+		title = "兜底路径：" + target
+	}
+	dns := "境内 DNS，解析出口与访问出口一致"
+	if hit.DNS == policy.DNSEncrypted {
+		dns = "加密 DNS，解析出口与访问出口一致"
+	}
+	return PolicyHitView{
+		Title: title,
+		Note:  "仅对域名、域名后缀与 CIDR 规则求值；geo 与远端 ruleset 需要锁定数据，本结果不猜测其匹配。",
+		Steps: []PolicyHitStep{
+			{Stage: "规则", Value: rule},
+			{Stage: "动作", Value: PolicyActionLabel(hit.Action)},
+			{Stage: "实际出口", Value: hit.Egress},
+			{Stage: "DNS", Value: dns},
+		},
+	}
 }
 
 // PolicyPreviewLabel marks the client layer as a rendered, gated preview. It

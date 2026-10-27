@@ -11,7 +11,7 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 )
 
 const databaseMigrationApprovePath = "/tasks/db-migration/approve"

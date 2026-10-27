@@ -78,7 +78,7 @@ jobs:
     # (see .gitattributes). `templ generate` must therefore be a no-op on a
     # clean tree: a hand-edited generated file, or a .templ change that was
     # never regenerated, leaves a diff and fails here. The generator version is
-    # pinned by the //go:generate directive in internal/web/views.go (v0.3.1070,
+    # pinned by the //go:generate directive in internal/web/view/views.go (v0.3.1070,
     # matching go.mod); this job rejects @latest and a pin that disagrees with
     # go.mod, so the two cannot drift.
     runs-on: ubuntu-latest

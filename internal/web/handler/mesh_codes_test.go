@@ -4,14 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // TestMeshErrorCodeOnlyReturnsRegisteredCodes pins the closed set: a value that
@@ -27,7 +27,7 @@ func TestMeshErrorCodeOnlyReturnsRegisteredCodes(t *testing.T) {
 		{errors.New(store.CodeMeshDeviceNotFound + ": unknown mesh device"), store.CodeMeshDeviceNotFound},
 		{store.MeshError(store.CodeMeshRouteConflict, "the prefix is already declared"), store.CodeMeshRouteConflict},
 		{&mesh.DomainError{Code: mesh.CodeNodeNameDuplicate, Detail: "taken"}, mesh.CodeNodeNameDuplicate},
-		{&headscale.Error{Code: headscale.CodeUnavailable}, headscale.CodeUnavailable},
+		{&meshnet.Error{Code: meshnet.CodeUnavailable}, meshnet.CodeUnavailable},
 		{fmt.Errorf("%s: %w", codeMeshEndpointRenderFailed, errors.New("boom")), codeMeshEndpointRenderFailed},
 	}
 	for _, tc := range accepted {
@@ -61,8 +61,8 @@ func TestMeshStatusIsChosenFromCodesOnly(t *testing.T) {
 		status int
 	}{
 		{store.CodeDatabaseUnavailable, http.StatusServiceUnavailable},
-		{headscale.CodeUnavailable, http.StatusServiceUnavailable},
-		{headscale.CodeTimeout, http.StatusServiceUnavailable},
+		{meshnet.CodeUnavailable, http.StatusServiceUnavailable},
+		{meshnet.CodeTimeout, http.StatusServiceUnavailable},
 		{store.CodeMeshDeviceNotFound, http.StatusNotFound},
 		{store.CodeMeshEnrollmentKeyNotFound, http.StatusNotFound},
 		{store.CodeMeshRouteNotFound, http.StatusNotFound},

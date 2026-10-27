@@ -1,0 +1,67 @@
+mixed-port: 1080
+allow-lan: false
+bind-address: "127.0.0.1"
+mode: "rule"
+log-level: "info"
+proxies:
+  - name: "香港 01 [11111111111111111111111111111111]"
+    type: "vless"
+    server: "line.example.invalid"
+    port: 8443
+    uuid: "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    flow: "xtls-rprx-vision"
+    tls: true
+    servername: "www.example.invalid"
+    client-fingerprint: "chrome"
+    reality-opts:
+      public-key: "6lxPE-fyg1NgBSYXHy5NVJASmJ3E5OPwfEX2NNaUMXo"
+      short-id: "0123456789abcdef"
+    network: "tcp"
+    udp: false
+  - name: "东京 02 [44444444444444444444444444444444]"
+    type: "vless"
+    server: "line.example.invalid"
+    port: 8443
+    uuid: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+    flow: "xtls-rprx-vision"
+    tls: true
+    servername: "www.example.invalid"
+    client-fingerprint: "chrome"
+    reality-opts:
+      public-key: "6lxPE-fyg1NgBSYXHy5NVJASmJ3E5OPwfEX2NNaUMXo"
+      short-id: "0123456789abcdef"
+    network: "tcp"
+    udp: false
+proxy-groups:
+  - name: "PROXY"
+    type: "select"
+    proxies:
+    - "香港 01 [11111111111111111111111111111111]"
+    - "东京 02 [44444444444444444444444444444444]"
+rule-providers:
+  ai@20261026:
+    type: http
+    behavior: domain
+    url: "https://rulesets.example.invalid/2026-10-26.srs"
+    path: ./ruleset/ai@20261026.yaml
+    interval: 86400
+  geoip-jp@20261026:
+    type: http
+    behavior: ipcidr
+    url: "https://rulesets.example.invalid/2026-10-26.srs"
+    path: ./ruleset/geoip-jp@20261026.yaml
+    interval: 86400
+  geosite-cn@20261026:
+    type: http
+    behavior: domain
+    url: "https://rulesets.example.invalid/2026-10-26.srs"
+    path: ./ruleset/geosite-cn@20261026.yaml
+    interval: 86400
+rules:
+  - "RULE-SET,geosite-cn@20261026,DIRECT"
+  - "RULE-SET,ai@20261026,PROXY"
+  - "DOMAIN-SUFFIX,ads.example.invalid,REJECT"
+  - "DOMAIN-SUFFIX,tracker.example.invalid,REJECT"
+  - "DOMAIN,dl.example.invalid,DIRECT"
+  - "RULE-SET,geoip-jp@20261026,DIRECT"
+  - "MATCH,PROXY"

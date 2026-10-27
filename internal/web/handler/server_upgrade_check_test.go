@@ -12,7 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"net/http/httptest"
@@ -22,9 +22,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/protocol"
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // upgradeApproveFixture pairs one Line whose initial chain already finished, so

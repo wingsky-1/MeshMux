@@ -24,16 +24,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 const (
@@ -115,8 +115,8 @@ func (app *Server) meshConfigPreflight(record store.MeshDeviceRecord, now time.T
 // meshConfig issues one device-scoped document. The Headscale key is minted
 // first and the Hub key second; any failure after the Headscale key exists
 // compensates both keys before the error is returned.
-func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user headscale.User, now time.Time) (*view.MeshKeyDisclosure, error) {
-	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, headscale.PreAuthKeyRequest{
+func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user meshnet.User, now time.Time) (*view.MeshKeyDisclosure, error) {
+	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, meshnet.PreAuthKeyRequest{
 		UserID:   user.ID,
 		Validity: mesh.KeyTTL,
 	})
@@ -155,7 +155,7 @@ func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user hea
 // Headscale key. A configuration refusal is returned as a stable code so the
 // caller can show it next to the still-valid Hub key instead of hiding the
 // created device.
-func (app *Server) meshCreateDisclosure(ctx context.Context, record store.MeshDeviceRecord, user headscale.User, now time.Time) (*view.MeshKeyDisclosure, string, error) {
+func (app *Server) meshCreateDisclosure(ctx context.Context, record store.MeshDeviceRecord, user meshnet.User, now time.Time) (*view.MeshKeyDisclosure, string, error) {
 	if record.Purpose == mesh.PurposeProxyMesh && app.cfg.HeadscaleOrigin != "" {
 		plan, preflightErr := app.meshConfigPreflight(record, now)
 		if preflightErr == nil {
@@ -182,7 +182,7 @@ type meshRekeyStage struct {
 	Disclosure   *view.MeshKeyDisclosure
 	Key          mesh.EnrollmentKey
 	ConfigNotice string
-	preAuth      *headscale.PreAuthKey
+	preAuth      *meshnet.PreAuthKey
 }
 
 // stageMeshRekey prepares the one-time material of a re-enrollment without
@@ -190,7 +190,7 @@ type meshRekeyStage struct {
 // device whose combined document cannot be produced still gets a Hub-side key,
 // with the refusal code as ConfigNotice, because losing the ability to enroll is
 // worse than losing the combined document.
-func (app *Server) stageMeshRekey(ctx context.Context, record store.MeshDeviceRecord, user headscale.User, now time.Time) (meshRekeyStage, error) {
+func (app *Server) stageMeshRekey(ctx context.Context, record store.MeshDeviceRecord, user meshnet.User, now time.Time) (meshRekeyStage, error) {
 	if record.Purpose == mesh.PurposeProxyMesh && app.cfg.HeadscaleOrigin != "" {
 		plan, preflightErr := app.meshConfigPreflight(record, now)
 		if preflightErr == nil {
@@ -209,8 +209,8 @@ func (app *Server) stageMeshRekey(ctx context.Context, record store.MeshDeviceRe
 // memory: the Headscale key is minted, the Hub key is minted but not stored, and
 // neither is persisted as plaintext. A failure after the Headscale key exists
 // expires that key; the Hub key never reached storage, so nothing is left behind.
-func (app *Server) stageMeshConfig(ctx context.Context, plan meshConfigPlan, user headscale.User, now time.Time) (meshRekeyStage, error) {
-	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, headscale.PreAuthKeyRequest{
+func (app *Server) stageMeshConfig(ctx context.Context, plan meshConfigPlan, user meshnet.User, now time.Time) (meshRekeyStage, error) {
+	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, meshnet.PreAuthKeyRequest{
 		UserID:   user.ID,
 		Validity: mesh.KeyTTL,
 	})
@@ -283,7 +283,7 @@ func (app *Server) issueMeshKeyDisclosure(deviceID string, now time.Time, notice
 // minted for an attempt that did not produce a response. Compensation failures
 // are ignored here: the caller reports the original failure, and the keys keep
 // their fixed short lifetime.
-func (app *Server) compensateMeshConfig(ctx context.Context, key headscale.PreAuthKey, hubKeyID string) {
+func (app *Server) compensateMeshConfig(ctx context.Context, key meshnet.PreAuthKey, hubKeyID string) {
 	_ = app.mesh.ExpirePreAuthKey(ctx, key.ID)
 	if hubKeyID != "" {
 		_, _ = app.store.RevokeMeshEnrollmentKey(hubKeyID)
@@ -423,6 +423,6 @@ func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess sessio
 
 // meshNodeMatchesName accepts the node name the list reports. GivenName is
 // checked as a fallback because older Headscale listings split the name.
-func meshNodeMatchesName(node headscale.Node, name string) bool {
+func meshNodeMatchesName(node meshnet.Node, name string) bool {
 	return node.Name == name || (node.GivenName != "" && node.GivenName == name)
 }

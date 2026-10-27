@@ -2,7 +2,7 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"sort"
@@ -10,9 +10,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wingsky-1/MeshMux/internal/compiler"
-	"github.com/wingsky-1/MeshMux/internal/route"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // The subscriber page keeps two states apart on purpose:
@@ -56,7 +55,7 @@ type tokenDisclosure struct {
 func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	app.render(w, r, 200, view.SubscribersPage(view.PageData{Title: "订阅用户", Path: "/subscribers", CSRF: sess.CSRF, Dev: app.cfg.DevHTTP}, page))
@@ -67,7 +66,7 @@ func (app *Server) subscribersPage(w http.ResponseWriter, r *http.Request, sess 
 func (app *Server) subscribersAPI(w http.ResponseWriter, r *http.Request, _ session) {
 	page, err := app.subscriberViewModel()
 	if err != nil {
-		app.fail(w, r, 503, "DATABASE_UNAVAILABLE", "无法读取订阅用户。", "请检查数据库和服务日志。")
+		app.fail(w, r, 503, store.CodeDatabaseUnavailable, "无法读取订阅用户。", "请检查数据库和服务日志。")
 		return
 	}
 	type lineProjection struct {
@@ -348,33 +347,14 @@ func (app *Server) fanOutLineChange(r *http.Request, nodeID string) {
 	}
 }
 
-// lineCredentialSubscriberIDs returns every subscriber that ever held a
-// credential on one Line. The rows are fully drained and closed before this
-// function returns, so the single store connection is free for the caller's
-// follow-up writes.
+// lineCredentialSubscriberIDs returns every subscriber that selects one Line or
+// ever held a credential on it. The selection edge is the authoritative intent;
+// the credential history is included so a dropped Line still loses its old UUID
+// on the next publication. The store owns the query and drains the rows before
+// returning, so the single store connection is free for the caller's follow-up
+// writes.
 func (app *Server) lineCredentialSubscriberIDs(nodeID string) ([]string, error) {
-	rows, err := app.store.DB.Query(`SELECT DISTINCT subscriber_id FROM proxy_credentials WHERE node_id=? ORDER BY subscriber_id`, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	subscriberIDs := []string{}
-	for rows.Next() {
-		var subscriberID string
-		if err = rows.Scan(&subscriberID); err != nil {
-			break
-		}
-		subscriberIDs = append(subscriberIDs, subscriberID)
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	if closeErr := rows.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return nil, err
-	}
-	return subscriberIDs, nil
+	return app.store.LineSubscriberIDs(nodeID)
 }
 
 // selectedLineIDs reads the checked Line checkboxes of one form.
@@ -421,8 +401,8 @@ func (e *lineInputError) Error() string { return "LINE_INPUT_INVALID" }
 func (app *Server) subscriberFail(w http.ResponseWriter, r *http.Request, err error, fallback, message, next string) {
 	code, status := fallback, http.StatusConflict
 	switch {
-	case strings.HasPrefix(err.Error(), "DATABASE_UNAVAILABLE"):
-		code, status = "DATABASE_UNAVAILABLE", http.StatusServiceUnavailable
+	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
+		code, status = store.CodeDatabaseUnavailable, http.StatusServiceUnavailable
 	case strings.HasPrefix(err.Error(), "SUBSCRIBER_NOT_FOUND"):
 		code, status = "SUBSCRIBER_NOT_FOUND", http.StatusNotFound
 	case strings.HasPrefix(err.Error(), "SUBSCRIBER_TRANSITION_INVALID"):
@@ -446,20 +426,20 @@ func (app *Server) subscriberFail(w http.ResponseWriter, r *http.Request, err er
 	// failure, and the previous revision stays live.
 	case strings.HasPrefix(err.Error(), "OUT_BINDING_INVALID"):
 		code, status = "OUT_BINDING_INVALID", http.StatusConflict
-	case strings.HasPrefix(err.Error(), route.CodeOutOfflineFailClosed):
-		code, status = route.CodeOutOfflineFailClosed, http.StatusConflict
+	case strings.HasPrefix(err.Error(), policy.CodeOutOfflineFailClosed):
+		code, status = policy.CodeOutOfflineFailClosed, http.StatusConflict
 	case strings.HasPrefix(err.Error(), store.CodeOutNotAuthorized):
 		code, status = store.CodeOutNotAuthorized, http.StatusConflict
 	case strings.HasPrefix(err.Error(), "POLICY_CORRUPT"):
 		code, status = "POLICY_CORRUPT", http.StatusConflict
 	case strings.HasPrefix(err.Error(), "POLICY_PINS_INVALID"):
 		code, status = "POLICY_PINS_INVALID", http.StatusConflict
-	case strings.HasPrefix(err.Error(), compiler.CodePolicyInvalid):
-		code, status = compiler.CodePolicyInvalid, http.StatusConflict
-	case strings.HasPrefix(err.Error(), compiler.CodePolicyConflict):
-		code, status = compiler.CodePolicyConflict, http.StatusConflict
-	case strings.HasPrefix(err.Error(), compiler.CodeRulesetUnpinned):
-		code, status = compiler.CodeRulesetUnpinned, http.StatusConflict
+	case strings.HasPrefix(err.Error(), policy.CodePolicyInvalid):
+		code, status = policy.CodePolicyInvalid, http.StatusConflict
+	case strings.HasPrefix(err.Error(), policy.CodePolicyConflict):
+		code, status = policy.CodePolicyConflict, http.StatusConflict
+	case strings.HasPrefix(err.Error(), policy.CodeRulesetUnpinned):
+		code, status = policy.CodeRulesetUnpinned, http.StatusConflict
 	}
 	app.fail(w, r, status, code, message, next)
 }

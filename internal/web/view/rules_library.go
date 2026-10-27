@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
 // rules_library.go holds the display model for the /rules library page (Task

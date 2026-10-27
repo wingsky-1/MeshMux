@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 )
 
 // TestAgentManifestRequiresAuth pins that the read-only manifest channel is

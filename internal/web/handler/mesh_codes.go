@@ -1,10 +1,10 @@
 package handler
 
 import (
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // The Mesh error codes are a closed set.
@@ -129,17 +129,17 @@ var (
 	// headscaleCodes are the control-plane adapter refusals. They are the only
 	// values a Mesh page reports as 503 instead of a conflict.
 	headscaleCodes = codeSet(
-		headscale.CodeVersionMismatch,
-		headscale.CodeSocketUnavailable,
-		headscale.CodeUnavailable,
-		headscale.CodeTimeout,
-		headscale.CodeCommandFailed,
-		headscale.CodeOutputInvalid,
-		headscale.CodeArgumentInvalid,
-		headscale.CodeCanceled,
-		headscale.CodeNotFound,
-		headscale.CodeAlreadyExists,
-		headscale.CodeRouteInvalid,
+		meshnet.CodeVersionMismatch,
+		meshnet.CodeSocketUnavailable,
+		meshnet.CodeUnavailable,
+		meshnet.CodeTimeout,
+		meshnet.CodeCommandFailed,
+		meshnet.CodeOutputInvalid,
+		meshnet.CodeArgumentInvalid,
+		meshnet.CodeCanceled,
+		meshnet.CodeNotFound,
+		meshnet.CodeAlreadyExists,
+		meshnet.CodeRouteInvalid,
 	)
 
 	// meshExportCodes are the client-configuration exporter refusals. They

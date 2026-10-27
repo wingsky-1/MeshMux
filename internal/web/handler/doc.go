@@ -16,11 +16,18 @@
 // POLICY_PAYLOAD_RETIRED. The client layer remains a gated preview of its
 // legacy revision, never a subscription input.
 //
-// Dependency direction (compiler-enforced): handler → store and handler →
-// view. Handlers use Store.DB only for the session/auth transactions that
-// moved here untouched; domain writes go through store methods or the policy
-// rule-library store constructed on the same handle (migration stays in
-// store). Rendering goes through view components and view page-models built
-// from store records. handler never imports web; nothing below handler
-// imports handler.
+// Dependency direction (compiler-enforced): handler → internal/control/store
+// and handler → view. Handlers use Store.DB only for the session/auth
+// transactions that moved here untouched; domain writes go through store
+// methods or the policy rule-library store constructed on the same handle
+// (migration stays in store). Rendering goes through view components and view
+// page-models built from store records. handler never imports web; nothing
+// below handler imports handler.
+//
+// codes.go is the single source of the error-code literals this package spells
+// in more than one file and of the grammar predicates (operation id, digest,
+// release version) aliased from internal/cli/backup. A literal a second handler
+// needs belongs there, never in a per-file copy. Display wording (page rows,
+// labels, hit chains, verdicts) lives in the view package: the handler states
+// facts and codes, the view states the words.
 package handler

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
+	"github.com/wingsky-1/MeshMux/internal/cli/install"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 func recordedNodeState(t *testing.T, role node.Role) (install.InstallState, string) {

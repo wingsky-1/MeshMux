@@ -1,0 +1,190 @@
+// Package install implements the privileged Hub and Line installers and their
+// read-only preflight and planning entry points (PreflightWithMode,
+// BuildNodePlanForRoot in node_plan.go).
+//
+// Both installers journal the same stage sequence — preflight, stage, apply,
+// verify — with a pairing stage for a Line that still needs a one-time code.
+// Preflight validates the host and target ownership; stage downloads and
+// verifies pinned artifacts and renders the candidate configuration (the Hub
+// additionally runs caddy validate and headscale configtest); apply snapshots and replaces only
+// MeshMux-owned files, writing the ledger after each file; verify starts the
+// units, polls the live data plane back and writes the terminal ledger.
+// InstallHub lives in apply.go and InstallNode in node_apply.go; their phase
+// helpers are the sibling hub_stage.go, hub_apply.go, node_stage.go,
+// node_identity.go, node_candidate.go, node_apply_verify.go and
+// node_verify_tail.go files. The per-role recovery wording stays at the call
+// sites and is pinned by apply_recovery_test.go.
+//
+// The shared infrastructure is apply_shared.go (newOperationRecorder,
+// ensureDebianPackages, validateStagedUnits, ensureFail2banRunning) plus
+// acquireInstallLock in lock.go, which takes the single host-wide flock without
+// waiting so a concurrent install fails as INSTALL_BUSY instead of blocking.
+//
+// The package imports internal/node for the node domain contract and runtime
+// helpers (node.Config, node.CurrentAgentVersion, node.NewClient,
+// node.ReadbackLocal, node.AcquireRuntimeLock); node never imports install.
+//
+// Layer: core (the installer engine below the cli one-shot). The cli's install
+// command is the only caller that starts a host mutation; this package owns the
+// preflight -> stage -> apply -> verify pipeline, never imports internal/web,
+// and reads only its own installer ledger. Shared roots/ports/grammar come from
+// internal/versions and internal/backup, the two leaves both sides may import.
+package install
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"regexp"
+	"strings"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/versions"
+)
+
+const (
+	// Ports are re-exported from the versions leaf: the rendered Caddy/Web
+	// units, the launcher and the restore probe read the same constants.
+	WebPort           = versions.WebPort
+	HeadscalePort     = versions.HeadscalePort
+	HeadscaleGRPCPort = versions.HeadscaleGRPCPort
+	STUNPort          = versions.STUNPort
+)
+
+// Unit names/paths rendered and enabled by the Hub installer. They are named
+// once here because render.go, hub_apply.go and preflight.go all have to agree
+// on the exact systemd identity.
+const (
+	headscaleUnitName = "meshmux-headscale.service"
+	caddyUnitName     = "meshmux-caddy.service"
+	headscaleUnitPath = "/etc/systemd/system/" + headscaleUnitName
+	caddyUnitPath     = "/etc/systemd/system/" + caddyUnitName
+)
+
+type Config struct {
+	ManagementDomain   string `json:"management_domain"`
+	SubscriptionDomain string `json:"subscription_domain"`
+	HeadscaleDomain    string `json:"headscale_domain"`
+	DirectCaddy        bool   `json:"direct_caddy,omitempty"`
+}
+
+func SameConfig(a, b Config) bool {
+	return a.ManagementDomain == b.ManagementDomain &&
+		a.SubscriptionDomain == b.SubscriptionDomain &&
+		a.HeadscaleDomain == b.HeadscaleDomain &&
+		a.DirectCaddy == b.DirectCaddy
+}
+
+var label = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// Validate rejects characters that could inject a Caddyfile, YAML, or unit directive.
+func (c Config) Validate() error {
+	domains := []string{c.ManagementDomain, c.SubscriptionDomain, c.HeadscaleDomain}
+	seen := map[string]bool{}
+	for _, name := range domains {
+		if len(name) < 4 || len(name) > 253 || name != strings.ToLower(name) ||
+			strings.HasSuffix(name, ".") || strings.ContainsAny(name, ":/\\ \t\n\r\"'") ||
+			net.ParseIP(name) != nil || name == "localhost" {
+			return errors.New("DOMAIN_INVALID: supply three lowercase public DNS names")
+		}
+		parts := strings.Split(name, ".")
+		if len(parts) < 2 || len(parts[len(parts)-1]) < 2 {
+			return errors.New("DOMAIN_INVALID: a domain must contain a nonempty public suffix")
+		}
+		for _, part := range parts {
+			if !label.MatchString(part) {
+				return fmt.Errorf("DOMAIN_INVALID: invalid DNS label")
+			}
+		}
+		if seen[name] {
+			return errors.New("DOMAIN_DUPLICATE: use separate management, subscription and Headscale domains")
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+type Check struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"` // pass, fail, pending
+	Code     string `json:"error_code,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Recovery string `json:"next_action,omitempty"`
+}
+
+type Port struct {
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+	Service  string `json:"service"`
+}
+
+type Component struct {
+	Name         string `json:"name"`
+	Version      string `json:"version"`
+	Distribution string `json:"distribution"`
+}
+
+type Plan struct {
+	OperationID     string      `json:"operation_id"`
+	Stage           string      `json:"stage"`
+	Status          string      `json:"status"`
+	OS              string      `json:"os"`
+	Architecture    string      `json:"architecture"`
+	Config          Config      `json:"config"`
+	Checks          []Check     `json:"checks"`
+	Artifacts       []Artifact  `json:"artifacts"`
+	Components      []Component `json:"components"`
+	Ports           []Port      `json:"ports"`
+	Units           []string    `json:"systemd_units"`
+	Paths           []string    `json:"managed_paths"`
+	FirewallChanges []string    `json:"firewall_changes"`
+	SSHPPorts       []int       `json:"ssh_listening_ports,omitempty"`
+	ApplyAvailable  bool        `json:"apply_available"`
+	NextAction      string      `json:"next_action"`
+}
+
+// NewOperationID generates an ID without using environment or user data.
+func NewOperationID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+func Ports() []Port {
+	return []Port{
+		{"tcp", 80, "Caddy ACME HTTP-01"},
+		{"tcp", 443, "Caddy HTTPS / Headscale DERP"},
+		{"udp", STUNPort, "Headscale embedded STUN"},
+		{"tcp", WebPort, "MeshMux Web loopback"},
+		{"tcp", HeadscalePort, "Headscale loopback"},
+		{"tcp", HeadscaleGRPCPort, "Headscale gRPC loopback"},
+	}
+}
+
+func BuildPlan(id string, c Config, architecture string, checks []Check, ssh []int) Plan {
+	ready := true
+	for _, check := range checks {
+		if check.Status == "fail" {
+			ready = false
+			break
+		}
+	}
+	status := "preflight_passed"
+	if !ready {
+		status = "preflight_blocked"
+	}
+	return Plan{
+		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13", Architecture: architecture,
+		Config: c, Checks: checks, Artifacts: PinnedArtifacts(architecture),
+		Components: []Component{{"MeshMux Web", "same executable as the invoked CLI", "self-copy verified by SHA-256"}, {"Caddy", CaddyVersion, "pinned upstream GitHub asset"}, {"Headscale", HeadscaleVersion, "pinned upstream GitHub asset"}, {"sing-box", KernelVersion + " (not installed in Hub phase)", "deferred to Issue #7"}, {"Fail2ban", "Debian 13 package version", "Debian official apt repository"}, {"nftables", "Debian 13 package version", "Debian official apt repository"}},
+		Ports:      Ports(), SSHPPorts: ssh,
+		Units:           []string{versions.WebUnitName, headscaleUnitName, caddyUnitName, "fail2ban.service"},
+		Paths:           []string{"/etc/meshmux/", "/var/lib/meshmux/", "/var/lib/meshmux-headscale/", "/var/lib/meshmux-caddy/", versions.InstallerStatePath, versions.RuntimeBinaryPath, caddyBinaryPath, headscaleBinaryPath, "/etc/fail2ban/jail.d/meshmux-ssh.local", "/etc/fail2ban/filter.d/meshmux-web.conf"},
+		FirewallChanges: []string{"none in preflight (do not replace the host nftables ruleset)"},
+		ApplyAvailable:  ready,
+		NextAction:      "After reviewing this plan, confirm with the exact prompt or pass --yes. Installation re-runs preflight, stages and validates pinned artifacts, applies only MeshMux-owned files, then verifies services and HTTPS. Public ingress and UDP reachability remain separately reported.",
+	}
+}

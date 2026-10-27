@@ -16,12 +16,14 @@ MeshMux 按 SemVer 2.0.0，**v1.0.0 是首个公开稳定版本**。开发里程
 ## 当前 Go 实现
 
 - cmd/meshmux：CLI 的 `install hub|edge|out` 入口（含 `--plan`/`--repair`），已随 #5/#6 交付并通过隔离 Debian 13 VM 自动化验收。
-- internal/node：节点契约、候选文档与角色模型（含 ParseRole 契约测试）。
+- `internal/cli/`：一次性 CLI 入口与共享叶子（`install`、`upgrade`、`update`、`hubupgrade`、`webcmd`、`backup`、`buildinfo`、`versions`），不读业务表。
+- `internal/core/`：领域层（`node` 含 `protocol`、`policy`、`subscription` 含 `ir`、`mesh`、`meshnet`），不依赖 control/web。
+- `internal/control/store`：Hub 持久化与编排；`internal/web/`：`handler`、`view`、`config.go`、`server.go` 的薄装配。
 - docs/：产品、架构、运维、安全与验收；docs/adr 仅在真实架构取舍时补充。
 - .github/workflows/ci.yml：gofmt、vet、test、race、build。
 - cmd/meshmux-web、internal/web：非 root Web 服务、安全认证/会话、SQLite 和嵌入式 templ/HTMX 页面。
-- **#7 Phase 3A 已合入（PR #19/#21/#22）**：安装器（`internal/install`）与订阅生成器（严格 v2 REALITY 编译器、Web 订阅生命周期、双格式下载）已实现；Agent 严格协议与一次性配对已随 #6（PR #18）合入。
-- **#9 已随 PR #62/#63 合入**：9a Mesh 设备生命周期（`internal/mesh` 纯领域模型、`internal/headscale` 固定 argv 适配器、Web `/mesh` 设备页、schema 6 的 `mesh_devices`/`mesh_enrollment_keys`、Hub 的 Web↔Headscale socket 组边界）、9b 子网路由声明/批准/撤销与观测归档、9c 单 VPN 客户端配置渲染、9d Mesh 身份迁移文档。**仍缺**：真实 tailnet 设备注册、真实 NAS 跨网可达与真机单 VPN 证据。
+- **#7 Phase 3A 已合入（PR #19/#21/#22）**：安装器（`internal/cli/install`）与订阅生成器（严格 v2 REALITY 编译器、Web 订阅生命周期、双格式下载）已实现；Agent 严格协议与一次性配对已随 #6（PR #18）合入。
+- **#9 已随 PR #62/#63 合入**：9a Mesh 设备生命周期（`internal/core/mesh` 纯领域模型、`internal/core/meshnet` 固定 argv 适配器、Web `/mesh` 设备页、schema 6 的 `mesh_devices`/`mesh_enrollment_keys`、Hub 的 Web↔Headscale socket 组边界）、9b 子网路由声明/批准/撤销与观测归档、9c 单 VPN 客户端配置渲染、9d Mesh 身份迁移文档。**仍缺**：真实 tailnet 设备注册、真实 NAS 跨网可达与真机单 VPN 证据。
 - 隔离运行、模板再生成、安全验收与恢复见 [WEB_DEVELOPMENT](WEB_DEVELOPMENT.zh-CN.md)，依赖见 [DEPENDENCIES](DEPENDENCIES.zh-CN.md)。
 
 本地运行：

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 var subscriberTokenPattern = regexp.MustCompile(`<pre class="sub-secret">([^<]+)</pre>`)

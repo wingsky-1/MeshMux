@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 // meshRowSlice returns the article slice of one device row, so row assertions
@@ -129,7 +129,7 @@ func TestMeshApproveModalRendersForObservedDevice(t *testing.T) {
 	if _, err := app.store.RecordMeshObservation(router.ID, 7, app.now()); err != nil {
 		t.Fatal(err)
 	}
-	fake.nodes = []headscale.Node{{
+	fake.nodes = []meshnet.Node{{
 		ID: 7, Name: router.NodeName,
 		AvailableRoutes: []string{"192.168.20.0/24"},
 	}}

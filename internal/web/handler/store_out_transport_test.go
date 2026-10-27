@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	nodedomain "github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // configureOut stores the dial address of one Out node for tests. The port

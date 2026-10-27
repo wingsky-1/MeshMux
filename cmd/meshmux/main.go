@@ -17,12 +17,12 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade/rootexec"
-	"github.com/wingsky-1/MeshMux/internal/install"
-	"github.com/wingsky-1/MeshMux/internal/node"
-	"github.com/wingsky-1/MeshMux/internal/update"
-	"github.com/wingsky-1/MeshMux/internal/webcmd"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade/rootexec"
+	"github.com/wingsky-1/MeshMux/internal/cli/install"
+	"github.com/wingsky-1/MeshMux/internal/cli/update"
+	"github.com/wingsky-1/MeshMux/internal/cli/webcmd"
+	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
 // installRoleHub is not a node role: a hub host is described by install.Config

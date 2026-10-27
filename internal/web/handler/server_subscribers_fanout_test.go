@@ -2,13 +2,13 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/url"
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
 
 // TestLinesSaveFansOutToEveryCredentialSubscriber pins the #7 fan-out: saving a

@@ -20,7 +20,6 @@ package handler
 // any layer blocks, so the page can always say "not saved" honestly.
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -28,9 +27,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/wingsky-1/MeshMux/internal/policy"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
@@ -419,11 +418,11 @@ func (app *Server) subscriptionWizardPreview(w http.ResponseWriter, r *http.Requ
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	preview := app.store.PreviewDraftSelection(draft, verifier)
+	preview := app.store.PreviewDraftSelection(r.Context(), draft, verifier)
 	app.event(r, "SUBSCRIPTION_PREVIEWED")
 	model, err := app.subscriptionWizardModelWith(subscriberID, &spec)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "预览已生成但页面数据读取失败。", "请刷新页面后重试。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "预览已生成但页面数据读取失败。", "请刷新页面后重试。")
 		return
 	}
 	model.Diagnostics = preview.Diagnostics
@@ -451,7 +450,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		app.subscriptionWizardFail(w, r, err)
 		return
 	}
-	result, err := app.store.ApproveSubscriptionSelection(context.Background(), subscriberID, displayName, spec, verifier, now)
+	result, err := app.store.ApproveSubscriptionSelection(r.Context(), subscriberID, displayName, spec, verifier, now)
 	if err != nil {
 		app.subscriptionWizardFail(w, r, err)
 		return
@@ -468,7 +467,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 		app.event(r, preview.Code())
 		model, modelErr := app.subscriptionWizardModelWith(pageSubscriberID, &spec)
 		if modelErr != nil {
-			app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "保存被拒绝但页面数据读取失败。", "请刷新页面后重试。")
+			app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "保存被拒绝但页面数据读取失败。", "请刷新页面后重试。")
 			return
 		}
 		model.Diagnostics = preview.Diagnostics
@@ -487,7 +486,7 @@ func (app *Server) subscriptionWizardSave(w http.ResponseWriter, r *http.Request
 	}
 	model, err := app.subscriptionWizardModel(subscriberID)
 	if err != nil {
-		app.fail(w, r, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "选择已保存但页面数据读取失败。", "请刷新页面后重试。")
+		app.fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "选择已保存但页面数据读取失败。", "请刷新页面后重试。")
 		return
 	}
 	model.Diagnostics = preview.Diagnostics
@@ -515,7 +514,7 @@ func (app *Server) subscriptionWizardFail(w http.ResponseWriter, r *http.Request
 	code, _, _ := strings.Cut(err.Error(), ": ")
 	status := http.StatusConflict
 	switch code {
-	case "DATABASE_UNAVAILABLE":
+	case store.CodeDatabaseUnavailable:
 		status = http.StatusServiceUnavailable
 	case "SUBSCRIBER_NOT_FOUND", "OUT_NOT_FOUND", "LINE_NOT_FOUND", "RULE_NOT_FOUND", "MESH_DEVICE_NOT_FOUND":
 		status = http.StatusNotFound

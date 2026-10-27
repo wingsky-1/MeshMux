@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/headscale"
-	"github.com/wingsky-1/MeshMux/internal/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/mesh"
+	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 )
 
 const meshFixtureListen = "127.0.0.1:19444"
@@ -78,13 +78,13 @@ func TestMeshHubFixture(t *testing.T) {
 	// The fixture refuses to guess the host layout: the pinned binary and the
 	// Hub-generated configuration are the same paths the adapter and installer
 	// use, and neither may be redirected by an environment variable.
-	for _, path := range []string{headscale.BinaryPath, headscale.ConfigPath} {
+	for _, path := range []string{meshnet.BinaryPath, meshnet.ConfigPath} {
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.Mode().IsRegular() {
 			t.Fatalf("pinned Headscale host layout is incomplete (%s): %v", path, statErr)
 		}
 	}
-	runner := headscale.NewCLIRunner()
+	runner := meshnet.NewCLIRunner()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err = runner.VerifyVersion(ctx); err != nil {
@@ -231,9 +231,9 @@ func TestMeshHubFixture(t *testing.T) {
 	}
 	if err = writePrivateJSON(metadataPath, meshFixtureMetadata{
 		HubOrigin:        testOrigin,
-		HeadscaleBinary:  headscale.BinaryPath,
-		HeadscaleConfig:  headscale.ConfigPath,
-		HeadscaleVersion: headscale.HeadscaleVersion,
+		HeadscaleBinary:  meshnet.BinaryPath,
+		HeadscaleConfig:  meshnet.ConfigPath,
+		HeadscaleVersion: meshnet.HeadscaleVersion,
 		Users:            len(users),
 		Devices:          1,
 		Revoked:          1,
@@ -267,7 +267,7 @@ func prepareMeshFixtureDir(dir string) error {
 
 // TestMeshHeadscaleWiringIsPinned proves the production page is wired to the
 // pinned local CLI adapter, not to an injectable command or a remote client.
-// The adapter's own argv table is covered in internal/headscale; this is the
+// The adapter's own argv table is covered in internal/core/meshnet; this is the
 // Web-side half of the command-assembly contract.
 func TestMeshHeadscaleWiringIsPinned(t *testing.T) {
 	app, _ := testApp(t)
@@ -275,14 +275,14 @@ func TestMeshHeadscaleWiringIsPinned(t *testing.T) {
 }
 
 // requirePinnedHeadscaleWiring pins the concrete adapter without spelling its
-// type name: the only production implementation of headscale.Client is the
+// type name: the only production implementation of meshnet.Client is the
 // value NewCLIRunner returns, so the runtime types must be identical.
 func requirePinnedHeadscaleWiring(t *testing.T, app *Server) {
 	t.Helper()
 	if app.mesh == nil {
 		t.Fatal("app.mesh is nil")
 	}
-	if got, want := fmt.Sprintf("%T", app.mesh), fmt.Sprintf("%T", headscale.NewCLIRunner()); got != want {
+	if got, want := fmt.Sprintf("%T", app.mesh), fmt.Sprintf("%T", meshnet.NewCLIRunner()); got != want {
 		t.Fatalf("wired %s, want the fixed-layout %s", got, want)
 	}
 }
@@ -292,11 +292,11 @@ func requirePinnedHeadscaleWiring(t *testing.T, app *Server) {
 // its stable code and no device, key or observation may be written. It is
 // skipped when the pinned binary exists so it can never reach a live service.
 func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
-	if _, err := os.Stat(headscale.BinaryPath); err == nil {
+	if _, err := os.Stat(meshnet.BinaryPath); err == nil {
 		t.Skip("pinned Headscale binary is installed on this host; refusing to exercise a live control plane")
 	}
 	app, _ := testApp(t)
-	app.mesh = headscale.NewCLIRunner()
+	app.mesh = meshnet.NewCLIRunner()
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -342,8 +342,8 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 // verbatim; the test only requires that the refusal keeps a stable code.
 func headscaleErrorCodeIn(body string) string {
 	for _, code := range []string{
-		headscale.CodeUnavailable, headscale.CodeSocketUnavailable, headscale.CodeTimeout,
-		headscale.CodeCommandFailed, headscale.CodeOutputInvalid, headscale.CodeVersionMismatch,
+		meshnet.CodeUnavailable, meshnet.CodeSocketUnavailable, meshnet.CodeTimeout,
+		meshnet.CodeCommandFailed, meshnet.CodeOutputInvalid, meshnet.CodeVersionMismatch,
 	} {
 		if strings.Contains(body, code) {
 			return code

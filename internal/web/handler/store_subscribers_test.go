@@ -4,14 +4,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/protocol"
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 // subscriberStoreFixture opens a private store and returns it with the fixed

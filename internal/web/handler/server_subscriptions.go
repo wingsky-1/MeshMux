@@ -3,13 +3,13 @@ package handler
 import (
 	"context"
 	"errors"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/wingsky-1/MeshMux/internal/subscription"
+	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
 const (
@@ -199,27 +199,13 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 		written = true
 		return
 	}
-	// The convergence gate runs first: an unconverged Line refuses the download
-	// even when an artifact was approved. The Lines and credentials themselves
-	// are not read here, because the artifact is the single source of bytes.
-	if _, _, err := s.store.SubscriptionDownload(token, s.now()); err != nil {
-		if errors.Is(err, store.ErrSubscriptionStoreUnavailable) {
-			s.event(r, store.CodeDatabaseUnavailable)
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			written = true
-			return
-		}
-		s.event(r, "SUBSCRIPTION_DOWNLOAD_REJECTED")
-		s.subscriptionNotFound(w, r)
-		written = true
-		return
-	}
-	// The approved artifact is the download's single source of truth for a
-	// subscription that went through the wizard: the bytes are re-derived from
-	// the saved selection and must match the digest that passed the kernel
-	// gate. A subscription without a snapshot keeps the historical export.
-	approvedSingBox, approvedMihomo, artifactErr := s.store.SubscriptionArtifactDownload(token, s.now())
+	// One resolve runs the convergence gate first: an unconverged Line refuses
+	// the download even when an artifact was approved. The approved artifact is
+	// then the download's single source of truth for a subscription that went
+	// through the wizard: the bytes are re-derived from the saved selection and
+	// must match the digest that passed the kernel gate. A subscription without
+	// a snapshot keeps the historical export.
+	approved, artifactErr := s.store.SubscriptionArtifactDownload(token, s.now())
 	if artifactErr != nil {
 		if errors.Is(artifactErr, store.ErrSubscriptionStoreUnavailable) {
 			s.event(r, store.CodeDatabaseUnavailable)
@@ -240,10 +226,10 @@ func (s *Server) subscription(w http.ResponseWriter, r *http.Request) {
 	)
 	switch format {
 	case subscriptionSingBoxFormat:
-		body = approvedSingBox
+		body = approved.SingBox
 		contentType = "application/json; charset=utf-8"
 	case subscriptionMihomoFormat:
-		body = approvedMihomo
+		body = approved.Mihomo
 		contentType = "text/yaml; charset=utf-8"
 	default:
 		renderErr = errors.New("SUBSCRIPTION_FORMAT_INVALID")

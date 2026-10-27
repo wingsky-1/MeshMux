@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // nodesOutTestApp opens one authenticated browser on a Hub with a paired Out

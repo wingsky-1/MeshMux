@@ -11,16 +11,15 @@ package view
 import (
 	"context"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/a-h/templ"
-	"github.com/wingsky-1/MeshMux/internal/backup"
-	"github.com/wingsky-1/MeshMux/internal/hubupgrade"
-	"github.com/wingsky-1/MeshMux/internal/upgrade"
-	"github.com/wingsky-1/MeshMux/internal/web/store"
+	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
+	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
+	"github.com/wingsky-1/MeshMux/internal/control/store"
 )
 
 // UpgradeSnapshot is the whole page input. An invalid manifest is shown as a
@@ -70,6 +69,10 @@ func (s HubIdentity) Confirmed() bool { return s.Code == "" && !s.CheckedAt.IsZe
 // per-operation record, the restored marker and the identity snapshot. Errors
 // are captured as stable codes so one unreadable metadata file cannot turn the
 // whole page into a 503.
+//
+// The facts are read by the handler and mapped into this structure; the view
+// package owns the shape and the wording, never the journal, the process owner
+// or any other filesystem access.
 type HubUpgradeView struct {
 	Op          hubupgrade.Op
 	HasOp       bool
@@ -90,63 +93,6 @@ type HubUpgradeView struct {
 	ExpiresAt time.Time
 }
 
-// NewHubUpgradeView reads the Hub upgrade facts. The journal is the authority
-// (D3): no mirror table is queried, and no directory under database-backup/ is
-// scanned to guess the current record.
-func NewHubUpgradeView(dataDir, resultsDir string, now time.Time, identity HubIdentity) HubUpgradeView {
-	view := HubUpgradeView{Identity: identity}
-	owner := os.Geteuid()
-	ops, err := hubupgrade.ListOps(dataDir, owner)
-	if err != nil {
-		view.Err = store.ErrorCodeOf(err)
-		return view
-	}
-	if op, ok := newestUpdateOp(ops); ok {
-		view.Op, view.HasOp = op, true
-		if op.State == hubupgrade.StateBackingUp || op.State == hubupgrade.StateBackedUp {
-			view.ExpiresAt = op.UpdatedAt.Add(hubupgrade.OrphanTimeout)
-		}
-		result, ok, err := hubupgrade.ReadResult(resultsDir, op.OperationID)
-		switch {
-		case err != nil:
-			view.ResultErr = store.ErrorCodeOf(err)
-		case ok:
-			view.Result, view.HasResult = result, true
-		}
-	}
-	if _, record, ok, err := hubupgrade.LatestBackup(dataDir, owner); err == nil && ok {
-		view.Record, view.HasRecord = record, true
-	} else if err != nil && view.Err == "" {
-		view.Err = store.ErrorCodeOf(err)
-	}
-	if marker, ok, err := hubupgrade.ReadRestoredMarker(dataDir); err == nil && ok {
-		view.Restored, view.HasRestored = marker, true
-	} else if err != nil && view.Err == "" {
-		view.Err = store.ErrorCodeOf(err)
-	}
-	return view
-}
-
-// newestUpdateOp is the journal's current update operation: the highest backup
-// generation, then the newest update time. It is journal-backed, so an
-// operation directory no journal names can never become "current".
-func newestUpdateOp(ops []hubupgrade.Op) (hubupgrade.Op, bool) {
-	var newest hubupgrade.Op
-	found := false
-	for _, op := range ops {
-		if op.Kind != hubupgrade.KindUpdate {
-			continue
-		}
-		switch {
-		case !found,
-			op.BackupGeneration > newest.BackupGeneration,
-			op.BackupGeneration == newest.BackupGeneration && op.UpdatedAt.After(newest.UpdatedAt):
-			newest, found = op, true
-		}
-	}
-	return newest, found
-}
-
 // converged compares two Hub-side reports: the newest staged revision is the
 // observed active one with the same compiled digest. It is not a health claim.
 func (v UpgradeSnapshot) converged(n store.Node) bool {
@@ -154,6 +100,51 @@ func (v UpgradeSnapshot) converged(n store.Node) bool {
 	return staged.Revision > 0 && staged.Revision == n.ObservedRevision &&
 		staged.ConfigSHA256 != "" && staged.ConfigSHA256 == n.ObservedConfigSHA256
 }
+
+// StagedVerdict renders the staged-vs-active conclusion of one node row. The
+// words live here, next to the page model, so a handler cannot re-spell the
+// verdict with different claims: nothing here says installed, reachable or
+// applied — only which revision the node has read back.
+func (v UpgradeSnapshot) StagedVerdict(n store.Node) string {
+	if v.converged(n) {
+		return "staged 已回读为 active"
+	}
+	if v.Staged[n.ID].Revision > 0 {
+		return "staged 未回读为 active"
+	}
+	return "尚无 staged"
+}
+
+// ApprovalNotes renders the exclusion notes of one approval cell: why the
+// control cannot be offered, or empty when the node may be approved. The Hub
+// cannot prove which candidate schema a node consumes without a read-back
+// Agent version, so such a node is excluded instead of guessed.
+func (v UpgradeSnapshot) ApprovalNotes(n store.Node) []string {
+	notes := []string{}
+	if v.TargetExcluded(n) {
+		notes = append(notes, "无 Agent 回读版本，已排除（不猜 schema）")
+	}
+	if n.ObservedAgentVersion != "" && n.ObservedAgentVersion != v.Manifest.Version {
+		notes = append(notes, "混版本：该节点仍运行 "+n.ObservedAgentVersion+"，批准前请确认它理解的候选 schema")
+	}
+	if v.Manifest.Version == "" || v.ManifestErr != "" {
+		notes = append(notes, "本机 manifest 不可用，无法批准")
+	}
+	return notes
+}
+
+// HasApproval reports whether an approval record exists for the node.
+func (v UpgradeSnapshot) HasApproval(approved store.ApprovedTarget) bool {
+	return approved.Version != ""
+}
+
+// Extension seam: 批量重批状态组件. The per-node facts a batch view needs are
+// already separate model answers, not table markup: StagedVerdict names the
+// staged-vs-active conclusion, TargetExcluded reports whether approval can be
+// offered, and ApprovalNotes names each exclusion reason. A future batch
+// component renders those answers per node in its own block; it never reuses
+// the table row HTML, and neither answer may claim a release is installed or
+// applied — the verdicts speak only about readback evidence.
 
 // targetExcluded reports whether an approval cannot be offered for this node:
 // without a read-back Agent version the Hub cannot prove which candidate schema
@@ -343,12 +334,6 @@ func upgradeNodesHTML(v UpgradeSnapshot, csrf string) string {
 	for _, n := range v.Nodes {
 		staged := v.Staged[n.ID]
 		approved := v.Approved[n.ID]
-		verdict := "尚无 staged"
-		if v.converged(n) {
-			verdict = "staged 已回读为 active"
-		} else if staged.Revision > 0 {
-			verdict = "staged 未回读为 active"
-		}
 		out += `<tr><td>` + templ.EscapeString(n.DisplayName) + `<br/><code>` + templ.EscapeString(n.ID) + `</code></td>` +
 			`<td>Agent ` + valueOrUnknown(n.ObservedAgentVersion) + ` · kernel ` + valueOrUnknown(n.ObservedKernelVersion) +
 			` · rev ` + strconv.FormatInt(n.ObservedRevision, 10) + `<br/><code>` + valueOrUnknown(n.ObservedConfigSHA256) +
@@ -364,7 +349,7 @@ func upgradeNodesHTML(v UpgradeSnapshot, csrf string) string {
 				`<br/><code>` + templ.EscapeString(staged.ConfigSHA256) + `</code><br/>manifest <code>` +
 				templ.EscapeString(staged.ManifestSHA256) + `</code><br/><code>` + templ.EscapeString(staged.OperationID) + `</code>`
 		}
-		out += `</td><td>` + approvedTargetHTML(v, n, approved, csrf) + `</td><td>` + verdict + `</td></tr>`
+		out += `</td><td>` + approvedTargetHTML(v, n, approved, csrf) + `</td><td>` + templ.EscapeString(v.StagedVerdict(n)) + `</td></tr>`
 	}
 	return out + `</tbody></table><p class="hint">批准只写入既有 <code>agent_tasks</code> 的目标记录并排队固定四任务链；执行由目标机本地 update 完成。Hub 自升级见上方区块：备份、交接与有损恢复是三个独立的、带 operation_id 的写操作。queued / restoring 都不等于已生效。</p></section>`
 }
@@ -372,10 +357,11 @@ func upgradeNodesHTML(v UpgradeSnapshot, csrf string) string {
 // approvedTargetHTML renders the newest persisted approval and the single
 // per-node approval control. The control only exists when the Hub can prove the
 // node's Agent version and the manifest can name a target; otherwise the cell
-// says why the node is excluded instead of offering a refusal to the operator.
+// names each exclusion note (the view model's ApprovalNotes) instead of
+// offering a refusal to the operator.
 func approvedTargetHTML(v UpgradeSnapshot, n store.Node, approved store.ApprovedTarget, csrf string) string {
 	out := ""
-	if approved.Version != "" {
+	if v.HasApproval(approved) {
 		out += `<span class="badge accent">` + templ.EscapeString(approved.Version) + `</span> · ` +
 			templ.EscapeString(approved.Status) + `<br/>policy_schema ` + strconv.Itoa(approved.PolicySchema) +
 			`<br/>rev ` + strconv.FormatInt(approved.Revision, 10) + `<br/>manifest <code>` +
@@ -383,15 +369,11 @@ func approvedTargetHTML(v UpgradeSnapshot, n store.Node, approved store.Approved
 	} else {
 		out += `<span class="muted">未批准</span>`
 	}
-	if v.TargetExcluded(n) {
-		return out + `<br/><span class="muted">无 Agent 回读版本，已排除（不猜 schema）</span>`
+	for _, note := range v.ApprovalNotes(n) {
+		out += `<br/><span class="muted">` + templ.EscapeString(note) + `</span>`
 	}
-	if n.ObservedAgentVersion != v.Manifest.Version {
-		out += `<br/><span class="muted">混版本：该节点仍运行 ` + templ.EscapeString(n.ObservedAgentVersion) +
-			`，批准前请确认它理解的候选 schema</span>`
-	}
-	if v.Manifest.Version == "" || v.ManifestErr != "" {
-		return out + `<br/><span class="muted">本机 manifest 不可用，无法批准</span>`
+	if len(v.ApprovalNotes(n)) > 0 {
+		return out
 	}
 	return out + `<form action="/tasks/approve" method="post"><input type="hidden" name="csrf" value="` +
 		templ.EscapeString(csrf) + `"/><input type="hidden" name="node_id" value="` + templ.EscapeString(n.ID) +
