@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,10 +25,10 @@ func postPolicy(t *testing.T, b *browser, path, body string) *httptest.ResponseR
 	return b.post(path, url.Values{"policy": {body}})
 }
 
-func policyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) policyWriteResponse {
+func policyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) policy.PolicyWriteResponse {
 	t.Helper()
 	requireStatus(t, w, status)
-	var out policyWriteResponse
+	var out policy.PolicyWriteResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("write response: %v %.300s", err, w.Body.String())
 	}
@@ -144,7 +145,7 @@ func TestPoliciesPageActiveAndBrokenSnapshots(t *testing.T) {
 
 	// A stored payload that no longer validates is never rendered as live.
 	broken := `{"default":"proxy","rules":[{"priority":200,"match":{"domains":["news.example.invalid"]},"action":"direct"},{"priority":100,"match":{"domains":["other.example.invalid"]},"action":"direct"}]}`
-	if _, err := b.app.store.DB.Exec(`UPDATE route_policies SET payload=? WHERE id=? AND revision=1`, broken, clientID); err != nil {
+	if _, err := b.app.Store.DB.Exec(`UPDATE route_policies SET payload=? WHERE id=? AND revision=1`, broken, clientID); err != nil {
 		t.Fatal(err)
 	}
 	w = b.req("GET", "/policies", nil, nil)

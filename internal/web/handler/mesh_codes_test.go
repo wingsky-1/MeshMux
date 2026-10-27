@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"strings"
 	"testing"
@@ -28,11 +29,11 @@ func TestMeshErrorCodeOnlyReturnsRegisteredCodes(t *testing.T) {
 		{store.MeshError(store.CodeMeshRouteConflict, "the prefix is already declared"), store.CodeMeshRouteConflict},
 		{&mesh.DomainError{Code: mesh.CodeNodeNameDuplicate, Detail: "taken"}, mesh.CodeNodeNameDuplicate},
 		{&meshnet.Error{Code: meshnet.CodeUnavailable}, meshnet.CodeUnavailable},
-		{fmt.Errorf("%s: %w", codeMeshEndpointRenderFailed, errors.New("boom")), codeMeshEndpointRenderFailed},
+		{fmt.Errorf("%s: %w", meshh.CodeMeshEndpointRenderFailed, errors.New("boom")), meshh.CodeMeshEndpointRenderFailed},
 	}
 	for _, tc := range accepted {
-		if got := meshErrorCode(tc.err); got != tc.want {
-			t.Errorf("meshErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
+		if got := meshh.MeshErrorCode(tc.err); got != tc.want {
+			t.Errorf("meshh.MeshErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 	}
 
@@ -47,8 +48,8 @@ func TestMeshErrorCodeOnlyReturnsRegisteredCodes(t *testing.T) {
 		fmt.Errorf("wrapped: %w", errors.New("postgres is down")),
 	}
 	for _, err := range rejected {
-		if got := meshErrorCode(err); got != codeMeshInternalError {
-			t.Errorf("meshErrorCode(%v) = %q, want %q", err, got, codeMeshInternalError)
+		if got := meshh.MeshErrorCode(err); got != meshh.CodeMeshInternalError {
+			t.Errorf("meshh.MeshErrorCode(%v) = %q, want %q", err, got, meshh.CodeMeshInternalError)
 		}
 	}
 }
@@ -66,30 +67,30 @@ func TestMeshStatusIsChosenFromCodesOnly(t *testing.T) {
 		{store.CodeMeshDeviceNotFound, http.StatusNotFound},
 		{store.CodeMeshEnrollmentKeyNotFound, http.StatusNotFound},
 		{store.CodeMeshRouteNotFound, http.StatusNotFound},
-		{codeMeshClaimNodeNotFound, http.StatusNotFound},
+		{meshh.CodeMeshClaimNodeNotFound, http.StatusNotFound},
 		{store.CodeMeshDeviceCorrupt, http.StatusInternalServerError},
 		{store.CodeMeshRouteCorrupt, http.StatusInternalServerError},
-		{codeMeshInternalError, http.StatusInternalServerError},
+		{meshh.CodeMeshInternalError, http.StatusInternalServerError},
 		{mesh.CodeDeviceIDInvalid, http.StatusBadRequest},
 		{mesh.CodeRoutePrefixInvalid, http.StatusBadRequest},
 		{mesh.CodeKeySecretInvalid, http.StatusBadRequest},
 		{mesh.CodeNodeNameDuplicate, http.StatusConflict},
 		{mesh.CodeKeyAlreadyActive, http.StatusConflict},
-		{codeMeshEndpointRenderFailed, http.StatusConflict},
+		{meshh.CodeMeshEndpointRenderFailed, http.StatusConflict},
 		{subscription.CodeMeshLineInTailnet, http.StatusConflict},
 		{subscription.CodeMeshPurposeUnsupported, http.StatusConflict},
-		{codeMeshRouteApprovalUnconfirmed, http.StatusConflict},
-		{codeMeshRouteApprovalPartial, http.StatusInternalServerError},
-		{codeMeshRouteWithdrawPartial, http.StatusInternalServerError},
+		{meshh.CodeMeshRouteApprovalUnconfirmed, http.StatusConflict},
+		{meshh.CodeMeshRouteApprovalPartial, http.StatusInternalServerError},
+		{meshh.CodeMeshRouteWithdrawPartial, http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
-		if got := meshStatus(tc.code); got != tc.status {
-			t.Errorf("meshStatus(%q) = %d, want %d", tc.code, got, tc.status)
+		if got := meshh.MeshStatus(tc.code); got != tc.status {
+			t.Errorf("meshh.MeshStatus(%q) = %d, want %d", tc.code, got, tc.status)
 		}
 	}
 	// A code that only resembles an export or adapter code is not promoted into
 	// its status class.
-	if got := meshStatus("EXPORT_MESH_SOMETHING_NEW"); got != http.StatusConflict {
+	if got := meshh.MeshStatus("EXPORT_MESH_SOMETHING_NEW"); got != http.StatusConflict {
 		t.Errorf("unknown export-like code = %d", got)
 	}
 }
@@ -106,7 +107,7 @@ func TestMeshControlPlaneFailRefusesForeignCodes(t *testing.T) {
 	if strings.Contains(w.Body.String(), "HEADSCALE_SOMETHING_NEW") {
 		t.Fatalf("unregistered adapter code reached the page: %.300s", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), codeMeshInternalError) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshInternalError) {
 		t.Fatalf("refusal lost its sanitized code: %.300s", w.Body.String())
 	}
 }
@@ -116,13 +117,13 @@ func TestMeshControlPlaneFailRefusesForeignCodes(t *testing.T) {
 // stay out of the page, and the log carries the code rather than the message.
 func TestMeshPageNoticeNeverRendersFreeFormText(t *testing.T) {
 	app, b, _, logs := meshTestApp(t)
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.now())
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A hand-edited node name that no longer satisfies the domain rules is a
 	// corrupt row: the store reports MESH_DEVICE_CORRUPT without quoting it.
-	if _, err = app.store.DB.Exec(`UPDATE mesh_devices SET node_name='Not A Name' WHERE id=?`, device.ID); err != nil {
+	if _, err = app.Store.DB.Exec(`UPDATE mesh_devices SET node_name='Not A Name' WHERE id=?`, device.ID); err != nil {
 		t.Fatal(err)
 	}
 	logs.Reset()
@@ -169,34 +170,34 @@ func TestMeshPageNoticeNeverRendersFreeFormText(t *testing.T) {
 // as MESH_INTERNAL_ERROR instead of its own code.
 func TestMeshCodesCoverEveryRenderedConstant(t *testing.T) {
 	for _, code := range []string{
-		codeMeshDeviceCreateFailed,
-		codeMeshDeviceKeyIssue,
-		codeMeshDeviceRekeyFailed,
-		codeMeshDeviceRevokeFailed,
-		codeMeshDeviceNotReenrollable,
-		codeMeshReconcileFailed,
-		codeMeshRouteApproval,
-		codeMeshRouteWithdraw,
-		codeMeshRouteApprovalPartial,
-		codeMeshRouteWithdrawPartial,
-		codeMeshRouteApprovalUnconfirmed,
-		codeMeshRouteNodeUnobserved,
-		codeMeshHeadscaleUserUnknown,
-		codeMeshClaimNodeNotFound,
-		codeMeshClaimNodeMismatch,
-		codeMeshClaimNodeOccupied,
-		codeMeshClaimFailed,
-		codeMeshEndpointControlURLUnavailable,
-		codeMeshEndpointPurposeUnsupported,
-		codeMeshEndpointSubscriberUnavailable,
-		codeMeshEndpointKeyIssueFailed,
-		codeMeshEndpointRenderFailed,
+		meshh.CodeMeshDeviceCreateFailed,
+		meshh.CodeMeshDeviceKeyIssue,
+		meshh.CodeMeshDeviceRekeyFailed,
+		meshh.CodeMeshDeviceRevokeFailed,
+		meshh.CodeMeshDeviceNotReenrollable,
+		meshh.CodeMeshReconcileFailed,
+		meshh.CodeMeshRouteApproval,
+		meshh.CodeMeshRouteWithdraw,
+		meshh.CodeMeshRouteApprovalPartial,
+		meshh.CodeMeshRouteWithdrawPartial,
+		meshh.CodeMeshRouteApprovalUnconfirmed,
+		meshh.CodeMeshRouteNodeUnobserved,
+		meshh.CodeMeshHeadscaleUserUnknown,
+		meshh.CodeMeshClaimNodeNotFound,
+		meshh.CodeMeshClaimNodeMismatch,
+		meshh.CodeMeshClaimNodeOccupied,
+		meshh.CodeMeshClaimFailed,
+		meshh.CodeMeshEndpointControlURLUnavailable,
+		meshh.CodeMeshEndpointPurposeUnsupported,
+		meshh.CodeMeshEndpointSubscriberUnavailable,
+		meshh.CodeMeshEndpointKeyIssueFailed,
+		meshh.CodeMeshEndpointRenderFailed,
 	} {
-		if !isMeshCode(code) {
+		if !meshh.IsMeshCode(code) {
 			t.Errorf("%q is rendered by a Mesh handler but not registered", code)
 		}
 	}
-	if isMeshCode("SOMETHING_NOT_REGISTERED") {
+	if meshh.IsMeshCode("SOMETHING_NOT_REGISTERED") {
 		t.Error("foreign code accepted by the registry")
 	}
 }

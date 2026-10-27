@@ -46,14 +46,14 @@ func decodeHubRestore(t *testing.T, w *httptest.ResponseRecorder, status int) hu
 func plantHubRestoreOperation(t *testing.T, app *Server, state hubupgrade.State) (string, hubupgrade.Op) {
 	t.Helper()
 	operationID := strings.Repeat("a", 32)
-	_, record := hubDatabaseRecord(t, app.store.Dir, operationID, nil)
+	_, record := hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 	op := hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: state, TargetVersion: "1.0.1", FromVersion: "1.0.0",
 		ManifestSHA256: strings.Repeat("b", 64), PackageSHA256: strings.Repeat("c", 64),
 		DBSchema: record.DBSchema, BackupGeneration: 1, UpdatedAt: time.Now().UTC(),
 	}
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
 	return operationID, op
@@ -61,7 +61,7 @@ func plantHubRestoreOperation(t *testing.T, app *Server, state hubupgrade.State)
 
 func TestRestoreReceipt(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
-	app.hubRequestDir = filepath.Join(t.TempDir(), "requests")
+	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StateFailed)
 
 	receipt := decodeHubRestore(t, b.post(hubRestorePath,
@@ -69,12 +69,12 @@ func TestRestoreReceipt(t *testing.T) {
 	if !receipt.OK || receipt.Status != "restoring" || receipt.OperationID != operationID {
 		t.Fatalf("receipt: %+v", receipt)
 	}
-	request, err := hubupgrade.ReadRequest(filepath.Join(app.hubRequestDir, operationID+".json"), os.Geteuid())
+	request, err := hubupgrade.ReadRequest(filepath.Join(app.upgradeServer.HubRequestDirValueForTest(), operationID+".json"), os.Geteuid())
 	if err != nil {
 		t.Fatalf("queued request: %v", err)
 	}
 	if request.Kind != hubupgrade.KindRestore || request.OperationID != operationID ||
-		request.DataDir != app.store.Dir {
+		request.DataDir != app.Store.Dir {
 		t.Fatalf("request = %+v", request)
 	}
 
@@ -89,11 +89,11 @@ func TestRestoreReceipt(t *testing.T) {
 
 func TestRestoreSecondRequestBusy(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
-	app.hubRequestDir = filepath.Join(t.TempDir(), "requests")
+	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StateFailed)
-	if _, err := hubupgrade.WriteRequest(app.hubRequestDir, hubupgrade.Request{
+	if _, err := hubupgrade.WriteRequest(app.upgradeServer.HubRequestDirValueForTest(), hubupgrade.Request{
 		Schema: hubupgrade.RequestSchema, Kind: hubupgrade.KindRestore,
-		OperationID: operationID, DataDir: app.store.Dir,
+		OperationID: operationID, DataDir: app.Store.Dir,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -111,14 +111,14 @@ func TestRestoreRejectsLiveOperation(t *testing.T) {
 	} {
 		t.Run(string(state), func(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
-			app.hubRequestDir = filepath.Join(t.TempDir(), "requests")
+			app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 			operationID, _ := plantHubRestoreOperation(t, app, state)
 			receipt := decodeHubRestore(t, b.post(hubRestorePath,
 				url.Values{"operation_id": {operationID}}), http.StatusConflict)
 			if receipt.OK || receipt.ErrorCode != "HUB_UPGRADE_BUSY" {
 				t.Fatalf("state %s receipt: %+v", state, receipt)
 			}
-			if _, err := os.Stat(filepath.Join(app.hubRequestDir, operationID+".json")); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(app.upgradeServer.HubRequestDirValueForTest(), operationID+".json")); !os.IsNotExist(err) {
 				t.Fatal("a request was queued for a live operation")
 			}
 		})
@@ -136,22 +136,22 @@ func TestRestoreRouteDoesNotListRequestDir(t *testing.T) {
 	}
 	b, app := databaseMigrationBrowser(t)
 	parent := t.TempDir()
-	app.hubRequestDir = filepath.Join(parent, "requests")
-	if err := os.Mkdir(app.hubRequestDir, 0730); err != nil {
+	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(parent, "requests"))
+	if err := os.Mkdir(app.upgradeServer.HubRequestDirValueForTest(), 0730); err != nil {
 		t.Fatal(err)
 	}
 	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StateFailed)
-	if err := os.Chmod(app.hubRequestDir, 0330); err != nil {
+	if err := os.Chmod(app.upgradeServer.HubRequestDirValueForTest(), 0330); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(app.hubRequestDir, 0730) })
+	t.Cleanup(func() { _ = os.Chmod(app.upgradeServer.HubRequestDirValueForTest(), 0730) })
 
 	receipt := decodeHubRestore(t, b.post(hubRestorePath,
 		url.Values{"operation_id": {operationID}}), http.StatusOK)
 	if receipt.Status != "restoring" {
 		t.Fatalf("receipt: %+v", receipt)
 	}
-	if _, err := os.Lstat(filepath.Join(app.hubRequestDir, operationID+".json")); err != nil {
+	if _, err := os.Lstat(filepath.Join(app.upgradeServer.HubRequestDirValueForTest(), operationID+".json")); err != nil {
 		t.Fatalf("request was not published through a write-only directory: %v", err)
 	}
 
@@ -165,7 +165,7 @@ func TestRestoreRouteDoesNotListRequestDir(t *testing.T) {
 
 func TestRestoreRejectsCarriedRecord(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
-	app.hubRequestDir = filepath.Join(t.TempDir(), "requests")
+	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 	operationID, _ := plantHubRestoreOperation(t, app, hubupgrade.StatePartial)
 	marker := hubupgrade.RestoredMarker{
 		Schema: hubupgrade.RestoredSchema, OperationID: operationID,
@@ -188,7 +188,7 @@ func writeTestRestoredMarker(app *Server, marker hubupgrade.RestoredMarker) erro
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(app.store.Dir, hubupgrade.HubUpgradeDir)
+	dir := filepath.Join(app.Store.Dir, hubupgrade.HubUpgradeDir)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func writeTestRestoredMarker(app *Server, marker hubupgrade.RestoredMarker) erro
 
 func TestRestoreRejectsMalformedOperation(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
-	app.hubRequestDir = filepath.Join(t.TempDir(), "requests")
+	app.upgradeServer.SetHubRequestDirForTest(filepath.Join(t.TempDir(), "requests"))
 	for _, id := range []string{"", "latest", strings.Repeat("A", 32), strings.Repeat("a", 31)} {
 		receipt := decodeHubRestore(t, b.post(hubRestorePath,
 			url.Values{"operation_id": {id}}), http.StatusBadRequest)
@@ -205,7 +205,7 @@ func TestRestoreRejectsMalformedOperation(t *testing.T) {
 			t.Fatalf("operation %q receipt: %+v", id, receipt)
 		}
 	}
-	if entries, err := os.ReadDir(app.hubRequestDir); err == nil && len(entries) != 0 {
+	if entries, err := os.ReadDir(app.upgradeServer.HubRequestDirValueForTest()); err == nil && len(entries) != 0 {
 		t.Fatal("a malformed operation queued a request")
 	}
 }

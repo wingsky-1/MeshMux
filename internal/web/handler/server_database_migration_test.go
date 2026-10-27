@@ -12,6 +12,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -34,10 +35,10 @@ func databaseMigrationBrowser(t *testing.T) (*browser, *Server) {
 	return b, app
 }
 
-func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status int) databaseMigrationReceipt {
+func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status int) policy.DatabaseMigrationReceipt {
 	t.Helper()
 	requireStatus(t, w, status)
-	var receipt databaseMigrationReceipt
+	var receipt policy.DatabaseMigrationReceipt
 	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
 		t.Fatalf("database migration receipt: %v %.300s", err, w.Body.String())
 	}
@@ -53,7 +54,7 @@ func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status 
 func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("d", 32)
-	recordPath, _ := hubDatabaseRecord(t, app.store.Dir, operationID, nil)
+	recordPath, _ := hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 	before, err := os.ReadFile(recordPath)
 	if err != nil {
 		t.Fatal(err)
@@ -96,11 +97,11 @@ func TestIrreversibleNeedsExplicitConfirm(t *testing.T) {
 	// The approval acts on the operation directory, never on the flat pointer
 	// <database-backup>/record.json that only the old binary's schemaTooNew
 	// existence check reads.
-	wantRecord := filepath.Join(app.store.Dir, store.DatabaseBackupDirName, operationID, store.DatabaseBackupRecordName)
+	wantRecord := filepath.Join(app.Store.Dir, store.DatabaseBackupDirName, operationID, store.DatabaseBackupRecordName)
 	if approved.BackupRecord != wantRecord {
 		t.Fatalf("approval record = %q, want %q", approved.BackupRecord, wantRecord)
 	}
-	if filepath.Dir(approved.BackupRecord) == filepath.Join(app.store.Dir, store.DatabaseBackupDirName) {
+	if filepath.Dir(approved.BackupRecord) == filepath.Join(app.Store.Dir, store.DatabaseBackupDirName) {
 		t.Fatalf("approval wrote the flat pointer %q", approved.BackupRecord)
 	}
 	if stored := readStoredDatabaseRecord(t, recordPath); !stored.IrreversibleApproved {
@@ -126,7 +127,7 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 
 	t.Run("authentication, origin and csrf stay required", func(t *testing.T) {
 		b, app := databaseMigrationBrowser(t)
-		hubDatabaseRecord(t, app.store.Dir, operationID, nil)
+		hubDatabaseRecord(t, app.Store.Dir, operationID, nil)
 		anonymous := &browser{app: app}
 		requireStatus(t, anonymous.req("POST", databaseMigrationApprovePath, approvedForm(), nil), http.StatusUnauthorized)
 		requireStatus(t, b.req("POST", databaseMigrationApprovePath,
@@ -209,7 +210,7 @@ func TestIrreversibleConfirmMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
-			path, _ := hubDatabaseRecord(t, app.store.Dir, operationID, tc.mutate)
+			path, _ := hubDatabaseRecord(t, app.Store.Dir, operationID, tc.mutate)
 			if tc.write != nil {
 				tc.write(path)
 			}

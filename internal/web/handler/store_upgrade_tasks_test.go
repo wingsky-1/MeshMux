@@ -12,12 +12,12 @@ import (
 // stampTargetTx drives the transaction-scoped stamp the way the approval path
 // does: one transaction, committed here.
 func stampTargetTx(app *Server, operationID string, target upgrade.Target) error {
-	tx, err := app.store.DB.Begin()
+	tx, err := app.Store.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := store.StampUpgradeTargetTx(tx, operationID, target, app.now()); err != nil {
+	if err := store.StampUpgradeTargetTx(tx, operationID, target, app.Now()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -30,7 +30,7 @@ func TestUpgradeTaskRecordRoundTripAndPage(t *testing.T) {
 	app, _ := testApp(t)
 	created, code := createPendingNode(t, app, "edge", "upgrade-record", 8443, 2222)
 	requireStatus(t, pairJSON(t, app, created.ID, "edge", code), 200)
-	latest, err := app.store.LatestCandidate(created.ID)
+	latest, err := app.Store.LatestCandidate(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,15 +50,15 @@ func TestUpgradeTaskRecordRoundTripAndPage(t *testing.T) {
 	if err := stampTargetTx(app, tasks[1].OperationID, target); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ReportResultAudited(created.ID, protocol.TaskResult{
+	if _, err := app.Store.ReportResultAudited(created.ID, protocol.TaskResult{
 		OperationID: tasks[1].OperationID, Status: "healthy",
-	}, app.now()); err != nil {
+	}, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := stampTargetTx(app, tasks[1].OperationID, target); err == nil {
 		t.Fatal("healthy task accepted a new target")
 	}
-	staged, err := app.store.StagedReadbacks()
+	staged, err := app.Store.StagedReadbacks()
 	if err != nil {
 		t.Fatal(err)
 	}

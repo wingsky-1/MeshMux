@@ -44,15 +44,15 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	lineSettings := testLine(line.ID, "line-sync")
 	lineSettings.Server = "203.0.113.7"
 	lineSettings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(lineSettings, now); err != nil {
+	if _, err := app.Store.SetLine(lineSettings, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := app.store.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
+	if _, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
 		t.Fatal(err)
 	}
 	// The fixture Out always carries its dial address, so enabling a binding
 	// in a test exercises the egress path instead of the transport refusal.
-	configureOut(t, app.store, out.ID, now)
+	configureOut(t, app.Store, out.ID, now)
 	// The tokens are issued after the roles are known. A reissue resets the
 	// node to pending, so both are marked online again afterwards and their
 	// seeded chains are settled, which lets the test attribute every later chain
@@ -62,9 +62,9 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 		outToken: agentToken(t, app, out.ID), lineToken: agentToken(t, app, line.ID),
 	}
 	for _, nodeID := range []string{out.ID, line.ID} {
-		markLineOnline(t, app.store, nodeID, now)
-		settleTasks(t, app.store, nodeID)
-		confirmChain(t, app.store, nodeID, now)
+		markLineOnline(t, app.Store, nodeID, now)
+		settleTasks(t, app.Store, nodeID)
+		confirmChain(t, app.Store, nodeID, now)
 	}
 	return result
 }
@@ -75,10 +75,10 @@ func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 func agentToken(t *testing.T, app *Server, nodeID string) string {
 	t.Helper()
 	var role string
-	if err := app.store.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role); err != nil {
 		t.Fatal(err)
 	}
-	code, err := app.store.ReissuePairing(nodeID, time.Now())
+	code, err := app.Store.ReissuePairing(nodeID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,13 +111,13 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	// the membership list is not yet the published one.
 	w := heartbeatJSON(t, app, f.outToken)
 	requireStatus(t, w, 200)
-	settled := candidateCount(t, app.store, f.outID)
+	settled := candidateCount(t, app.Store, f.outID)
 	if settled < 1 {
 		t.Fatalf("out has no published chain: %d", settled)
 	}
 
 	// Report the Out chain healthy: the result event must release the Line.
-	latest, err := app.store.LatestCandidate(f.outID)
+	latest, err := app.Store.LatestCandidate(f.outID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +139,10 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	}
 	// The Out is healthy and its own confirmation released the Line: the Line
 	// chain is now queued by the result event, not by a manual action.
-	if got := candidateCount(t, app.store, f.lineID); got != 2 {
+	if got := candidateCount(t, app.Store, f.lineID); got != 2 {
 		t.Fatalf("line revisions after out confirmation = %d, want 2", got)
 	}
-	state, code, err := outSyncStatusForTest(t, app.store, f.outID, now)
+	state, code, err := outSyncStatusForTest(t, app.Store, f.outID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 
 	// The Line reports its own chain healthy, which is the second half of the
 	// dual readback.
-	lineCandidate, err := app.store.LatestCandidate(f.lineID)
+	lineCandidate, err := app.Store.LatestCandidate(f.lineID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 		w = reportJSON(t, app, f.lineToken, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(lineDetail)})
 		requireStatus(t, w, 200)
 	}
-	readback, err := app.store.NodeCoordinationReadback(f.lineID, now)
+	readback, err := app.Store.NodeCoordinationReadback(f.lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,9 +181,9 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 
 	// A further heartbeat after convergence changes nothing: the drain is
 	// idempotent and never repeats a confirmed chain.
-	before := candidateCount(t, app.store, f.outID)
+	before := candidateCount(t, app.Store, f.outID)
 	requireStatus(t, heartbeatJSON(t, app, f.outToken), 200)
-	if got := candidateCount(t, app.store, f.outID); got != before {
+	if got := candidateCount(t, app.Store, f.outID); got != before {
 		t.Fatalf("converged heartbeat republished: %d -> %d", before, got)
 	}
 	_ = subscription.StateActive
@@ -195,10 +195,10 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	f := newPairedWebOutSyncApp(t)
 	app, now := f.app, time.Now()
 
-	enableOutForLine(t, app.store, f.outID, f.lineID, now)
-	settleTasks(t, app.store, f.outID)
-	confirmChain(t, app.store, f.outID, now)
-	allowed, err := app.store.DeriveOutAllowlist(f.outID)
+	enableOutForLine(t, app.Store, f.outID, f.lineID, now)
+	settleTasks(t, app.Store, f.outID)
+	confirmChain(t, app.Store, f.outID, now)
+	allowed, err := app.Store.DeriveOutAllowlist(f.outID)
 	if err != nil || len(allowed) != 1 {
 		t.Fatalf("derivation before revoke = %v err=%v", allowed, err)
 	}
@@ -209,15 +209,15 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	w := b.post("/nodes/"+f.lineID+"/revoke", nil)
 	requireStatus(t, w, 200)
 
-	allowed, err = app.store.DeriveOutAllowlist(f.outID)
+	allowed, err = app.Store.DeriveOutAllowlist(f.outID)
 	if err != nil || len(allowed) != 0 {
 		t.Fatalf("derivation after revoke = %v err=%v, want empty", allowed, err)
 	}
-	latest, err := app.store.LatestCandidate(f.outID)
+	latest, err := app.Store.LatestCandidate(f.outID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoked, present, err := outReadbackAllowlist(app.store, f.outID, latest.Revision)
+	revoked, present, err := outReadbackAllowlist(app.Store, f.outID, latest.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,18 +238,18 @@ func TestOutSyncIdempotencyConflictIsUnchanged(t *testing.T) {
 		OperationID: strings.Repeat("e", 32), IdempotencyKey: strings.Repeat("e", 32),
 		NodeID: node.ID, Kind: protocol.KindHealthStatus, Params: []byte(`{}`), Revision: 1,
 	}
-	if err := app.store.EnqueueTaskAt(task, time.Now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(task, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	changed := task
 	changed.Params = []byte(`{}`)
 	changed.Kind = protocol.KindHealthStatus
 	changed.Revision = 2
-	if err := app.store.EnqueueTaskAt(changed, time.Now()); err == nil || !hasErrorCode(err, "IDEMPOTENCY_CONFLICT") {
+	if err := app.Store.EnqueueTaskAt(changed, time.Now()); err == nil || !hasErrorCode(err, "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("changed envelope error = %v, want IDEMPOTENCY_CONFLICT", err)
 	}
 	// An identical replay stays a success.
-	if err := app.store.EnqueueTaskAt(task, time.Now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(task, time.Now()); err != nil {
 		t.Fatalf("identical replay failed: %v", err)
 	}
 }

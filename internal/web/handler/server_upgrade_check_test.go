@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
+	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"net/http/httptest"
@@ -43,9 +45,9 @@ func upgradeApproveFixture(t *testing.T, observed string) (b *browser, app *Serv
 	if err := json.Unmarshal(pairing.Body.Bytes(), &paired); err != nil || paired.IdentityToken == "" {
 		t.Fatalf("pairing did not issue an identity: %.200s", pairing.Body.String())
 	}
-	confirmChain(t, app.store, created.ID, app.now())
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET observed_agent_version=?, observed_at=? WHERE id=?`,
-		observed, app.now().Unix(), created.ID); err != nil {
+	confirmChain(t, app.Store, created.ID, app.Now())
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_agent_version=?, observed_at=? WHERE id=?`,
+		observed, app.Now().Unix(), created.ID); err != nil {
 		t.Fatal(err)
 	}
 	b = &browser{app: app}
@@ -56,7 +58,7 @@ func upgradeApproveFixture(t *testing.T, observed string) (b *browser, app *Serv
 
 func latestRevision(t *testing.T, app *Server, nodeID string) int64 {
 	t.Helper()
-	stored, err := app.store.LatestCandidate(nodeID)
+	stored, err := app.Store.LatestCandidate(nodeID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,17 +68,17 @@ func latestRevision(t *testing.T, app *Server, nodeID string) int64 {
 func countStamped(t *testing.T, app *Server, nodeID string) int {
 	t.Helper()
 	var count int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND target_version<>''`,
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND target_version<>''`,
 		nodeID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	return count
 }
 
-func decodeApprove(t *testing.T, w *httptest.ResponseRecorder, status int) upgradeApproveReceipt {
+func decodeApprove(t *testing.T, w *httptest.ResponseRecorder, status int) handlerupgrade.ApproveReceipt {
 	t.Helper()
 	requireStatus(t, w, status)
-	var receipt upgradeApproveReceipt
+	var receipt handlerupgrade.ApproveReceipt
 	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
 		t.Fatalf("approval receipt: %v %.300s", err, w.Body.String())
 	}
@@ -97,16 +99,16 @@ func approveUpgrade(t *testing.T, b *browser, nodeID, version string) *httptest.
 // route).
 func seedUpgradeRouteIntent(t *testing.T, app *Server, nodeID string) {
 	t.Helper()
-	now := app.now()
-	if _, err := app.store.SetLine(testLine(nodeID, "upgrade-line"), now); err != nil {
+	now := app.Now()
+	if _, err := app.Store.SetLine(testLine(nodeID, "upgrade-line"), now); err != nil {
 		t.Fatal(err)
 	}
-	created, err := app.store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
+	created, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "升级服务端策略",
 		json.RawMessage(publishServerDirect), nil, "op-upgrade-policy", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ActivateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
+	if _, err := app.Store.ActivateRoutePolicy(created.ID, created.Revision, "op-upgrade-activate", now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -117,7 +119,7 @@ func seedUpgradeRouteIntent(t *testing.T, app *Server, nodeID string) {
 // guessed version, and an unverified tag can never be approved.
 func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
-	app.releaseSource = func(context.Context) (string, error) { return "1.0.1", nil }
+	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return "1.0.1", nil })
 	before := latestRevision(t, app, nodeID)
 
 	w := b.req("GET", "/tasks/check", nil, nil)
@@ -136,7 +138,7 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 	}
 
 	// A failed query is unknown, never a cached or guessed release.
-	app.releaseSource = func(context.Context) (string, error) { return "", errors.New("unreachable") }
+	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return "", errors.New("unreachable") })
 	w = b.req("GET", "/tasks/check", nil, nil)
 	requireStatus(t, w, http.StatusOK)
 	if !strings.Contains(w.Body.String(), "无法确认") {
@@ -150,7 +152,7 @@ func TestCheckUpdateIsAdvisoryOnly(t *testing.T) {
 
 	// Approving the unverified tag is refused and stores nothing.
 	receipt := decodeApprove(t, approveUpgrade(t, b, nodeID, "1.0.1"), http.StatusConflict)
-	if receipt.OK || receipt.ErrorCode != codeUpgradeManifestUnavailable {
+	if receipt.OK || receipt.ErrorCode != infra.CodeManifestUnavailable {
 		t.Fatalf("unverified approval = %+v, want MANIFEST_UNAVAILABLE", receipt)
 	}
 	if got := countStamped(t, app, nodeID); got != 0 {
@@ -207,7 +209,7 @@ func TestApproveEnqueuesStampedChain(t *testing.T) {
 
 	// The chain exists exactly once, all four steps pending after the commit.
 	var pending int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='pending'`,
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='pending'`,
 		nodeID).Scan(&pending); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +218,7 @@ func TestApproveEnqueuesStampedChain(t *testing.T) {
 	}
 	// The four pending rows are one chain of the approved candidate revision.
 	var chained int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='pending' AND params LIKE ?`,
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status='pending' AND params LIKE ?`,
 		nodeID, `%"revision":`+strconv.FormatInt(receipt.Revision, 10)+`%`).Scan(&chained); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +230,7 @@ func TestApproveEnqueuesStampedChain(t *testing.T) {
 	var gotVersion, gotManifest, gotOperation string
 	var gotPolicy int
 	var gotTargetRevision int64
-	if err := app.store.DB.QueryRow(`SELECT operation_id, target_version, target_manifest_sha256, policy_schema, target_revision
+	if err := app.Store.DB.QueryRow(`SELECT operation_id, target_version, target_manifest_sha256, policy_schema, target_revision
  FROM agent_tasks WHERE node_id=? AND kind=? AND status='pending' AND target_version<>''`,
 		nodeID, protocol.KindConfigStage).Scan(&gotOperation, &gotVersion, &gotManifest, &gotPolicy, &gotTargetRevision); err != nil {
 		t.Fatal(err)
@@ -252,7 +254,7 @@ func TestApprovePinsObservedArchitecture(t *testing.T) {
 	if runtime.GOARCH == "arm64" {
 		otherArch = "amd64"
 	}
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET observed_architecture=? WHERE id=?`, otherArch, nodeID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET observed_architecture=? WHERE id=?`, otherArch, nodeID); err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := upgrade.ForArch(otherArch)
@@ -271,7 +273,7 @@ func TestApprovePinsObservedArchitecture(t *testing.T) {
 		t.Fatalf("approval pins %q, want the %s projection %q", receipt.ManifestSHA256, otherArch, wantSHA)
 	}
 	var stored string
-	if err := app.store.DB.QueryRow(`SELECT target_manifest_sha256 FROM agent_tasks
+	if err := app.Store.DB.QueryRow(`SELECT target_manifest_sha256 FROM agent_tasks
  WHERE node_id=? AND target_version<>''`, nodeID).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +378,7 @@ func TestUpgradeApproveAllowsRetryAfterFailedChain(t *testing.T) {
 	}
 	first := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusOK)
 	// The Agent reports the stage step failed, which ends that chain.
-	if _, err := app.store.DB.Exec(`UPDATE agent_tasks SET status='failed' WHERE node_id=?`, nodeID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed' WHERE node_id=?`, nodeID); err != nil {
 		t.Fatal(err)
 	}
 	second := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusOK)
@@ -387,7 +389,7 @@ func TestUpgradeApproveAllowsRetryAfterFailedChain(t *testing.T) {
 		t.Fatalf("stamped rows = %d, want both attempts recorded", got)
 	}
 	// The history collapses the duplicate, so a retry does not fake a release.
-	tx, err := app.store.DB.Begin()
+	tx, err := app.Store.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,10 +436,10 @@ func TestUpgradeApproveRefusesUnknownNodeAndBadVersion(t *testing.T) {
 	if got := decodeApprove(t, approveUpgrade(t, b, strings.Repeat("f", 32), manifest.Version), http.StatusNotFound); got.ErrorCode != "NODE_NOT_FOUND" {
 		t.Fatalf("unknown node = %+v", got)
 	}
-	if got := decodeApprove(t, approveUpgrade(t, b, "not-a-node", manifest.Version), http.StatusBadRequest); got.ErrorCode != codeUpgradeTargetInvalid {
+	if got := decodeApprove(t, approveUpgrade(t, b, "not-a-node", manifest.Version), http.StatusBadRequest); got.ErrorCode != "UPGRADE_TARGET_INVALID" {
 		t.Fatalf("malformed node = %+v", got)
 	}
-	if got := decodeApprove(t, approveUpgrade(t, b, nodeID, "latest"), http.StatusBadRequest); got.ErrorCode != codeUpgradeTargetInvalid {
+	if got := decodeApprove(t, approveUpgrade(t, b, nodeID, "latest"), http.StatusBadRequest); got.ErrorCode != "UPGRADE_TARGET_INVALID" {
 		t.Fatalf("floating version = %+v", got)
 	}
 	// The approval is a CSRF-protected management POST.
@@ -472,7 +474,7 @@ func TestApproveRefusedUntilHubSelfUpgrade(t *testing.T) {
 
 	// The page states the boundary instead of letting the operator discover it
 	// through a refusal.
-	app.releaseSource = func(context.Context) (string, error) { return manifest.Version, nil }
+	app.upgradeServer.SetReleaseSourceForTest(func(context.Context) (string, error) { return manifest.Version, nil })
 	// The page states the boundary precisely: newer releases need 11d, while a
 	// lagging node is still approvable to this Hub's release.
 	body := b.req("GET", "/tasks/check", nil, nil).Body.String()
@@ -512,7 +514,7 @@ func TestAgentUpgradeTargetReadsPersistedStamp(t *testing.T) {
 	}
 
 	// A row that already moved on keeps its stamp: the read is not pending-only.
-	if _, err := app.store.DB.Exec(`UPDATE agent_tasks SET status='healthy' WHERE operation_id=?`, receipt.StageOperationID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='healthy' WHERE operation_id=?`, receipt.StageOperationID); err != nil {
 		t.Fatal(err)
 	}
 	if got := bearerReq(app, "GET", "/api/agent/upgrade-target/"+receipt.StageOperationID, token, nil); got.Code != http.StatusOK {
@@ -521,7 +523,7 @@ func TestAgentUpgradeTargetReadsPersistedStamp(t *testing.T) {
 
 	// An unstamped stage row and an unknown id are both not found.
 	var unstamped string
-	if err := app.store.DB.QueryRow(`SELECT operation_id FROM agent_tasks WHERE node_id=? AND kind=? AND target_version='' LIMIT 1`,
+	if err := app.Store.DB.QueryRow(`SELECT operation_id FROM agent_tasks WHERE node_id=? AND kind=? AND target_version='' LIMIT 1`,
 		nodeID, protocol.KindConfigStage).Scan(&unstamped); err != nil {
 		t.Fatal(err)
 	}

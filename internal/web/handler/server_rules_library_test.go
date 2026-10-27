@@ -24,8 +24,8 @@ func rulesLibraryApp(t *testing.T) *browser {
 // Task-4 created_at.
 func seedRuleSubscriber(t *testing.T, b *browser, subscriberID, subscriberName, stableKey string, version int) {
 	t.Helper()
-	db := b.app.store.DB
-	now := b.app.now().Unix()
+	db := b.app.Store.DB
+	now := b.app.Now().Unix()
 	if _, err := db.Exec(`INSERT INTO subscribers(id, display_name, state, revision, created_at, updated_at)
 	  VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, subscriberID, subscriberName, "active", 1, now, now); err != nil {
 		t.Fatal(err)

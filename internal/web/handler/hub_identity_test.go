@@ -10,6 +10,7 @@ package handler
 import (
 	"database/sql"
 	"errors"
+	handlerupgrade "github.com/wingsky-1/MeshMux/internal/web/handler/upgrade"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -34,15 +35,15 @@ type identityState struct {
 func observeIdentity(t *testing.T, app *Server) identityState {
 	t.Helper()
 	var state identityState
-	if err := app.store.DB.QueryRow(`SELECT total_changes()`).Scan(&state.Changes); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT total_changes()`).Scan(&state.Changes); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.DB.QueryRow(`PRAGMA user_version`).Scan(&state.UserVersion); err != nil {
+	if err := app.Store.DB.QueryRow(`PRAGMA user_version`).Scan(&state.UserVersion); err != nil {
 		t.Fatal(err)
 	}
 	var version, confirmed string
 	var schema int
-	err := app.store.DB.QueryRow(`SELECT quote(last_good_version), last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
+	err := app.Store.DB.QueryRow(`SELECT quote(last_good_version), last_good_schema, confirmed_at FROM database_versions WHERE id=1`).
 		Scan(&version, &schema, &confirmed)
 	if errors.Is(err, sql.ErrNoRows) {
 		state.Row = "absent"
@@ -73,7 +74,7 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 	check := func(t *testing.T, wantCode string, wantStatus int) {
 		t.Helper()
 		before := observeIdentity(t, app)
-		if got := app.hubIdentity(now).Code; got != wantCode {
+		if got := app.upgradeServer.HubIdentity(now).Code; got != wantCode {
 			t.Fatalf("identity code = %q, want %q", got, wantCode)
 		}
 		w := b.req("GET", "/healthz", nil, nil)
@@ -86,23 +87,23 @@ func TestHealthzSelectOneOnly(t *testing.T) {
 
 	check(t, "", 200)
 
-	if _, err := app.store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
-	check(t, codeDatabaseVersionMismatch, 200)
+	check(t, "DATABASE_VERSION_MISMATCH", 200)
 
-	if _, err := app.store.DB.Exec(`DELETE FROM database_versions`); err != nil {
+	if _, err := app.Store.DB.Exec(`DELETE FROM database_versions`); err != nil {
 		t.Fatal(err)
 	}
-	check(t, codeDatabaseUnconfirmed, 200)
+	check(t, "DATABASE_UNCONFIRMED", 200)
 
-	if _, err := app.store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
+	if _, err := app.Store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
 		t.Fatal(err)
 	}
-	check(t, codeSchemaReadbackFailed, 200)
+	check(t, "SCHEMA_READBACK_FAILED", 200)
 
 	// Only a database that cannot answer SELECT 1 is a health failure.
-	if err := app.store.DB.Close(); err != nil {
+	if err := app.Store.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
 	requireStatus(t, b.req("GET", "/healthz", nil, nil), 503)
@@ -121,58 +122,58 @@ func TestReadbackNeverWrites(t *testing.T) {
 	}
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 
-	identity, err := app.readDatabaseIdentity()
+	identity, err := app.upgradeServer.ReadDatabaseIdentity()
 	if err != nil {
 		t.Fatalf("readDatabaseIdentity: %v", err)
 	}
 	if identity.UserVersion != store.DatabaseSchemaVersion || !identity.HasRow {
 		t.Fatalf("identity = %+v, want the confirmed schema %d", identity, store.DatabaseSchemaVersion)
 	}
-	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+	if snapshot := app.upgradeServer.HubIdentity(now); !snapshot.Confirmed() {
 		t.Fatalf("snapshot = %+v, want confirmed", snapshot)
 	}
-	app.refreshHubIdentity()
-	if got := app.currentHubIdentity(); got.Code != "" {
+	app.upgradeServer.RefreshHubIdentity()
+	if got := app.upgradeServer.CurrentHubIdentity(); got.Code != "" {
 		t.Fatalf("published snapshot = %+v, want confirmed", got)
 	}
 	// A real refresh tick must be as quiet as the on-demand read.
-	app.identityInterval = time.Millisecond
-	app.startHubIdentityRefresh(t.Context())
-	first := app.currentHubIdentity().CheckedAt
+	app.upgradeServer.SetIdentityIntervalForTest(time.Millisecond)
+	app.upgradeServer.StartHubIdentityRefresh(t.Context())
+	first := app.upgradeServer.CurrentHubIdentity().CheckedAt
 	deadline := time.Now().Add(5 * time.Second)
-	for !app.currentHubIdentity().CheckedAt.After(first) {
+	for !app.upgradeServer.CurrentHubIdentity().CheckedAt.After(first) {
 		if time.Now().After(deadline) {
 			t.Fatal("the refresher never ticked")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	app.stopHubIdentityRefresh()
+	app.upgradeServer.StopHubIdentityRefresh()
 	requireIdentityUntouched(t, app, before, "the readback, one refresh and one tick")
 
 	// Strongest form of "zero writes": SQLite itself refuses writes on this
 	// connection. A readback and a tick that still succeed under query_only
 	// cannot have executed a writing statement.
-	if _, err := app.store.DB.Exec(`PRAGMA query_only=ON`); err != nil {
+	if _, err := app.Store.DB.Exec(`PRAGMA query_only=ON`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.readDatabaseIdentity(); err != nil {
+	if _, err := app.upgradeServer.ReadDatabaseIdentity(); err != nil {
 		t.Fatalf("readback under query_only: %v", err)
 	}
-	if snapshot := app.publishHubIdentity(now, nil); !snapshot.Confirmed() {
+	if snapshot := app.upgradeServer.PublishHubIdentity(now, nil); !snapshot.Confirmed() {
 		t.Fatalf("snapshot under query_only = %+v", snapshot)
 	}
-	if _, err := app.store.DB.Exec(`PRAGMA query_only=OFF`); err != nil {
+	if _, err := app.Store.DB.Exec(`PRAGMA query_only=OFF`); err != nil {
 		t.Fatal(err)
 	}
 	requireIdentityUntouched(t, app, before, "a readback under query_only")
 
-	readOnly, err := sql.Open("sqlite", "file:"+filepath.Join(app.store.Dir, "meshmux.db")+"?mode=ro")
+	readOnly, err := sql.Open("sqlite", "file:"+filepath.Join(app.Store.Dir, "meshmux.db")+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer readOnly.Close()
 	readOnly.SetMaxOpenConns(1)
-	if _, err := readDatabaseIdentityFrom(readOnly); err != nil {
+	if _, err := handlerupgrade.ReadDatabaseIdentityFromForTest(readOnly); err != nil {
 		t.Fatalf("the readback issued a write statement: %v", err)
 	}
 	if _, err := readOnly.Exec(`UPDATE database_versions SET last_good_version='x' WHERE id=1`); err == nil {
@@ -195,27 +196,27 @@ func TestReadbackMatrix(t *testing.T) {
 			// One above the schema this build owns, never a literal: Task 5
 			// moves store.DatabaseSchemaVersion to 11, and the assertion must stay
 			// "a newer schema", not "the next release's schema".
-			if _, err := app.store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
+			if _, err := app.Store.DB.Exec("PRAGMA user_version=" + strconv.Itoa(store.DatabaseSchemaVersion+1)); err != nil {
 				t.Fatal(err)
 			}
-		}, codeSchemaReadbackFailed},
+		}, "SCHEMA_READBACK_FAILED"},
 		{"database unconfirmed", func(t *testing.T, app *Server) {
-			if _, err := app.store.DB.Exec(`DELETE FROM database_versions`); err != nil {
+			if _, err := app.Store.DB.Exec(`DELETE FROM database_versions`); err != nil {
 				t.Fatal(err)
 			}
-		}, codeDatabaseUnconfirmed},
+		}, "DATABASE_UNCONFIRMED"},
 		{"database version mismatch", func(t *testing.T, app *Server) {
-			if _, err := app.store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
+			if _, err := app.Store.DB.Exec(`UPDATE database_versions SET last_good_version='0.0.1' WHERE id=1`); err != nil {
 				t.Fatal(err)
 			}
-		}, codeDatabaseVersionMismatch},
+		}, "DATABASE_VERSION_MISMATCH"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			app, _ := testApp(t)
 			tc.mutate(t, app)
 			before := observeIdentity(t, app)
-			snapshot := app.hubIdentity(now)
+			snapshot := app.upgradeServer.HubIdentity(now)
 			if snapshot.Code != tc.want {
 				t.Fatalf("code = %q, want %q (%+v)", snapshot.Code, tc.want, snapshot)
 			}
@@ -242,7 +243,7 @@ func TestOpTargetSeamLeavesReadbackReadOnly(t *testing.T) {
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	before := observeIdentity(t, app)
 
-	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+	if snapshot := app.upgradeServer.HubIdentity(now); !snapshot.Confirmed() {
 		t.Fatalf("nil seam reported %+v", snapshot)
 	}
 	requireIdentityUntouched(t, app, before, "the nil op-target seam")
@@ -256,13 +257,13 @@ func TestOpTargetSeamLeavesReadbackReadOnly(t *testing.T) {
 		ok                    bool
 		want                  string
 	}{
-		{"another version", "9.9.9", digest, true, codeDatabaseVersionMismatch},
-		{"another package digest", buildinfo.Version, strings.Repeat("0", 64), true, codeDatabaseVersionMismatch},
+		{"another version", "9.9.9", digest, true, "DATABASE_VERSION_MISMATCH"},
+		{"another package digest", buildinfo.Version, strings.Repeat("0", 64), true, "DATABASE_VERSION_MISMATCH"},
 		{"no verifying operation", "", "", false, ""},
 		{"matching version and digest", buildinfo.Version, digest, true, ""},
 	} {
-		app.opTarget = func(string) (string, string, bool) { return tc.version, tc.digest, tc.ok }
-		if snapshot := app.hubIdentity(now); snapshot.Code != tc.want {
+		app.upgradeServer.SetOpTargetForTest(func(string) (string, string, bool) { return tc.version, tc.digest, tc.ok })
+		if snapshot := app.upgradeServer.HubIdentity(now); snapshot.Code != tc.want {
 			t.Fatalf("%s: code = %q, want %q", tc.name, snapshot.Code, tc.want)
 		}
 		requireIdentityUntouched(t, app, before, tc.name)
@@ -274,11 +275,11 @@ func TestOpTargetSeamLeavesReadbackReadOnly(t *testing.T) {
 // snapshot while it refreshes.
 func TestIdentityRefreshIsBoundedAndStopsOnClose(t *testing.T) {
 	app, _ := testApp(t)
-	app.identityInterval = time.Millisecond
-	app.startHubIdentityRefresh(t.Context())
+	app.upgradeServer.SetIdentityIntervalForTest(time.Millisecond)
+	app.upgradeServer.StartHubIdentityRefresh(t.Context())
 
 	deadline := time.Now().Add(5 * time.Second)
-	for app.currentHubIdentity().CheckedAt.IsZero() {
+	for app.upgradeServer.CurrentHubIdentity().CheckedAt.IsZero() {
 		if time.Now().After(deadline) {
 			t.Fatal("the refresher never published a snapshot")
 		}
@@ -290,7 +291,7 @@ func TestIdentityRefreshIsBoundedAndStopsOnClose(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				if got := app.currentHubIdentity(); got.Schema != store.DatabaseSchemaVersion {
+				if got := app.upgradeServer.CurrentHubIdentity(); got.Schema != store.DatabaseSchemaVersion {
 					t.Errorf("snapshot schema = %d", got.Schema)
 					return
 				}
@@ -301,7 +302,7 @@ func TestIdentityRefreshIsBoundedAndStopsOnClose(t *testing.T) {
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
 	}
-	app.stopHubIdentityRefresh()
+	app.upgradeServer.StopHubIdentityRefresh()
 }
 
 // TestUnprimedSnapshotIsNotConfirmed pins that "no readback has happened yet"
@@ -313,11 +314,11 @@ func TestUnprimedSnapshotIsNotConfirmed(t *testing.T) {
 		t.Fatal("zero-value snapshot reads as confirmed")
 	}
 	app, _ := testApp(t)
-	if got := app.currentHubIdentity(); got.Confirmed() {
+	if got := app.upgradeServer.CurrentHubIdentity(); got.Confirmed() {
 		t.Fatalf("unprimed server snapshot reads as confirmed: %+v", got)
 	}
-	app.refreshHubIdentity()
-	if got := app.currentHubIdentity(); !got.Confirmed() {
+	app.upgradeServer.RefreshHubIdentity()
+	if got := app.upgradeServer.CurrentHubIdentity(); !got.Confirmed() {
 		t.Fatalf("primed snapshot = %+v, want confirmed", got)
 	}
 }
@@ -334,9 +335,9 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app.opTarget = app.hubOpTarget
+	app.upgradeServer.SetOpTargetForTest(app.upgradeServer.HubOpTarget)
 
-	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+	if snapshot := app.upgradeServer.HubIdentity(now); !snapshot.Confirmed() {
 		t.Fatalf("an empty journal reported %+v", snapshot)
 	}
 
@@ -347,13 +348,13 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: digest,
 		DBSchema: 10, BackupGeneration: 1, UpdatedAt: now,
 	}
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
-	if version, pkg, ok := app.opTarget(strings.Repeat("b", 32)); ok || version != "" || pkg != "" {
+	if version, pkg, ok := app.upgradeServer.HubOpTarget(strings.Repeat("b", 32)); ok || version != "" || pkg != "" {
 		t.Fatalf("the adapter resolved another operation: %q/%q/%v", version, pkg, ok)
 	}
-	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+	if snapshot := app.upgradeServer.HubIdentity(now); !snapshot.Confirmed() {
 		t.Fatalf("a matching verifying target reported %+v", snapshot)
 	}
 	requireIdentityUntouched(t, app, before, "the matching verifying target")
@@ -361,21 +362,21 @@ func TestReadbackComparesVerifyingOpTarget(t *testing.T) {
 	// The row still names this build, so only the journal target comparison can
 	// catch a release the Hub is not actually running.
 	op.TargetVersion = "1.0.1"
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := app.hubIdentity(now); snapshot.Code != codeDatabaseVersionMismatch {
-		t.Fatalf("another target: code = %q, want %q", snapshot.Code, codeDatabaseVersionMismatch)
+	if snapshot := app.upgradeServer.HubIdentity(now); snapshot.Code != "DATABASE_VERSION_MISMATCH" {
+		t.Fatalf("another target: code = %q, want %q", snapshot.Code, "DATABASE_VERSION_MISMATCH")
 	}
 	requireIdentityUntouched(t, app, before, "a mismatching verifying target")
 
 	// A non-verifying operation is never the seam's input: the build's own
 	// identity stands.
 	op.State, op.TargetVersion = hubupgrade.StateBackedUp, buildinfo.Version
-	if err := hubupgrade.WriteOp(app.store.Dir, op); err != nil {
+	if err := hubupgrade.WriteOp(app.Store.Dir, op); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := app.hubIdentity(now); !snapshot.Confirmed() {
+	if snapshot := app.upgradeServer.HubIdentity(now); !snapshot.Confirmed() {
 		t.Fatalf("a backed_up operation was compared: %+v", snapshot)
 	}
 }

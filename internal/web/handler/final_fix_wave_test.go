@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,34 +34,34 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 
 	out := createPairedWebNode(t, app, "out", "out-line-save", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-line-save", 8443, 2222)
-	configureOut(t, app.store, out.ID, now)
+	configureOut(t, app.Store, out.ID, now)
 	// The Line starts at one documentation address and both nodes are online
 	// with settled chains, so every later chain is attributable.
 	lineSettings := testLine(line.ID, "line-line-save")
 	lineSettings.Server = "203.0.113.7"
 	lineSettings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(lineSettings, now); err != nil {
+	if _, err := app.Store.SetLine(lineSettings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.store, line.ID, now)
-	markLineOnline(t, app.store, out.ID, now)
+	markLineOnline(t, app.Store, line.ID, now)
+	markLineOnline(t, app.Store, out.ID, now)
 	for _, nodeID := range []string{out.ID, line.ID} {
-		settleTasks(t, app.store, nodeID)
-		confirmChain(t, app.store, nodeID, now)
+		settleTasks(t, app.Store, nodeID)
+		confirmChain(t, app.Store, nodeID, now)
 	}
-	if _, _, err := app.store.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
+	if _, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now); err != nil {
 		t.Fatal(err)
 	}
-	settleTasks(t, app.store, line.ID)
-	confirmChain(t, app.store, line.ID, now)
+	settleTasks(t, app.Store, line.ID)
+	confirmChain(t, app.Store, line.ID, now)
 
-	enableOutForLine(t, app.store, out.ID, line.ID, now)
-	settleTasks(t, app.store, out.ID)
-	confirmChain(t, app.store, out.ID, now)
-	if allowed, err := app.store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 || allowed[0] != "203.0.113.7/32" {
+	enableOutForLine(t, app.Store, out.ID, line.ID, now)
+	settleTasks(t, app.Store, out.ID)
+	confirmChain(t, app.Store, out.ID, now)
+	if allowed, err := app.Store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 || allowed[0] != "203.0.113.7/32" {
 		t.Fatalf("allowlist before the save = %v err=%v", allowed, err)
 	}
-	outRevisionsBefore := candidateCount(t, app.store, out.ID)
+	outRevisionsBefore := candidateCount(t, app.Store, out.ID)
 
 	// The save changes the Line's server address, which is exactly the value the
 	// Out allowlist is derived from.
@@ -73,18 +74,18 @@ func TestLineSaveRepublishesBoundOut(t *testing.T) {
 	require2xx(t, w)
 
 	// The Out derived a new authorization...
-	if allowed, err := app.store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 || allowed[0] != "198.51.100.9/32" {
+	if allowed, err := app.Store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 || allowed[0] != "198.51.100.9/32" {
 		t.Fatalf("allowlist after the save = %v err=%v, want the new line address", allowed, err)
 	}
 	// ...and the save itself republished it, without a second trigger.
-	if got := candidateCount(t, app.store, out.ID); got != outRevisionsBefore+1 {
+	if got := candidateCount(t, app.Store, out.ID); got != outRevisionsBefore+1 {
 		t.Fatalf("out revisions after the save = %d, want exactly one more than %d", got, outRevisionsBefore)
 	}
-	latest, err := app.store.LatestCandidate(out.ID)
+	latest, err := app.Store.LatestCandidate(out.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	published, present, err := outReadbackAllowlist(app.store, out.ID, latest.Revision)
+	published, present, err := outReadbackAllowlist(app.Store, out.ID, latest.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +120,14 @@ func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 	lineSettings := testLine(line.ID, "line-unbound")
 	lineSettings.Server = "203.0.113.7"
 	lineSettings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(lineSettings, now); err != nil {
+	if _, err := app.Store.SetLine(lineSettings, now); err != nil {
 		t.Fatal(err)
 	}
-	markLineOnline(t, app.store, line.ID, now)
-	markLineOnline(t, app.store, out.ID, now)
-	settleTasks(t, app.store, out.ID)
-	confirmChain(t, app.store, out.ID, now)
-	before := candidateCount(t, app.store, out.ID)
+	markLineOnline(t, app.Store, line.ID, now)
+	markLineOnline(t, app.Store, out.ID, now)
+	settleTasks(t, app.Store, out.ID)
+	confirmChain(t, app.Store, out.ID, now)
+	before := candidateCount(t, app.Store, out.ID)
 
 	w := b.post("/lines", url.Values{
 		"node_id": {line.ID}, "display_name": {"line-unbound"}, "sort_order": {"1"},
@@ -136,10 +137,10 @@ func TestLineSaveRepublishesEveryOutOnTheNewAddress(t *testing.T) {
 	})
 	require2xx(t, w)
 
-	if got := candidateCount(t, app.store, out.ID); got != before+1 {
+	if got := candidateCount(t, app.Store, out.ID); got != before+1 {
 		t.Fatalf("out revisions after the address change = %d, want exactly one more than %d", got, before)
 	}
-	allowed, err := app.store.DeriveOutAllowlist(out.ID)
+	allowed, err := app.Store.DeriveOutAllowlist(out.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,18 +261,18 @@ func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
 
 	// The Out is a member and its guard is confirmed (Ruling R10: enrollment publishes
 	// it), and the Line routes through it because the subscription selected it.
-	app.store.RepublishOutAuthorizations(now)
-	settleTasks(t, app.store, f.outID)
-	confirmChain(t, app.store, f.outID, now)
-	enableOutForLine(t, app.store, f.outID, f.lineID, now)
-	if err := app.store.PrepareSubscriberSync(f.subscriberIDForTest(t), now); err != nil {
+	app.Store.RepublishOutAuthorizations(now)
+	settleTasks(t, app.Store, f.outID)
+	confirmChain(t, app.Store, f.outID, now)
+	enableOutForLine(t, app.Store, f.outID, f.lineID, now)
+	if err := app.Store.PrepareSubscriberSync(f.subscriberIDForTest(t), now); err != nil {
 		t.Fatalf("publish the line: %v", err)
 	}
-	settleTasks(t, app.store, f.lineID)
-	confirmChain(t, app.store, f.lineID, now)
+	settleTasks(t, app.Store, f.lineID)
+	confirmChain(t, app.Store, f.lineID, now)
 	// Fail the Out chain, then heartbeat: the readback event must carry
 	// retry_pending=true together with the stable failure code.
-	if _, err := app.store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, f.outID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_ACL_RULE_INVALID' WHERE node_id=?`, f.outID); err != nil {
 		t.Fatal(err)
 	}
 	w := heartbeatJSON(t, app, f.outToken)
@@ -293,11 +294,11 @@ func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
 
 	// A converged pair emits retry_pending=false, so the flag is meaningful in
 	// both directions and not a constant.
-	confirmChain(t, app.store, f.outID, now)
-	if err := prepareSubscriberSyncForLine(app.store, f.lineID, now); err != nil {
+	confirmChain(t, app.Store, f.outID, now)
+	if err := prepareSubscriberSyncForLine(app.Store, f.lineID, now); err != nil {
 		t.Fatal(err)
 	}
-	confirmChain(t, app.store, f.lineID, now)
+	confirmChain(t, app.Store, f.lineID, now)
 	before := len(outReadbackEvents(f.logsForTest()))
 	requireStatus(t, heartbeatJSON(t, app, f.lineToken), 200)
 	events := outReadbackEvents(f.logsForTest())
@@ -430,11 +431,11 @@ func TestJSONFailureBodyIsDeclaredByTheRoute(t *testing.T) {
 	// Without it, every real route coincidentally lives under /api/ or
 	// /nodes/out/, so a reinstated path heuristic would go unnoticed.
 	probeRouter := chi.NewRouter()
-	probeRouter.Post("/opaque/endpoint", jsonAPI(func(w http.ResponseWriter, r *http.Request) {
-		app.fail(w, r, 400, "PROBE_JSON", "probe", "probe")
+	probeRouter.Post("/opaque/endpoint", infra.JSONAPI(func(w http.ResponseWriter, r *http.Request) {
+		app.Fail(w, r, 400, "PROBE_JSON", "probe", "probe")
 	}))
 	probeRouter.Post("/api/opaque-page", func(w http.ResponseWriter, r *http.Request) {
-		app.fail(w, r, 400, "PROBE_HTML", "probe", "probe")
+		app.Fail(w, r, 400, "PROBE_HTML", "probe", "probe")
 	})
 
 	jsonProbe := httptest.NewRecorder()

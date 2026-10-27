@@ -16,7 +16,7 @@ import (
 // config.readback. It never calls an upgrade path, because none exists yet.
 func markStagedAndActive(t *testing.T, app *Server, nodeID string) int64 {
 	t.Helper()
-	latest, err := app.store.LatestCandidate(nodeID)
+	latest, err := app.Store.LatestCandidate(nodeID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,9 +24,9 @@ func markStagedAndActive(t *testing.T, app *Server, nodeID string) int64 {
 	if len(tasks) != 4 {
 		t.Fatalf("fixed chain = %d tasks, want 4", len(tasks))
 	}
-	if _, err = app.store.ReportResultAudited(nodeID, protocol.TaskResult{
+	if _, err = app.Store.ReportResultAudited(nodeID, protocol.TaskResult{
 		OperationID: tasks[1].OperationID, Status: "healthy",
-	}, app.now()); err != nil {
+	}, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	release, ok := node.KernelReleaseFor("amd64")
@@ -42,9 +42,9 @@ func markStagedAndActive(t *testing.T, app *Server, nodeID string) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = app.store.ReportResultAudited(nodeID, protocol.TaskResult{
+	if _, err = app.Store.ReportResultAudited(nodeID, protocol.TaskResult{
 		OperationID: tasks[3].OperationID, Status: "healthy", Detail: string(detail),
-	}, app.now()); err != nil {
+	}, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return latest.Revision
@@ -104,7 +104,7 @@ func TestUpgradePageWithoutNodesIsExplicit(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "尚未纳管节点") {
 		t.Fatal("empty Hub did not state that there is nothing to show")
 	}
-	view, err := app.upgradeView(app.now())
+	view, err := app.upgradeServer.UpgradeView(app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,11 +120,11 @@ func TestStagedReadbackRequiresAStoredCandidate(t *testing.T) {
 	created, code := createPendingNode(t, app, "edge", "corrupt-stage", 8443, 2222)
 	requireStatus(t, pairJSON(t, app, created.ID, "edge", code), 200)
 	markStagedAndActive(t, app, created.ID)
-	if _, err := app.store.DB.Exec(`UPDATE agent_tasks SET params='{"revision":99}' WHERE node_id=? AND kind=? AND status='healthy'`,
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET params='{"revision":99}' WHERE node_id=? AND kind=? AND status='healthy'`,
 		created.ID, protocol.KindConfigStage); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.StagedReadbacks(); err == nil || !strings.Contains(err.Error(), "STAGED_READBACK_CORRUPT") {
+	if _, err := app.Store.StagedReadbacks(); err == nil || !strings.Contains(err.Error(), "STAGED_READBACK_CORRUPT") {
 		t.Fatalf("staged readback err=%v, want STAGED_READBACK_CORRUPT", err)
 	}
 	b := &browser{app: app}
@@ -148,13 +148,13 @@ func TestStagedReadbackIsTheNewestHealthyStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = app.store.EnqueueTaskAt(task, app.now()); err != nil {
+	if err = app.Store.EnqueueTaskAt(task, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = app.store.ReportResultAudited(created.ID, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy"}, app.now()); err != nil {
+	if _, err = app.Store.ReportResultAudited(created.ID, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy"}, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	staged, err := app.store.StagedReadbacks()
+	staged, err := app.Store.StagedReadbacks()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestStagedReadbackIsTheNewestHealthyStage(t *testing.T) {
 // revisions come from the store's active rows, not from the manifest.
 func TestUpgradePolicyRevisionsReadLiveLayers(t *testing.T) {
 	app, _ := testApp(t)
-	view, err := app.upgradeView(app.now())
+	view, err := app.upgradeServer.UpgradeView(app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,7 +31,7 @@ func wizardApp(t *testing.T) (*Server, *browser, *fixturePublishVerifier) {
 	t.Helper()
 	app, _ := testApp(t)
 	verifier := &fixturePublishVerifier{}
-	app.publishGate = func() (store.PublishVerifier, error) { return verifier, nil }
+	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -41,7 +42,7 @@ func wizardApp(t *testing.T) (*Server, *browser, *fixturePublishVerifier) {
 func wizardLine(t *testing.T, app *Server, name string) string {
 	t.Helper()
 	node, _ := createPendingNode(t, app, "edge", name, 8443, 2222)
-	configureLine(t, app.store, node.ID, name, app.now())
+	configureLine(t, app.Store, node.ID, name, app.Now())
 	return node.ID
 }
 
@@ -49,7 +50,7 @@ func wizardLine(t *testing.T, app *Server, name string) string {
 func wizardOut(t *testing.T, app *Server, name string) string {
 	t.Helper()
 	node, _ := createPendingNode(t, app, "out", name, 8444, 2223)
-	if _, err := app.store.SetOutTransport(node.ID, "out.example.invalid", node.VlessPort, app.now()); err != nil {
+	if _, err := app.Store.SetOutTransport(node.ID, "out.example.invalid", node.VlessPort, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return node.ID
@@ -105,13 +106,13 @@ func TestWizardPreviewWritesNothingAndRemindsOnRecordedGroups(t *testing.T) {
 		t.Fatal("preview does not state that nothing was saved")
 	}
 	// Nothing was written: no subscriber, no edges, no snapshot.
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 0 {
 		t.Fatalf("preview created %d subscribers (err %v)", len(subs), err)
 	}
 	for table, want := range map[string]int{"subscription_lines": 0, "subscription_outs": 0, "subscription_rules": 0, "subscription_networks": 0, "subscription_snapshots": 0} {
 		var count int
-		if err := app.store.DB.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+		if err := app.Store.DB.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count != want {
@@ -146,14 +147,14 @@ func TestWizardSaveApprovesArtifactAndDownloadServesIt(t *testing.T) {
 	}
 	bearer := match[1]
 
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
 	sub := subs[0]
 	var artifactID string
 	var approved int
-	if err := app.store.DB.QueryRow(`SELECT artifact_id, artifact_approved FROM subscription_snapshots WHERE subscriber_id=?`, sub.ID).
+	if err := app.Store.DB.QueryRow(`SELECT artifact_id, artifact_approved FROM subscription_snapshots WHERE subscriber_id=?`, sub.ID).
 		Scan(&artifactID, &approved); err != nil {
 		t.Fatalf("snapshot missing: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestWizardSaveApprovesArtifactAndDownloadServesIt(t *testing.T) {
 		t.Fatalf("sing-box gate calls = %d, want 1", calls)
 	}
 	// The approved artifact is the download's single source of truth.
-	if _, artifactID, err := app.store.SubscriptionArtifact(sub.ID); err != nil || artifactID == "" {
+	if _, artifactID, err := app.Store.SubscriptionArtifact(sub.ID); err != nil || artifactID == "" {
 		t.Fatalf("artifact = %q err=%v", artifactID, err)
 	}
 	// The convergence gate still runs first, so an unconverged Line refuses
@@ -194,7 +195,7 @@ func TestWizardSaveRefusesBlockingPreviewWithoutWriting(t *testing.T) {
 	if !strings.Contains(body, "保存被拒绝") {
 		t.Fatal("save does not state that it wrote nothing")
 	}
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 0 {
 		t.Fatalf("a blocked save created %d subscribers (err %v)", len(subs), err)
 	}
@@ -213,7 +214,7 @@ func TestWizardSaveRefusesGateFailure(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "SUBSCRIPTION_GATE_FAILED") {
 		t.Fatalf("gate refusal missing: %.800s", w.Body.String())
 	}
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 0 {
 		t.Fatalf("a refused gate created %d subscribers", len(subs))
 	}
@@ -247,7 +248,7 @@ func TestWizardSaveRefusesOutConflictWithExistingSubscription(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "alice") {
 		t.Fatal("conflict does not name the existing subscription")
 	}
-	if subs, _ := app.store.ListSubscribers(); len(subs) != 1 {
+	if subs, _ := app.Store.ListSubscribers(); len(subs) != 1 {
 		t.Fatalf("a refused conflicting save created a subscriber: %d", len(subs))
 	}
 }
@@ -265,7 +266,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 		"line_" + lineID: {"1"},
 	})
 	require2xx(t, w)
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
@@ -294,7 +295,7 @@ func TestWizardSaveRefusesMihomoRejectionButAcceptsAbsentBinary(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "SUBSCRIPTION_GATE_FAILED") {
 		t.Fatalf("mihomo refusal missing: %.800s", w.Body.String())
 	}
-	if subs, _ := app.store.ListSubscribers(); len(subs) != 1 {
+	if subs, _ := app.Store.ListSubscribers(); len(subs) != 1 {
 		t.Fatalf("subscribers = %d, want only the first approved one", len(subs))
 	}
 }
@@ -332,15 +333,15 @@ func TestWizardMeshGroupRefusesRevokedDevice(t *testing.T) {
 		"device_" + deviceID: {"1"},
 	})
 	require2xx(t, w)
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
-	names, err := app.store.MeshDeviceUsedBy(deviceID)
+	names, err := app.Store.MeshDeviceUsedBy(deviceID)
 	if err != nil || len(names) != 1 || names[0] != "alice" {
 		t.Fatalf("device used-by = %q err=%v, want [alice]", names, err)
 	}
-	if _, _, err := app.store.RequestMeshDeviceRevocation(deviceID, "USER_DELETE", app.now()); err != nil {
+	if _, _, err := app.Store.RequestMeshDeviceRevocation(deviceID, "USER_DELETE", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	// A revoked device is history: selecting it again is refused.
@@ -359,7 +360,7 @@ func TestWizardMeshGroupRefusesRevokedDevice(t *testing.T) {
 // wizardDeviceID inserts one selectable mesh device.
 func wizardDeviceID(t *testing.T, app *Server) string {
 	t.Helper()
-	device, err := app.store.CreateMeshDevice(meshSpec("ipad", mesh.PurposeMeshOnly, ""), app.now())
+	device, err := app.Store.CreateMeshDevice(meshSpec("ipad", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +379,7 @@ func TestWizardSelectionRestoresSavedChoice(t *testing.T) {
 		"rule_preset-direct-cn@1": {"1"},
 	})
 	require2xx(t, w)
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
@@ -390,7 +391,7 @@ func TestWizardSelectionRestoresSavedChoice(t *testing.T) {
 			t.Fatalf("restored wizard misses %q", want)
 		}
 	}
-	selection, saved, err := app.store.SubscriptionSelection(subs[0].ID)
+	selection, saved, err := app.Store.SubscriptionSelection(subs[0].ID)
 	if err != nil || !saved {
 		t.Fatalf("selection = %+v saved=%v err=%v", selection, saved, err)
 	}
@@ -432,7 +433,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		spec, _, err := readWizardSelection(r)
+		spec, _, err := subscriber.ReadWizardSelection(r)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -458,16 +459,16 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 	//    compose byte-identical documents.
 	w := b.post("/subscribers/wizard/save", fields)
 	require2xx(t, w)
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
 	subID := subs[0].ID
-	firstSelection, saved, err := app.store.SubscriptionSelection(subID)
+	firstSelection, saved, err := app.Store.SubscriptionSelection(subID)
 	if err != nil || !saved {
 		t.Fatalf("selection saved=%v err=%v", saved, err)
 	}
-	firstDocuments, firstArtifact, err := app.store.SubscriptionArtifact(subID)
+	firstDocuments, firstArtifact, err := app.Store.SubscriptionArtifact(subID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +481,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 		repeat.Set("subscriber_id", subID)
 		w = b.post("/subscribers/wizard/save", repeat)
 		require2xx(t, w)
-		selection, _, err := app.store.SubscriptionSelection(subID)
+		selection, _, err := app.Store.SubscriptionSelection(subID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -493,7 +494,7 @@ func TestWizardSelectionPositionsAreStable(t *testing.T) {
 		if !reflect.DeepEqual(selection.Networks, firstSelection.Networks) {
 			t.Fatalf("iteration %d: device positions = %+v, want %+v", iteration, selection.Networks, firstSelection.Networks)
 		}
-		documents, artifactID, err := app.store.SubscriptionArtifact(subID)
+		documents, artifactID, err := app.Store.SubscriptionArtifact(subID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -514,8 +515,8 @@ func TestWizardSaveKeepsExistingCredentialOnReSave(t *testing.T) {
 		"line_" + lineID: {"1"},
 	})
 	require2xx(t, w)
-	subs, _ := app.store.ListSubscribers()
-	before, err := app.store.ListSubscriberCredentials(subs[0].ID)
+	subs, _ := app.Store.ListSubscribers()
+	before, err := app.Store.ListSubscriberCredentials(subs[0].ID)
 	if err != nil || len(before) != 1 {
 		t.Fatalf("credentials = %d err=%v", len(before), err)
 	}
@@ -524,7 +525,7 @@ func TestWizardSaveKeepsExistingCredentialOnReSave(t *testing.T) {
 		"line_" + lineID: {"1"},
 	})
 	require2xx(t, w)
-	after, err := app.store.ListSubscriberCredentials(subs[0].ID)
+	after, err := app.Store.ListSubscriberCredentials(subs[0].ID)
 	if err != nil || len(after) != 1 {
 		t.Fatalf("credentials after re-save = %d err=%v", len(after), err)
 	}
@@ -545,7 +546,7 @@ func TestWizardRequiresCSRFAndOrigin(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "CSRF_REJECTED") {
 		t.Fatal("wrong CSRF was not rejected")
 	}
-	if subs, _ := app.store.ListSubscribers(); len(subs) != 0 {
+	if subs, _ := app.Store.ListSubscribers(); len(subs) != 0 {
 		t.Fatal("a rejected request created a subscriber")
 	}
 }
@@ -555,11 +556,11 @@ func TestWizardRequiresCSRFAndOrigin(t *testing.T) {
 func TestWizardGateUsesRealSingBox(t *testing.T) {
 	binary := testSingBoxBinary(t)
 	app, b, _ := wizardApp(t)
-	app.publishGate = nil
-	app.cfg.SingBoxPath = binary
-	app.publishRunner = node.ExecRunner{}
+	app.policyServer.SetPublishGate(nil)
+	app.Cfg.SingBoxPath = binary
+	app.policyServer.SetPublishRunner(node.ExecRunner{})
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	lineID := wizardLine(t, app, "hk-01")
 	seedActivePolicyPins(t, app)
 
@@ -571,11 +572,11 @@ func TestWizardGateUsesRealSingBox(t *testing.T) {
 	require2xx(t, w)
 	// The create response is the one-time bearer page; the approved artifact is
 	// the proof that the real kernel accepted the composed documents.
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscribers = %d err=%v", len(subs), err)
 	}
-	if _, artifactID, err := app.store.SubscriptionArtifact(subs[0].ID); err != nil || artifactID == "" {
+	if _, artifactID, err := app.Store.SubscriptionArtifact(subs[0].ID); err != nil || artifactID == "" {
 		t.Fatalf("real gate refused the composed artifact: artifact=%q err=%v", artifactID, err)
 	}
 }
@@ -601,12 +602,12 @@ func seedActivePolicyPins(t *testing.T, app *Server) {
 		t.Fatal(err)
 	}
 	payload := []byte(`{"default":"direct","rules":[]}`)
-	policy, err := app.store.CreateRoutePolicy(store.PolicyLayerServer, "wizard-pins", payload, encoded, "op-wizard-pins", app.now())
+	policy, err := app.Store.CreateRoutePolicy(store.PolicyLayerServer, "wizard-pins", payload, encoded, "op-wizard-pins", app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Only an active revision is read as the deployment's artifact lock.
-	if _, err := app.store.ActivateRoutePolicy(policy.ID, policy.Revision, "op-wizard-pins-activate", app.now()); err != nil {
+	if _, err := app.Store.ActivateRoutePolicy(policy.ID, policy.Revision, "op-wizard-pins-activate", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 }

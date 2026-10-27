@@ -23,7 +23,7 @@ func nodesOutTestApp(t *testing.T) (*Server, *browser, string, string) {
 	settings := testLine(line.ID, "line-pool-ui")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b, line.ID, out.ID
@@ -68,7 +68,7 @@ func TestOutTransportSetFlow(t *testing.T) {
 	if !strings.Contains(body, "出口地址已保存") || !strings.Contains(body, "out.example.invalid") {
 		t.Fatalf("transport save did not render back: %.300s", body)
 	}
-	pool, err := app.store.OutPool(app.now())
+	pool, err := app.Store.OutPool(app.Now())
 	if err != nil || len(pool) != 1 || pool[0].Server != "out.example.invalid" || pool[0].Port != 9443 {
 		t.Fatalf("stored transport wrong: %+v err=%v", pool, err)
 	}
@@ -93,12 +93,12 @@ func TestOutTransportSetFlow(t *testing.T) {
 func TestOutDeleteConfirmFlow(t *testing.T) {
 	app, b, lineID, outID := nodesOutTestApp(t)
 	now := time.Now()
-	configureOut(t, app.store, outID, now)
-	markLineOnline(t, app.store, lineID, now)
-	markLineOnline(t, app.store, outID, now)
-	enableOutForLine(t, app.store, outID, lineID, now)
-	settleTasks(t, app.store, outID)
-	confirmChain(t, app.store, outID, now)
+	configureOut(t, app.Store, outID, now)
+	markLineOnline(t, app.Store, lineID, now)
+	markLineOnline(t, app.Store, outID, now)
+	enableOutForLine(t, app.Store, outID, lineID, now)
+	settleTasks(t, app.Store, outID)
+	confirmChain(t, app.Store, outID, now)
 
 	body := nodesPageBody(t, b)
 	if !strings.Contains(body, "1 个被订阅选中") || !strings.Contains(body, lineID) {
@@ -113,7 +113,7 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	if !strings.Contains(body, "确认删除出口") || !strings.Contains(body, lineID) {
 		t.Fatalf("delete confirm does not name the used-by Line: %.500s", body)
 	}
-	if tables := tableExists(t, app.store, "out_bindings"); tables {
+	if tables := tableExists(t, app.Store, "out_bindings"); tables {
 		t.Fatal("the nodes page still projects a binding table the schema dropped")
 	}
 
@@ -138,18 +138,18 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 	// Once the subscription stops selecting it, the release action succeeds. It does
 	// NOT empty the ACL: the published set is the node membership (Ruling R10), so the
 	// page only reports that the hub-side publication was refreshed.
-	clearOutForLine(t, app.store, lineID, now)
+	clearOutForLine(t, app.Store, lineID, now)
 	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), "已解除") {
 		t.Fatalf("unbind notice missing: %.300s", w.Body.String())
 	}
-	if subscribers, err := app.store.OutAuthorizedSubscribers(outID); err != nil || len(subscribers) != 0 {
+	if subscribers, err := app.Store.OutAuthorizedSubscribers(outID); err != nil || len(subscribers) != 0 {
 		t.Fatalf("unbind kept the out selected: %v err=%v", subscribers, err)
 	}
 	// Membership is untouched by the release: the Line is still an enrolled source,
 	// so the Out still accepts it (Ruling R10).
-	members, err := app.store.OutMembershipLineIDs(outID)
+	members, err := app.Store.OutMembershipLineIDs(outID)
 	if err != nil || len(members) != 1 || members[0] != lineID {
 		t.Fatalf("release changed the membership set: %v err=%v", members, err)
 	}
@@ -164,12 +164,12 @@ func TestOutDeleteConfirmFlow(t *testing.T) {
 func TestOutUnbindCopyNamesMembership(t *testing.T) {
 	app, b, lineID, outID := nodesOutTestApp(t)
 	now := time.Now()
-	configureOut(t, app.store, outID, now)
-	markLineOnline(t, app.store, lineID, now)
-	markLineOnline(t, app.store, outID, now)
-	enableOutForLine(t, app.store, outID, lineID, now)
-	settleTasks(t, app.store, outID)
-	confirmChain(t, app.store, outID, now)
+	configureOut(t, app.Store, outID, now)
+	markLineOnline(t, app.Store, lineID, now)
+	markLineOnline(t, app.Store, outID, now)
+	enableOutForLine(t, app.Store, outID, lineID, now)
+	settleTasks(t, app.Store, outID)
+	confirmChain(t, app.Store, outID, now)
 
 	// A live reference is refused; the refusal must not claim a subscription-driven
 	// ACL recompute would follow.
@@ -186,7 +186,7 @@ func TestOutUnbindCopyNamesMembership(t *testing.T) {
 	}
 
 	// Released: the action succeeds and reports what it actually did.
-	clearOutForLine(t, app.store, lineID, now)
+	clearOutForLine(t, app.Store, lineID, now)
 	w = b.post("/nodes/out-unbind", url.Values{"out_id": {outID}})
 	requireStatus(t, w, 200)
 	notice := w.Body.String()
@@ -200,7 +200,7 @@ func TestOutUnbindCopyNamesMembership(t *testing.T) {
 	}
 	// The claim is also checked against the data plane: the release left the Line
 	// authorized, which is exactly why the notice must not say the list was emptied.
-	allowed, err := app.store.DeriveOutAllowlist(outID)
+	allowed, err := app.Store.DeriveOutAllowlist(outID)
 	if err != nil {
 		t.Fatal(err)
 	}

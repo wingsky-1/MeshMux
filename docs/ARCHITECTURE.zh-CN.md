@@ -40,6 +40,8 @@ Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本�
 
 Task 6（订阅聚合收尾）删除已无生产调用方的旧路径并同步契约：`internal/route` 的 AI 出口决策层（保留 `RulesetPin`/`ResolveAIRuleset` 字节校验，pins 未来使用）、`internal/jobs` 的阶段机（升级目标 `Target` 与 `operation_id` 校验保留）、`route_policies` 的 client 层写入 API（表与既有版本保留只读预览）、`exceptions`/`ssids` 顶层字段（显式拒绝 + schema 17 重写存量）以及测试专用的包装函数。`compiler.Match.SSIDs`、`jsonAPI/jsonNamespace` 与 server 层 `route_policies` 语义不受影响。
 
+Web 层代码布局：`internal/web` 只做配置校验与装配，`internal/web/handler` 只保留打包文档、`Server` 装配（结构体、`New`/`newServer`、路由顺序、`Close`）与导航兜底，路由主体按域放在子包：`handler/infra`（部署配置、会话/CSRF/表单令牌边界、operation_id、失败/成功写出、安全头、登录预算、KDF 槽、跨域共享错误码）、`handler/subscriber`（订阅用户页/API、向导）、`handler/subscription`（公开下载边界）、`handler/node`（节点、Agent 通道、配对、Out 管理）、`handler/mesh`（Mesh 设备、注册 Key、子网路由）、`handler/policy`（策略快照/写入/预览/发布、规则库、数据库迁移确认）、`handler/upgrade`（/tasks、发布检查与批准、Agent 升级通道、Hub 备份/交接/恢复、身份回读与 journal 状态机）。依赖方向为「域 → infra → store/view」，域之间不互相 import；跨域只经根装配注入的窄接口（`subscriber.Backends`、`policy.Backends`、`upgrade.AgentAuth`）或根包提供的小桥接函数，`subscriber → subscription` 是唯一例外且只读公开下载边界（无回边）。`internal/web/handler/boundary_test.go` 用编译产物 import 图固定该约束，并把根包文件限定为 `doc.go`/`server.go`。
+
 ## 4. Technology Architecture — 技术
 
 Go 1.27.2、Debian 13、单一 Web/API Hub、Caddy HTTPS、SQLite、轻量后台任务、Headscale 0.29.5、sing-box 1.14.3、systemd、nftables、Fail2ban、结构化 slog。Web 层优先 chi + templ/HTMX，但仅在使用时引入依赖并固定其版本；初始脚手架只有 Go 标准库。Agent systemd unit 使用 root，并仅保留 `CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE` 的 capability bounding/ambient 集合；`CAP_SYS_PTRACE` 用于读取不同 UID sing-box 的 `/proc/PID/exe` 与 cmdline 实际 hash，`CAP_DAC_READ_SEARCH` 用于 `ss -p` 解析非 root sing-box 的 `/proc/PID/fd` 监听映射（无 `CAP_DAC_OVERRIDE`）。该权限边界仍需真实 Debian 13 VM 验证，当前不能宣称所有权限已经最小化验收。

@@ -36,7 +36,7 @@ func TestSubscriberRoutesRequireAuthentication(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "SESSION_INVALID") {
 		t.Fatal("unauthenticated mutation did not report SESSION_INVALID")
 	}
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestSubscriberMutationsRejectWrongCSRFAndOrigin(t *testing.T) {
 		t.Fatal("wrong Origin was not rejected")
 	}
 
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 		"handshake_server": {"handshake.example.invalid"}, "handshake_port": {"443"},
 	})
 	require2xx(t, w)
-	line, err := readStoredLine(t, app.store, node.ID)
+	line, err := readStoredLine(t, app.Store, node.ID)
 	if err != nil {
 		t.Fatal("Line was not stored")
 	}
@@ -115,14 +115,14 @@ func TestLineAndSubscriberCreationDiscloseSecretsOnlyOnce(t *testing.T) {
 	if err := subscription.ValidateToken(token); err != nil {
 		t.Fatal("disclosed token is not canonical")
 	}
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(subs) != 1 {
 		t.Fatalf("subscriber count = %d, want 1", len(subs))
 	}
-	creds, err := app.store.ListSubscriberCredentials(subs[0].ID)
+	creds, err := app.Store.ListSubscriberCredentials(subs[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,11 +159,11 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 	node, _ := createPendingNode(t, app, "edge", "line-01", 8443, 2222)
-	configureLine(t, app.store, node.ID, "line-a", time.Now())
+	configureLine(t, app.Store, node.ID, "line-a", time.Now())
 
 	w := b.post("/subscribers", url.Values{"display_name": {"alice"}, "line_" + node.ID: {"1"}})
 	require2xx(t, w)
-	subs, err := app.store.ListSubscribers()
+	subs, err := app.Store.ListSubscribers()
 	if err != nil || len(subs) != 1 {
 		t.Fatalf("subscriber setup failed: %v", err)
 	}
@@ -174,21 +174,21 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "SUBSCRIBER_ACTION_INVALID") {
 		t.Fatal("complete action was not rejected")
 	}
-	sub, err := app.store.GetSubscriber(id)
+	sub, err := app.Store.GetSubscriber(id)
 	if err != nil || sub.State != subscription.StateActive {
 		t.Fatalf("state = %q after rejected complete, want active (err %v)", sub.State, err)
 	}
 
 	w = b.post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"delete"}})
 	require2xx(t, w)
-	sub, err = app.store.GetSubscriber(id)
+	sub, err = app.Store.GetSubscriber(id)
 	if err != nil || sub.State != subscription.StateDeleting {
 		t.Fatalf("state = %q after delete, want deleting (err %v)", sub.State, err)
 	}
 
 	w = b.post("/subscribers/state", url.Values{"subscriber_id": {id}, "action": {"complete"}})
 	requireStatus(t, w, http.StatusBadRequest)
-	sub, err = app.store.GetSubscriber(id)
+	sub, err = app.Store.GetSubscriber(id)
 	if err != nil || sub.State != subscription.StateDeleting {
 		t.Fatalf("manual complete changed deleting to %q (err %v)", sub.State, err)
 	}
@@ -201,7 +201,7 @@ func TestSubscriberStateRejectsManualCompletion(t *testing.T) {
 // must follow the same serving origin the download routes use.
 func TestSubscriberPageShowsServingDownloadOrigin(t *testing.T) {
 	app, _ := subscriptionAppWithOrigin(t, testSubscriptionOrigin)
-	view, err := app.subscriberViewModel()
+	view, err := app.subscriberServer.SubscriberViewModel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestSubscriberPageShowsServingDownloadOrigin(t *testing.T) {
 	}
 
 	management, _ := subscriptionAppWithOrigin(t, "")
-	managementView, err := management.subscriberViewModel()
+	managementView, err := management.subscriberServer.SubscriberViewModel()
 	if err != nil {
 		t.Fatal(err)
 	}

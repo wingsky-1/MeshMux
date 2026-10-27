@@ -59,20 +59,20 @@ func TestApplyReceipt(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	operationID := strings.Repeat("a", 32)
 	var got hubupgrade.HandoffConfig
-	app.hubApply = func(_ context.Context, cfg hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
+	app.upgradeServer.SetHubApplyForTest(func(_ context.Context, cfg hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 		got = cfg
 		return hubupgrade.HandoffReceipt{
 			Status: "queued", OperationID: cfg.OperationID,
 			TargetVersion: "1.0.1", PackageSHA256: strings.Repeat("b", 64),
 		}, nil
-	}
+	})
 	receipt := decodeHubApply(t, b.post(hubApplyPath,
 		url.Values{"operation_id": {operationID}}), http.StatusOK)
 	if !receipt.OK || receipt.Status != "queued" || receipt.OperationID != operationID ||
 		receipt.TargetVersion != "1.0.1" || receipt.PackageSHA256 != strings.Repeat("b", 64) {
 		t.Fatalf("receipt: %+v", receipt)
 	}
-	if got.DataDir != app.store.Dir || got.OperationID != operationID ||
+	if got.DataDir != app.Store.Dir || got.OperationID != operationID ||
 		got.ManifestDir != hubupgrade.RootManifestDir || got.RequestDir != hubupgrade.RequestDir {
 		t.Fatalf("handoff config: %+v", got)
 	}
@@ -98,10 +98,10 @@ func TestApplyReceipt(t *testing.T) {
 func TestApplyRejectsMalformedOperation(t *testing.T) {
 	b, app := databaseMigrationBrowser(t)
 	called := false
-	app.hubApply = func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
+	app.upgradeServer.SetHubApplyForTest(func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 		called = true
 		return hubupgrade.HandoffReceipt{}, nil
-	}
+	})
 	for _, id := range []string{"", "latest", strings.Repeat("A", 32), strings.Repeat("a", 31), "../" + strings.Repeat("a", 29)} {
 		receipt := decodeHubApply(t, b.post(hubApplyPath,
 			url.Values{"operation_id": {id}}), http.StatusBadRequest)
@@ -134,9 +134,9 @@ func TestApplyFailureCodes(t *testing.T) {
 	} {
 		t.Run(tc.code, func(t *testing.T) {
 			b, app := databaseMigrationBrowser(t)
-			app.hubApply = func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
+			app.upgradeServer.SetHubApplyForTest(func(context.Context, hubupgrade.HandoffConfig) (hubupgrade.HandoffReceipt, error) {
 				return hubupgrade.HandoffReceipt{}, &hubApplyError{code: tc.code}
-			}
+			})
 			receipt := decodeHubApply(t, b.post(hubApplyPath,
 				url.Values{"operation_id": {strings.Repeat("a", 32)}}), tc.status)
 			if receipt.OK || receipt.Status == "queued" || receipt.ErrorCode != tc.code {
@@ -161,7 +161,7 @@ func (e *hubApplyError) Error() string { return e.code + ": injected refusal" }
 func TestNoSchema11(t *testing.T) {
 	app, _ := testApp(t)
 	var version int
-	if err := app.store.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+	if err := app.Store.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if version != store.DatabaseSchemaVersion {
@@ -169,7 +169,7 @@ func TestNoSchema11(t *testing.T) {
 	}
 	mirrorTable := "hub_upgrade_" + "operations"
 	var tables int
-	if err := app.store.DB.QueryRow(
+	if err := app.Store.DB.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, mirrorTable).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
@@ -240,9 +240,9 @@ func TestNewRunsStartupReconcile(t *testing.T) {
 // stops it.
 func TestReconcileTickerAdvancesJournal(t *testing.T) {
 	app, _ := testApp(t)
-	app.reconcileInterval = time.Millisecond
+	app.upgradeServer.SetReconcileIntervalForTest(time.Millisecond)
 	operationID := strings.Repeat("1", 32)
-	if err := hubupgrade.WriteOp(app.store.Dir, hubupgrade.Op{
+	if err := hubupgrade.WriteOp(app.Store.Dir, hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: hubupgrade.StateBackingUp, TargetVersion: "1.0.1", FromVersion: "1.0.0-dev",
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("c", 64),
@@ -250,10 +250,10 @@ func TestReconcileTickerAdvancesJournal(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	app.startHubUpgradeReconcile(t.Context())
+	app.upgradeServer.StartHubUpgradeReconcile(t.Context())
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		op, ok, err := hubupgrade.ReadOp(app.store.Dir, operationID, os.Geteuid())
+		op, ok, err := hubupgrade.ReadOp(app.Store.Dir, operationID, os.Geteuid())
 		if err == nil && ok && op.State == hubupgrade.StateFailed && op.ErrorCode == "HUB_BACKUP_ORPHANED" {
 			break
 		}
@@ -262,7 +262,7 @@ func TestReconcileTickerAdvancesJournal(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	app.stopHubUpgradeReconcile()
+	app.upgradeServer.StopHubUpgradeReconcile()
 }
 
 // plantWebVerifiedRecord writes one readable per-operation generation whose
@@ -301,9 +301,9 @@ func TestUpgradeViewMergesJournalReadOnly(t *testing.T) {
 	app, _ := testApp(t)
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	operationID := strings.Repeat("d", 32)
-	plantWebVerifiedRecord(t, app.store.Dir, operationID, "1.0.1", strings.Repeat("c", 64))
+	plantWebVerifiedRecord(t, app.Store.Dir, operationID, "1.0.1", strings.Repeat("c", 64))
 	updated := now.Add(-time.Minute)
-	if err := hubupgrade.WriteOp(app.store.Dir, hubupgrade.Op{
+	if err := hubupgrade.WriteOp(app.Store.Dir, hubupgrade.Op{
 		Schema: hubupgrade.OpSchema, OperationID: operationID, Kind: hubupgrade.KindUpdate,
 		State: hubupgrade.StateBackedUp, TargetVersion: "1.0.1", FromVersion: "1.0.0-dev",
 		ManifestSHA256: strings.Repeat("a", 64), PackageSHA256: strings.Repeat("c", 64),
@@ -311,8 +311,8 @@ func TestUpgradeViewMergesJournalReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	journalPath := filepath.Join(app.store.Dir, hubupgrade.OpsDir, operationID+".json")
-	recordPath := filepath.Join(app.store.Dir, store.DatabaseBackupDirName, operationID, backup.RecordName)
+	journalPath := filepath.Join(app.Store.Dir, hubupgrade.OpsDir, operationID+".json")
+	recordPath := filepath.Join(app.Store.Dir, store.DatabaseBackupDirName, operationID, backup.RecordName)
 	journalBefore, err := os.ReadFile(journalPath)
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestUpgradeViewMergesJournalReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view, err := app.upgradeView(now)
+	view, err := app.upgradeServer.UpgradeView(now)
 	if err != nil {
 		t.Fatalf("upgradeView: %v", err)
 	}

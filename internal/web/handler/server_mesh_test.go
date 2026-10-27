@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -167,7 +168,7 @@ func meshTestApp(t *testing.T) (*Server, *browser, *fakeHeadscale, *bytes.Buffer
 	t.Helper()
 	app, logs := testApp(t)
 	fake := &fakeHeadscale{failWith: map[string]string{}, users: []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
-	app.mesh = fake
+	app.meshServer.SetClient(fake)
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -188,7 +189,7 @@ func meshCreateDevice(t *testing.T, b *browser, fake *fakeHeadscale, displayName
 	if len(match) != 2 {
 		t.Fatalf("response did not disclose a one-time key: %.400s", w.Body.String())
 	}
-	devices, err := b.app.store.ListMeshDevices()
+	devices, err := b.app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestMeshRoutesRequireAuthentication(t *testing.T) {
 			t.Fatalf("%s did not report SESSION_INVALID", path)
 		}
 	}
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +238,7 @@ func TestMeshPageRequiresCSRFOnMutations(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "CSRF_REJECTED") {
 		t.Fatal("wrong CSRF was not rejected")
 	}
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +332,7 @@ func TestMeshCreateShowsKeyOnceAndNeverLeaksIt(t *testing.T) {
 	}
 	// Only the digest is stored; the plaintext column does not exist.
 	var digests int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM mesh_enrollment_keys WHERE secret_hash IS NOT NULL`).Scan(&digests); err != nil {
 		t.Fatal(err)
 	}
 	if digests != 1 {
@@ -349,7 +350,7 @@ func TestMeshCreateShowsKeyOnceAndNeverLeaksIt(t *testing.T) {
 // no invented routes), while the secret itself still appears exactly once.
 func TestMeshOnlyDisclosureShowsStandardJoinCommand(t *testing.T) {
 	app, b, _, _ := meshTestApp(t)
-	app.cfg.HeadscaleOrigin = "https://headscale.example.invalid"
+	app.Cfg.HeadscaleOrigin = "https://headscale.example.invalid"
 
 	w := b.post("/mesh", url.Values{"display_name": {"carol-nas"}, "purpose": {"mesh_only"}, "platform": {"linux"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusOK)
@@ -367,7 +368,7 @@ func TestMeshOnlyDisclosureShowsStandardJoinCommand(t *testing.T) {
 // plane (never the SaaS default).
 func TestMeshDisclosureWithoutOriginAsksForConfiguration(t *testing.T) {
 	app, b, _, _ := meshTestApp(t)
-	app.cfg.HeadscaleOrigin = ""
+	app.Cfg.HeadscaleOrigin = ""
 
 	w := b.post("/mesh", url.Values{"display_name": {"dave-phone"}, "purpose": {"mesh_only"}, "platform": {"android"}, "subscriber_id": {""}})
 	requireStatus(t, w, http.StatusOK)
@@ -394,7 +395,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 	fake.nodes = []meshnet.Node{{ID: 77, Name: device.NodeName, Online: true, IPAddresses: []string{"100.64.0.7"}}}
 	page := b.req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, 200)
-	afterRender, err := b.app.store.GetMeshDevice(device.ID)
+	afterRender, err := b.app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +413,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 	// still not registered by it, because no Headscale node id was observed.
 	w := b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
-	reconciled, err := b.app.store.GetMeshDevice(device.ID)
+	reconciled, err := b.app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +426,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 
 	// A registered device is annotated with the live address on a plain render,
 	// and the render still writes nothing.
-	measured, err := b.app.store.RecordMeshObservation(device.ID, 77, app.now())
+	measured, err := b.app.Store.RecordMeshObservation(device.ID, 77, app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +439,7 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 	if !strings.Contains(page.Body.String(), "在线") {
 		t.Fatal("the live online evidence was not shown")
 	}
-	after, err := b.app.store.GetMeshDevice(device.ID)
+	after, err := b.app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,11 +451,11 @@ func TestMeshReconcilePersistsOnlyOnExplicitAction(t *testing.T) {
 func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
-	records, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.now())
+	records, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	registered, err := app.store.RecordMeshObservation(records.ID, 42, app.now())
+	registered, err := app.Store.RecordMeshObservation(records.ID, 42, app.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +467,7 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 	fake.nodes = nil
 	w := b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
-	expired, err := app.store.GetMeshDevice(records.ID)
+	expired, err := app.Store.GetMeshDevice(records.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,12 +491,12 @@ func TestMeshReconcileSettlesDisappearedNode(t *testing.T) {
 // retires it.
 func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
-	now := app.now()
-	device, err := app.store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
+	now := app.Now()
+	device, err := app.Store.CreateMeshDevice(meshSpec("phone", mesh.PurposeMeshOnly, ""), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = app.store.RecordMeshObservation(device.ID, 42, now); err != nil {
+	if _, err = app.Store.RecordMeshObservation(device.ID, 42, now); err != nil {
 		t.Fatal(err)
 	}
 	secret, err := mesh.NewEnrollmentSecret()
@@ -503,7 +504,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	keyID := strings.Repeat("a", 32)
-	if _, err = app.store.DB.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
+	if _, err = app.Store.DB.Exec(`INSERT INTO mesh_enrollment_keys(id, device_id, secret_hash, state, issued_at, expires_at, consumed_at)
  VALUES(?,?,?,'issued',?,?,0)`, keyID, device.ID, mesh.EnrollmentKeyHash(secret), now.Unix(), now.Add(mesh.KeyTTL).Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +518,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 		hash       []byte
 		consumedAt int64
 	)
-	if err = app.store.DB.QueryRow(`SELECT state, secret_hash, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
+	if err = app.Store.DB.QueryRow(`SELECT state, secret_hash, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
 		Scan(&state, &hash, &consumedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +528,7 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 	// A second check finds no issued row and changes nothing.
 	w = b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, 200)
-	if err = app.store.DB.QueryRow(`SELECT state, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
+	if err = app.Store.DB.QueryRow(`SELECT state, consumed_at FROM mesh_enrollment_keys WHERE id=?`, keyID).
 		Scan(&state, &consumedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -542,10 +543,10 @@ func TestMeshReconcileConsumesLingeringKey(t *testing.T) {
 func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
-	now := app.now()
-	line := createEdgeNode(t, app.store, now)
-	configureLine(t, app.store, line, "line-a", now)
-	subscriber, token, err := app.store.CreateSubscriber("alice", []string{line}, now)
+	now := app.Now()
+	line := createEdgeNode(t, app.Store, now)
+	configureLine(t, app.Store, line, "line-a", now)
+	subscriber, token, err := app.Store.CreateSubscriber("alice", []string{line}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +557,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	// A second device of the same subscriber must survive the first one's
 	// deletion: one device is one identity, not the whole subscription.
 	second, _ := meshCreateDevice(t, b, fake, "alice-ipad", "proxy_mesh", "ios", subscriber.ID)
-	registered, err := app.store.RecordMeshObservation(device.ID, 42, now)
+	registered, err := app.Store.RecordMeshObservation(device.ID, 42, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +569,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 
 	w := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
-	revoked, err := app.store.GetMeshDevice(device.ID)
+	revoked, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +604,7 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 			t.Fatalf("repeat revoke performed a remote change: %v", call)
 		}
 	}
-	again, err := app.store.GetMeshDevice(device.ID)
+	again, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,25 +613,25 @@ func TestMeshRevokeIsIdempotentAndIsolated(t *testing.T) {
 	}
 
 	// The subscriber and every credential/token of it survive untouched.
-	stored, err := app.store.GetSubscriber(subscriber.ID)
+	stored, err := app.Store.GetSubscriber(subscriber.ID)
 	if err != nil {
 		t.Fatalf("subscriber lost: %v", err)
 	}
 	if stored.State != "active" {
 		t.Fatalf("subscriber state = %q, want active", stored.State)
 	}
-	credentials, err := app.store.ListSubscriberCredentials(subscriber.ID)
+	credentials, err := app.Store.ListSubscriberCredentials(subscriber.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(credentials) == 0 {
 		t.Fatal("subscriber credentials disappeared with the mesh device")
 	}
-	if _, err = resolveBearer(t, app.store, token); err != nil {
+	if _, err = resolveBearer(t, app.Store, token); err != nil {
 		t.Fatalf("subscription token stopped working: %v", err)
 	}
 	// The sibling device of the same subscriber is untouched.
-	sibling, err := app.store.GetMeshDevice(second.ID)
+	sibling, err := app.Store.GetMeshDevice(second.ID)
 	if err != nil {
 		t.Fatalf("sibling device lost: %v", err)
 	}
@@ -645,14 +646,14 @@ func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	fake.users = []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}
 	device, _ := meshCreateDevice(t, b, fake, "tablet", "mesh_only", "android", "")
-	if _, err := app.store.RecordMeshObservation(device.ID, 55, app.now()); err != nil {
+	if _, err := app.Store.RecordMeshObservation(device.ID, 55, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fake.failWith["nodes.delete"] = meshnet.CodeCommandFailed
 
 	w := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
-	pending, err := app.store.GetMeshDevice(device.ID)
+	pending, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +669,7 @@ func TestMeshRevokeRetriesRemoteFailure(t *testing.T) {
 	delete(fake.failWith, "nodes.delete")
 	w = b.post("/mesh/retry", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, 200)
-	settled, err := app.store.GetMeshDevice(device.ID)
+	settled, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,7 +706,7 @@ func TestMeshUnknownDeviceIs404(t *testing.T) {
 func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
 	device, firstSecret := meshCreateDevice(t, b, fake, "phone", "mesh_only", "ios", "")
-	firstKeys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	firstKeys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +720,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	if len(match) != 2 || match[1] == firstSecret {
 		t.Fatal("reissue did not disclose a fresh key")
 	}
-	keys, err := app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err := app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,15 +738,15 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	}
 	// The live key is the one the list reports; an older revoked record does not
 	// hide it.
-	if label, _, _ := meshKeyState(keys, app.now()); label != "已签发 · 未使用" {
+	if label, _, _ := meshh.MeshKeyState(keys, app.Now()); label != "已签发 · 未使用" {
 		t.Fatalf("key column rendered %q after reissue", label)
 	}
 	// Registration spends only the live key: the withdrawn row stays revoked in
 	// the audit trail and is never rewired into a consumption.
-	if _, err = app.store.RecordMeshObservation(device.ID, 42, app.now()); err != nil {
+	if _, err = app.Store.RecordMeshObservation(device.ID, 42, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	keys, err = app.store.ListMeshEnrollmentKeys(device.ID)
+	keys, err = app.Store.ListMeshEnrollmentKeys(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +766,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 		t.Fatalf("after registration: issued=%d consumed=%d revoked=%d, want 0/1/1", issued, consumed, revoked)
 	}
 	// Rekeying a revoked device is refused with its own stable code.
-	if _, _, err = app.store.RequestMeshDeviceRevocation(device.ID, "USER_DELETE", app.now()); err != nil {
+	if _, _, err = app.Store.RequestMeshDeviceRevocation(device.ID, "USER_DELETE", app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w = b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
@@ -783,7 +784,7 @@ func TestMeshCreateRejectsBindingMismatch(t *testing.T) {
 	if !strings.Contains(w.Body.String(), mesh.CodeSubscriberBindingInvalid) {
 		t.Fatalf("binding mismatch lost its code: %.300s", w.Body.String())
 	}
-	devices, err := b.app.store.ListMeshDevices()
+	devices, err := b.app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,11 +815,11 @@ func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
 	// Creating the user again because Headscale raced the list is still success.
 	fake.users = nil
 	fake.failWith["users.create"] = meshnet.CodeAlreadyExists
-	if _, err := b.app.ensureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
+	if _, err := b.app.meshServer.EnsureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
 		t.Fatalf("already-exists user creation failed: %v", err)
 	}
 	// A name other than the shared default is never minted from a form field.
-	if _, err := b.app.ensureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), codeMeshHeadscaleUserUnknown) {
+	if _, err := b.app.meshServer.EnsureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), meshh.CodeMeshHeadscaleUserUnknown) {
 		t.Fatalf("an arbitrary headscale user was created: %v", err)
 	}
 	if fake.callsOf("users.create") != 1 {
@@ -830,16 +831,16 @@ func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
 // canonical even when the display label has no ASCII characters, and that it is
 // unique per Headscale user.
 func TestMeshNodeNameFallsBackForNonLatinLabels(t *testing.T) {
-	if got := meshNodeName("客厅 NAS"); got != "mesh-nas" {
+	if got := meshh.MeshNodeName("客厅 NAS"); got != "mesh-nas" {
 		t.Fatalf("node name = %q, want mesh-nas", got)
 	}
-	if got := meshNodeName("客厅"); got != "mesh" {
+	if got := meshh.MeshNodeName("客厅"); got != "mesh" {
 		t.Fatalf("node name = %q, want mesh", got)
 	}
-	if got := meshNodeName(strings.Repeat("a", 200)); len(got) > 63 {
+	if got := meshh.MeshNodeName(strings.Repeat("a", 200)); len(got) > 63 {
 		t.Fatalf("node name length = %d", len(got))
 	}
-	if err := mesh.ValidateNodeName(meshNodeName("  -- ")); err != nil {
+	if err := mesh.ValidateNodeName(meshh.MeshNodeName("  -- ")); err != nil {
 		t.Fatalf("fallback node name invalid: %v", err)
 	}
 }
@@ -849,15 +850,15 @@ func TestMeshNodeNameFallsBackForNonLatinLabels(t *testing.T) {
 func TestMeshKeyStateLabels(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	lapsed := store.MeshEnrollmentKeyRecord{State: mesh.KeyIssued, IssuedAt: now.Unix(), ExpiresAt: now.Add(-time.Minute).Unix()}
-	label, class, _ := meshKeyState([]store.MeshEnrollmentKeyRecord{lapsed}, now)
+	label, class, _ := meshh.MeshKeyState([]store.MeshEnrollmentKeyRecord{lapsed}, now)
 	if label != "已过期 · 待回收" || class != "badge" {
 		t.Fatalf("lapsed key rendered as %q/%q", label, class)
 	}
 	live := store.MeshEnrollmentKeyRecord{State: mesh.KeyIssued, IssuedAt: now.Unix(), ExpiresAt: now.Add(time.Minute).Unix()}
-	if label, _, _ = meshKeyState([]store.MeshEnrollmentKeyRecord{live}, now); label != "已签发 · 未使用" {
+	if label, _, _ = meshh.MeshKeyState([]store.MeshEnrollmentKeyRecord{live}, now); label != "已签发 · 未使用" {
 		t.Fatalf("live key rendered as %q", label)
 	}
-	if label, _, _ = meshKeyState(nil, now); label != "尚无 Key" {
+	if label, _, _ = meshh.MeshKeyState(nil, now); label != "尚无 Key" {
 		t.Fatalf("missing key rendered as %q", label)
 	}
 }

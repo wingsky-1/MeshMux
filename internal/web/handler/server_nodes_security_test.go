@@ -49,7 +49,7 @@ func TestAgentEndpointsRequireSingleJSONObject(t *testing.T) {
 	}
 	_, token := pairedNode(t, app, "strict-result")
 	taskID, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: taskID, Revision: 1, IdempotencyKey: taskID, NodeID: node.ID, Kind: protocol.KindHealthStatus, Params: []byte(`{}`)}, app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: taskID, Revision: 1, IdempotencyKey: taskID, NodeID: node.ID, Kind: protocol.KindHealthStatus, Params: []byte(`{}`)}, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	res, _ := json.Marshal(protocol.TaskResult{OperationID: taskID, Status: "healthy"})
@@ -63,31 +63,31 @@ func TestAgentEndpointsRequireSingleJSONObject(t *testing.T) {
 func TestPairingFailureDoesNotConsumeCode(t *testing.T) {
 	app, _ := testApp(t)
 	node, code := createPendingNode(t, app, "edge", "pair-rollback", 8443, 2222)
-	if _, err := app.store.DB.Exec(`CREATE TRIGGER pairing_issue_fail BEFORE INSERT ON node_identities BEGIN SELECT RAISE(ABORT, 'IDENTITY_ISSUE_FAILED'); END`); err != nil {
+	if _, err := app.Store.DB.Exec(`CREATE TRIGGER pairing_issue_fail BEFORE INSERT ON node_identities BEGIN SELECT RAISE(ABORT, 'IDENTITY_ISSUE_FAILED'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.store.ConsumePairing(node.ID, "edge", code, "meshmux-agent test", "6.1-test", time.Now()); err == nil || !strings.Contains(err.Error(), "IDENTITY_ISSUE_FAILED") {
+	if _, err := app.Store.ConsumePairing(node.ID, "edge", code, "meshmux-agent test", "6.1-test", time.Now()); err == nil || !strings.Contains(err.Error(), "IDENTITY_ISSUE_FAILED") {
 		t.Fatalf("identity issue failure not returned: %v", err)
 	}
 	var consumed int64
 	var status string
-	if err := app.store.DB.QueryRow(`SELECT consumed FROM node_pairing WHERE node_id=?`, node.ID).Scan(&consumed); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT consumed FROM node_pairing WHERE node_id=?`, node.ID).Scan(&consumed); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.DB.QueryRow(`SELECT status FROM nodes WHERE id=?`, node.ID).Scan(&status); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT status FROM nodes WHERE id=?`, node.ID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if consumed != 0 || status != "pending" {
 		t.Fatalf("pairing consumed or node finalized: consumed=%d status=%s", consumed, status)
 	}
 	var identities int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM node_identities`).Scan(&identities); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM node_identities`).Scan(&identities); err != nil {
 		t.Fatal(err)
 	}
 	if identities != 0 {
 		t.Fatal("identity persisted after pairing failure")
 	}
-	if _, err := app.store.DB.Exec(`DROP TRIGGER pairing_issue_fail`); err != nil {
+	if _, err := app.Store.DB.Exec(`DROP TRIGGER pairing_issue_fail`); err != nil {
 		t.Fatal(err)
 	}
 	w := pairJSON(t, app, node.ID, "edge", code)
@@ -99,34 +99,34 @@ func TestEnqueueExactIdempotencyAndConflicts(t *testing.T) {
 	node, _ := createPendingNode(t, app, "edge", "queue-idem", 8443, 2222)
 	id, _ := protocol.NewID()
 	task := protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: id, Revision: 1, IdempotencyKey: id, NodeID: node.ID, Kind: protocol.KindHealthStatus, Params: []byte(`{}`)}
-	if err := app.store.EnqueueTaskAt(task, app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(task, app.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.EnqueueTaskAt(task, app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(task, app.Now()); err != nil {
 		t.Fatalf("exact replay must succeed: %v", err)
 	}
 	var count int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks`).Scan(&count); err != nil || count != 1 {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("exact replay count=%d err=%v", count, err)
 	}
 	keyID, _ := protocol.NewID()
 	otherOp, _ := protocol.NewID()
 	keyed := task
 	keyed.OperationID, keyed.IdempotencyKey, keyed.Revision = keyID, keyID, 2
-	if err := app.store.EnqueueTaskAt(keyed, app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(keyed, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	keyed.OperationID = otherOp
-	if err := app.store.EnqueueTaskAt(keyed, app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.Store.EnqueueTaskAt(keyed, app.Now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("cross-operation exact idempotency key replay accepted: %v", err)
 	}
 	task.Revision = 2
-	if err := app.store.EnqueueTaskAt(task, app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.Store.EnqueueTaskAt(task, app.Now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("operation content conflict accepted: %v", err)
 	}
 	other, _ := protocol.NewID()
 	task.OperationID, task.Revision = other, 3
-	if err := app.store.EnqueueTaskAt(task, app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.Store.EnqueueTaskAt(task, app.Now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("idempotency content conflict accepted: %v", err)
 	}
 }
@@ -143,11 +143,11 @@ func TestEnqueueConcurrentRevisionIsMonotonic(t *testing.T) {
 	start := make(chan struct{})
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
-	now := app.now()
+	now := app.Now()
 	for _, task := range tasks {
 		wg.Go(func() {
 			<-start
-			errs <- app.store.EnqueueTaskAt(task, now)
+			errs <- app.Store.EnqueueTaskAt(task, now)
 		})
 	}
 	close(start)
@@ -165,7 +165,7 @@ func TestEnqueueConcurrentRevisionIsMonotonic(t *testing.T) {
 		t.Fatalf("same revision inserted %d tasks", succeeded)
 	}
 	var count, distinct int
-	if err := app.store.DB.QueryRow(`SELECT count(*), count(DISTINCT revision) FROM agent_tasks WHERE node_id=?`, node.ID).Scan(&count, &distinct); err != nil || count != 1 || distinct != 1 {
+	if err := app.Store.DB.QueryRow(`SELECT count(*), count(DISTINCT revision) FROM agent_tasks WHERE node_id=?`, node.ID).Scan(&count, &distinct); err != nil || count != 1 || distinct != 1 {
 		t.Fatalf("revision invariant: count=%d distinct=%d err=%v", count, distinct, err)
 	}
 }
@@ -176,7 +176,7 @@ func TestAgentResultRejectsCrossNodeWrites(t *testing.T) {
 	_, tokenB := pairedNode(t, app, "line-b")
 	clearNodeTasks(t, app, nodeA.ID)
 	task := protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Revision: 1, IdempotencyKey: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", NodeID: nodeA.ID, Kind: protocol.KindHealthStatus, Params: []byte("{}")}
-	if err := app.store.EnqueueTaskAt(task, app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(task, app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	forge := protocol.TaskResult{OperationID: task.OperationID, Status: "healthy"}
@@ -186,7 +186,7 @@ func TestAgentResultRejectsCrossNodeWrites(t *testing.T) {
 		t.Fatalf("cross-node result was not scoped: %.200s", w.Body.String())
 	}
 	var status string
-	if err := app.store.DB.QueryRow(`SELECT status FROM agent_tasks WHERE operation_id=?`, task.OperationID).Scan(&status); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT status FROM agent_tasks WHERE operation_id=?`, task.OperationID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "pending" {
@@ -208,7 +208,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 		return protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: operation, Revision: revision, IdempotencyKey: operation, NodeID: node.ID, Kind: protocol.KindHealthStatus, Params: []byte("{}")}
 	}
 	backward, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(backward), app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(newTask(backward), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	res := protocol.TaskResult{OperationID: backward, Status: "applying"}
@@ -222,7 +222,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	verify, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(verify), app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(newTask(verify), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: verify, Status: "applying"})
@@ -236,7 +236,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	partial, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(partial), app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(newTask(partial), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: partial, Status: "partial", ErrorCode: "APPLY_FAILED"})
@@ -252,7 +252,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	rollback, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(rollback), app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(newTask(rollback), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: rollback, Status: "applying"})
@@ -263,7 +263,7 @@ func TestAgentResultRejectsPendingAndIllegalTransitions(t *testing.T) {
 	}
 
 	nonterminal, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(nonterminal), app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(newTask(nonterminal), app.Now()); err != nil {
 		t.Fatal(err)
 	}
 	w = reportJSON(t, app, token, protocol.TaskResult{OperationID: nonterminal, Status: "applying"})
@@ -280,7 +280,7 @@ func TestPendingTasksIncludeRedeliveryStates(t *testing.T) {
 	for i, status := range statuses {
 		id, _ := protocol.NewID()
 		task := protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: id, Revision: int64(i + 1), IdempotencyKey: id, NodeID: node.ID, Kind: protocol.KindHealthStatus, Params: []byte(`{}`)}
-		if err := app.store.EnqueueTaskAt(task, app.now()); err != nil {
+		if err := app.Store.EnqueueTaskAt(task, app.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if status != "pending" {
@@ -288,7 +288,7 @@ func TestPendingTasksIncludeRedeliveryStates(t *testing.T) {
 			requireStatus(t, w, 200)
 		}
 	}
-	tasks, err := app.store.PendingTasksAt(node.ID, 8, app.now())
+	tasks, err := app.Store.PendingTasksAt(node.ID, 8, app.Now())
 	if err != nil || len(tasks) != 3 {
 		t.Fatalf("pending task states = %d err=%v", len(tasks), err)
 	}

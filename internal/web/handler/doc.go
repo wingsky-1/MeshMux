@@ -1,33 +1,50 @@
-// Package handler is the HTTP layer of the Hub control plane: routing, the
-// management boundary (operation ID, security headers, host and Origin
-// checks), session authentication (login/setup/logout/password, CSRF, login
-// budget, KDF guard) and every management/agent handler.
+// Package handler is the HTTP assembly of the Hub control plane. It owns the
+// router, the navigation fallbacks and the process lifecycle; every route body
+// lives in a domain package next to the facts it reads.
 //
-// The subscription wizard (server_subscribers_wizard.go) is the only writer of
-// a subscription selection: four groups (Lines, Out, rules, mesh devices), a
-// preview that writes nothing, and a save that persists only an artifact which
-// passed the kernel gate. Preview findings render "!" for a reminder and "✖"
-// for a blocking refusal.
+// Layout:
 //
-// The route-policy write API (server_policies_write.go) keeps the server layer
-// writable and the client layer read-only: since Task 6 every client-layer
-// create/revise/activate/revoke is refused with POLICY_LAYER_RETIRED, and the
-// retired exceptions/ssids payload keys are refused with
-// POLICY_PAYLOAD_RETIRED. The client layer remains a gated preview of its
-// legacy revision, never a subscription input.
+//   - infra: the deployment configuration, session/CSRF/form-token boundary,
+//     request operation id, failure and success writers, security headers, login
+//     budget, KDF guard and the error-code vocabulary shared by more than one
+//     domain.
+//   - subscription: the public bearer download boundary, which runs before the
+//     management boundary so a download never carries a session.
+//   - node: nodes, the Agent channel, pairing, and Out management.
+//   - mesh: Mesh devices, enrollment keys and subnet routes.
+//   - subscriber: the subscriber page/API, per-Line selection and the
+//     subscription wizard.
+//   - policy: the route-policy snapshot, write API, server preview, gated
+//     publication, rule library and the database-migration confirmation.
+//   - upgrade: /tasks, the release check and per-node approval, the Agent upgrade
+//     channels, Hub backup/handoff/restore, and the read-only Hub identity
+//     readback with its journal state machine.
 //
-// Dependency direction (compiler-enforced): handler → internal/control/store
-// and handler → view. Handlers use Store.DB only for the session/auth
-// transactions that moved here untouched; domain writes go through store
-// methods or the policy rule-library store constructed on the same handle
-// (migration stays in store). Rendering goes through view components and view
-// page-models built from store records. handler never imports web; nothing
-// below handler imports handler.
+// The subscription wizard is the only writer of a subscription selection: four
+// groups (Lines, Out, rules, mesh devices), a preview that writes nothing, and a
+// save that persists only an artifact which passed the kernel gate. Preview
+// findings render "!" for a reminder and "✖" for a blocking refusal.
 //
-// codes.go is the single source of the error-code literals this package spells
-// in more than one file and of the grammar predicates (operation id, digest,
-// release version) aliased from internal/cli/backup. A literal a second handler
-// needs belongs there, never in a per-file copy. Display wording (page rows,
-// labels, hit chains, verdicts) lives in the view package: the handler states
-// facts and codes, the view states the words.
+// The route-policy write API keeps the server layer writable and the client
+// layer read-only: every client-layer create/revise/activate/revoke is refused
+// with POLICY_LAYER_RETIRED, and the retired exceptions/ssids payload keys are
+// refused with POLICY_PAYLOAD_RETIRED. The client layer remains a gated preview
+// of its legacy revision, never a subscription input.
+//
+// Dependency direction (compiler-enforced): every domain imports infra; domains
+// do not import each other, and a domain that needs another one's fact receives
+// it through a narrow interface the root package satisfies (subscriber.Backends,
+// policy.Backends, upgrade.AgentAuth) or through a small bridge in backends.go.
+// subscriber reads the public download boundary, which has no edge back. infra
+// imports internal/control/store and internal/web/view only. Nothing below this
+// package imports it, and it never imports internal/web.
+//
+// infra owns the shared error-code vocabulary and the grammar predicates
+// (operation id, digest, release version) aliased from internal/cli/backup. A
+// literal two domains need belongs there, never in a per-domain copy. Display
+// wording (page rows, labels, hit chains, verdicts) lives in the view package:
+// the handler states facts and codes, the view states the words.
+//
+// boundary_test.go pins both halves of that contract: the compiled import graph
+// of every domain, and the fact that this package holds no route body.
 package handler

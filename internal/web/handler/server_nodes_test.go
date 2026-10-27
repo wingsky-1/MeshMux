@@ -15,7 +15,7 @@ import (
 
 func createPendingNode(t *testing.T, app *Server, role, name string, vless, ssh int) (store.Node, string) {
 	t.Helper()
-	node, code, err := app.store.CreateNode(role, name, vless, ssh, time.Now())
+	node, code, err := app.Store.CreateNode(role, name, vless, ssh, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func createPendingNode(t *testing.T, app *Server, role, name string, vless, ssh 
 
 func clearNodeTasks(t *testing.T, app *Server, nodeID string) {
 	t.Helper()
-	if _, err := app.store.DB.Exec(`DELETE FROM agent_tasks WHERE node_id=?`, nodeID); err != nil {
+	if _, err := app.Store.DB.Exec(`DELETE FROM agent_tasks WHERE node_id=?`, nodeID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -144,7 +144,7 @@ func TestPairingSingleUseExpiryAndRole(t *testing.T) {
 	// Expired codes cannot be revived, and their refusal is the same neutral
 	// 401 as an unknown code.
 	node3, code3 := createPendingNode(t, app, "edge", "line-03", 8444, 2224)
-	if _, err := app.store.DB.Exec(`UPDATE node_pairing SET expires=0 WHERE node_id=?`, node3.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE node_pairing SET expires=0 WHERE node_id=?`, node3.ID); err != nil {
 		t.Fatal(err)
 	}
 	w = pairJSON(t, app, node3.ID, "edge", code3)
@@ -187,16 +187,16 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 		return protocol.Task{Schema: protocol.Schema, Version: protocol.Version, OperationID: idem, Revision: rev, IdempotencyKey: idem, NodeID: node.ID, Kind: kind, Params: json.RawMessage(params)}
 	}
 	id1, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(protocol.KindHealthStatus, 1, id1, `{}`), app.now()); err != nil {
+	if err := app.Store.EnqueueTaskAt(newTask(protocol.KindHealthStatus, 1, id1, `{}`), app.Now()); err != nil {
 		t.Fatalf("valid status task rejected: %v", err)
 	}
 	// Duplicate idempotency key is a rejection, not a second execution.
-	if err := app.store.EnqueueTaskAt(newTask(protocol.KindHealthStatus, 2, id1, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
+	if err := app.Store.EnqueueTaskAt(newTask(protocol.KindHealthStatus, 2, id1, `{}`), app.Now()); err == nil || !strings.Contains(err.Error(), "IDEMPOTENCY_CONFLICT") {
 		t.Fatalf("duplicate idempotency accepted: %v", err)
 	}
 	// Stale revision cannot rewind the per-node monotonic chain.
 	id2, _ := protocol.NewID()
-	if err := app.store.EnqueueTaskAt(newTask(protocol.KindHealthStatus, 1, id2, `{}`), app.now()); err == nil || !strings.Contains(err.Error(), "REVISION_STALE") {
+	if err := app.Store.EnqueueTaskAt(newTask(protocol.KindHealthStatus, 1, id2, `{}`), app.Now()); err == nil || !strings.Contains(err.Error(), "REVISION_STALE") {
 		t.Fatalf("stale revision accepted: %v", err)
 	}
 	// Malicious payloads never reach storage.
@@ -208,7 +208,7 @@ func TestTaskAllowlistIdempotencyAndResults(t *testing.T) {
 		{"rollback.config", `{}`},
 	} {
 		id, _ := protocol.NewID()
-		if err := app.store.EnqueueTaskAt(newTask(tc.kind, 5, id, tc.params), app.now()); err == nil {
+		if err := app.Store.EnqueueTaskAt(newTask(tc.kind, 5, id, tc.params), app.Now()); err == nil {
 			t.Fatalf("malicious task accepted: %+v", tc)
 		}
 	}

@@ -10,6 +10,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -56,7 +57,7 @@ func createPairedWebNode(t *testing.T, app *Server, role, name string, vless, ss
 	w := pairJSON(t, app, node.ID, role, code)
 	requireStatus(t, w, 200)
 	clearNodeTasks(t, app, node.ID)
-	paired, err := app.store.GetNodeAt(node.ID, time.Now())
+	paired, err := app.Store.GetNodeAt(node.ID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +92,8 @@ func TestOutBindingEndpointsAreRetired(t *testing.T) {
 	line := createPairedWebNode(t, app, "edge", "line-retired", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-retired", 9443, 2223)
 	now := time.Now()
-	configureLine(t, app.store, line.ID, "line-retired", now)
-	configureOut(t, app.store, out.ID, now)
+	configureLine(t, app.Store, line.ID, "line-retired", now)
+	configureOut(t, app.Store, out.ID, now)
 
 	// Session and CSRF boundaries are unchanged: the routes are still mutations, so
 	// an anonymous or unmarked request never reaches the handler.
@@ -104,7 +105,7 @@ func TestOutBindingEndpointsAreRetired(t *testing.T) {
 
 	for _, path := range []string{"/nodes/out/bind", "/nodes/out/unbind"} {
 		w := b.post(path, url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
-		requireBindingError(t, w, 410, CodeBindingAPIRetired)
+		requireBindingError(t, w, 410, node.CodeBindingAPIRetired)
 		var body struct {
 			NextAction string `json:"next_action"`
 		}
@@ -117,7 +118,7 @@ func TestOutBindingEndpointsAreRetired(t *testing.T) {
 	}
 	// The refused calls changed nothing: selecting an Out is still the
 	// subscription's decision, and the retired route cannot write it.
-	if subscribers, err := app.store.OutAuthorizedSubscribers(out.ID); err != nil || len(subscribers) != 0 {
+	if subscribers, err := app.Store.OutAuthorizedSubscribers(out.ID); err != nil || len(subscribers) != 0 {
 		t.Fatalf("a retired endpoint selected an out: %v err=%v", subscribers, err)
 	}
 }
@@ -145,9 +146,9 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	line := createPairedWebNode(t, app, "edge", "line-preview", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-preview", 9443, 2223)
 	now := time.Now()
-	configureLine(t, app.store, line.ID, "line-preview", now)
-	configureOut(t, app.store, out.ID, now)
-	subscriber, _, err := app.store.CreateSubscriber("alice", []string{line.ID}, now)
+	configureLine(t, app.Store, line.ID, "line-preview", now)
+	configureOut(t, app.Store, out.ID, now)
+	subscriber, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +193,7 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	settings := testLine(line.ID, "line-preview")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
 	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
@@ -209,7 +210,7 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	}
 	// The subscription does not authorize anything; it appears only as a used-by name
 	// for the delete guard, while the source set stays the membership set.
-	enableOutForLine(t, app.store, out.ID, line.ID, now)
+	enableOutForLine(t, app.Store, out.ID, line.ID, now)
 	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
 	requireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
@@ -225,7 +226,7 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 		t.Fatal("preview leaked a subscriber identity")
 	}
 	var credentialUUID string
-	if err = app.store.DB.QueryRow(`SELECT uuid FROM proxy_credentials WHERE subscriber_id=? AND node_id=?`,
+	if err = app.Store.DB.QueryRow(`SELECT uuid FROM proxy_credentials WHERE subscriber_id=? AND node_id=?`,
 		subscriber.ID, line.ID).Scan(&credentialUUID); err != nil {
 		t.Fatal(err)
 	}
@@ -249,15 +250,15 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 	line := createPairedWebNode(t, app, "edge", "line-del", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-del", 9443, 2223)
 	now := time.Now()
-	configureLine(t, app.store, line.ID, "line-del", now)
-	configureOut(t, app.store, out.ID, now)
-	enableOutForLine(t, app.store, out.ID, line.ID, now)
-	settleTasks(t, app.store, out.ID)
-	confirmChain(t, app.store, out.ID, now)
+	configureLine(t, app.Store, line.ID, "line-del", now)
+	configureOut(t, app.Store, out.ID, now)
+	enableOutForLine(t, app.Store, out.ID, line.ID, now)
+	settleTasks(t, app.Store, out.ID)
+	confirmChain(t, app.Store, out.ID, now)
 	// The delete is refused while the subscription selects the Out, so the fixture
 	// releases it first: that is the operator migration the refusal asks for.
-	clearOutForLine(t, app.store, line.ID, now)
-	settleTasks(t, app.store, out.ID)
+	clearOutForLine(t, app.Store, line.ID, now)
+	settleTasks(t, app.Store, out.ID)
 
 	// Missing session / CSRF never reach the handler.
 	anon := &browser{app: app}
@@ -280,15 +281,15 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 	// Ruling R9: the delete is total. The node row, its dial parameters (address +
 	// link key) and every row keyed to it are gone, so a later selection cannot
 	// resurrect a stale endpoint.
-	if _, err := app.store.GetNodeAt(out.ID, now); err == nil {
+	if _, err := app.Store.GetNodeAt(out.ID, now); err == nil {
 		t.Fatal("the delete left the out node behind")
 	}
-	if outTransportConfigured(t, app.store, out.ID) {
+	if outTransportConfigured(t, app.Store, out.ID) {
 		t.Fatal("the delete left the dial parameters behind")
 	}
-	if tableExists(t, app.store, "out_settings") {
+	if tableExists(t, app.Store, "out_settings") {
 		var settings int
-		if err := app.store.DB.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, out.ID).Scan(&settings); err != nil {
+		if err := app.Store.DB.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, out.ID).Scan(&settings); err != nil {
 			t.Fatal(err)
 		}
 		if settings != 0 {
@@ -296,10 +297,10 @@ func TestOutDeleteManagementAPICleansTheRoute(t *testing.T) {
 		}
 	}
 	var tasks, candidates int
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=?`, out.ID).Scan(&tasks); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=?`, out.ID).Scan(&tasks); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.store.DB.QueryRow(`SELECT count(*) FROM node_candidates WHERE node_id=?`, out.ID).Scan(&candidates); err != nil {
+	if err := app.Store.DB.QueryRow(`SELECT count(*) FROM node_candidates WHERE node_id=?`, out.ID).Scan(&candidates); err != nil {
 		t.Fatal(err)
 	}
 	if tasks != 0 || candidates != 0 {
@@ -332,21 +333,21 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 	line := createPairedWebNode(t, app, "edge", "line-live", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-live", 9443, 2223)
 	now := time.Now()
-	configureLine(t, app.store, line.ID, "line-live", now)
-	configureOut(t, app.store, out.ID, now)
-	enableOutForLine(t, app.store, out.ID, line.ID, now)
-	settleTasks(t, app.store, out.ID)
-	confirmChain(t, app.store, out.ID, now)
+	configureLine(t, app.Store, line.ID, "line-live", now)
+	configureOut(t, app.Store, out.ID, now)
+	enableOutForLine(t, app.Store, out.ID, line.ID, now)
+	settleTasks(t, app.Store, out.ID)
+	confirmChain(t, app.Store, out.ID, now)
 
 	// The Out must be authorizable for the reference to be the reason the delete is
 	// refused: a DNS-named Line never authorizes, and the delete would succeed.
 	settings := testLine(line.ID, "line-live")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	settleTasks(t, app.store, out.ID)
+	settleTasks(t, app.Store, out.ID)
 
 	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	requireBindingError(t, w, 409, store.CodeOutReferenced)
@@ -354,43 +355,43 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 		t.Fatalf("the refusal does not name the subscription: %.300s", w.Body.String())
 	}
 	// The Out is untouched: its transport, its ACK chain and its selection survive.
-	if !outTransportConfigured(t, app.store, out.ID) {
+	if !outTransportConfigured(t, app.Store, out.ID) {
 		t.Fatal("a refused delete removed the transport")
 	}
-	if subscribers, err := app.store.OutAuthorizedSubscribers(out.ID); err != nil || len(subscribers) != 1 {
+	if subscribers, err := app.Store.OutAuthorizedSubscribers(out.ID); err != nil || len(subscribers) != 1 {
 		t.Fatalf("a refused delete dropped the selection: %v err=%v", subscribers, err)
 	}
 
 	// Once the subscription releases it, the delete succeeds and — Ruling R9 — takes
 	// the node and its dial parameters with it. Getting the Out back means enrolling
 	// a node again, which is the point of "delete means delete".
-	clearOutForLine(t, app.store, line.ID, now)
+	clearOutForLine(t, app.Store, line.ID, now)
 	// The release queued an empty-authorization chain; the delete refuses until the host
 	// has confirmed it, so the fixture settles it the way a reachable Out would.
-	settleTasks(t, app.store, out.ID)
-	if err := app.store.RetryOutSync(out.ID, now); err != nil {
+	settleTasks(t, app.Store, out.ID)
+	if err := app.Store.RetryOutSync(out.ID, now); err != nil {
 		t.Fatalf("republish the empty authorization: %v", err)
 	}
-	settleTasks(t, app.store, out.ID)
-	confirmChain(t, app.store, out.ID, now)
+	settleTasks(t, app.Store, out.ID)
+	confirmChain(t, app.Store, out.ID, now)
 	// A confirmed, non-empty membership still has to be emptied before the row can go,
 	// so the delete publishes that empty guard and the host confirms it. Here the Line
 	// carries a literal address, so the membership is a real source.
 	w = b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	if w.Code == 202 {
-		settleTasks(t, app.store, out.ID)
-		if err := app.store.RetryOutSync(out.ID, now); err != nil {
+		settleTasks(t, app.Store, out.ID)
+		if err := app.Store.RetryOutSync(out.ID, now); err != nil {
 			t.Fatalf("republish the cleanup chain: %v", err)
 		}
-		settleTasks(t, app.store, out.ID)
-		confirmChain(t, app.store, out.ID, now)
+		settleTasks(t, app.Store, out.ID)
+		confirmChain(t, app.Store, out.ID, now)
 		w = b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	}
 	requireStatus(t, w, 200)
-	if _, err := app.store.GetNodeAt(out.ID, now); err == nil {
+	if _, err := app.Store.GetNodeAt(out.ID, now); err == nil {
 		t.Fatal("the delete kept the node row")
 	}
-	if outTransportConfigured(t, app.store, out.ID) {
+	if outTransportConfigured(t, app.Store, out.ID) {
 		t.Fatal("the delete kept the dial parameters")
 	}
 }
@@ -408,21 +409,21 @@ func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
 	line := createPairedWebNode(t, app, "edge", "line-del-offline", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-del-offline", 9443, 2223)
 	now := time.Now()
-	configureLine(t, app.store, line.ID, "line-del-offline", now)
-	configureOut(t, app.store, out.ID, now)
+	configureLine(t, app.Store, line.ID, "line-del-offline", now)
+	configureOut(t, app.Store, out.ID, now)
 	// A subscribable address makes the Out authorize a real source, so the empty
 	// authorization it has to publish on delete is a genuine change.
 	settings := testLine(line.ID, "line-del-offline")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
-	if _, err := app.store.SetLine(settings, now); err != nil {
+	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
-	settleTasks(t, app.store, out.ID)
-	confirmChain(t, app.store, out.ID, now)
+	settleTasks(t, app.Store, out.ID)
+	confirmChain(t, app.Store, out.ID, now)
 	// The Out stops reporting after it confirmed the last chain, so the empty
 	// authorization cannot be delivered.
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out.ID); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -430,13 +431,13 @@ func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
 	requireBindingError(t, w, 409, store.CodeOutSyncPending)
 	// Nothing was destroyed: the node, its dial address and its authorization survive,
 	// so the operator can bring the host back and retry.
-	if _, err := app.store.GetNodeAt(out.ID, now); err != nil {
+	if _, err := app.Store.GetNodeAt(out.ID, now); err != nil {
 		t.Fatalf("a refused delete removed the node: %v", err)
 	}
-	if !outTransportConfigured(t, app.store, out.ID) {
+	if !outTransportConfigured(t, app.Store, out.ID) {
 		t.Fatal("a refused delete removed the dial parameters")
 	}
-	if allowed, err := app.store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 {
+	if allowed, err := app.Store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 {
 		t.Fatalf("a refused delete changed the authorization: %v err=%v", allowed, err)
 	}
 }

@@ -121,7 +121,7 @@ func disableOutForLine(t *testing.T, s *store.Store, outID, lineID string, now t
 func (f pairedWebOutSyncApp) subscriberIDForTest(t *testing.T) string {
 	t.Helper()
 	var id string
-	if err := f.app.store.DB.QueryRow(`SELECT id FROM subscribers ORDER BY created_at ASC, id ASC LIMIT 1`).Scan(&id); err != nil {
+	if err := f.app.Store.DB.QueryRow(`SELECT id FROM subscribers ORDER BY created_at ASC, id ASC LIMIT 1`).Scan(&id); err != nil {
 		t.Fatalf("read the fixture subscriber: %v", err)
 	}
 	return id

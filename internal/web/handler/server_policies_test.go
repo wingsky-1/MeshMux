@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
-	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	corepolicy "github.com/wingsky-1/MeshMux/internal/core/policy"
+	policy "github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 )
 
 // policiesLiveApp returns a console whose mesh model can be built from one
@@ -18,9 +19,9 @@ func policiesLiveApp(t *testing.T) (*Server, *browser) {
 	t.Helper()
 	app, b, _, _ := meshEndpointTestApp(t, testHeadscaleOrigin)
 	now := time.Unix(1_700_000_000, 0)
-	app.now = func() time.Time { return now }
+	app.Now = func() time.Time { return now }
 	sub, _ := meshConvergedSubscriber(t, app, now)
-	if _, err := app.store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, sub.ID), now); err != nil {
+	if _, err := app.Store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, sub.ID), now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b
@@ -65,23 +66,23 @@ func policiesOutFixture(t *testing.T) (*Server, *browser, outSyncFixture) {
 	t.Helper()
 	f := newOutSyncFixture(t)
 	app, _ := testApp(t)
-	if err := app.store.Close(); err != nil {
+	if err := app.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	app.store = f.store
-	app.cfg.HeadscaleOrigin = testHeadscaleOrigin
-	app.now = func() time.Time { return f.now }
-	if err := app.store.PrepareBootstrap(f.now); err != nil {
+	app.Store = f.store
+	app.Cfg.HeadscaleOrigin = testHeadscaleOrigin
+	app.Now = func() time.Time { return f.now }
+	if err := app.Store.PrepareBootstrap(f.now); err != nil {
 		t.Fatal(err)
 	}
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
-	subscribers, err := app.store.ListSubscribers()
+	subscribers, err := app.Store.ListSubscribers()
 	if err != nil || len(subscribers) == 0 {
 		t.Fatalf("subscribers = %v err=%v", subscribers, err)
 	}
-	if _, err = app.store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, subscribers[0].ID), f.now); err != nil {
+	if _, err = app.Store.CreateMeshDevice(meshSpec("policy-phone", mesh.PurposeProxyMesh, subscribers[0].ID), f.now); err != nil {
 		t.Fatal(err)
 	}
 	return app, b, f
@@ -108,7 +109,7 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 		t.Fatalf("active state missing: %.400s", w.Body.String())
 	}
 
-	if _, err := app.store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.out); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.out); err != nil {
 		t.Fatal(err)
 	}
 	w = b.req("GET", "/policies", nil, nil)
@@ -129,7 +130,7 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 		{"Priority":200,"Match":{"Domains":["news.example.invalid"]},"Action":"direct"}]}`
 	w := b.post("/policies/validate", url.Values{"rules": {pass}})
 	requireStatus(t, w, http.StatusOK)
-	var ok policyValidationResponse
+	var ok policy.PolicyValidationResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &ok); err != nil || !ok.OK || ok.Rules != 2 || ok.OperationID == "" {
 		t.Fatalf("validate pass body = %+v err=%v: %.300s", ok, err, w.Body.String())
 	}
@@ -139,17 +140,17 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 		{"Priority":200,"Match":{"Domains":["news.example.invalid"]},"Action":"proxy"}]}`
 	w = b.post("/policies/validate", url.Values{"rules": {conflict}})
 	requireStatus(t, w, http.StatusUnprocessableEntity)
-	var refused policyValidationResponse
+	var refused policy.PolicyValidationResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
 		t.Fatalf("validate refusal body: %v %.300s", err, w.Body.String())
 	}
-	if refused.OK || refused.ErrorCode != policy.CodePolicyConflict || !strings.Contains(refused.Detail, "priority 100 shadows") {
+	if refused.OK || refused.ErrorCode != corepolicy.CodePolicyConflict || !strings.Contains(refused.Detail, "priority 100 shadows") {
 		t.Fatalf("validate refusal = %+v", refused)
 	}
 
 	w = b.post("/policies/validate", url.Values{"rules": {"not json"}})
 	requireStatus(t, w, http.StatusBadRequest)
-	if !strings.Contains(w.Body.String(), policy.CodePolicyInvalid) {
+	if !strings.Contains(w.Body.String(), corepolicy.CodePolicyInvalid) {
 		t.Fatalf("malformed rules lost POLICY_INVALID: %.300s", w.Body.String())
 	}
 }

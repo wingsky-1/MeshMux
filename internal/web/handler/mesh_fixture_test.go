@@ -176,7 +176,7 @@ func TestMeshHubFixture(t *testing.T) {
 	if !strings.Contains(reconciled.Body.String(), "已核对 1 台设备") || strings.Contains(reconciled.Body.String(), "无法核对") {
 		t.Fatalf("reconcile did not report a clean single-device check: %.600s", reconciled.Body.String())
 	}
-	stored, err := app.store.GetMeshDevice(device.ID)
+	stored, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestMeshHubFixture(t *testing.T) {
 	// deletion settles locally and never touches another node in the tailnet.
 	revoked := b.post("/mesh/revoke", url.Values{"device_id": {device.ID}})
 	requireStatus(t, revoked, http.StatusOK)
-	settled, err := app.store.GetMeshDevice(device.ID)
+	settled, err := app.Store.GetMeshDevice(device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestMeshHubFixture(t *testing.T) {
 	// Route counts are part of the archived evidence even when this fixture
 	// creates no subnet_router: a zero must be a measured zero, not a missing
 	// field that hides a route the run actually wrote.
-	routes, routeErr := app.store.ListMeshRoutes(device.ID)
+	routes, routeErr := app.Store.ListMeshRoutes(device.ID)
 	if routeErr != nil {
 		t.Fatal(routeErr)
 	}
@@ -279,10 +279,10 @@ func TestMeshHeadscaleWiringIsPinned(t *testing.T) {
 // value NewCLIRunner returns, so the runtime types must be identical.
 func requirePinnedHeadscaleWiring(t *testing.T, app *Server) {
 	t.Helper()
-	if app.mesh == nil {
-		t.Fatal("app.mesh is nil")
+	if app.meshServer.Client() == nil {
+		t.Fatal("app.meshServer.Client() is nil")
 	}
-	if got, want := fmt.Sprintf("%T", app.mesh), fmt.Sprintf("%T", meshnet.NewCLIRunner()); got != want {
+	if got, want := fmt.Sprintf("%T", app.meshServer.Client()), fmt.Sprintf("%T", meshnet.NewCLIRunner()); got != want {
 		t.Fatalf("wired %s, want the fixed-layout %s", got, want)
 	}
 }
@@ -296,7 +296,7 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 		t.Skip("pinned Headscale binary is installed on this host; refusing to exercise a live control plane")
 	}
 	app, _ := testApp(t)
-	app.mesh = meshnet.NewCLIRunner()
+	app.meshServer.SetClient(meshnet.NewCLIRunner())
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -321,7 +321,7 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 	if code := headscaleErrorCodeIn(w.Body.String()); code == "" {
 		t.Fatalf("create lost its stable code: %.400s", w.Body.String())
 	}
-	devices, err := app.store.ListMeshDevices()
+	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
 	}
