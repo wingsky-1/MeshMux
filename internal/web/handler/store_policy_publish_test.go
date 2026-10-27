@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node"
-	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
@@ -72,48 +71,6 @@ func (f publishFixture) activatePolicy(t *testing.T, layer store.PolicyLayer, pa
 }
 
 const publishServerDirect = `{"default":"direct","rules":[]}`
-
-// assertRealOutEgress proves the assembled Line document carries the Hub's
-// Out access path: the "out" tag is a Shadowsocks outbound (Ruling R7: the
-// bare-VLESS double-hop is gone) that dials the selected Out node's
-// configured address/port with the Hub-issued link key, not the fail-closed
-// block stub.
-func assertRealOutEgress(t *testing.T, document []byte) {
-	t.Helper()
-	var decoded struct {
-		Outbounds []struct {
-			Type       string `json:"type"`
-			Tag        string `json:"tag"`
-			Server     string `json:"server,omitempty"`
-			ServerPort int    `json:"server_port,omitempty"`
-			Method     string `json:"method,omitempty"`
-			Password   string `json:"password,omitempty"`
-		} `json:"outbounds"`
-	}
-	if err := json.Unmarshal(document, &decoded); err != nil {
-		t.Fatal("assembled Line document is not valid JSON")
-	}
-	for _, outbound := range decoded.Outbounds {
-		if outbound.Tag != "out" {
-			continue
-		}
-		if outbound.Type != "shadowsocks" {
-			t.Fatalf("assembled out outbound type = %q, want shadowsocks", outbound.Type)
-		}
-		if outbound.Method != "2022-blake3-aes-128-gcm" {
-			t.Fatalf("assembled out method = %q, want the pinned SS method", outbound.Method)
-		}
-		if outbound.Server != "out.example.invalid" || outbound.ServerPort != 8443 {
-			t.Fatalf("assembled out endpoint = %s:%d, want the configured Out node address/port",
-				outbound.Server, outbound.ServerPort)
-		}
-		if outbound.Password == "" {
-			t.Fatal("assembled out outbound carries no Hub-issued link key")
-		}
-		return
-	}
-	t.Fatal("assembled Line document declares no out outbound")
-}
 
 func TestPublishAssemblyServerLayerRecordsOnly(t *testing.T) {
 	f := newPublishFixture(t)
@@ -324,7 +281,3 @@ func TestPublishAssemblyCarriesManifestFields(t *testing.T) {
 		t.Fatalf("route_policy_revisions = %v", got)
 	}
 }
-
-// TestPublishCandidateRouteIsInCandidateDocument proves the route reaches the
-// candidate document the Agent pulls, instead of only reaching the gate.
-func protocolKinds() []string { return protocol.PublicationKinds }

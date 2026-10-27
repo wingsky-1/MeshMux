@@ -428,18 +428,6 @@ func TestHTTPProxyURLUpdateDoesNotRepublishTheBoundLines(t *testing.T) {
 	}
 }
 
-// mustTx opens one transaction for a read helper and rolls it back when the
-// test ends, so a store test can reuse the transaction-scoped readers.
-func mustTx(t *testing.T, s *store.Store) *sql.Tx {
-	t.Helper()
-	tx, err := s.DB.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = tx.Rollback() })
-	return tx
-}
-
 // candidateCount reads how many immutable revisions a node has.
 func candidateCount(t *testing.T, s *store.Store, nodeID string) int {
 	t.Helper()

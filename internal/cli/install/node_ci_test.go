@@ -81,8 +81,10 @@ func TestWriteNodeComponentFixtures(t *testing.T) {
 			t.Fatal(err)
 		}
 		if role == node.RoleOut {
-			if len(acl) == 0 || !bytes.Contains(acl, []byte("tcp dport 8443 drop")) {
-				t.Fatalf("Out ACL is not the actual default-deny renderer:\n%s", acl)
+			if len(acl) == 0 || !bytes.Contains(acl, []byte("table inet meshmux_out")) ||
+				!bytes.Contains(acl, []byte("type filter hook input priority -10; policy accept;")) ||
+				bytes.Contains(acl, []byte(" saddr ")) || bytes.Contains(acl, []byte(" dport ")) {
+				t.Fatalf("Out ACL is not the retired, rule-free table:\n%s", acl)
 			}
 			if err := os.WriteFile(filepath.Join(roleDir, "acl.nft"), acl, 0600); err != nil {
 				t.Fatal(err)

@@ -105,17 +105,6 @@ func enableOutForLine(t *testing.T, s *store.Store, outID, lineID string, now ti
 	selectOutForLine(t, s, outID, lineID, now)
 }
 
-// disableOutForLine is the readable alias of clearOutForLine.
-func disableOutForLine(t *testing.T, s *store.Store, outID, lineID string, now time.Time) {
-	t.Helper()
-	// The Out id is checked so a test typo cannot silently pass on the wrong
-	// fixture, even though the selection write is keyed by the Line.
-	if _, err := s.GetNodeAt(outID, now); err != nil {
-		t.Fatalf("disable an unknown out %s: %v", outID, err)
-	}
-	clearOutForLine(t, s, lineID, now)
-}
-
 // subscriberIDForTest returns the single subscriber a fixture created, so a test can
 // drive the subscriber publication without guessing the id.
 func (f pairedWebOutSyncApp) subscriberIDForTest(t *testing.T) string {
@@ -123,19 +112,6 @@ func (f pairedWebOutSyncApp) subscriberIDForTest(t *testing.T) string {
 	var id string
 	if err := f.app.Store.DB.QueryRow(`SELECT id FROM subscribers ORDER BY created_at ASC, id ASC LIMIT 1`).Scan(&id); err != nil {
 		t.Fatalf("read the fixture subscriber: %v", err)
-	}
-	return id
-}
-
-// nodeSubscriberID returns the active subscriber that serves one Line, so a test can
-// drive the subscriber publication without guessing the id.
-func nodeSubscriberID(t *testing.T, s *store.Store, lineID string) string {
-	t.Helper()
-	var id string
-	if err := s.DB.QueryRow(`SELECT l.subscriber_id FROM subscription_lines l
-	  JOIN subscribers sub ON sub.id=l.subscriber_id AND sub.state='active'
-	 WHERE l.node_id=? ORDER BY l.subscriber_id LIMIT 1`, lineID).Scan(&id); err != nil {
-		t.Fatalf("read the subscriber of line %s: %v", lineID, err)
 	}
 	return id
 }

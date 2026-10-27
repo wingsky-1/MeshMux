@@ -117,8 +117,10 @@ else
   echo 'SKIP nft apply/readback: nft list tables denied (no CAP_NET_ADMIN); dry-run only, not counted as applied evidence'
 fi
 for acl in "${acls[@]}"; do
-  if ! grep -q 'tcp dport 8443 drop' "$acl" || ! grep -q 'udp dport 8443 drop' "$acl"; then
-    echo "ACL missing VLESS drop rules in $acl" >&2
+  if ! grep -q 'table inet meshmux_out' "$acl" ||
+     ! grep -q 'type filter hook input priority -10; policy accept;' "$acl" ||
+     grep -qE ' (saddr|dport) | drop' "$acl"; then
+    echo "ACL is not the retired, rule-free Out table in $acl" >&2
     cat "$acl" >&2
     exit 1
   fi
@@ -131,12 +133,12 @@ for acl in "${acls[@]}"; do
     nft list table inet meshmux_out | tee "$nft_log"
     rules="$(nft -j list table inet meshmux_out | jq '[.nftables[] | select(has("rule"))] | length')"
     echo "nft readback: ${rules} rule(s) in inet meshmux_out (log: $nft_log)"
-    if (( rules < 2 )); then
-      echo "expected at least 2 Out ACL rules after nft -f, got ${rules}" >&2
+    if (( rules != 0 )); then
+      echo "expected zero rules in the retired Out table after nft -f, got ${rules}" >&2
       exit 1
     fi
-    if ! grep -q 'tcp dport 8443 drop' "$nft_log" || ! grep -q 'udp dport 8443 drop' "$nft_log"; then
-      echo 'live nft readback is missing the VLESS tcp/udp drop rules' >&2
+    if ! grep -q 'table inet meshmux_out' "$nft_log"; then
+      echo 'live nft readback is missing the retired Out table' >&2
       cat "$nft_log" >&2
       exit 1
     fi

@@ -85,41 +85,6 @@ func seedInitialChain(t *testing.T, s *store.Store, nodeID string, now time.Time
 	}
 }
 
-// chainRevisionParams reads the params of every task of one revision chain.
-func chainRevisionParams(t *testing.T, s *store.Store, nodeID string, revision int64) []struct {
-	Kind    string
-	Allowed *[]string
-} {
-	t.Helper()
-	rows, err := s.DB.Query(`SELECT kind, params FROM agent_tasks WHERE node_id=? ORDER BY revision ASC`, nodeID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var out []struct {
-		Kind    string
-		Allowed *[]string
-	}
-	for rows.Next() {
-		var kind, raw string
-		if err := rows.Scan(&kind, &raw); err != nil {
-			t.Fatal(err)
-		}
-		var params struct {
-			Revision       int64     `json:"revision"`
-			AllowedSources *[]string `json:"allowed_sources"`
-		}
-		if json.Unmarshal([]byte(raw), &params) != nil || params.Revision != revision {
-			continue
-		}
-		out = append(out, struct {
-			Kind    string
-			Allowed *[]string
-		}{Kind: kind, Allowed: params.AllowedSources})
-	}
-	return out
-}
-
 // prepareSubscriberSyncForLine runs the Line half of the drain for one Line, so
 // the publication path can be exercised without a subscriber action.
 func prepareSubscriberSyncForLine(s *store.Store, lineID string, now time.Time) error {
@@ -184,16 +149,6 @@ func drainOutAllowError(s *store.Store, outID string, now time.Time) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-// lineEgressState is a test helper around the read-only projection.
-func lineEgressState(s *store.Store, lineID string, now time.Time) (string, string, error) {
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return "", "", err
-	}
-	defer tx.Rollback()
-	return store.LineOutEgressStatusTx(tx, lineID, now)
 }
 
 // TestOutChainUnchangedFailureNeedsExplicitRetry keeps the bounded-retry rule:
