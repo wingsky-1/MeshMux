@@ -58,8 +58,8 @@ func TestPublishDoesNotHoldThePasswordSlot(t *testing.T) {
 	initialize(t, b)
 	loginAs(t, b, testPassword)
 	seedPublishLine(t, app)
-	activateViaAPI(t, b, "server",
-		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"direct"}]}`)
+	activateViaAPI(t, b, "client",
+		`{"default":"proxy","rules":[{"priority":100,"match":{"domains":["news.example.invalid"]},"action":"direct"}]}`)
 
 	// The publication runs on its own browser value so neither goroutine writes
 	// the other's cookie/CSRF fields; the copied cookie keeps the same session.
@@ -67,7 +67,7 @@ func TestPublishDoesNotHoldThePasswordSlot(t *testing.T) {
 	publisher := &browser{app: app, cookie: &cookie, csrf: b.csrf}
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- publisher.post("/policies/publish", url.Values{"publish": {`{"layer":"server","operation_id":"op-publish"}`}})
+		done <- publisher.post("/policies/publish", url.Values{"publish": {`{"layer":"client","operation_id":"op-publish"}`}})
 	}()
 	<-verifier.entered
 

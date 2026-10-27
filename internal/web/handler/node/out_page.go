@@ -82,7 +82,8 @@ func proxyAddress(server string, port int) string {
 // This is the HTML twin of the retired JSON unbind endpoint, but it does not silently
 // mutate subscriptions: an Out with a live reference has to be migrated by the operator,
 // and the page names the subscriptions so the action is explicit. Under Ruling R10 the
-// release changes only which egress the client document names — the ACL is node
+// release changes only which egress the client document names — the Out admits
+// by link key and has no source allowlist to rewrite.
 // membership and is untouched — so an Out no subscription selects is already unbound and
 // this call is an idempotent no-op that publishes nothing.
 func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
@@ -98,16 +99,15 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infr
 		s.Event(r, store.CodeOutReferenced)
 		s.Fail(w, r, 409, store.CodeOutReferenced,
 			"该 Out 仍被订阅选中："+strings.Join(usedBy, "、")+"。",
-			"请在订阅向导中取消这些订阅的 Out 选择后重试。Out 的互通由节点成员制决定，订阅变更不会改变互通。")
+			"请在订阅向导中取消这些订阅的 Out 选择后重试。Out 按订阅下发的 link key 接入，订阅选择变化不会改变 Out 本身的凭据。")
 		return
 	}
-	// Nothing selects it. This action does NOT empty the Out's allowlist: under
-	// Ruling R10 the authorization is node membership, so publishing here re-derives
-	// the member set (which is non-empty as long as any Line is enrolled). All this
-	// call can do is republish the current authorization, which is a no-op when the
-	// newest chain already carries it; a chain still in flight defers the republish —
-	// the intent is durable and the next Out event completes it, so the page reports
-	// the pending state instead of an error the operator cannot fix.
+	// Nothing selects it. The source allowlist is retired, so this action cannot
+	// revoke access: the Out still admits any client that presents the link key
+	// its own candidate publishes. All this call can do is reconcile that chain,
+	// which is a no-op when the newest revision already matches; a chain still in
+	// flight defers the republish, so the page reports the pending state instead
+	// of an error the operator cannot fix.
 	//
 	// An external HTTP proxy has no chain, no ACL and no readback at all (Ruling
 	// R11): the drain answers OUT_SYNC_NOT_APPLICABLE, which is an explicit no-op
@@ -126,10 +126,10 @@ func (s *Server) outUnbindPage(w http.ResponseWriter, r *http.Request, sess infr
 		return
 	}
 	s.Event(r, "OUT_UNBOUND")
-	notice := "已解除：还没有订阅使用这个出口。Out 的互通由节点成员制决定；本次已按当前成员集重新下发。"
+	notice := "已解除：还没有订阅使用这个出口。Out 仍按 link key 接受订阅者；本次只重新下发 Out 自身配置。"
 	if retryErr != nil {
 		s.Event(r, store.CodeOutSyncPending)
-		notice = "已解除：还没有订阅使用这个出口。Out 的互通由节点成员制决定；本次下发待同步，Out 上线后自动完成。"
+		notice = "已解除：还没有订阅使用这个出口。Out 仍按 link key 接受订阅者；本次下发待同步，Out 上线后自动完成。"
 	}
 	s.nodesPageFull(w, r, sess, nil, "", "", view.NodesData{Notice: notice})
 }

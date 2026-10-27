@@ -21,8 +21,9 @@ func TestAIRuleset_FactsRejectNonLineIDs(t *testing.T) {
 	if _, err := s.OutEgressFacts("nope", now); err == nil || !hasErrorCode(err, "LINE_ID_INVALID") {
 		t.Fatalf("facts of a malformed id = %v, want LINE_ID_INVALID", err)
 	}
-	// An Out-bound Line whose guard has not been confirmed is reported as unavailable
-	// with the transition code, never as available.
+	// An Out-bound Line whose own chain is not confirmed is still available to
+	// the client document: it names the Out's dial body, and admission is the
+	// link key, not the Out's publication state.
 	enableOutForLine(t, s, out, line, now)
 	if _, err := s.DB.Exec(`UPDATE nodes SET observed_at=0, observed_revision=0, observed_config_sha256='' WHERE id=?`, out); err != nil {
 		t.Fatal(err)
@@ -31,7 +32,19 @@ func TestAIRuleset_FactsRejectNonLineIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !facts.Configured || facts.Available || facts.Code == "" || facts.OutID != out {
-		t.Fatalf("converging facts = %+v, want configured and not available with a code", facts)
+	if !facts.Configured || !facts.Available || facts.Code != "" || facts.OutID != out {
+		t.Fatalf("converging facts = %+v, want configured and available by link key", facts)
+	}
+	// An Out without a transport has no dial body, so the client document cannot
+	// name it yet; that is the pending case.
+	if _, err := s.DB.Exec(`DELETE FROM out_settings WHERE node_id=?`, out); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.OutEgressFacts(line, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pending.Configured || pending.Available || pending.Code != "OUT_SYNC_PENDING" {
+		t.Fatalf("transport-less facts = %+v, want configured and pending", pending)
 	}
 }

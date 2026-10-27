@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -145,40 +144,21 @@ func TestOutTransportMigrationVoidsUUIDAndReissuesKey(t *testing.T) {
 		t.Fatal("migration carried the void UUID over as the key")
 	}
 
-	// End to end: the migrated key reaches the published Line candidate and
-	// renders the SS out body (migration -> store -> kernel bytes).
+	// End to end: the migrated key reaches the Out's published candidate, which
+	// is the document the Agent renders as the SS guard listener.
+	markLineOnline(t, s, out, now)
 	configureOut(t, s, out, now)
-	enableOutForLine(t, s, out, line, now)
-	target, err := s.PublishTarget(line,
-		json.RawMessage(`{"rules":[{"domain":["chat.example.invalid"],"outbound":"out"}],"final":"direct"}`),
-		true, "healthy", "")
+	latest, err := s.LatestCandidate(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rendered struct {
-		Outbounds []struct {
-			Type       string `json:"type"`
-			Tag        string `json:"tag"`
-			Server     string `json:"server,omitempty"`
-			ServerPort int    `json:"server_port,omitempty"`
-			Method     string `json:"method,omitempty"`
-			Password   string `json:"password,omitempty"`
-		} `json:"outbounds"`
+	if latest.Document.Role != nodedomain.RoleOut || latest.Document.Out == nil {
+		t.Fatalf("out candidate carries no dial body: %+v", latest.Document)
 	}
-	if err := json.Unmarshal(target.Config, &rendered); err != nil {
-		t.Fatal(err)
+	if latest.Document.Out.Key != key || latest.Document.Out.Server != "out.example.invalid" ||
+		latest.Document.Out.Port != 8443 {
+		t.Fatalf("migrated out candidate = %+v, want the reissued key and stored dial address", latest.Document.Out)
 	}
-	for _, outbound := range rendered.Outbounds {
-		if outbound.Tag != "out" {
-			continue
-		}
-		if outbound.Type != "shadowsocks" || outbound.Method != "2022-blake3-aes-128-gcm" ||
-			outbound.Server != "out.example.invalid" || outbound.ServerPort != 8443 || outbound.Password != key {
-			t.Fatalf("migrated out body = %+v, want the SS egress with the reissued key", outbound)
-		}
-		return
-	}
-	t.Fatal("published Line candidate declares no out outbound")
 }
 
 // TestOutPoolListsTransportAndSelection is the pool datasource: every enrolled Out

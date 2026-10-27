@@ -386,7 +386,7 @@ templ Status(checked string) {
 
 templ ErrorPage(code string, message string, next string, op string) {
 	@Document("请求未完成") {
-		<main class="error-page">
+		<main class="error-page" data-code={ code } data-operation-id={ op }>
 			@Brand()
 			<div class="panel"><span class="badge failure">请求未完成</span><h1>{ message }</h1><p>{ next }</p><a href="/">返回控制台 →</a></div>
 		</main>

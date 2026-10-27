@@ -30,9 +30,10 @@ const (
 	RuntimeStatePath    = AgentDataDir + "/state.json"
 	ActiveCandidatePath = AgentDataDir + "/active-candidate.json"
 	ActiveConfigPath    = ActiveConfigDir + "/config.json"
-	// ACLPath is the managed Out VLESS guard script: the exact table
-	// replacement including the Hub-authorized source accept rules. It is
-	// applied as one nft -f transaction and read back through nft -j.
+	// ACLPath is the retired Out guard script: the exact, rule-free table
+	// replacement. It is still applied as one nft -f transaction so a host
+	// upgraded from an allowlist release flushes its stale rules; the readback
+	// only asserts that the table exists and carries no rule.
 	ACLPath = AgentDataDir + "/out.nft"
 
 	AgentUnit   = "meshmux-agent.service"
@@ -354,12 +355,12 @@ func (c Candidate) Equal(other Candidate) bool {
 // Readback contains only local evidence. Its fields deliberately cannot claim
 // public reachability, a real protocol handshake or client usability.
 //
-// OutDefaultDeny is the observed_out_default_deny the Hub persists for an Out
-// node. It means the live inet meshmux_out table was read back and proven to
-// be the exact VLESS guard: the MeshMux table, the input chain at priority
-// -10, both VLESS drops, and an accept set exactly equal to the applied
-// source allowlist. An empty allowlist is still a passing guard — that is the
-// fail-closed data plane. It never means "policy accept was seen".
+// OutDefaultDeny is the observed_out_default_deny field the Hub persists for
+// an Out node. The name is historical: with the source allowlist retired it
+// means the live inet meshmux_out table was read back and proven to be the
+// neutral MeshMux table (the input chain at priority -10 with no rule), which
+// is what flushes a legacy allowlist. It never claims a source was filtered
+// or that public reachability was proven.
 type Readback struct {
 	Architecture   string `json:"architecture"`
 	AgentVersion   string `json:"agent_version"`

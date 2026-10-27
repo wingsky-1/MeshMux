@@ -91,14 +91,14 @@ func activateViaAPI(t *testing.T, b *browser, layer, payload string) {
 		fmt.Sprintf(`{"id":%q,"revision":1,"operation_id":"op-activate"}`, created.ID)), http.StatusOK)
 }
 
-func TestPublishEndpointStoresCandidate(t *testing.T) {
+func TestPublishEndpointGatesServerPolicy(t *testing.T) {
 	b, verifier := publishApp(t)
-	line := seedPublishLine(t, b.app)
+	seedPublishLine(t, b.app)
 	activateViaAPI(t, b, "server",
 		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"direct"}]}`)
 
 	receipt := publishReceipt(t, postPublish(t, b, `{"layer":"server","operation_id":"op-publish"}`), http.StatusOK)
-	if !receipt.OK || receipt.Status != "queued" {
+	if !receipt.OK || receipt.Status != "gated" {
 		t.Fatalf("receipt = %+v", receipt)
 	}
 	if receipt.PolicySchema != 8 {
@@ -110,37 +110,22 @@ func TestPublishEndpointStoresCandidate(t *testing.T) {
 	if receipt.EgressState != policy.AIEgressLine {
 		t.Fatalf("egress_state = %q, want line", receipt.EgressState)
 	}
-	if receipt.Candidate == nil || receipt.Candidate.Revision < 1 || receipt.Candidate.Lines != 1 ||
-		len(receipt.Candidate.Config) != 64 {
-		t.Fatalf("candidate reference = %+v", receipt.Candidate)
+	// The server layer is a validated record only: no candidate and no Line
+	// evidence may be invented for it.
+	if receipt.Candidate != nil || len(receipt.Lines) != 0 {
+		t.Fatalf("server-only publication invented a candidate: %+v", receipt)
 	}
-	if len(receipt.Checks) != 1 || receipt.Checks[0].Kernel != "sing-box" || receipt.Checks[0].Status != "passed" {
-		t.Fatalf("check evidence = %+v", receipt.Checks)
+	if len(receipt.Checks) != 0 {
+		t.Fatalf("server-only publication ran kernel gates: %+v", receipt.Checks)
 	}
-	if len(receipt.Lines) != 1 || receipt.Lines[0].LineID != line || receipt.Lines[0].Status != "queued" {
-		t.Fatalf("line evidence = %+v", receipt.Lines)
-	}
-	// The check evidence is a summary: the document itself never appears.
-	body := receipt.Checks[0].Detail
-	if strings.Contains(body, "ai.example.invalid") || strings.Contains(body, "outbounds") {
-		t.Fatalf("check evidence leaked the document: %q", body)
-	}
-	if singBox, _ := verifier.counts(); singBox != 1 {
-		t.Fatalf("sing-box gate calls = %d, want 1", singBox)
-	}
-	// Exactly one new candidate revision carrying the route is stored.
-	stored, err := b.app.Store.LatestCandidate(line)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Document.Schema != node.CandidateSchemaV3 || !strings.Contains(string(stored.Document.Route), "ai.example.invalid") {
-		t.Fatalf("stored candidate = %s route=%s", stored.Document.Schema, stored.Document.Route)
+	if singBox, mihomo := verifier.counts(); singBox != 0 || mihomo != 0 {
+		t.Fatalf("server-only gate calls = %d/%d, want 0/0", singBox, mihomo)
 	}
 }
 
 func TestPublishEndpointRefusals(t *testing.T) {
 	b, _ := publishApp(t)
-	line := seedPublishLine(t, b.app)
+	seedPublishLine(t, b.app)
 
 	// No active policy for the requested layer.
 	refusal := publishReceipt(t, postPublish(t, b, `{"layer":"server","operation_id":"op-publish"}`), http.StatusNotFound)
@@ -158,23 +143,6 @@ func TestPublishEndpointRefusals(t *testing.T) {
 		t.Fatalf("malformed body = %+v", got)
 	}
 
-	activateViaAPI(t, b, "server",
-		`{"default":"direct","rules":[{"priority":100,"match":{"domains":["ai.example.invalid"]},"action":"out"}]}`)
-	out := pairedStoreNode(t, b.app.Store, "out", b.app.Now())
-	markLineOnline(t, b.app.Store, out, b.app.Now())
-	configureOut(t, b.app.Store, out, b.app.Now())
-	enableOutForLine(t, b.app.Store, out, line, b.app.Now())
-	if _, err := b.app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out); err != nil {
-		t.Fatal(err)
-	}
-	// An unhealthy Out fails closed with 409 and stores nothing.
-	refusal = publishReceipt(t, postPublish(t, b, `{"layer":"server","operation_id":"op-publish"}`), http.StatusConflict)
-	if refusal.ErrorCode != policy.CodeOutOfflineFailClosed {
-		t.Fatalf("unhealthy out = %+v", refusal)
-	}
-	if refusal.NextAction == "" {
-		t.Fatal("a refusal has no next action")
-	}
 }
 
 func TestPublishEndpointClientOnlyIsGatedNotStored(t *testing.T) {
@@ -268,13 +236,14 @@ func TestPublishEndpointRefusesMissingKernel(t *testing.T) {
 	if !receipt.OK {
 		t.Fatalf("publication with both kernels = %+v", receipt)
 	}
-	// The Line candidate is gated first, then the two client documents. The
-	// order is stable, so an operator reads the same evidence every time.
+	// Only the two client documents are gated: the server layer produces no
+	// routing artifact. The order is stable, so an operator reads the same
+	// evidence every time.
 	var kinds []string
 	for _, check := range receipt.Checks {
 		kinds = append(kinds, check.Stage+"/"+check.Kernel)
 	}
-	want := "line-candidate/sing-box,client-document/sing-box,client-document/mihomo"
+	want := "client-document/sing-box,client-document/mihomo"
 	if strings.Join(kinds, ",") != want {
 		t.Fatalf("gate order = %v, want %s", kinds, want)
 	}

@@ -58,6 +58,9 @@ type OutEgressFacts struct {
 // consume, so a projection can never disagree with the client artifact about
 // which egress the selection names.
 func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
+	if !validNodeID(lineID) {
+		return OutEgressFacts{}, common.ErrLineIDInvalid()
+	}
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {

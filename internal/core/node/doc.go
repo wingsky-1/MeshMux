@@ -10,10 +10,12 @@
 // digest, token and release-version grammars).
 //
 // The pure half is deliberately small and deterministic:
-//   - CompileCandidate / CompileCandidateWithRoute and CompileACL turn a
-//     validated candidate into exact bytes;
-//   - Candidate.Validate, CandidateDocument.Validate, ValidateFor, ParseACLAllowed
-//     and the ACL source predicates are shape checks with stable refusal codes;
+//   - CompileCandidate / CompileCandidateWithRoute turn a validated candidate
+//     into exact bytes; CompileACL only renders the retired, rule-free Out
+//     table so an upgraded host flushes a legacy source allowlist;
+//   - Candidate.Validate, CandidateDocument.Validate and ValidateFor are shape
+//     checks with stable refusal codes. The ACL source predicates are retired
+//     but kept for the installer's upgrade path;
 //   - ParseHTTPProxyURL, ValidateOutLinkKey and NewOutLinkKey describe the Out
 //     egress.
 //

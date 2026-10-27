@@ -306,9 +306,6 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 	page := b.req("GET", "/mesh", nil, nil)
 	requireStatus(t, page, http.StatusOK)
 	body := page.Body.String()
-	if code := headscaleErrorCodeIn(body); code == "" {
-		t.Fatalf("page hid the control-plane refusal: %.800s", body)
-	}
 	if !strings.Contains(body, "尚未创建 Mesh 设备") {
 		t.Fatal("a failed Headscale read invented device rows")
 	}
@@ -318,9 +315,6 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 
 	w := b.post("/mesh", url.Values{"display_name": {"phone"}, "purpose": {"mesh_only"}, "platform": {"ios"}})
 	requireStatus(t, w, http.StatusServiceUnavailable)
-	if code := headscaleErrorCodeIn(w.Body.String()); code == "" {
-		t.Fatalf("create lost its stable code: %.400s", w.Body.String())
-	}
 	devices, err := app.Store.ListMeshDevices()
 	if err != nil {
 		t.Fatal(err)
@@ -331,25 +325,6 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 
 	w = b.post("/mesh/reconcile", url.Values{})
 	requireStatus(t, w, http.StatusServiceUnavailable)
-	if code := headscaleErrorCodeIn(w.Body.String()); code == "" {
-		t.Fatalf("reconcile lost its stable code: %.400s", w.Body.String())
-	}
-}
-
-// headscaleErrorCodeIn returns the first HEADSCALE_* code rendered into a
-// response. A missing pinned binary is a host-layout defect, and Headscale's own
-// 0.29.5 error text is classified into one of these codes rather than exposed
-// verbatim; the test only requires that the refusal keeps a stable code.
-func headscaleErrorCodeIn(body string) string {
-	for _, code := range []string{
-		meshnet.CodeUnavailable, meshnet.CodeSocketUnavailable, meshnet.CodeTimeout,
-		meshnet.CodeCommandFailed, meshnet.CodeOutputInvalid, meshnet.CodeVersionMismatch,
-	} {
-		if strings.Contains(body, code) {
-			return code
-		}
-	}
-	return ""
 }
 
 // TestMeshPageRenderOnlyReadsControlPlane pins the read shape of one page

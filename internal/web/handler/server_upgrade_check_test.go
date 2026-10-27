@@ -346,8 +346,9 @@ func TestUpgradeMixedVersionGate(t *testing.T) {
 		t.Fatal("a mixed-version node was hidden instead of labelled")
 	}
 
-	// End to end: the approval resolves a v3 route from the live policy, and an
-	// older node is refused instead of being force-published.
+	// End to end: the approval no longer resolves a server route, so an older
+	// Agent version is still approved (the upgrade replaces the binary, and no
+	// routing artifact is published with it).
 	b, app, nodeID, _ := upgradeApproveFixture(t, "0.9.0")
 	manifest, err := upgrade.ForArch(runtime.GOARCH)
 	if err != nil {
@@ -355,15 +356,12 @@ func TestUpgradeMixedVersionGate(t *testing.T) {
 	}
 	seedUpgradeRouteIntent(t, app, nodeID)
 	before := latestRevision(t, app, nodeID)
-	refusal := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusConflict)
-	if refusal.OK || refusal.ErrorCode != store.CodeUpgradeAgentIncompatible {
-		t.Fatalf("v3 approval for an older node = %+v, want UPGRADE_AGENT_INCOMPATIBLE", refusal)
+	approved := decodeApprove(t, approveUpgrade(t, b, nodeID, manifest.Version), http.StatusOK)
+	if !approved.OK || approved.Revision <= before {
+		t.Fatalf("v3 approval for an older node = %+v, want a queued upgrade above %d", approved, before)
 	}
-	if got := latestRevision(t, app, nodeID); got != before {
-		t.Fatalf("refused v3 approval advanced the revision: %d -> %d", before, got)
-	}
-	if got := countStamped(t, app, nodeID); got != 0 {
-		t.Fatalf("refused v3 approval wrote %d upgrade records", got)
+	if got := countStamped(t, app, nodeID); got != 1 {
+		t.Fatalf("approval wrote %d upgrade records, want 1", got)
 	}
 }
 

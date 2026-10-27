@@ -109,12 +109,12 @@ func TestPoliciesOutTriStateSnapshot(t *testing.T) {
 		t.Fatalf("active state missing: %.400s", w.Body.String())
 	}
 
-	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, f.out); err != nil {
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='failed', error_code='OUT_SYNC_FAILED' WHERE node_id=?`, f.out); err != nil {
 		t.Fatal(err)
 	}
 	w = b.req("GET", "/policies", nil, nil)
 	requireStatus(t, w, http.StatusOK)
-	if !strings.Contains(w.Body.String(), "Out 故障 · fail-closed") {
+	if !strings.Contains(w.Body.String(), "Out 故障") || !strings.Contains(w.Body.String(), "健康检查未通过") {
 		t.Fatalf("degraded state missing: %.400s", w.Body.String())
 	}
 }

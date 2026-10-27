@@ -169,9 +169,15 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	f := newPairedWebOutSyncApp(t)
 	app, now := f.app, time.Now()
 
-	// The Out's authorization is node membership (Ruling R10), so the heartbeat
-	// reconciles the pair rather than a subscription edit: it republishes the Out when
-	// the membership list is not yet the published one.
+	// Change the link key so the next Out event has a real revision to publish;
+	// an unchanged chain is deliberately not repeated.
+	key, err := node.NewOutLinkKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Store.DB.Exec(`UPDATE out_settings SET link_key=? WHERE node_id=?`, key, f.outID); err != nil {
+		t.Fatal(err)
+	}
 	w := heartbeatJSON(t, app, f.outToken)
 	requireStatus(t, w, 200)
 	settled := candidateCount(t, app.Store, f.outID)
@@ -179,7 +185,9 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 		t.Fatalf("out has no published chain: %d", settled)
 	}
 
-	// Report the Out chain healthy: the result event must release the Line.
+	// Report the Out chain healthy: the result event confirms the Out's own
+	// revision and must not republish a Line.
+	lineBefore := candidateCount(t, app.Store, f.lineID)
 	latest, err := app.Store.LatestCandidate(f.outID)
 	if err != nil {
 		t.Fatal(err)
@@ -200,10 +208,10 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 		w = reportJSON(t, app, f.outToken, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(detail)})
 		requireStatus(t, w, 200)
 	}
-	// The Out is healthy and its own confirmation released the Line: the Line
-	// chain is now queued by the result event, not by a manual action.
-	if got := candidateCount(t, app.Store, f.lineID); got != 2 {
-		t.Fatalf("line revisions after out confirmation = %d, want 2", got)
+	// The Out is healthy and the Line is untouched: the two chains are
+	// independent after the client-chain rebuild.
+	if got := candidateCount(t, app.Store, f.lineID); got != lineBefore {
+		t.Fatalf("out confirmation republished the line: %d -> %d", lineBefore, got)
 	}
 	state, code, err := outSyncStatusForTest(t, app.Store, f.outID, now)
 	if err != nil {
@@ -213,29 +221,24 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 		t.Fatalf("out status after confirmation = %s/%s, want healthy", state, code)
 	}
 
-	// The Line reports its own chain healthy, which is the second half of the
-	// dual readback.
+	// The Line's own chain is published and confirmed independently of the
+	// Out event; its readback is the second half of the pair.
+	if err := prepareSubscriberSyncForLine(app.Store, f.lineID, now); err != nil {
+		t.Fatal(err)
+	}
+	settleTasks(t, app.Store, f.lineID)
+	confirmChain(t, app.Store, f.lineID, now)
 	lineCandidate, err := app.Store.LatestCandidate(f.lineID)
 	if err != nil {
 		t.Fatal(err)
-	}
-	lineEvidence := evidence
-	lineEvidence.ActiveRevision = lineCandidate.Revision
-	lineEvidence.ConfigSHA256 = lineCandidate.ConfigSHA256
-	lineEvidence.OutDefaultDeny = false
-	lineDetail, _ := json.Marshal(lineEvidence)
-	for _, task := range fixedTasksForRevision(t, app, f.lineID, lineCandidate.Revision) {
-		w = reportJSON(t, app, f.lineToken, protocol.TaskResult{OperationID: task.OperationID, Status: "healthy", Detail: string(lineDetail)})
-		requireStatus(t, w, 200)
 	}
 	readback, err := app.Store.NodeCoordinationReadback(f.lineID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No subscription selects the Out, so the Line itself egresses directly
-	// (Ruling R10: the ACL is membership, the route is the selection). The dual
-	// readback must still prove the Line half, and must not claim an Out path it does
-	// not have.
+	// No subscription selects the Out, so the Line itself egresses directly.
+	// The dual readback must still prove the Line half, and must not claim an
+	// Out path it does not have.
 	if readback.Allowlist != store.LineEgressDirect || readback.Inbound != store.SubscriberSyncHealthy ||
 		readback.FinalEgress != store.SubscriberSyncHealthy || !readback.Reality ||
 		readback.ConfirmedRevision != lineCandidate.Revision {
@@ -252,18 +255,19 @@ func TestOutSyncHeartbeatAndResultReadback(t *testing.T) {
 	_ = subscription.StateActive
 }
 
-// TestOutSyncRetireThroughRevokeEndpoint proves the retire path is reachable
-// through the real revocation endpoint and reclaims the allowlist.
-func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
+// TestOutSyncRevokeLeavesTheOutChainAlone pins the decoupling: revoking a Line
+// identity is not an Out authorization change any more. The Out admits by link
+// key, so its own chain must not gain a revision from the revocation.
+func TestOutSyncRevokeLeavesTheOutChainAlone(t *testing.T) {
 	f := newPairedWebOutSyncApp(t)
 	app, now := f.app, time.Now()
 
 	enableOutForLine(t, app.Store, f.outID, f.lineID, now)
 	settleTasks(t, app.Store, f.outID)
 	confirmChain(t, app.Store, f.outID, now)
-	allowed, err := app.Store.DeriveOutAllowlist(f.outID)
-	if err != nil || len(allowed) != 1 {
-		t.Fatalf("derivation before revoke = %v err=%v", allowed, err)
+	before, err := app.Store.LatestCandidate(f.outID)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	b := &browser{app: app}
@@ -272,20 +276,13 @@ func TestOutSyncRetireThroughRevokeEndpoint(t *testing.T) {
 	w := b.post("/nodes/"+f.lineID+"/revoke", nil)
 	requireStatus(t, w, 200)
 
-	allowed, err = app.Store.DeriveOutAllowlist(f.outID)
-	if err != nil || len(allowed) != 0 {
-		t.Fatalf("derivation after revoke = %v err=%v, want empty", allowed, err)
-	}
-	latest, err := app.Store.LatestCandidate(f.outID)
+	after, err := app.Store.LatestCandidate(f.outID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoked, present, err := outReadbackAllowlist(app.Store, f.outID, latest.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !present || len(revoked) != 0 {
-		t.Fatalf("reclaimed chain = %v present=%v, want an explicit empty list", revoked, present)
+	if after.Revision != before.Revision || after.ConfigSHA256 != before.ConfigSHA256 {
+		t.Fatalf("revoking a Line republished the out chain: %d/%s -> %d/%s",
+			before.Revision, before.ConfigSHA256, after.Revision, after.ConfigSHA256)
 	}
 }
 

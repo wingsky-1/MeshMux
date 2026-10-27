@@ -146,82 +146,62 @@ func TestOutPreviewDerivesFromTheSubscription(t *testing.T) {
 	line := createPairedWebNode(t, app, "edge", "line-preview", 8443, 2222)
 	out := createPairedWebNode(t, app, "out", "out-preview", 9443, 2223)
 	now := time.Now()
-	configureLine(t, app.Store, line.ID, "line-preview", now)
-	configureOut(t, app.Store, out.ID, now)
-	subscriber, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Membership is the authorization (Ruling R10): the Out accepts the enrolled Line
-	// whether or not any subscription selects it. No subscription exists yet, so the
-	// preview reports a pool of one accepted Line and no affected policy.
-	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
-	requireStatus(t, w, 200)
-	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
-		t.Fatal(err)
-	}
-	if preview.Mode != store.OutPoolBound || len(preview.LineIDs) != 1 || preview.LineIDs[0] != line.ID {
-		t.Fatalf("membership preview wrong: %+v", preview)
-	}
-	// The default fixture Line is addressed by a DNS name, which the Hub refuses to
-	// authorize, so the projection reports the same refusal the publication would.
-	if preview.EgressCode != store.CodeLineEgressUnverified || len(preview.Sources) != 0 {
-		t.Fatalf("DNS-named line preview = %+v, want LINE_EGRESS_UNVERIFIED and no source", preview)
-	}
-	if len(preview.Subscribers) != 0 {
-		t.Fatalf("preview reports subscribers nobody created: %v", preview.Subscribers)
-	}
-
-	// A single-Line projection narrows the answer to that Line and reports its real
-	// state. The derivation still refuses the DNS-named address, so this is a refusal
-	// rather than a fabricated pending transition.
-	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
-	requireStatus(t, w, 200)
-	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
-		t.Fatal(err)
-	}
-	if preview.Mode != store.OutPoolLineDirect || len(preview.LineIDs) != 1 {
-		t.Fatalf("single-line preview wrong: %+v", preview)
-	}
-	if preview.EgressCode != store.CodeLineEgressUnverified {
-		t.Fatalf("single-line preview code = %q, want LINE_EGRESS_UNVERIFIED", preview.EgressCode)
-	}
-
-	// A subscribable Line address makes the derived set non-empty, and the affected
-	// counts then describe the credentials membership covers.
 	settings := testLine(line.ID, "line-preview")
 	settings.Server = "203.0.113.7"
 	settings.ServerName = "line.example.invalid"
 	if _, err := app.Store.SetLine(settings, now); err != nil {
 		t.Fatal(err)
 	}
+	configureOut(t, app.Store, out.ID, now)
+	subscriber, _, err := app.Store.CreateSubscriber("alice", []string{line.ID}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The selection is the whole authorization now: with nobody selecting it,
+	// the Out is a pool entry and no Line is routed through it.
 	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
 	requireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if preview.Mode != store.OutPoolBound || preview.AffectedLines != 1 ||
-		preview.AffectedPolicies != 1 || preview.AffectedSubscribers != 1 {
-		t.Fatalf("membership preview wrong: %+v", preview)
+	if preview.Mode != store.OutPoolLineDirect || len(preview.LineIDs) != 0 ||
+		len(preview.Subscribers) != 0 || len(preview.Sources) != 0 {
+		t.Fatalf("unselected preview wrong: %+v", preview)
 	}
-	if len(preview.Sources) != 1 || preview.Sources[0] != "203.0.113.7/32" {
-		t.Fatalf("membership sources = %v, want the line address", preview.Sources)
-	}
-	// The subscription does not authorize anything; it appears only as a used-by name
-	// for the delete guard, while the source set stays the membership set.
+
+	// Selecting it names the Line and the subscription; Sources is retired and
+	// stays empty, so no address list is presented as an authorization.
 	enableOutForLine(t, app.Store, out.ID, line.ID, now)
 	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}})
 	requireStatus(t, w, 200)
 	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Sources) != 1 || preview.Sources[0] != "203.0.113.7/32" {
-		t.Fatalf("selecting a subscriber changed the authorization: %v", preview.Sources)
+	if preview.Mode != store.OutPoolBound || len(preview.LineIDs) != 1 || preview.LineIDs[0] != line.ID {
+		t.Fatalf("selected preview wrong: %+v", preview)
+	}
+	if len(preview.Sources) != 0 {
+		t.Fatalf("preview still names a source set: %v", preview.Sources)
 	}
 	if len(preview.Subscribers) != 1 || preview.Subscribers[0] != "alice" {
-		t.Fatalf("selected preview subscribers = %v, want the subscription name", preview.Subscribers)
+		t.Fatalf("selected preview subscribers = %v, want alice", preview.Subscribers)
 	}
+	if preview.AffectedLines != 1 || preview.AffectedPolicies != 1 || preview.AffectedSubscribers != 1 {
+		t.Fatalf("selected preview counts = %+v, want 1/1/1", preview)
+	}
+
+	// A Line-scoped proposal is always a pending preview until a selection
+	// exists; the response never claims an established path.
+	w = b.post("/nodes/out/preview", url.Values{"out_id": {out.ID}, "line_id": {line.ID}})
+	requireStatus(t, w, 200)
+	if err = json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Mode != store.OutPoolLineDirect || preview.EgressState != store.LineEgressPendingPreview {
+		t.Fatalf("line-scoped preview = %+v, want a pending proposal", preview)
+	}
+
 	if strings.Contains(w.Body.String(), subscriber.ID) {
 		t.Fatal("preview leaked a subscriber identity")
 	}
@@ -396,11 +376,10 @@ func TestOutDeleteRefusesALiveSubscriptionReference(t *testing.T) {
 	}
 }
 
-// TestOutDeleteRefusesWhenTheHostCannotDropItsGuard keeps the fail-closed half of
-// Ruling R9: the delete publishes the empty guard first, so an Out that cannot
-// receive it (offline) is REFUSED rather than deleted. Deleting anyway would leave an
-// unreachable host accepting the old sources with no node row left to retry from.
-func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
+// TestOutDeleteRefusesAnUnfinishedChain keeps the fail-closed half of Ruling
+// R9: a node whose chain has not settled is refused instead of deleted,
+// because the result of that chain could never be recorded.
+func TestOutDeleteRefusesAnUnfinishedChain(t *testing.T) {
 	app, _ := testApp(t)
 	b := &browser{app: app}
 	initialize(t, b)
@@ -411,33 +390,24 @@ func TestOutDeleteRefusesWhenTheHostCannotDropItsGuard(t *testing.T) {
 	now := time.Now()
 	configureLine(t, app.Store, line.ID, "line-del-offline", now)
 	configureOut(t, app.Store, out.ID, now)
-	// A subscribable address makes the Out authorize a real source, so the empty
-	// authorization it has to publish on delete is a genuine change.
-	settings := testLine(line.ID, "line-del-offline")
-	settings.Server = "203.0.113.7"
-	settings.ServerName = "line.example.invalid"
-	if _, err := app.Store.SetLine(settings, now); err != nil {
-		t.Fatal(err)
-	}
 	settleTasks(t, app.Store, out.ID)
 	confirmChain(t, app.Store, out.ID, now)
-	// The Out stops reporting after it confirmed the last chain, so the empty
-	// authorization cannot be delivered.
-	if _, err := app.Store.DB.Exec(`UPDATE nodes SET last_heartbeat=0 WHERE id=?`, out.ID); err != nil {
+	// Re-open the chain: the host has not finished applying it.
+	if _, err := app.Store.DB.Exec(`UPDATE agent_tasks SET status='pending' WHERE node_id=?`, out.ID); err != nil {
 		t.Fatal(err)
 	}
 
 	w := b.post("/nodes/out/delete", url.Values{"out_id": {out.ID}})
 	requireBindingError(t, w, 409, store.CodeOutSyncPending)
-	// Nothing was destroyed: the node, its dial address and its authorization survive,
-	// so the operator can bring the host back and retry.
+	// Nothing was destroyed: the node, its dial address and its published chain
+	// survive, so the operator can let the chain settle and retry.
 	if _, err := app.Store.GetNodeAt(out.ID, now); err != nil {
 		t.Fatalf("a refused delete removed the node: %v", err)
 	}
 	if !outTransportConfigured(t, app.Store, out.ID) {
 		t.Fatal("a refused delete removed the dial parameters")
 	}
-	if allowed, err := app.Store.DeriveOutAllowlist(out.ID); err != nil || len(allowed) != 1 {
-		t.Fatalf("a refused delete changed the authorization: %v err=%v", allowed, err)
+	if latest, err := app.Store.LatestCandidate(out.ID); err != nil || latest.Revision < 1 {
+		t.Fatalf("a refused delete removed the out chain: %+v err=%v", latest, err)
 	}
 }

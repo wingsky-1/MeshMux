@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/netip"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
@@ -50,9 +48,9 @@ type singBoxOutbound struct {
 }
 
 // singBoxSSInbound is the Out guard listener: Shadowsocks with the pinned
-// 2022 method and the Hub-issued link key as password. The nft whitelist
-// around it is unchanged: it still gates the VLESS port value plus the
-// authorized source IPs, whatever inbound type listens there.
+// 2022 method and the Hub-issued link key as password. The client-side chain
+// model makes that key the only admission: the nft source allowlist around the
+// listener is retired and the table is rendered rule-free.
 type singBoxSSInbound struct {
 	Type       string `json:"type"`
 	Tag        string `json:"tag"`
@@ -434,48 +432,21 @@ func renderUsers(users []VLESSUser) []singBoxVLESSUser {
 	return rendered
 }
 
-// maxACLSources bounds one rendered allowlist. The Hub derives at most one
-// source per authorized Line, so this stays far above any real deployment and
-// keeps the ACL file small enough to stay a single bounded nft -f script.
-const maxACLSources = 256
-
-// aclSource is one validated allowlist entry: the nft address family keyword
-// plus the canonical masked prefix. The inet table carries both families, so
-// one rule per source covers IPv4 and IPv6 without a second table.
-type aclSource struct {
-	family string
-	prefix netip.Prefix
-}
-
-// CompileACL renders an exact table replacement for Out nodes. Edge nodes do
-// not create the Out table. The caller must verify that inet meshmux_out is
-// MeshMux-owned and feed the returned bytes to one nft -f transaction.
+// CompileACL renders the exact replacement script for the retired Out guard.
 //
-// The table is a narrow VLESS guard, not a host firewall: the base chain
-// keeps policy accept so SSH, established return traffic and loopback stay
-// with the host/filter rules, while the two VLESS drop rules deny the data
-// plane by default. An empty allowlist therefore denies every unauthorized
-// source. Each authorized source gets one accept rule ahead of the drops, so
-// rule order carries the authorization decision: only the listed sources
-// reach the VLESS port, everything else hits the drops.
+// The source allowlist is retired: an Out admits any client that presents the
+// link key its own candidate publishes, so no nft rule may filter a source or
+// the VLESS port any more. The table is kept as an empty, policy-accept shell
+// so a host upgraded from an older release flushes its stale accept/drop rules
+// on the next apply instead of keeping a guard that would deny every client
+// the new model admits.
 //
-// Every allowlist entry must be a valid IP or CIDR; anything else fails with
-// ACL_SOURCE_INVALID instead of rendering a rule the kernel would reject or,
-// worse, a broader rule than the Hub authorized. Entries are masked,
-// de-duplicated and sorted, so the same authorization set always renders the
-// same bytes and the readback comparison stays exact.
-func CompileACL(c Candidate, allowed []string) ([]byte, error) {
+// The allowed argument stays in the signature only for the installer and older
+// callers; it is ignored. An Edge never owns the table.
+func CompileACL(c Candidate, _ []string) ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	// Sources are validated for every role: a malformed entry is a Hub defect
-	// and must fail the task even on a node that does not render the table.
-	sources, err := normalizeACLSources(allowed)
-	if err != nil {
-		return nil, err
-	}
-	// An Edge has no Out table, so an allowlist carries no meaning there and
-	// renders nothing. Only Out creates the VLESS guard.
 	if c.Role == RoleEdge {
 		return nil, nil
 	}
@@ -484,111 +455,24 @@ func CompileACL(c Candidate, allowed []string) ([]byte, error) {
 	}
 	var script strings.Builder
 	fmt.Fprintf(&script, "# Exact MeshMux-owned table replacement; apply as one nft -f transaction.\n")
+	fmt.Fprintf(&script, "# The Out source allowlist is retired; this table is intentionally rule-free.\n")
 	fmt.Fprintf(&script, "table inet %[1]s {}\n", ACLTable)
 	fmt.Fprintf(&script, "delete table inet %[1]s\n", ACLTable)
 	fmt.Fprintf(&script, "table inet %[1]s {\n", ACLTable)
 	fmt.Fprintf(&script, "  chain input {\n")
 	fmt.Fprintf(&script, "    type filter hook input priority -10; policy accept;\n")
-	for _, source := range sources {
-		fmt.Fprintf(&script, "    %s saddr %s tcp dport %d accept\n",
-			source.family, source.prefix, c.VLESSPort)
-	}
-	fmt.Fprintf(&script, "    tcp dport %d drop\n", c.VLESSPort)
-	fmt.Fprintf(&script, "    udp dport %d drop\n", c.VLESSPort)
 	fmt.Fprintf(&script, "  }\n}\n")
 	return []byte(script.String()), nil
 }
 
-// ParseACLAllowed parses the accept rules of one managed Out ACL script and
-// then re-renders that set to confirm the file is a canonical MeshMux render
-// rather than a hand-assembled table.
-//
-// This is an idempotency self-check, NOT an authorization proof: the input set
-// is derived from the file being checked, so any edit that still sorts into the
-// canonical order (for example an accept appended after the last authorized
-// source) reproduces itself and passes. Callers must compare the result against
-// an independent record of what the Hub authorized — the Agent's applied
-// allowlist in state.json (AppliedAllowedSources) or the Hub-supplied task
-// parameter — before treating the file as authorized.
+// ParseACLAllowed is retired with the source allowlist. The only canonical
+// script is the empty table; it returns an empty set for that script and
+// rejects every other file. A legacy allowlist is therefore never preserved
+// across an install --repair: the repair rewrites the neutral table instead.
 func ParseACLAllowed(c Candidate, script []byte) ([]string, error) {
-	invalid := errors.New("ACL_SCRIPT_INVALID: managed ACL is not the MeshMux render")
-	allowed := make([]string, 0, 8)
-	for line := range strings.SplitSeq(string(script), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 7 || (fields[0] != "ip" && fields[0] != "ip6") ||
-			fields[1] != "saddr" || fields[3] != "tcp" || fields[4] != "dport" || fields[6] != "accept" {
-			continue
-		}
-		if fields[5] != strconv.Itoa(c.VLESSPort) {
-			continue
-		}
-		allowed = append(allowed, fields[2])
+	rendered, err := CompileACL(c, nil)
+	if err != nil || bytes.Equal(script, nil) || !bytes.Equal(rendered, script) {
+		return nil, errors.New("ACL_SCRIPT_INVALID: managed ACL is not the MeshMux render")
 	}
-	rendered, err := CompileACL(c, allowed)
-	if err != nil || !bytes.Equal(rendered, script) {
-		return nil, invalid
-	}
-	return allowed, nil
-}
-
-// normalizeACLSources validates, masks, de-duplicates and sorts one allowlist
-// into the canonical rule order.
-func normalizeACLSources(allowed []string) ([]aclSource, error) {
-	if len(allowed) > maxACLSources {
-		return nil, errors.New("ACL_SOURCE_INVALID: too many authorized sources")
-	}
-	seen := make(map[netip.Prefix]struct{}, len(allowed))
-	sources := make([]aclSource, 0, len(allowed))
-	for _, raw := range allowed {
-		prefix, err := parseACLSource(raw)
-		if err != nil {
-			return nil, err
-		}
-		if _, duplicate := seen[prefix]; duplicate {
-			continue
-		}
-		seen[prefix] = struct{}{}
-		family := "ip"
-		if prefix.Addr().Is6() {
-			family = "ip6"
-		}
-		sources = append(sources, aclSource{family: family, prefix: prefix})
-	}
-	slices.SortFunc(sources, func(left, right aclSource) int {
-		return left.prefix.Compare(right.prefix)
-	})
-	return sources, nil
-}
-
-// parseACLSource accepts one bare IP or CIDR. The prefix is masked so the
-// rendered rule and the readback comparison share one canonical spelling.
-func parseACLSource(raw string) (netip.Prefix, error) {
-	invalid := errors.New("ACL_SOURCE_INVALID: authorized source must be one IP or CIDR")
-	if raw == "" || len(raw) > 64 || strings.TrimSpace(raw) != raw {
-		return netip.Prefix{}, invalid
-	}
-	var (
-		prefix netip.Prefix
-		err    error
-	)
-	if prefix, err = netip.ParsePrefix(raw); err != nil {
-		addr, addrErr := netip.ParseAddr(raw)
-		// PrefixFrom silently drops a zone, so it is rejected on the
-		// address itself; a scoped link-local source is not a Hub Line.
-		if addrErr != nil || addr.Zone() != "" {
-			return netip.Prefix{}, invalid
-		}
-		prefix = netip.PrefixFrom(addr, addr.BitLen())
-	}
-	addr := prefix.Addr()
-	if !addr.IsValid() || addr.Zone() != "" || addr.Is4In6() {
-		return netip.Prefix{}, invalid
-	}
-	// A zero-length prefix authorizes the whole internet, which would turn
-	// the guard back into an allow-all rule. The Hub never derives one, so
-	// it is a configuration error, not an authorization.
-	if prefix.Bits() == 0 {
-		return netip.Prefix{}, errors.New("ACL_SOURCE_INVALID: zero-length prefix would disable default deny")
-	}
-	return prefix.Masked(), nil
+	return []string{}, nil
 }

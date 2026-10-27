@@ -103,7 +103,7 @@ func TestRunningBinaryMismatchReportsOnlyACode(t *testing.T) {
 		logger:   slog.New(slog.NewJSONHandler(&logged, nil)),
 	}
 	candidate := testCandidate(7).Candidate()
-	_, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, "", aclExpectation{})
+	_, err := runtime.readbackFor(context.Background(), cfg.Role, candidate, "")
 	if err == nil {
 		t.Fatal("wrong running binary accepted")
 	}
@@ -135,7 +135,7 @@ func TestRunningBinaryMismatchSurvivesWithoutALogger(t *testing.T) {
 	cfg.KernelSHA256 = strings.Repeat("b", 64)
 	runtime := &Runtime{cfg: cfg, root: root, runner: runner, procRoot: filepath.Join(root, "proc"),
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	_, err := runtime.readbackFor(context.Background(), cfg.Role, testCandidate(7).Candidate(), "", aclExpectation{})
+	_, err := runtime.readbackFor(context.Background(), cfg.Role, testCandidate(7).Candidate(), "")
 	if errorCode(err) != codeSingboxRunningBinaryMismatch {
 		t.Fatalf("error code = %q, want %q", errorCode(err), codeSingboxRunningBinaryMismatch)
 	}
