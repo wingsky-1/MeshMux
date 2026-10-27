@@ -1,17 +1,5 @@
 package candidate
 
-// The shared candidate and Agent-task store.
-//
-// A candidate revision and the four-task chain that publishes it are one
-// artifact: the immutable row, the idempotent task envelope and the per-node
-// monotonic revisions are written together or not at all. Four domains
-// (node, policy, subscription, upgrade) need that pair, and none of them owns
-// it, so it lives here — the second leaf of the split, beside common.
-//
-// The Out authorization a candidate chain carries is the one fact this package
-// cannot derive: the Out domain owns it. It is injected (see Store.OutAllowlist)
-// rather than imported, so candidate stays below every domain that publishes.
-
 import (
 	"database/sql"
 	"encoding/json"

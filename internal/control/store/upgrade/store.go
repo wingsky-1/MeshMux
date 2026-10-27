@@ -1,12 +1,5 @@
 package upgrade
 
-// The Hub's upgrade targets and the Agent upgrade channel.
-//
-// An approved release is a stamped row per node plus the four-task chain that
-// applies it. The chain is the same publication path every other change uses,
-// so this package reads the Line snapshot, the derived route and the candidate
-// revision from the node and policy domains; neither of them imports it.
-
 import (
 	"database/sql"
 

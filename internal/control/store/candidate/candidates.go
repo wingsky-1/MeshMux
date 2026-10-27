@@ -1,14 +1,5 @@
 package candidate
 
-// The immutable candidate revision and the fixed Agent task chain that
-// publishes it.
-//
-// A revision is never updated or deleted (the schema's triggers refuse both),
-// and the chain that names it is enqueued in the same transaction, so a
-// publication either stores both or neither. The read helpers below re-derive
-// the stored digest instead of trusting the column, so a corrupted row fails
-// closed.
-
 import (
 	"bytes"
 	"crypto/sha256"
