@@ -238,14 +238,14 @@ printf '%s  %s\n' "$FROM_SHA" "<data-dir>/upgrade/meshmuxd-<from_version>-<arch>
 
 ### root 投递恢复请求（无 Web 的替代路径）
 
-若 root 希望由已启用的 path unit 执行旧包，可投递一份与 Web 相同形状的请求；文件必须是 `meshmux` 属主、0600，先落在未监视的 staging 目录再 rename：
+若 root 希望由已启用的 path unit 执行旧包，可投递一份与 Web 相同形状的请求；文件必须是 `meshmux` 属主、0600，先在 **requests/ 内的点前缀临时文件**写完再 rename。不要用 `staging/` 中转：`requests/` 与 `staging/` 是两条独立 `ReadWritePaths` 挂载，跨目录 rename 会 `EXDEV`（`HUB_HANDOFF_WRITE_FAILED`）：
 
 ```sh
 umask 077
 printf '%s\n' '{"schema":1,"kind":"restore","operation_id":"<op32hex>","data_dir":"<data-dir>"}' \
-  > /run/meshmux-hub/staging/<op32hex>.json
-chown meshmux:meshmux /run/meshmux-hub/staging/<op32hex>.json
-mv /run/meshmux-hub/staging/<op32hex>.json /run/meshmux-hub/requests/<op32hex>.json
+  > /run/meshmux-hub/requests/.<op32hex>.json.part-root
+chown meshmux:meshmux /run/meshmux-hub/requests/.<op32hex>.json.part-root
+mv /run/meshmux-hub/requests/.<op32hex>.json.part-root /run/meshmux-hub/requests/<op32hex>.json
 ```
 
 请求只表达“恢复这个冻结操作”；它不提供路径、目标、摘要或 argv。dispatcher 仍会重新校验 Web 单元的 `--data-dir`、journal 状态、记录、旧包摘要并生成冻结 argv。

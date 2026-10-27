@@ -5,11 +5,23 @@ package hubupgrade
 // never an authorization: it only says which frozen operation to look at, and
 // every path, target and digest is re-derived on the root side.
 //
-// A request is staged in an *unwatched* sibling directory, fsynced, and only the
-// completed document is renamed into the watched one. The path unit triggers on
-// DirectoryNotEmpty, so a scratch file under requests/ would fire the oneshot
-// while the writer was still filling it; staging outside removes that race
-// without a timeout guess in the dispatcher.
+// A request is completed in a dot-prefixed scratch file *inside* the watched
+// directory and renamed to its published name in that same directory. It is
+// deliberately not staged in the sibling staging/ directory: the web unit
+// declares requests/ and staging/ as two ReadWritePaths, so systemd mounts
+// each path separately and a rename between them fails with EXDEV. That is the
+// v1.0.0 HUB_HANDOFF_WRITE_FAILED: invisible to tests that share one
+// filesystem, guaranteed on a real host. A same-directory rename is atomic and
+// mount-local, so the published document is still either absent or complete.
+//
+// The dot prefix keeps a half-written document out of the dispatcher's way:
+// DirectoryNotEmpty ignores dot names and dispatch.go skips them. A crashed
+// writer can leave one dot-named scratch document behind; /run is tmpfs and
+// clears it on boot, and the best-effort cleanup below removes this
+// operation's leftovers whenever the directory is listable. The Web is 0730
+// root:meshmux (write+execute, no read), so its cleanup is a silent no-op;
+// that residue is inert (dot names), never reused (CreateTemp is O_EXCL) and
+// never mistaken for a request.
 //
 // The publish path deliberately does not fsync the request directory. It is
 // 0730 root:meshmux (write+execute, no read for the Web), so the Web cannot open
@@ -45,12 +57,11 @@ const (
 	// and the path unit watches. It is deliberately outside the data
 	// directory: a restore flips --data-dir but cannot move this unit.
 	RequestDir = versions.HubRunDir + "/requests"
-	// RequestStagingDir is the unwatched sibling where a request is completed
-	// before it becomes visible. It must be declared in the web unit's
-	// ReadWritePaths and created by the tmpfiles drop-in *before* the unit
-	// starts: ProtectSystem=strict makes an undeclared write EROFS, and a
-	// declared-but-absent path fails the unit with status=226/NAMESPACE. The
-	// MkdirAll below is only a same-uid convenience for fixtures and repairs.
+	// RequestStagingDir is the sibling the installer still creates and the web
+	// unit still declares in ReadWritePaths. The writer no longer stages there:
+	// the two paths are separate mounts in the sandbox, so a rename between them
+	// is EXDEV. It stays part of the installed layout for compatibility, and no
+	// request is ever written to it.
 	RequestStagingDir = versions.HubRunDir + "/staging"
 	// RequestDoneDir holds consumed requests. It is root:root 0700; the Web
 	// can neither read nor replace a dispatched intent.
@@ -103,31 +114,31 @@ func WriteRequest(dir string, r Request) (string, error) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return "", fail(codeRequestWrite, "the request directory is not a real directory")
 	}
-	staging := stagingDirFor(dir)
-	if err := os.MkdirAll(staging, requestDirMode); err != nil {
-		return "", fail(codeRequestWrite, "the request staging directory is unavailable")
-	}
-	stagingInfo, err := os.Lstat(staging)
-	if err != nil || stagingInfo.Mode()&os.ModeSymlink != 0 || !stagingInfo.IsDir() ||
-		stagingInfo.Mode().Perm()&0002 != 0 ||
-		(!ownedBy(os.Geteuid(), stagingInfo) && !ownedBy(0, stagingInfo)) {
-		return "", fail(codeRequestWrite, "the request staging directory is not a safe scratch directory")
+	// The publish directory is also the scratch directory, so it must be a
+	// private directory this account may write: not world-writable, and owned by
+	// this account (a fixture) or root (the installed 0730 root:meshmux tree).
+	if info.Mode().Perm()&0002 != 0 ||
+		(!ownedBy(os.Geteuid(), info) && !ownedBy(0, info)) {
+		return "", fail(codeRequestWrite, "the request directory is not a safe publish directory")
 	}
 	body, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return "", fail(CodeHandoffRequestInvalid, "the request could not be encoded")
 	}
-	// A crashed writer can leave one scratch document behind; tmpfs clears it on
-	// boot, and the same operation's leftovers are never reused.
-	if leftovers, err := os.ReadDir(staging); err == nil {
+	// A crashed writer can leave one scratch document of this operation behind.
+	// The watched directory is 0730 root:meshmux, so the Web has write+execute
+	// but no read and cannot enumerate it: this cleanup only takes effect where
+	// the directory is listable (root/fixture repairs), and the residue is
+	// harmless elsewhere. It never matches a published <op32hex>.json.
+	if leftovers, err := os.ReadDir(dir); err == nil {
 		for _, entry := range leftovers {
 			if strings.HasPrefix(entry.Name(), "."+r.OperationID+".json.part-") {
-				_ = os.Remove(filepath.Join(staging, entry.Name()))
+				_ = os.Remove(filepath.Join(dir, entry.Name()))
 			}
 		}
 	}
 	target := filepath.Join(dir, name)
-	scratch, err := os.CreateTemp(staging, "."+r.OperationID+".json.part-*")
+	scratch, err := os.CreateTemp(dir, "."+r.OperationID+".json.part-*")
 	if err != nil {
 		return "", fail(codeRequestWrite, "the request scratch file could not be created")
 	}
@@ -157,21 +168,6 @@ func WriteRequest(dir string, r Request) (string, error) {
 		return "", fail(codeRequestWrite, "the request could not be published")
 	}
 	return target, nil
-}
-
-// stagingDirFor returns the unwatched staging directory for a watched one. The
-// script-visible name is fixed ("requests"), so a caller passing that path gets
-// RequestStagingDir; a fixture with another name gets a unique sibling instead of
-// a scratch file inside the watched directory.
-func stagingDirFor(requestDir string) string {
-	if requestDir == RequestDir {
-		return RequestStagingDir
-	}
-	parent := filepath.Dir(requestDir)
-	if filepath.Base(requestDir) == "requests" {
-		return filepath.Join(parent, "staging")
-	}
-	return filepath.Join(parent, "staging-"+filepath.Base(requestDir))
 }
 
 // ReadRequest parses one request for the named owner. It never follows a

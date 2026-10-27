@@ -140,9 +140,11 @@ func RunDispatch(ctx context.Context, cfg DispatchConfig) error {
 	if err != nil {
 		return fail(codeRequestInvalid, "the request directory could not be read")
 	}
-	// Only <op32hex>.json is a request. The writer stages in the unwatched
-	// sibling, so no half-written document can appear here. A dot-name is
-	// ignored by systemd's DirectoryNotEmpty, so it cannot re-arm the path unit.
+	// Only <op32hex>.json is a request. The writer completes a request in a
+	// dot-named scratch file beside the target and renames it into place, so a
+	// half-written document can appear here only under a dot name; it is
+	// skipped below. A dot-name is also ignored by systemd's
+	// DirectoryNotEmpty, so it cannot re-arm the path unit.
 	// Any *other* name is debris the Web (which can write this directory) may
 	// plant; leaving it in place would keep the directory non-empty, re-trigger
 	// the unit on every completion and eventually exhaust TriggerLimitBurst so

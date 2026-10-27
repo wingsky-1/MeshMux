@@ -188,11 +188,13 @@ func validRequestBody() []byte {
 }
 
 // TestWriteRequestDoesNotReadRequestDir is the blocker-1 regression. The watched
-// directory is 0730 root:meshmux: the Web has write+execute and no read, so any
-// publish path that opens the directory (a directory fsync, a ReadDir) fails
-// EACCES *after* the request is already live. The mode-only simulation below
-// reproduces exactly that: 0330 removes the read bit from the owner while
-// keeping write+execute, which is what the Web's group access looks like.
+// directory is 0730 root:meshmux: the Web has write+execute and no read, so the
+// publish path must not depend on reading it (a required directory fsync or
+// listing would fail EACCES after the request is already live). The mode-only
+// simulation below reproduces exactly that: 0330 removes the read bit from the
+// owner while keeping write+execute, which is what the Web's group access looks
+// like. The best-effort leftover cleanup may try to list the directory; its
+// failure must stay irrelevant to the publish.
 func TestWriteRequestDoesNotReadRequestDir(t *testing.T) {
 	if os.Geteuid() == 0 {
 		// Root bypasses the missing read bit, so the mode simulation would be
@@ -219,20 +221,32 @@ func TestWriteRequestDoesNotReadRequestDir(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("published request = %v, %v", info, err)
 	}
-	staged, err := os.Lstat(filepath.Join(parent, "staging"))
-	if err != nil {
-		t.Fatalf("staging directory is not the unwatched sibling: %v", err)
+	// The scratch file is created in this same write-only directory, so no
+	// sibling staging directory may appear: the real unit mounts requests/ and
+	// staging/ separately, and a rename between them is EXDEV.
+	if _, err := os.Lstat(filepath.Join(parent, "staging")); !os.IsNotExist(err) {
+		t.Fatalf("publishing created a staging sibling: %v", err)
 	}
-	if !staged.IsDir() {
-		t.Fatal("staging sibling is not a directory")
+	// Restore the read bit only to inspect the result: the scratch document must
+	// have become the one published file, leaving nothing beside it.
+	if err := os.Chmod(requestDir, 0730); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(requestDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != testRequestOp+".json" {
+		t.Fatalf("write-only request directory holds %v, want only the published request", entries)
 	}
 }
 
 // TestWriteRequestNeverOpensWatchedDir is the static half of the blocker-1
-// regression: the publish path must not open the watched directory at all (no
-// directory fsync, no listing, no relative scratch file), because the Web has
-// write+execute but no read on it. The AST check keeps a future "harmless"
-// ReadDir or directory Sync from reintroducing the EACCES-after-publish bug.
+// regression: the publish path must not require reading the watched directory
+// (no directory fsync, no mandatory listing), because the Web has write+execute
+// but no read on it. CreateTemp is allowed and required: O_CREAT|O_EXCL in a
+// write+execute directory needs no read bit. The leftover cleanup may list the
+// directory best-effort, but its failure must not gate publication.
 func TestWriteRequestNeverOpensWatchedDir(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "request.go", nil, 0)
 	if err != nil {
@@ -249,11 +263,11 @@ func TestWriteRequestNeverOpensWatchedDir(t *testing.T) {
 		t.Fatal("WriteRequest is not declared in request.go")
 	}
 	// Lstat/Stat of the directory itself only need execute on its parent, so
-	// they are allowed; opening it, listing it or creating a child in it needs
-	// read or a directory handle and would fail for the Web.
+	// they are allowed; opening it for a directory fsync or reading a file needs
+	// read and would fail for the Web. Creating a child only needs write+execute,
+	// so CreateTemp stays.
 	forbidden := map[string]bool{
-		"Open": true, "OpenFile": true, "ReadDir": true, "ReadFile": true,
-		"CreateTemp": true,
+		"Open": true, "OpenFile": true, "ReadFile": true,
 	}
 	var offenders []string
 	ast.Inspect(publish, func(node ast.Node) bool {
@@ -273,14 +287,23 @@ func TestWriteRequestNeverOpensWatchedDir(t *testing.T) {
 	if len(offenders) > 0 {
 		t.Fatalf("WriteRequest opens the watched directory: %v", offenders)
 	}
-	// The scratch file must be created in the unwatched staging sibling.
-	if !strings.Contains(sourceOfTestFile(t), "os.CreateTemp(staging") {
-		t.Fatal("WriteRequest no longer stages in the unwatched sibling")
+	// The scratch file must be created in the directory it is renamed into: a
+	// sibling staging directory is a different vfsmount in the sandbox and the
+	// rename would fail EXDEV.
+	source := sourceOfTestFile(t)
+	if !strings.Contains(source, "os.CreateTemp(dir,") {
+		t.Fatal("WriteRequest does not create its scratch file in the request directory")
+	}
+	if !strings.Contains(source, "os.Rename(scratchName, target)") {
+		t.Fatal("WriteRequest does not rename its scratch file onto the published name")
+	}
+	if strings.Contains(source, "stagingDirFor") {
+		t.Fatal("request.go still carries the retired staging helper")
 	}
 }
 
-// sourceOfTestFile reads this test file back so the staging assertion above stays
-// tied to a literal call rather than to renamed variables.
+// sourceOfTestFile reads request.go back so the assertions above stay tied to a
+// literal call rather than to renamed variables.
 func sourceOfTestFile(t *testing.T) string {
 	t.Helper()
 	body, err := os.ReadFile("request.go")
@@ -290,9 +313,13 @@ func sourceOfTestFile(t *testing.T) string {
 	return string(body)
 }
 
-// TestWriteRequestStagesOutsideWatchedDir proves the watched directory only ever
-// holds completed documents: staging is a sibling, and nothing is left behind.
-func TestWriteRequestStagesOutsideWatchedDir(t *testing.T) {
+// TestWriteRequestStagesInTargetDir is the same-directory publish regression.
+// The scratch document is created beside its target, so the final rename never
+// crosses a mount (the web sandbox mounts requests/ and staging/ separately and
+// a cross-directory rename is EXDEV). An unusable staging path proves the
+// publish path never touches it, and a stale dot-named scratch document is
+// recognised and cleared by the same-operation cleanup.
+func TestWriteRequestStagesInTargetDir(t *testing.T) {
 	parent := t.TempDir()
 	requestDir := filepath.Join(parent, "requests")
 	if err := os.Mkdir(requestDir, 0730); err != nil {
@@ -301,38 +328,42 @@ func TestWriteRequestStagesOutsideWatchedDir(t *testing.T) {
 	if err := os.Chmod(requestDir, 0730); err != nil {
 		t.Fatal(err)
 	}
+	// A regular file where the retired staging sibling used to be: any
+	// MkdirAll, CreateTemp or rename through it would fail ENOTDIR.
+	if err := os.WriteFile(filepath.Join(parent, "staging"), []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(requestDir, "."+testRequestOp+".json.part-stale")
+	if err := os.WriteFile(stale, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	path, err := WriteRequest(requestDir, Request{
 		Schema: RequestSchema, Kind: KindUpdate, OperationID: testRequestOp, DataDir: "/var/lib/meshmux",
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("publishing with an unusable staging path failed: %v", err)
+	}
+	if filepath.Dir(path) != requestDir {
+		t.Fatalf("published %q outside the request directory %q", path, requestDir)
 	}
 	entries, err := os.ReadDir(requestDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
-		t.Fatalf("watched directory holds %v, want only the published request", entries)
+	if len(entries) != 1 || entries[0].Name() != testRequestOp+".json" {
+		t.Fatalf("request directory holds %v, want only the published request", entries)
 	}
-	stagingEntries, err := os.ReadDir(filepath.Join(parent, "staging"))
-	if err != nil {
-		t.Fatal(err)
+	// The stale scratch document of this operation was recognised and cleared;
+	// the live scratch document became the request.
+	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale scratch survived the next publish: %v", err)
 	}
-	if len(stagingEntries) != 0 {
-		t.Fatalf("staging left scratch residue: %v", stagingEntries)
+	if info, err := os.Lstat(filepath.Join(parent, "staging")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("publishing touched the staging path: %v, %v", info, err)
 	}
-	// A stale scratch document of the same operation is cleared, never reused.
-	if err := os.WriteFile(filepath.Join(parent, "staging", "."+testRequestOp+".json.part-stale"), []byte("x"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := WriteRequest(requestDir, Request{
-		Schema: RequestSchema, Kind: KindUpdate, OperationID: testRequestOp, DataDir: "/var/lib/meshmux",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	stagingEntries, err = os.ReadDir(filepath.Join(parent, "staging"))
-	if err != nil || len(stagingEntries) != 0 {
-		t.Fatalf("stale scratch survived the next publish: %v, %v", stagingEntries, err)
+	// The published document is complete and readable.
+	if _, err := ReadRequest(path, os.Geteuid()); err != nil {
+		t.Fatalf("published request is not readable: %v", err)
 	}
 }
 
