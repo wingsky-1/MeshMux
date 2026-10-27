@@ -291,7 +291,7 @@ func (app *Server) failUpgradeApprove(w http.ResponseWriter, r *http.Request, er
 			"当前 active 服务端策略无法解析出线路路由。", "请先修复并重新发布服务端策略；未写入任何升级记录。")
 	default:
 		app.writeUpgradeFailure(w, r, http.StatusServiceUnavailable, "UPGRADE_APPROVAL_FAILED",
-			"批准未完成。", "请凭操作编号检查服务日志；已应用修订保持不变。")
+			"批准未完成。", "请稍后重试；已应用修订保持不变。")
 	}
 }
 

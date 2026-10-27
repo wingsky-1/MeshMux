@@ -38,7 +38,7 @@ func (rt *Runtime) Boundary(next http.Handler) http.Handler {
 				if recovered == http.ErrAbortHandler {
 					panic(recovered)
 				}
-				rt.FailAs(w, r, 500, "INTERNAL_ERROR", "请求未完成。", "请凭操作编号检查服务日志。", jsonBody)
+				rt.FailAs(w, r, 500, "INTERNAL_ERROR", "请求未完成。", "请稍后重试。", jsonBody)
 			}
 		}()
 		u, _ := url.Parse(rt.Cfg.Origin)

@@ -62,7 +62,7 @@ func outBindingFailure(err error) (status int, code, message, next string) {
 	case strings.HasPrefix(err.Error(), store.CodeDatabaseUnavailable):
 		return 503, store.CodeDatabaseUnavailable, "无法读写 Out 状态。", "请检查数据库与服务日志后重试。"
 	default:
-		return 500, "OUT_MANAGEMENT_FAILED", "Out 操作未完成。", "请凭操作编号检查服务日志。"
+		return 500, "OUT_MANAGEMENT_FAILED", "Out 操作未完成。", "请稍后重试。"
 	}
 }
 

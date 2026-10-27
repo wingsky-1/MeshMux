@@ -46,6 +46,9 @@ type NodesData = view.NodesData
 // JSON by declaration, which are HTML twins, and which authenticate the Agent
 // with Bearer identity instead of a session.
 func (s *Server) RegisterRoutes(r chi.Router, jsonAPI func(http.HandlerFunc) http.HandlerFunc, authenticated func(func(http.ResponseWriter, *http.Request, infra.Session)) http.HandlerFunc, mutation func(func(http.ResponseWriter, *http.Request, infra.Session), bool) http.HandlerFunc) {
+	// The diagnostics page owns "/logs": the single home of operational detail
+	// (revisions, readback, task chains, error codes), kept off business pages.
+	r.Get("/logs", authenticated(s.OpsPage))
 	r.Get("/nodes", authenticated(s.NodesPage))
 	r.Post("/nodes", mutation(s.nodesCreate, true))
 	r.Post("/nodes/reconcile", mutation(s.nodesReconcile, true))

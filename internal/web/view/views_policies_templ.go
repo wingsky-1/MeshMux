@@ -242,7 +242,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else if v.Out == PolicyOutDegraded {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<span class=\"badge failure\">Out 故障 · fail-closed</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "<span class=\"badge failure\">Out 故障</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -262,17 +262,17 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if v.Out == PolicyOutActive {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<p class=\"hint\">指定分流优先经 Out 直出；Out 不可用时 fail-closed，不会自动改走 Line。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<p class=\"hint\">指定分流优先经 Out 直出；Out 不可用时拒绝转发，不会自动改走 Line。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else if v.Out == PolicyOutDegraded {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<p class=\"hint\">Out 健康检查未通过：指定到 Out 的分流拒绝转发，不隐式回落 Line；恢复后自动退出该状态。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<p class=\"hint\">Out 健康检查未通过：指定到 Out 的流量拒绝转发，不自动改走 Line；恢复后自动退出该状态。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else if v.Out == PolicyOutExternal {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<p class=\"hint\" title=\"Hub 没有它的 ACL、回读或控制器（LINE_EGRESS_EXTERNAL_DECLARED）。链路是否真的通，只能由该代理自己的日志与客户端实测证明。\">出口位是外部 HTTP 代理：这是<b>操作员声明</b>，不是已证明可用的出口。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<p class=\"hint\" title=\"这是操作员填写的声明，不是已验证的结果；链路是否真的通，以该代理自己的日志与你的实测为准。\">出口是外部 HTTP 代理：是否可用以你的实测为准。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -295,7 +295,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "</span></div><p class=\"muted\">客户端层当前<b>没有消费者</b>：标准订阅由固定导出器按 Line 与凭据生成，不读取客户端层，也不包含这些规则。</p><p class=\"hint\" title=\"创建/改版/激活/撤销均返回 POLICY_LAYER_RETIRED；既有 revision 只读预览，exceptions/ssids 字段已退役。\">客户端层已停写；设备侧分流请在<b>规则库</b>维护（六种匹配器，暂不含 SSID）。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "</span></div><p class=\"muted\">客户端层只是预览：标准订阅下载不包含这些规则；设备侧分流请在<b>规则库</b>维护。</p><p class=\"hint\" title=\"客户端层已停写：创建/改版/激活/撤销均返回 POLICY_LAYER_RETIRED；既有 revision 只读预览，exceptions/ssids 字段已退役。\">客户端层已停写。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

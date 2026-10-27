@@ -50,7 +50,7 @@ templ AuthPage(setup bool, csrf string, dev bool, message string, op string) {
 					<div class="notice">本地开发模式 · HTTP 仅用于隔离环境</div>
 				}
 				if message != "" {
-					<div class="error" role="alert">{ message }<small>AUTH_FAILED · { op }</small></div>
+					<div class="error" role="alert">{ message }<span class="info" title="请确认密码后重试；多次失败会暂时锁定登录。">!</span></div>
 				}
 				<form method="post" action={ templ.SafeURL(authAction(setup)) }>
 					<input type="hidden" name="csrf" value={ csrf }/>
@@ -102,14 +102,14 @@ templ Dashboard(p PageData) {
 							<article><div class="stat-label">代理节点 <span>◇</span></div><strong>0</strong><p>尚未纳管 Line / Out</p></article>
 							<article><div class="stat-label">订阅用户 <span>◎</span></div><strong>0</strong><p>尚未创建订阅</p></article>
 							<article><div class="stat-label">Mesh 设备 <span>⌘</span></div><strong>0</strong><p>尚未连接私有网络</p></article>
-							<article><div class="stat-label">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器尚未接入</p></article>
+							<article><div class="stat-label">待处理任务 <span>▤</span></div><strong>—</strong><p>暂无待处理任务</p></article>
 						</section>
 						<div class="overview-grid">
 							<section class="panel network-panel"><div class="panel-heading"><h2>网络状态</h2><span class="badge">未部署</span></div><div class="empty-network"><span class="network-symbol" aria-hidden="true">◇</span><h3>你的网络，从第一个节点开始</h3><p>当前没有连接任何代理或 Mesh 服务。<br/>节点纳管将在后续阶段开放。</p><a href="/nodes">查看代理节点</a></div></section>
 							<section class="panel">
 								<div class="panel-heading"><h2>控制台状态</h2><span class="badge accent">本机</span></div>
 								@Status("当前请求")
-								<p class="hint">只表示 Web 请求已处理，不代表代理握手、Mesh 或公网可用。</p><a class="refresh" href="/" hx-get="/status" hx-target="#web-status" hx-swap="outerHTML">刷新状态 ↻</a>
+								<a class="refresh" href="/" hx-get="/status" hx-target="#web-status" hx-swap="outerHTML" title="只表示控制台本身在运行，不代表节点或公网可用。">刷新状态 ↻</a>
 								<p id="status-feedback" class="hint" role="status"></p>
 							</section>
 						</div>
@@ -138,13 +138,13 @@ templ Dashboard(p PageData) {
 										}
 									</dd>
 								</dl>
-								<p class="hint">Fail2ban 候选配置与软件升级将在后续版本接入。</p>
+								<p class="hint">Fail2ban 与软件升级将在后续版本接入。</p>
 							</section>
 						</div>
-					} else if p.Path=="/tasks" || p.Path=="/logs" {
+					} else if p.Path=="/tasks" {
 						<p class="subtitle">操作结果需要可追踪，也需要真实的验证证据。</p>
 						<div class="notice">以下是静态失败示例，不是真实任务或主机探测结果。</div>
-						<section class="panel"><div class="panel-heading"><h2>SSH 监听端口预检 · 示例</h2><span class="badge failure">模拟失败</span></div><dl class="details"><dt>operation_id</dt><dd><code>demo-ssh-preflight</code></dd><dt>阶段</dt><dd>validate · 只读预检</dd><dt>error_code</dt><dd><code>SSH_LISTENER_MISMATCH</code></dd><dt>原因</dt><dd>示例中 SSH 实际监听端口与 jail 覆盖不一致。</dd><dt>建议动作</dt><dd>在安装阶段核对 sshd 实际监听端口与 Fail2ban action 的端口（IPv4 / IPv6 分开核对）。</dd></dl><p class="hint">本阶段不读取系统配置、不执行命令；真实任务与日志查询尚未实现。</p></section>
+						<section class="panel"><div class="panel-heading"><h2>SSH 监听端口预检 · 示例</h2><span class="badge failure">模拟失败</span></div><dl class="details"><dt>原因</dt><dd>示例中 SSH 实际监听端口与 jail 覆盖不一致。</dd><dt>如何恢复</dt><dd>在安装时核对 SSH 实际监听端口，与 Fail2ban 配置保持一致后重试。</dd></dl><p class="hint">本阶段不读取系统配置、不执行命令；真实任务与日志查询尚未实现。</p></section>
 					} else {
 						<p class="subtitle">{ p.Title }将在后续开发阶段开放。</p>
 						<section class="panel empty-page"><span class="network-symbol" aria-hidden="true">◇</span><h2>此入口尚无可用页面</h2><p>状态以各功能页和任务记录为准。</p><a href="/">返回概览 →</a></section>
@@ -181,7 +181,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 					if p.Dev {
 						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
 					}
-					<p class="subtitle">创建节点后，在目标 Debian 主机核验本地 CLI 的 SHA-256，再在安装器提示处输入一次性配对码完成配对。</p>
+					<p class="subtitle">创建节点后，在目标主机运行安装命令，输入一次性配对码完成配对。</p>
 					if data.Notice != "" {
 						<div class="notice">{ data.Notice }</div>
 					}
@@ -195,7 +195,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								{{ missing++ }}
 							}
 						}
-						<p class="muted">{ bound } 个被订阅选中 · { missing } 个未配置出口地址。Out 与 Line 纳管即互通；HTTP 代理是外部端点（无 Agent、不参与 ACL），订阅只决定客户端走哪个出口。</p>
+						<p class="muted">{ bound } 个被订阅选中 · { missing } 个未配置出口地址。Out 与 Line 纳管即互通；HTTP 代理是外部端点，订阅决定客户端走哪个出口。<span class="info" title="Out 与 Line 纳管后即互通；HTTP 代理没有安装在控制台里的程序，可用性以你自己实测为准。">!</span></p>
 						<a class="button" href="#enroll">纳管节点</a>
 					</section>
 					if created != nil {
@@ -205,24 +205,22 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								} else {
 									<div class="panel-heading"><h2>配对码已签发 · 仅显示一次</h2><span class="badge accent">15 分钟有效</span></div>
 								}
-							<dl class="details"><dt>Node ID（不可变）</dt><dd><code data-copy>{ created.ID }</code></dd><dt>角色</dt><dd>{ created.Role }</dd><dt>一次性配对码</dt><dd><code data-copy>{ pairingCode }</code></dd></dl>
+							<dl class="details"><dt>Node ID</dt><dd><code data-copy>{ created.ID }</code></dd><dt>角色</dt><dd>{ created.Role }</dd><dt>一次性配对码</dt><dd><code data-copy>{ pairingCode }</code></dd></dl>
 							@InstallCommand(created, pairingCode, hubOrigin, artifact)
 						</section>
 					}
 					<div class="settings-grid">
 						<section class="panel"><h2>创建待纳管节点</h2><p class="muted">节点纳管不限个数，Out 池可按需扩展；Out 出口地址在下方节点卡片中配置。</p><a class="button" href="#enroll">纳管节点</a></section>
-						<section class="panel"><h2>安装制品</h2><dl class="details"><dt>Agent 版本</dt><dd><code>{ nodedomain.CurrentAgentVersion() }</code></dd><dt>内核</dt><dd><code>{ nodedomain.KernelVersion }</code></dd>
+						<section class="panel"><h2>安装文件</h2><dl class="details"><dt>版本</dt><dd><code>{ nodedomain.CurrentAgentVersion() }</code></dd>
 							if artifact != nil {
-								<dt>当前架构</dt><dd>{ artifact.Architecture }</dd><dt title="下载后请先核对再执行">CLI SHA-256</dt><dd><code data-copy>{ artifact.SHA256 }</code></dd>
-								<p class="hint">只提供当前 Hub 架构的 CLI；其他架构请使用同源、已核验的构建，不使用 latest 或 curl | sh。</p>
-								<a href="/api/nodes/cli">下载当前同源 CLI</a>
+								<dt title="下载后请先核对再执行">文件校验值</dt><dd><code data-copy>{ artifact.SHA256 }</code></dd>
+								<a href="/api/nodes/cli" title="只提供当前机器架构的安装文件；其他架构请使用同源、已核验的构建。">下载安装文件</a>
 							} else {
-								<dt>下载制品</dt><dd class="muted">开发预览无 CLI 制品，节点管理仍可使用</dd>
-								<p class="hint">请从已安装的 meshmux __internal-web 获取固定制品。</p>
+								<dt>下载安装文件</dt><dd class="muted">开发预览暂无安装文件</dd>
 							}
 						</dl></section>
 					</div>
-					<div id="enroll" class="modal" role="dialog" aria-label="纳管节点"><div class="modal-card"><section class="panel"><div class="panel-heading"><h2>纳管节点</h2><a class="text-button" href="#">关闭 ✕</a></div><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><span class="field-label">角色</span><div class="radio-row"><label><input type="radio" name="role" value="edge" checked required/>Line（edge）· 客户端入口</label><label><input type="radio" name="role" value="out" required/>Out · 可选私有出口</label><label><input type="radio" name="role" value="http" required/>HTTP 代理 · 外部出口</label></div><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><div id="node-port-fields"><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" placeholder="例如 2222"/></div><div id="http-proxy-fields"><label for="proxy_url">HTTP 代理 URL</label><input id="proxy_url" name="proxy_url" type="text" maxlength="512" placeholder="http://user:pass@proxy.example.invalid:8080"/><p class="hint">仅接受 http://主机:端口，可带用户名与密码，不带路径或查询参数；页面与日志只显示 host:port。HTTP 代理是外部节点：无 Agent、无配对、不参与 ACL。</p></div><p class="hint">Line / Out 需要 VLESS 与 SSH 端口（两者必须不同）；Out 创建后在节点卡片配置出口地址。配对码 15 分钟过期、一次性使用、不记日志（HTTP 代理不需要配对码）。</p><button type="submit">创建节点</button></form></section></div></div>
+					<div id="enroll" class="modal" role="dialog" aria-label="纳管节点"><div class="modal-card"><section class="panel"><div class="panel-heading"><h2>纳管节点</h2><a class="text-button" href="#">关闭 ✕</a></div><form method="post" action="/nodes"><input type="hidden" name="csrf" value={ p.CSRF }/><span class="field-label">角色</span><div class="radio-row"><label><input type="radio" name="role" value="edge" checked required/>Line（edge）· 客户端入口</label><label><input type="radio" name="role" value="out" required/>Out · 可选私有出口</label><label><input type="radio" name="role" value="http" required/>HTTP 代理 · 外部出口</label></div><label for="display_name">展示名</label><input id="display_name" name="display_name" type="text" required maxlength="64" placeholder="例如 line-hk-01"/><div id="node-port-fields"><label for="vless_port">VLESS 端口</label><input id="vless_port" name="vless_port" type="number" min="1" max="65535" placeholder="例如 8443"/><label for="ssh_port">期望 SSH 端口</label><input id="ssh_port" name="ssh_port" type="number" min="1" max="65535" placeholder="例如 2222"/></div><div id="http-proxy-fields"><label for="proxy_url">HTTP 代理 URL</label><input id="proxy_url" name="proxy_url" type="text" maxlength="512" placeholder="http://user:pass@proxy.example.invalid:8080"/><span class="info" title="仅接受 http://主机:端口，可带用户名与密码，不带路径或查询参数；页面与日志只显示 host:port。">!</span></div><p class="hint">Line / Out 需要 VLESS 与 SSH 端口（两者必须不同）；配对码 15 分钟过期、一次性使用、不记日志（HTTP 代理不需要配对码）。<span class="info" title="HTTP 代理是外部节点：没有配对，保存 URL 后即可在订阅向导中选择；Out 创建后在节点卡片配置出口地址，再到订阅向导中选择。">!</span></p><button type="submit">创建节点</button></form></section></div></div>
 						<section class="panel"><div class="panel-heading"><h2>节点列表</h2><span class="badge">待纳管</span></div>
 					if len(nodes) == 0 {
 						<p class="muted">尚未创建待纳管节点。</p>
@@ -244,51 +242,24 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 									<dl class="details">
 										<dt>Node ID</dt><dd><code data-copy>{ n.ID }</code></dd>
 										if n.Role == "http" {
-											<dt>角色</dt><dd>http · 外部 HTTP 代理（无 Agent、不参与 ACL）</dd>
+											<dt>角色</dt><dd>http · 外部 HTTP 代理<span class="info" title="外部 HTTP 代理：没有安装在控制台里的程序，页面与日志只显示地址，是否可用以你自己实测为准。">!</span></dd>
 										} else {
 											<dt>角色 / 端口</dt><dd>{ n.Role } · VLESS { n.VlessPortString() } · SSH { n.SSHPortString() }</dd>
 										}
 										if n.Role != "http" {
-										<dt title="节点心跳自报，未经回读验证">声明心跳版本</dt><dd>Agent { n.AgentVersion } · kernel { n.KernelVersion }</dd>
-										<dt title="严格回读 = 本机实际运行版本，与心跳声明区分">回读版本</dt><dd>Agent { n.ObservedAgentVersion } · kernel { n.ObservedKernelVersion }</dd>
-										<dt title="Agent 哈希为节点自报，未与 Hub 制品清单比对">Agent SHA-256</dt><dd><code data-copy>{ n.ObservedAgentSHA256 }</code></dd>
-										<dt title="回读时已对照架构内核发行清单">内核 SHA-256</dt><dd><code data-copy>{ n.ObservedKernelSHA256 }</code></dd>
-										<dt title="当前 Hub 同源 CLI；不是 Agent 回读 pin">CLI 制品 SHA-256</dt>
-										<dd>
-											if artifact != nil {
-												<code data-copy>{ artifact.SHA256 }</code>
-											} else {
-												<span class="muted">无可用制品</span>
-											}
-										</dd>
 										<dt>最近联系</dt><dd>{ heartbeatAt }</dd>
-										<dt title="candidate 为最新期望，task 为最新任务修订">最新配置 / 任务</dt><dd>candidate rev { n.LatestConfigRevision } · task { n.LastTaskRevision }</dd>
-										<dt>最近回读</dt><dd>observed rev { n.ObservedRevision } · task <code>{ n.ObservedTaskOperationID }</code> · { n.ObservedAtString() }</dd>
-										<dt>最近任务</dt><dd>{ n.LastTaskKind } · { n.LastTaskStatus } · <code>{ n.LastTaskOperationID }</code></dd>
-										if n.LastTaskErrorCode != "" {
-											<dt>错误码</dt><dd><code>{ n.LastTaskErrorCode }</code></dd>
-										}
-										if n.LastFailureTaskErrorCode != "" {
-											<dt>最近失败</dt><dd>{ n.LastFailureTaskKind } · task { n.LastFailureTaskRevision } · <code>{ n.LastFailureTaskOperationID }</code> · <code>{ n.LastFailureTaskErrorCode }</code></dd>
-										}
-										<dt title="只有最新 desired revision 与最新回读一致才标为已确认；旧回读不会覆盖 partial / failed / queued">服务状态</dt>
+										<dt>服务状态</dt>
 									<dd>
 										if n.NativeReady {
-												<span class="badge accent">本机服务已确认</span>
+												<span class="badge accent">运行正常</span>
 										} else {
-												<span class="badge">未确认</span>
+												<span class="badge" title="节点还没有确认最新配置已在本机生效。">待确认</span>
+										}
+										if n.LastTaskErrorCode != "" {
+												<span class="badge failure">上次更新失败<span class="info" title="上次更新没有完成。点击“重新校验 / 应用”重试；反复失败请联系管理员查看服务日志。">!</span></span>
 										}
 									</dd>
-										<dt>当前连接</dt>
-										<dd>
-											if n.Offline {
-												<span>离线 · 暂不下发任务</span>
-											} else {
-												<span>最近联系</span>
-											}
-										</dd>
 										}
-								<dt>网络验证边界</dt><dd class="muted">公网、协议握手、客户端可用均未验证</dd>
 								if n.Role == "out" {
 									for _, entry := range data.Pool {
 										if entry.OutID == n.ID {
@@ -299,14 +270,12 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 													<span class="badge failure">未配置出口地址</span>
 												}
 											</dd>
-											<dt>配置出口地址</dt><dd><form method="post" action="/nodes/out-transport"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "out-server-" + n.ID }>出口地址</label><input id={ "out-server-" + n.ID } name="server" type="text" required maxlength="253" placeholder="例如 out.example.invalid 或 203.0.113.10" value={ entry.Server }/><button type="submit">保存出口地址</button></form><p class="hint">端口须与 VLESS 端口（{ n.VlessPortString() }）一致；保存后选中该 Out 的订阅在下一次收敛中获得真实出站，凭据由 Hub 签发、不进日志。出口地址会公开给订阅者：订阅文档直接携带出口与 link key，客户端凭 key 接入。</p></dd>
+											<dt>配置出口地址</dt><dd><form method="post" action="/nodes/out-transport"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "out-server-" + n.ID }>出口地址</label><input id={ "out-server-" + n.ID } name="server" type="text" required maxlength="253" placeholder="例如 out.example.invalid 或 203.0.113.10" value={ entry.Server }/><button type="submit">保存出口地址</button></form><p class="hint">保存后，使用这个出口的订阅在下次下载时拿到新配置。<span class="info" title="端口须与 VLESS 端口（{ n.VlessPortString() }）一致。出口地址会公开给订阅者：订阅文件直接携带出口和 key，客户端凭 key 接入；key 由控制台签发，不显示、不进日志。">!</span></p></dd>
 											<dt>服务对象</dt><dd>
 												if len(entry.LineIDs) == 0 {
-													<span class="muted">没有订阅选择该 Out · 该 Out 不承载任何客户端出口</span>
+													<span class="muted">还没有订阅使用这个出口</span>
 												} else {
-													for _, lineID := range entry.LineIDs {
-														<div><span>承载 Line <code>{ lineID }</code></span><span class="badge accent">订阅已选择</span></div>
-													}
+													<span class="badge accent">有订阅在用</span>
 												}
 											</dd>
 											<dt>出口操作</dt><dd><div class="action-row">
@@ -318,7 +287,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 												}
 											</div>
 												if data.PendingDeleteOut == n.ID {
-													<p class="hint">删除会<strong>彻底清除</strong>该 Out（节点行、出口地址与 Hub 签发的 link key）；引用它的订阅在下次下载时重新组装，客户端文档会随之变化。<strong>仍被订阅选中、离线或有未完成链时删除会被拒绝</strong>并列出订阅名。</p>
+													<p class="hint">删除后，使用这个出口的订阅在下次下载时拿到新配置。<strong>还有订阅在用、离线或有未完成的更新时，删除会被拒绝</strong>并列出订阅名。<span class="info" title="删除会彻底清除这个出口：节点、出口地址和签发的 key 一并删除；删除是永久操作。">!</span></p>
 												}
 											</dd>
 										}
@@ -333,14 +302,12 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 													<span class="badge failure">未配置代理 URL</span>
 												}
 											</dd>
-											<dt>配置代理 URL</dt><dd><form method="post" action="/nodes/http-proxy"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "http-proxy-url-" + n.ID }>HTTP 代理 URL</label><input id={ "http-proxy-url-" + n.ID } name="proxy_url" type="text" maxlength="512" placeholder="http://user:pass@proxy.example.invalid:8080"/><button type="submit">保存代理 URL</button></form><p class="hint">仅接受 http://主机:端口，不带路径或查询参数；页面与日志只显示 host:port。保存后引用该代理的 Line 在下一次收敛中获得新的 http 出站。</p></dd>
+											<dt>配置代理 URL</dt><dd><form method="post" action="/nodes/http-proxy"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="out_id" value={ n.ID }/><label for={ "http-proxy-url-" + n.ID }>HTTP 代理 URL</label><input id={ "http-proxy-url-" + n.ID } name="proxy_url" type="text" maxlength="512" placeholder="http://user:pass@proxy.example.invalid:8080"/><button type="submit">保存代理 URL</button></form><p class="hint">保存后，使用这个代理的订阅在下次下载时拿到新配置。<span class="info" title="仅接受 http://主机:端口，不带路径或查询参数；页面与日志只显示 host:port。">!</span></p></dd>
 											<dt>服务对象</dt><dd>
 												if len(entry.LineIDs) == 0 {
-													<span class="muted">没有订阅选择该 HTTP 代理 · 它不承载任何客户端出口</span>
+													<span class="muted">还没有订阅使用这个代理</span>
 												} else {
-													for _, lineID := range entry.LineIDs {
-														<div><span>承载 Line <code>{ lineID }</code></span><span class="badge accent">订阅已选择</span></div>
-													}
+													<span class="badge accent">有订阅在用</span>
 												}
 											</dd>
 											<dt>出口操作</dt><dd><div class="action-row">
@@ -351,7 +318,7 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 												}
 											</div>
 												if data.PendingDeleteOut == n.ID {
-													<p class="hint">删除会<strong>彻底清除</strong>该 HTTP 代理（节点行与 URL/凭据）；引用它的订阅在下次下载时重新组装，客户端文档会随之变化。<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名。</p>
+													<p class="hint">删除后，使用这个代理的订阅在下次下载时拿到新配置。<strong>还有订阅在用时，删除会被拒绝</strong>并列出订阅名。<span class="info" title="删除会彻底清除这个代理：节点和保存的 URL/凭据一并删除；删除是永久操作。">!</span></p>
 												}
 											</dd>
 										}
@@ -359,27 +326,26 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 								} else {
 									<dt>Out 出口</dt><dd>
 										if len(data.ByLine[n.ID]) == 0 {
-											<span class="muted">没有订阅选择该 Line 的 Out · 客户端走直连出口</span>
+											<span class="muted">还没有订阅使用这个节点的出口</span>
 										} else {
 											for _, entry := range data.ByLine[n.ID] {
-												<div><span>{ entry.DisplayName }</span><span class="badge accent">订阅已选择</span></div>
+												<div><span>{ entry.DisplayName }</span><span class="badge accent">订阅在用</span></div>
 											}
 										}
 									</dd>
 								}
 									</dl>
 									if n.Role == "http" {
-										<p class="hint">外部 HTTP 代理没有 Agent、配对或 ACL：“外部声明”只是操作员声明的端点，页面与日志只显示 host:port。</p>
+										<span class="info" title="外部 HTTP 代理：没有配对，页面与日志只显示地址；是否可用以你自己实测为准。">!</span>
 									} else {
 									<div class="action-row">
-										<form method="post" action="/nodes/reconcile"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button type="submit">重新校验 / 应用</button></form>
-										<form method="post" action="/nodes/reissue"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button class="secondary-button" type="submit">重签身份</button></form>
-										<form method="post" action="/nodes/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button class="secondary-button" type="submit">吊销身份</button></form>
+										<form method="post" action="/nodes/reconcile"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button type="submit" title="让节点重新核对并应用最新配置；失败不改动现有配置。">重新校验 / 应用</button></form>
+										<form method="post" action="/nodes/reissue"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button class="secondary-button" type="submit" title="生成新的配对码，用于在同一台主机上重新安装；旧配对码作废。">重签身份</button></form>
+										<form method="post" action="/nodes/revoke"><input type="hidden" name="csrf" value={ p.CSRF }/><input type="hidden" name="node_id" value={ n.ID }/><button class="secondary-button" type="submit" title="节点立即失去连接资格，需要重新配对才能恢复。">吊销身份</button></form>
 									</div>
 									}
 							</article>
 					}
-					<p class="hint">“本机服务已确认”= 最新期望配置与本机回读一致；check/stage/apply 成功本身不算确认。离线节点不会下发任务。</p>
 					</section>
 					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>节点配对 · 开发预览</span></footer>
 				</main>
@@ -391,9 +357,9 @@ templ NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.N
 templ InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifact *InstallArtifact) {
 	<p class="hint">配对码请在安装器的 Pairing code 提示处输入；不要放入命令行、URL 或日志。</p>
 	if artifact == nil {
-		<p class="hint">当前开发预览不提供安装制品与可执行安装命令。</p>
+		<p class="hint">当前开发预览不提供安装文件与可执行安装命令。</p>
 	} else {
-		<div class="copy-row"><p class="hint">先下载同源 CLI，核对固定 SHA-256 后再执行（命令不含配对码）：</p></div>
+		<div class="copy-row"><p class="hint">先核对文件校验值再执行（命令不含配对码）：</p></div>
 		<div class="copy-row"><div id="install-command"><pre><code>echo { ShellQuote(artifact.SHA256 + "  meshmux") } | sha256sum -c -
 chmod +x meshmux
 ./meshmux install { ShellQuote(n.Role) } --hub { ShellQuote(hubOrigin) } --node { ShellQuote(n.ID) } --vless-port { ShellQuote(n.VlessPortString()) } --ssh-port { ShellQuote(n.SSHPortString()) }</code></pre></div><button type="button" class="copy-button text-button" data-copy-target="#install-command">复制安装命令</button></div>
@@ -405,11 +371,9 @@ templ NodeActionPage(p PageData, nodeID string, configRevision int64, configSHA 
 		<main class="error-page">
 			@Brand()
 			<section class="panel">
-				<p class="eyebrow">FIXED CONFIG TRANSACTION</p>
-				<h1>配置修订已发布</h1>
-				<p>节点 <code>{ nodeID }</code> 的配置修订 <strong>{ configRevision }</strong> 已在四任务链中排队。</p>
-				<dl class="details"><dt>编译配置 SHA-256</dt><dd><code data-copy>{ configSHA }</code></dd><dt>任务数</dt><dd>{ taskCount }</dd></dl>
-				<p class="hint">本页只表示已排队；Agent 需完成 check、stage、apply 与回读后才算应用。</p>
+				<p class="eyebrow">MESHMUX CONSOLE</p>
+				<h1>配置已下发</h1>
+				<p>节点 <code>{ nodeID }</code> 的更新已开始，稍后在本页查看是否生效。</p>
 				<a href="/nodes">返回节点列表 →</a>
 			</section>
 		</main>
@@ -424,7 +388,7 @@ templ ErrorPage(code string, message string, next string, op string) {
 	@Document("请求未完成") {
 		<main class="error-page">
 			@Brand()
-			<div class="panel"><span class="badge failure">请求未完成</span><h1>{ message }</h1><p>{ next }</p><dl class="details"><dt>错误码</dt><dd><code>{ code }</code></dd><dt>操作编号</dt><dd><code>{ op }</code></dd><dt>阶段</dt><dd>web</dd></dl><a href="/">返回控制台 →</a></div>
+			<div class="panel"><span class="badge failure">请求未完成</span><h1>{ message }</h1><p>{ next }</p><a href="/">返回控制台 →</a></div>
 		</main>
 	}
 }
