@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -20,9 +21,27 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 )
 
+// Event writes one audit event at Warn. The level is a visibility floor, not a
+// severity judgement: the process floor is Warn (internal/logging), so an Info
+// audit line would never reach the journal at all. An audit event is a business
+// fact an operator must be able to find afterwards, and its cadence is one line
+// per operator action. A path that repeats on every poll must use EventAt with
+// Debug instead (see agentHeartbeat).
 func (rt *Runtime) Event(r *http.Request, code string) {
+	rt.EventAt(r, slog.LevelWarn, code)
+}
+
+// EventAt writes one audit event at an explicit severity. Three tiers exist:
+//
+//   - Warn (Event): a business fact or a refusal, one line per operator action.
+//     This is the only tier visible at the default floor.
+//   - Info: per-step detail of one operation, such as the agent_task_result line
+//     a recorded task result emits. Restored by MESHMUX_LOG_LEVEL=info.
+//   - Debug: a path a node repeats on every poll. A 1s heartbeat cannot write a
+//     line per tick, so its success path lands here.
+func (rt *Runtime) EventAt(r *http.Request, level slog.Level, code string) {
 	// Allowlisted fields only: never log URLs, headers, forms, usernames or raw errors.
-	rt.Log.Info("web_event", "operation_id", Operation(r), "stage", "web", "error_code", code)
+	rt.Log.Log(r.Context(), level, "web_event", "operation_id", Operation(r), "stage", "web", "error_code", code)
 }
 
 // jsonAPI marks every request that reaches the wrapped route as a JSON API. It

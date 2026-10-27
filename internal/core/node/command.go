@@ -20,11 +20,21 @@ const (
 	// RuntimeLockPath is shared by the Agent transaction writer and installer
 	// repair. It is never held for the lifetime of the Agent process.
 	RuntimeLockPath = "/var/lib/meshmux-agent/runtime.lock"
+	// defaultAgentPollInterval is the Agent's heartbeat and task-poll cadence:
+	// one ticker carries both, so this is also how fast a queued task is
+	// picked up. One second keeps last_heartbeat fresh against the Hub's
+	// 2-minute OfflineAfter window at the cost of one small authenticated
+	// request per second per node; the fleet is small, so the extra load is
+	// accepted.
+	defaultAgentPollInterval = time.Second
 	// agentLockTimeout bounds one poll cycle's wait for the shared runtime
-	// lock. It is well under the 30s poll interval, so a lock held by an
-	// install/repair costs one retry and never delays the next heartbeat
-	// (spec §4.9). The startup readback retry reuses this same budget: while
-	// the lock is held for bootstrap, the Agent must not wait longer than one
+	// lock. A lock held by an install/repair costs one retry and never turns
+	// into a terminal failure, so the task is simply redelivered on a later
+	// poll (spec §4.9). The wait is longer than one 1s interval on purpose: a
+	// contended cycle is dropped by the ticker, and the heartbeat sent at the
+	// top of the next cycle is still far inside the Hub's 2-minute offline
+	// window. The startup readback retry reuses this same budget: while the
+	// lock is held for bootstrap, the Agent must not wait longer than one
 	// contended poll cycle.
 	agentLockTimeout = 5 * time.Second
 	// runtimeStartupLockTimeout bounds the startup wait for that same lock. It
@@ -44,7 +54,7 @@ type CommandRunner interface {
 
 // Spawner is the start-only half of the same boundary. Spawn returns once the
 // child exists, with its PID, and the Agent never waits for it: the poll loop
-// must keep heartbeating while the child runs (30s poll interval). The PID is
+// must keep heartbeating while the child runs (1s poll interval). The PID is
 // how the next poll tells "the update is still running" from "the child died
 // without installing the target".
 type Spawner interface {
@@ -398,15 +408,23 @@ func runInstalledAgent(ctx context.Context, stderr io.Writer, options []RunOptio
 	if err != nil {
 		return err
 	}
+	// Warn, not Info: the run sink's default floor is Warn (internal/logging),
+	// so this is the one line that proves a restart reached the poll loop. An
+	// operator needs it after an upgrade or after confirming the 1s heartbeat
+	// cadence, and it is written once per process, not once per tick.
+	agentRuntime.logger.Warn("agent_started", "role", string(cfg.Role), "agent_version", cfg.AgentVersion)
 	return agentRuntime.Run(ctx)
 }
 
 func defaultPollInterval(d time.Duration) time.Duration {
 	if d <= 0 {
-		return 30 * time.Second
+		return defaultAgentPollInterval
 	}
-	if d < time.Second {
-		return time.Second
+	// Sub-second overrides stay clamped: one heartbeat plus one task poll per
+	// interval per node is the whole cost, so a shorter one only multiplies
+	// requests without making liveness fresher than the Hub needs.
+	if d < defaultAgentPollInterval {
+		return defaultAgentPollInterval
 	}
 	return d
 }

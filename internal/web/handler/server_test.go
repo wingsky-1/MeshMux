@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/logging"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"log/slog"
 	"net/http"
@@ -36,9 +37,20 @@ type browser struct {
 
 func testApp(t *testing.T) (*Server, *bytes.Buffer) {
 	t.Helper()
+	// The production floor, not a test-only one: a test that asserts a log line
+	// must see exactly what journald would. A test inspecting a deliberately
+	// demoted line asks for that level with testAppWithLevel.
+	return testAppWithLevel(t, logging.Default)
+}
+
+// testAppWithLevel builds the fixture with an explicit handler level. Most tests
+// want logging.Default, because that is what journald shows. A test that inspects
+// a demoted line (the per-poll heartbeat audit) asks for Debug here.
+func testAppWithLevel(t *testing.T, level slog.Level) (*Server, *bytes.Buffer) {
+	t.Helper()
 	var logs bytes.Buffer
 	c := Config{Listen: "127.0.0.1:9080", Origin: testOrigin, DataDir: filepath.Join(t.TempDir(), "state")}
-	app, err := newServer(c, slog.New(slog.NewJSONHandler(&logs, nil)))
+	app, err := newServer(c, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: level})))
 	if err != nil {
 		t.Fatal(err)
 	}

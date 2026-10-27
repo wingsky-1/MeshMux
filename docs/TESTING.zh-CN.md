@@ -1,12 +1,12 @@
 # 测试与环境变量
 
-本文只记录**测试与 CI 代码实际读取**的 `MESHMUX_*` 环境变量。下列 file:line 以合入时基线为准，仅供定位；代码变动后以 `grep` 重新核对，不以本文行号为准。
+本文记录测试与 CI 代码实际读取的 `MESHMUX_*` 环境变量，以及生产代码会读取的那一个运行时变量（第 4 节）。下列 file:line 以合入时基线为准，仅供定位；代码变动后以 `grep` 重新核对，不以本文行号为准。
 
 判定口径：以 `os.Getenv` / `os.LookupEnv` / `syscall.Getenv` 及脚本中真实的取值语句为准，不按名字前缀猜测。仓库当前只使用 `os.Getenv`，没有 `LookupEnv` 或 `syscall.Getenv` 调用。
 
 ## 1. 结论与边界
 
-- 26 个变量由 Go 测试通过 `os.Getenv` 读取，全部位于 `*_test.go`；生产进程（`cmd/`、`internal/` 的非测试文件）不读取任何 `MESHMUX_*` 环境变量，因此这些变量不是运行时配置。
+- 26 个变量由 Go 测试通过 `os.Getenv` 读取，全部位于 `*_test.go`；这 26 个都不是运行时配置。生产代码只读取一个运行时变量 `MESHMUX_LOG_LEVEL`（见第 4 节），除此之外不读取任何 `MESHMUX_*`。
 - 3 个变量只由测试脚本自身读取（Node/Shell），见第 3 节。
 - 所有变量未设置时都不会导致生产行为变化；测试侧要么 `t.Skip`，要么由调用方显式设置（第 2 节“未设置时默认行为”）。
 - 变量只在对应 workflow 的隔离容器/一次性 VM 内使用，不依赖仓库 secrets，符合 [CI_HUB_VALIDATION](CI_HUB_VALIDATION.zh-CN.md) 的 L1/L2/L3 分层。
@@ -56,13 +56,21 @@
 | `MESHMUX_LOCAL_IMAGE` | `scripts/ci-node-local.sh:28`（`${VAR:-默认}`） | 本地 L3 docker harness 使用的镜像 | 仅本地 `bash scripts/ci-node-local.sh`，参数为 `edge` 或 `out`；没有 workflow 调用 | `meshmux/node-l3local:13` |
 | `MESHMUX_LOCAL_BASE` | `scripts/ci-node-local.sh:29`（`${VAR:-默认}`） | 本地 harness 的基础镜像 | 同上 | `debian:13` |
 
-## 4. 已排除的 lookalike
+## 4. 运行时配置变量
+
+这些变量由生产代码读取，不是测试开关；设置它们会改变运行行为。
+
+| 变量名 | 读取点 | 用途 | 生效范围 | 未设置时的默认行为 |
+| --- | --- | --- | --- | --- |
+| `MESHMUX_LOG_LEVEL` | `internal/logging/logging.go`（`EnvLevel`，`FromEnv`） | 两个长驻入口（`__internal-web`、`__internal-agent`）共用的 slog 级别 | Hub 与节点进程；建议用 systemd drop-in `Environment=MESHMUX_LOG_LEVEL=info` 设置 | 默认 `warn`；接受 `debug`/`info`/`warn`/`warning`/`error`，大小写不敏感；无法识别的值保持 `warn` 并记一条 `LOG_LEVEL_INVALID` |
+
+## 5. 已排除的 lookalike
 
 - `MESHMUX_BINARY_INVALID`：稳定错误码，不是环境变量，没有读取点。证据：`internal/cli/install/apply.go:348,744`、`internal/cli/install/local_line.go:334,390,394,416,420`、`internal/cli/install/node_apply.go:281` 均把它作为 `InstallError.Code` 或 `errors.New` 的文本。
 - 其他含 `MESHMUX_` 的命中若出现在脚本、注释或文档里，只是上述变量名的设置方或引用，不是独立变量；表内不重复收录。
-- 生产代码不读取 `MESHMUX_*`：`grep -rn 'os.Getenv\|os.LookupEnv\|syscall.Getenv' --include='*.go'` 的全部命中都在 `*_test.go`。
+- 生产代码只读取 `MESHMUX_LOG_LEVEL`（第 4 节）与 systemd 提供的 `NOTIFY_SOCKET` / `WATCHDOG_USEC`；后者不是本项目发明的变量。其余 `MESHMUX_*` 的 `os.Getenv` 命中都在 `*_test.go`。
 
-## 5. 如何本地跑测试
+## 6. 如何本地跑测试
 
 常规本地流程（gofmt、vet、test、race、build）见 [DEVELOPMENT](DEVELOPMENT.zh-CN.md) 的“本地运行”小节，本文不重复。
 
@@ -78,7 +86,7 @@
   需要真实客户端二进制的订阅导入检查，同时设置 `MESHMUX_SINGBOX_TEST_BINARY` 与 `MESHMUX_MIHOMO_TEST_BINARY`。
 - L2/L3（Debian 13 容器、一次性 QEMU VM、真实 systemd/nftables）：使用 `scripts/ci-*.sh`，所需环境与证据级别见 [CI_HUB_VALIDATION](CI_HUB_VALIDATION.zh-CN.md)；这些脚本只允许操作隔离 fixture/VM，禁止指向现网。
 
-## 6. 维护约定
+## 7. 维护约定
 
 - 新增、删除或改名 `MESHMUX_*` 变量时，在同一个 PR 更新本表，并保留“读取点”与“设置方”两列的证据。
 - 表中行号会漂移；合并冲突时以 `grep -rn 'os.Getenv' --include='*_test.go'` 和脚本中的赋值行为准重新定位。

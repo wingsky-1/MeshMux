@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -254,8 +255,12 @@ func TestOutReadbackRetryPointerBoundaries(t *testing.T) {
 // TestRetryPointerIsLoggedForTheRetryAffordance proves the pointer reaches the
 // operator-facing event, which is the affordance the node retry route acts on.
 // A field that is computed but never emitted cannot guide a retry.
+//
+// The fixture runs at Debug because the heartbeat's readback line is Debug: a
+// 1s heartbeat cannot write an Info line per tick, so the same projection is
+// only visible in a debug-level journal. The payload itself is unchanged.
 func TestRetryPointerIsLoggedForTheRetryAffordance(t *testing.T) {
-	f := newPairedWebOutSyncApp(t)
+	f := newPairedWebOutSyncAppWithLevel(t, slog.LevelDebug)
 	app := f.app
 	now := time.Now()
 

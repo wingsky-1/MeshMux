@@ -31,6 +31,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
+	"github.com/wingsky-1/MeshMux/internal/logging"
 	"github.com/wingsky-1/MeshMux/internal/web"
 )
 
@@ -47,14 +48,33 @@ func Run(args []string) int {
 }
 
 // newLogger is the one log sink of the launcher: JSON on stdout with UTC
-// timestamps, so journald and the boot guard read the same fields.
+// timestamps, so journald and the boot guard read the same fields. The level
+// comes from internal/logging (default Warn, MESHMUX_LOG_LEVEL overrides), so a
+// healthy 1s-heartbeat fleet stays out of the journal until something is wrong.
 func newLogger() *slog.Logger {
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-		if a.Key == slog.TimeKey && len(groups) == 0 {
-			return slog.Time(slog.TimeKey, a.Value.Time().UTC())
-		}
-		return a
-	}}))
+	return newLoggerFor(os.Stdout)
+}
+
+// newLoggerFor is newLogger over an arbitrary writer, so a test can read what
+// the real settings emit without capturing os.Stdout.
+func newLoggerFor(w io.Writer) *slog.Logger {
+	level, ok := logging.FromEnv()
+	logger := slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey && len(groups) == 0 {
+				return slog.Time(slog.TimeKey, a.Value.Time().UTC())
+			}
+			return a
+		},
+	}))
+	if !ok {
+		// The value is never echoed: it is unvetted operator input. The stable
+		// code is enough to point at MESHMUX_LOG_LEVEL, and the floor is
+		// unchanged, so the service still starts.
+		logger.Warn("log_level_invalid", "stage", "startup", "error_code", "LOG_LEVEL_INVALID")
+	}
+	return logger
 }
 
 // launch is the one-shot "start" flow: prepare -> assemble -> listen -> serve.
@@ -156,7 +176,11 @@ func serve(app *web.Server, server *http.Server, listener net.Listener, devHTTP 
 		}
 		close(stopped)
 	}()
-	logger.Info("web_started", "stage", "startup", "error_code", "WEB_STARTED", "development_http", devHTTP)
+	// A start must be observable under the default Warn floor: it is the one
+	// positive line an operator greps for after a restart, and it fires twice
+	// per process lifetime, not per request. The stable code keeps it
+	// filterable, and the level states plainly that it is not an Info line.
+	logger.Warn("web_started", "stage", "startup", "error_code", "WEB_STARTED", "development_http", devHTTP)
 	err := server.Serve(listener)
 	stop()
 	<-stopped
@@ -164,7 +188,9 @@ func serve(app *web.Server, server *http.Server, listener net.Listener, devHTTP 
 		logger.Error("http_failed", "error_code", "HTTP_SERVE_FAILED")
 		return 1
 	}
-	logger.Info("web_stopped", "stage", "shutdown", "error_code", "WEB_STOPPED")
+	// Same reasoning as web_started: a clean stop is startup/shutdown evidence
+	// an operator needs at the default level, and it is not per-request noise.
+	logger.Warn("web_stopped", "stage", "shutdown", "error_code", "WEB_STOPPED")
 	return 0
 }
 

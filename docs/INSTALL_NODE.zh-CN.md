@@ -169,6 +169,8 @@ Node 页面只暴露固定操作，管理员不能提交任意 task kind、命�
 - “吊销身份”把未完成任务标记为 `IDENTITY_REVOKED`，并使待用配对码失效；不会代替管理员删除宿主机数据。
 - 没有 heartbeat、节点仍为 `pending`，或最近 heartbeat 超过 2 分钟时，Web 视为离线，不向该节点投递会修改节点状态的任务。
 
+Agent 的心跳与任务拉取共用同一个 1s ticker（`defaultAgentPollInterval`，`internal/core/node/command.go`）：每个周期先发心跳、再拉任务，所以排队的配置链最迟约 1s 后被取走。间隔可用 `RuntimeOptions.PollInterval` 覆盖（只接受不小于 1s 的值），没有对应的配置项或 CLI 参数。代价是每节点每秒一次小型已认证请求；当前机队规模下可接受，节点数量显著增长时需重新评估 Hub 的连接与写入压力。Hub 与 Agent 的日志默认级别都是 Warn（`internal/logging`），可用 `MESHMUX_LOG_LEVEL=info`（或 `debug`）恢复详细行；成功心跳本身在这条路径上只写 Debug，默认看不到，失败路径不变。详见 [OBSERVABILITY](OBSERVABILITY.zh-CN.md)。
+
 `paired`、`check` 成功或页面显示“本机服务已确认”只表示最新 desired revision 与严格本机 readback 一致；它们仍不代表公网可达、真实协议握手或客户端可用。
 
 ## 当前 baseline 与非目标

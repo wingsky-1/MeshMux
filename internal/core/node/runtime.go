@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/logging"
 )
 
 const (
@@ -736,7 +737,7 @@ func (r *Runtime) preLockHandoffGate(ctx context.Context, task protocol.Task) (p
 // reports a non-terminal handoff receipt at once. Every other row keeps the
 // existing stage path.
 //
-// The child is never waited for. The poll interval is 30s, so blocking here
+// The child is never waited for. The poll interval is 1s, so blocking here
 // would stop the heartbeat and make a live node look offline for the length of
 // an install. The handoff is recorded in the persisted marker before the child
 // exists, and the stage row stays "applying" until the marker resolves, so the
@@ -1338,8 +1339,22 @@ func boundedDetail(data []byte) string {
 	return string(shortened)
 }
 
+// newRunLogger is the Agent's one log sink: JSON on stderr with the time and
+// level keys dropped, because journald already stamps both and the stable codes
+// in the message are what an operator greps. The level comes from
+// internal/logging (default Warn, MESHMUX_LOG_LEVEL overrides), so a healthy
+// 1s-heartbeat Agent stays out of the journal.
 func newRunLogger(writer io.Writer) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{
+	level, ok := logging.FromEnv()
+	return newRunLoggerAt(writer, level, ok)
+}
+
+// newRunLoggerAt is newRunLogger with an explicit level resolution result, so a
+// test can read what each setting emits without touching the process
+// environment.
+func newRunLoggerAt(writer io.Writer, level slog.Level, ok bool) *slog.Logger {
+	logger := slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{
+		Level: level,
 		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
 			switch attr.Key {
 			case slog.TimeKey:
@@ -1350,4 +1365,11 @@ func newRunLogger(writer io.Writer) *slog.Logger {
 			return attr
 		},
 	}))
+	if !ok {
+		// The value is never echoed: it is unvetted operator input. The stable
+		// code points at MESHMUX_LOG_LEVEL and the floor is unchanged, so the
+		// Agent still runs.
+		logger.Warn("log_level_invalid", "error_code", "LOG_LEVEL_INVALID")
+	}
+	return logger
 }

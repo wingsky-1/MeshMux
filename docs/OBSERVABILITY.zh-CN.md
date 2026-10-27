@@ -66,6 +66,29 @@
 | OUT_DELETED | Out 路由删除且 ACL 清空已发布 | operation_id + 稳定码；未下发时改记 OUT_SYNC_PENDING |
 | MESH_ROUTE_UNTRACKED_DROPPED | Mesh 子网路由批准/撤销批准时，Headscale 已批准集合中存在适配器会拒绝、无法随整表替换发送的条目（退出路由 /0、带主机位等），该条目被移出集合 | operation_id + 稳定码，逐条记录；不含前缀本身。批准/撤销请求本身仍成功，页面以计数披露 |
 
+## 日志级别
+
+两个长驻入口（Hub `__internal-web` 与节点 `__internal-agent`）共用一个级别策略，实现在 `internal/logging`（`log/slog`，无第三方日志库）：
+
+- **默认 Warn**。健康机队的稳态是高频的：Agent 每 1s 心跳一次，Web 每次 Agent 轮询记一条事件。若默认 Info，journald 里会淹没真正需要处理的行，所以默认地板是 Warn。
+- **`MESHMUX_LOG_LEVEL`** 覆盖：`debug` / `info` / `warn`（或 `warning`）/ `error`，大小写与首尾空格不敏感。`info` 恢复逐任务/逐步骤的详细行，`debug` 再加上每跳心跳的审计行。未设置等价于 `warn`。
+- **无法识别的值不改变地板**：保持 Warn 并写一条 `log_level_invalid`（稳定码 `LOG_LEVEL_INVALID`），不打印操作员输入的原文，服务照常启动。
+- 系统级设置建议用 systemd drop-in：`systemctl edit meshmux-hub` 或 `meshmux-agent`，写 `[Service]` + `Environment=MESHMUX_LOG_LEVEL=info`，不要改安装器渲染的 unit。
+
+三档语义（`infra.Event` / `infra.EventAt`）：
+
+| 档 | 内容 | 默认可见 |
+| --- | --- | --- |
+| Warn | 业务审计事实与拒绝：绑定/解绑、发布、注销、登录失败、拒绝码、`agent_task_result` 之外的 `web_event` | 是 |
+| Info | 一次操作的逐步骤细节（如 `agent_task_result`、`out_readback`） | 否，`info` 恢复 |
+| Debug | 每轮询重复的路径（成功心跳的 `AGENT_HEARTBEAT` 与 `out_readback`） | 否，`debug` 恢复 |
+
+Warn 档不是严重度判断，而是**可见性下限**：审计事件是操作员事后必须能查到的业务事实，频率是“每操作一次一行”；`MESHMUX_LOG_LEVEL=warn` 时它必须仍在 journal 里。
+
+**启动证据在 Warn 下仍可见**：Hub 的 `WEB_STARTED`、`WEB_STOPPED` 与 Agent 的 `agent_started` 主动以 Warn 记录（每次进程生命周期各一次，不是请求噪声）；启动失败/监听失败/Watchdog 失败本就是 Error/Warn，Agent 的启动拒绝另有一条不经 slog 的稳定码 stderr 行，不受级别影响。
+
+**心跳的日志级别（1s 心跳的前提）**：`POST /api/agent/heartbeat` 的成功路径只写 Debug（`AGENT_HEARTBEAT` 与 `out_readback`），任何默认级别下 journal 里都看不到，否则每节点每秒两条会淹没真正的状态变化。失败路径不变：400 `HEARTBEAT_INVALID`、503 `DATABASE_UNAVAILABLE`、`AGENT_UNAUTHORIZED` 仍走 `web_event` 的 Warn，`out_readback_unavailable` 仍是 Warn。
+
 说明：`LINE_NOT_RETIRED` 由 #8-C 引入，此处只补登记、不改归属；`BOOTSTRAP_ACL_UNAVAILABLE` / `BOOTSTRAP_ACL_INVALID` 只在 #8-B 的中间提交存在过，同一 PR 内随「bootstrap 只做形状断言、不以受管文件自证」修正被删除，从未进入 `main`。**本表不声称覆盖全部稳定码**：`internal/cli/install` 与 `internal/core/node` 的阶段码（`ACL_*`、`OUT_ACL_READBACK_FAILED`、`LKG_*`、`BOOTSTRAP_*` 等）以对应包的返回值与任务结果为准；`OUT_ACL_UNATTESTED` 仍保留在基础表，用于「远端 ACL 无法 attest」这一独立事实。
 
 ## UI 交互
