@@ -1,8 +1,8 @@
 package subscription
 
 // The kernel-neutral composer IR. Validation and selection live in
-// compose.go; the four stages fill this plan and the makers in render.go turn
-// it into bytes. No maker reads an Action, an exportNode or a kernel tag rule:
+// compose.go; the stages fill this plan and the makers in render.go turn it
+// into bytes. No maker reads an Action, an exportNode or a kernel tag rule:
 // actions are mapped exactly once here, and a new matcher or maker is an
 // additive change to this file and the target maker only.
 //
@@ -12,10 +12,13 @@ package subscription
 //	  -> buildComposeSelection: shape checks, ordering, rule pin/overlap checks
 //	     (deterministic, no I/O); a blocking finding stops here
 //	  -> composeDocuments: stage 1 mesh material (sing-box only), stage 2 one
-//	     Line selector block, stage 3 Line double-hop route, stage 4 client
-//	     route; then the target makers
-//	  -> ComposeDocuments: two documents, per-Line fragments, SelectionID,
-//	     ContentID (the approval credential)
+//	     Line selector block, stage 3 the client egress (Line selector + the
+//	     selected Out) and the client route; then the target makers
+//	  -> ComposeDocuments: two documents, SelectionID, ContentID (the approval
+//	     credential)
+//
+// There is no server route stage: under client-chain egress the Line only
+// serves its own inbound, and the Out is one more egress the client dials.
 //
 // Nothing here reads a clock, a database, the network or a random source; the
 // same input always yields the same bytes.
@@ -28,21 +31,20 @@ import (
 )
 
 // composeEgress is the target-neutral egress of one routed rule. The three
-// library egresses reuse the shared action spellings; the last three exist only
-// here, because "the Out double hop", "the explicit block" and "the mesh
-// endpoint" are routing facts no rule library row can state.
+// library egresses reuse the shared action spellings; the endpoint exists only
+// here, because "the mesh endpoint" is a routing fact no rule library row can
+// state. A proxy rule names the Out tag when the selection carries an Out and
+// the Line selector otherwise; that is decided once, in buildClientRoutePlan.
 //
-// These names are IR identifiers, not kernel tags: a maker maps "block" to the
-// kernel's block tag and "line-out" to the Out tag, which is exactly why the
-// tag literals live in internal/core/node/protocol and not here.
+// These names are IR identifiers, not kernel tags: a maker maps "reject" to the
+// kernel's reject action and "endpoint" to its own endpoint tag, which is why
+// the tag literals live in internal/core/node/protocol and not here.
 type composeEgress string
 
 const (
 	composeEgressDirect   composeEgress = composeEgress(ir.ActionDirect)
 	composeEgressProxy    composeEgress = composeEgress(ir.ActionProxy)
 	composeEgressReject   composeEgress = composeEgress(ir.ActionReject)
-	composeEgressLineOut  composeEgress = "line-out"
-	composeEgressBlock    composeEgress = "block"
 	composeEgressEndpoint composeEgress = "endpoint"
 )
 
@@ -102,6 +104,19 @@ type composeLineBlock struct {
 	Selector  composeSelector
 }
 
+// composeOutEgress is stage 3: the selected egress the client dials itself.
+// Kind is "" for a MeshMux Out node (the SS link) and ComposeOutHTTP for an
+// external HTTP proxy. A nil *composeOutEgress means the subscription selects
+// no egress, so every proxy rule names the Line selector.
+type composeOutEgress struct {
+	Kind     string
+	Server   string
+	Port     int
+	LinkKey  string
+	Username string
+	Password string
+}
+
 // composeEndpoint is one mesh Tailscale endpoint material.
 type composeEndpoint struct {
 	Tag          string
@@ -123,6 +138,7 @@ type composeRouterPlan struct {
 	Endpoints []composeEndpoint
 	Lines     []composeLineOutbound
 	Selector  composeSelector
+	Out       *composeOutEgress
 	Route     composeRoutePlan
 }
 
@@ -195,9 +211,11 @@ func buildComposeMatcher(rule composeRenderedRule) composeMatcher {
 }
 
 // buildClientRoutePlan is stage 4: library actions become the client egresses.
-// A proxy rule points at the selector, direct at the explicit direct outbound
-// and reject at the kernel's reject action. The final egress is always the
-// selector.
+// A proxy rule points at the Out tag when the selection carries an egress and
+// at the selector otherwise, direct at the explicit direct outbound and reject
+// at the kernel's reject action. The final egress is always the selector: a
+// subscription sends the traffic its rules do not match over the Line, and the
+// Out is only ever reached through a proxy rule.
 func buildClientRoutePlan(rules []composeRenderedRule) composeRoutePlan {
 	plan := composeRoutePlan{
 		Rules:    make([]composeRouteRule, 0, len(rules)),
@@ -217,27 +235,22 @@ func buildClientRoutePlan(rules []composeRenderedRule) composeRoutePlan {
 	return plan
 }
 
-// buildLineRoutePlan is stage 3: the server-side double hop. A proxied rule
-// names the Out, a reject names the explicit block and a direct rule stays on
-// the Line. The final egress stays the Line so a selected Out never becomes
-// the default path of a subscription that only names it in rules.
-func buildLineRoutePlan(rules []composeRenderedRule) composeRoutePlan {
-	plan := composeRoutePlan{
-		Rules:    make([]composeRouteRule, 0, len(rules)),
-		RuleSets: buildComposeRuleSets(rules),
-		Final:    composeEgressDirect,
+// buildOutEgress is stage 3: the selected egress the client dials itself. A
+// nil selection yields a nil egress, so a direct subscription keeps the frozen
+// selector-only bytes. The credential shape is chosen by Kind: an Out node
+// carries the SS link key, an external HTTP proxy its optional Basic pair.
+func buildOutEgress(out *ComposeOut) *composeOutEgress {
+	if out == nil {
+		return nil
 	}
-	for _, rule := range rules {
-		egress := composeEgressDirect
-		switch rule.action {
-		case ActionProxy:
-			egress = composeEgressLineOut
-		case ActionReject:
-			egress = composeEgressBlock
-		}
-		plan.Rules = append(plan.Rules, composeRouteRule{Matcher: buildComposeMatcher(rule), Egress: egress})
+	return &composeOutEgress{
+		Kind:     out.Kind,
+		Server:   out.Server,
+		Port:     out.Port,
+		LinkKey:  out.LinkKey,
+		Username: out.Username,
+		Password: out.Password,
 	}
-	return plan
 }
 
 // buildMeshMaterial is stage 1: the mesh-only sing-box material. It never
@@ -334,9 +347,9 @@ func buildComposeSelection(lines []ComposeLine, outs []ComposeOut, rules []Compo
 			}
 		}
 		if proxyRules == 0 {
-			// An Out that no rule selects would render a Line route that never
-			// uses it: the operator asked for a double hop the document cannot
-			// express. Refuse instead of silently keeping the Line egress.
+			// An Out that no rule routes to would be an egress the client never
+			// dials: the operator asked for a hop the document cannot express.
+			// Refuse instead of silently shipping an unused credential.
 			block(CodeComposeOutUnused, "已选择出口，但没有任何代理规则使用它；请为规则选择代理动作或取消出口")
 		}
 	}
@@ -344,7 +357,7 @@ func buildComposeSelection(lines []ComposeLine, outs []ComposeOut, rules []Compo
 		return composeSelection{}, diagnostics
 	}
 	if out != nil {
-		remind(CodeComposeOutRecorded, "出口选择已记录；Line 路由片段按所选出口渲染并通过内核门禁")
+		remind(CodeComposeOutRecorded, "出口选择已记录；出口凭据随客户端文档下发，客户端按代理规则直接连接出口")
 	}
 	if len(network) > 0 {
 		remind(CodeComposeNetworkRecorded, "组网设备选择已记录；Mesh 子网路由执行待 1.1，本订阅不包含 Mesh 端点")
@@ -364,8 +377,9 @@ func sortComposeLines(selected []ComposeLine) {
 	})
 }
 
-// composeDocuments renders the two client documents, the optional Line route
-// fragments and both identities from one validated selection.
+// composeDocuments renders the two client documents and both identities from
+// one validated selection. The Line publishes no route: the Out lives in the
+// client documents, so there is no fragment to render.
 func composeDocuments(selection composeSelection) (ComposeDocuments, []Diagnostic) {
 	diagnostics := make([]Diagnostic, 0, 2)
 	block := func(code, detail string) {
@@ -388,10 +402,12 @@ func composeDocuments(selection composeSelection) (ComposeDocuments, []Diagnosti
 	}
 	blockLines := buildLineBlock(plan.Nodes)
 	clientRoute := buildClientRoutePlan(selection.Rendered)
+	outEgress := buildOutEgress(selection.Out)
 
 	singBox, err := makeStandardSingBoxDocument(composeRouterPlan{
 		Lines:    blockLines.Outbounds,
 		Selector: blockLines.Selector,
+		Out:      outEgress,
 		Route:    clientRoute,
 	})
 	if err != nil {
@@ -401,6 +417,7 @@ func composeDocuments(selection composeSelection) (ComposeDocuments, []Diagnosti
 	mihomo, err := makeMihomoDocument(composeRouterPlan{
 		Lines:    blockLines.Outbounds,
 		Selector: blockLines.Selector,
+		Out:      outEgress,
 		Route:    clientRoute,
 	})
 	if err != nil {
@@ -412,17 +429,10 @@ func composeDocuments(selection composeSelection) (ComposeDocuments, []Diagnosti
 		return ComposeDocuments{}, diagnostics
 	}
 
-	documents := ComposeDocuments{SingBox: singBox, Mihomo: mihomo, LineRoutes: []LineRoute{}}
-	if selection.Out != nil {
-		fragment, err := makeLineRouteFragment(buildLineRoutePlan(selection.Rendered))
-		if err != nil {
-			block(CodeComposeRuleInvalid, "Line 路由片段无法渲染")
-			return ComposeDocuments{}, diagnostics
-		}
-		for _, entry := range selection.Lines {
-			documents.LineRoutes = append(documents.LineRoutes, LineRoute{NodeID: entry.Line.NodeID, Fragment: fragment})
-		}
-	}
+	// LineRoutes stays nil: the Line publishes no route for a subscription any
+	// more (client-chain egress). The field is kept only for source
+	// compatibility and is removed in a later v1 release.
+	documents := ComposeDocuments{SingBox: singBox, Mihomo: mihomo}
 	documents.SelectionID = composeSelectionID(baseLines, selection.Out, selection.Rules, selection.Network)
 	documents.ContentID = composeContentID(documents)
 	return documents, diagnostics

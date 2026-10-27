@@ -32,6 +32,13 @@ proxies:
       short-id: "0123456789abcdef"
     network: "tcp"
     udp: false
+  - name: "out"
+    type: "ss"
+    server: "out.example.invalid"
+    port: 443
+    cipher: "2022-blake3-aes-128-gcm"
+    password: "AQIDBAUGBwgJCgsMDQ4PEA=="
+    udp: false
 proxy-groups:
   - name: "PROXY"
     type: "select"
@@ -59,7 +66,7 @@ rule-providers:
     interval: 86400
 rules:
   - "RULE-SET,geosite-cn@20261026,DIRECT"
-  - "RULE-SET,ai@20261026,PROXY"
+  - "RULE-SET,ai@20261026,out"
   - "DOMAIN-SUFFIX,ads.example.invalid,REJECT"
   - "DOMAIN-SUFFIX,tracker.example.invalid,REJECT"
   - "DOMAIN,dl.example.invalid,DIRECT"

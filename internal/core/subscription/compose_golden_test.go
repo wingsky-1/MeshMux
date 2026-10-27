@@ -23,6 +23,9 @@ const (
 	goldenRealityPriv   = "_5PhaIMFD9Kcdl95wSVXkKdto_EhCeGcgPdImdYu2zE"
 	goldenRealityPub    = "6lxPE-fyg1NgBSYXHy5NVJASmJ3E5OPwfEX2NNaUMXo"
 	goldenShortID       = "0123456789abcdef"
+	// goldenLinkKey is a throwaway 16-byte base64-std link key of the fixtures.
+	// It authenticates nothing: it is never installed and never served.
+	goldenLinkKey = "AQIDBAUGBwgJCgsMDQ4PEA=="
 )
 
 func goldenLine(nodeID, name string, sortOrder int) Line {
@@ -61,6 +64,7 @@ func goldenSelection() ([]ComposeLine, []ComposeOut, []ComposeRule, []ComposeNet
 		DisplayName: "东京 Out",
 		Server:      "out.example.invalid",
 		Port:        443,
+		LinkKey:     goldenLinkKey,
 	}}
 	rules := []ComposeRule{
 		{StableKey: "preset-direct-cn", Version: 1, Action: ActionDirect, Kind: MatcherGeoSite,
@@ -130,10 +134,11 @@ func TestComposeGoldenArtifacts(t *testing.T) {
 	}
 	assertGolden(t, "standard.singbox.json", documents.SingBox)
 	assertGolden(t, "standard.mihomo.yaml", documents.Mihomo)
-	if len(documents.LineRoutes) != 2 {
-		t.Fatalf("line routes = %d, want 2", len(documents.LineRoutes))
+	// The Line publishes no route for a subscription any more (client-chain
+	// egress): the retired field is empty and its golden is gone.
+	if len(documents.LineRoutes) != 0 {
+		t.Fatalf("line routes = %d, want none", len(documents.LineRoutes))
 	}
-	assertGolden(t, "line-route.json", documents.LineRoutes[0].Fragment)
 	assertGolden(t, "standard.content-id.txt", []byte(documents.ContentID))
 
 	baseLines, credentials := composeBaseLines(lines)

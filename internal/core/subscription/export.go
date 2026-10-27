@@ -43,11 +43,15 @@ const (
 	// so the configuration never depends on an implicit default and never
 	// references an Out node.
 	exportSingBoxDirectTag = protocol.OutboundDirectTag
-	// singBoxOutTag and singBoxBlockTag are the Line-route egress tags the
-	// composer renders. They are the node renderer's server tags, so a route
-	// fragment produced here is publishable as a Line candidate unchanged.
-	singBoxOutTag   = protocol.OutboundOutTag
-	singBoxBlockTag = protocol.OutboundBlockTag
+	// exportOutTag is the client-side egress tag of the selected Out. Both
+	// client documents spell it the same way (the sing-box outbound tag and the
+	// Mihomo proxy name), and it is the node renderer's Out tag, so a reader of
+	// either document sees one name for "the egress the operator selected".
+	exportOutTag = protocol.OutboundOutTag
+	// exportOutLinkMethod is the pinned Shadowsocks method of the Out link the
+	// client dials. The Out inbound serves exactly this method, so the client
+	// half of the handshake must name it.
+	exportOutLinkMethod = protocol.OutLinkMethod
 	// exportSingBoxInboundTag is the tag of the loopback mixed inbound.
 	exportSingBoxInboundTag = "mixed-in"
 	// exportSingBoxDNSTag is the tag of the local DNS transport used to
@@ -276,6 +280,9 @@ type singBoxClientOutbound struct {
 	UUID       string            `json:"uuid,omitempty"`
 	Flow       string            `json:"flow,omitempty"`
 	Network    string            `json:"network,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Username   string            `json:"username,omitempty"`
+	Password   string            `json:"password,omitempty"`
 	TLS        *singBoxClientTLS `json:"tls,omitempty"`
 	Outbounds  []string          `json:"outbounds,omitempty"`
 	Default    string            `json:"default,omitempty"`
