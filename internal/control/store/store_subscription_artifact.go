@@ -29,6 +29,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -137,7 +139,7 @@ func snapshotArtifactTx(tx *sql.Tx, subscriberID string) (string, bool, error) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, errors.New(CodeDatabaseUnavailable)
+		return "", false, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if approved != 1 || artifactID == "" {
 		return "", true, nil

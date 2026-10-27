@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -93,7 +95,7 @@ func OpenStore(dir string) (*Store, error) {
 	}
 	f.Close()
 	u := url.URL{Scheme: "file", Path: filepath.Join(abs, databaseFileName)}
-	s.DB, err = sql.Open("sqlite", u.String()+sqliteDSNPragmas())
+	s.DB, err = sql.Open("sqlite", u.String()+common.SQLiteDSNPragmas())
 	if err != nil {
 		s.Close()
 		return nil, err
@@ -124,7 +126,7 @@ func OpenStore(dir string) (*Store, error) {
 // writes its check documents there, so they never leave the private boundary.
 func (s *Store) ScratchDir() (string, error) {
 	if s.Dir == "" || !filepath.IsAbs(s.Dir) {
-		return "", errors.New(codePublishGate + ": the hub data directory is unavailable")
+		return "", errors.New(common.CodePublishGate + ": the hub data directory is unavailable")
 	}
 	return s.Dir, nil
 }
@@ -371,11 +373,11 @@ func (s *Store) PrepareBootstrap(now time.Time) error {
 		}
 		return nil
 	}
-	token := RandomToken()
+	token := common.RandomToken()
 	if err = os.WriteFile(path, []byte(token+"\n"), 0600); err != nil {
 		return err
 	}
-	_, err = s.DB.Exec("INSERT OR REPLACE INTO bootstrap VALUES(1,?,?)", TokenHash(token), now.Add(30*time.Minute).Unix())
+	_, err = s.DB.Exec("INSERT OR REPLACE INTO bootstrap VALUES(1,?,?)", common.TokenHash(token), now.Add(30*time.Minute).Unix())
 	return err
 }
 
@@ -390,12 +392,12 @@ func (s *Store) Session(token string, now time.Time) (Session, error) {
 	if len(token) != 43 {
 		return sess, sql.ErrNoRows
 	}
-	sess.Hash = TokenHash(token)
-	err := s.DB.QueryRow("UPDATE sessions SET seen=? WHERE token_hash=? AND expires>? AND seen>? RETURNING csrf, authenticated, expires", now.Unix(), sess.Hash, now.Unix(), now.Add(-idleLifetime).Unix()).Scan(&sess.CSRF, &sess.Auth, &sess.Expires)
+	sess.Hash = common.TokenHash(token)
+	err := s.DB.QueryRow("UPDATE sessions SET seen=? WHERE token_hash=? AND expires>? AND seen>? RETURNING csrf, authenticated, expires", now.Unix(), sess.Hash, now.Unix(), now.Add(-common.IdleLifetime).Unix()).Scan(&sess.CSRF, &sess.Auth, &sess.Expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Once expiry is observed, persist revocation so a later clock correction
 		// or restart cannot make this expired token valid again.
-		if _, cleanupErr := s.DB.Exec("DELETE FROM sessions WHERE token_hash=? AND (expires<=? OR seen<=?)", sess.Hash, now.Unix(), now.Add(-idleLifetime).Unix()); cleanupErr != nil {
+		if _, cleanupErr := s.DB.Exec("DELETE FROM sessions WHERE token_hash=? AND (expires<=? OR seen<=?)", sess.Hash, now.Unix(), now.Add(-common.IdleLifetime).Unix()); cleanupErr != nil {
 			return sess, cleanupErr
 		}
 	}
@@ -415,14 +417,14 @@ func (s *Store) Attempt(now time.Time) (bool, time.Duration, error) {
 	err := s.DB.QueryRow(`UPDATE auth_limit SET
  attempts=CASE WHEN started<=? THEN 1 ELSE attempts+1 END,
  started=CASE WHEN started<=? THEN ? ELSE started END
- WHERE id=1 RETURNING attempts, started`, now.Add(-authWindow).Unix(), now.Add(-authWindow).Unix(), now.Unix()).Scan(&attempts, &started)
+ WHERE id=1 RETURNING attempts, started`, now.Add(-common.AuthWindow).Unix(), now.Add(-common.AuthWindow).Unix(), now.Unix()).Scan(&attempts, &started)
 	if err != nil {
 		return false, 0, err
 	}
-	if attempts <= authBudget {
+	if attempts <= common.AuthBudget {
 		return true, 0, nil
 	}
-	retry := time.Unix(started, 0).Add(authWindow).Sub(now)
+	retry := time.Unix(started, 0).Add(common.AuthWindow).Sub(now)
 	if retry <= 0 {
 		retry = time.Second
 	}

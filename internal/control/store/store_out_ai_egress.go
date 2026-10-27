@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -53,11 +55,11 @@ type OutEgressFacts struct {
 func (s *Store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, error) {
 	lineID = strings.TrimSpace(lineID)
 	if err := subscription.ValidateID(lineID); err != nil {
-		return OutEgressFacts{}, errLineIDInvalid()
+		return OutEgressFacts{}, common.ErrLineIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return OutEgressFacts{}, errors.New(CodeDatabaseUnavailable)
+		return OutEgressFacts{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	return outEgressFactsTx(tx, lineID, now)

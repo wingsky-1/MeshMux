@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
@@ -22,24 +24,24 @@ import (
 // serve.
 func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Line, error) {
 	if err := subscription.ValidateID(line.NodeID); err != nil {
-		return subscription.Line{}, errLineNodeIDInvalid()
+		return subscription.Line{}, common.ErrLineNodeIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Line{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	var vlessPort int
 	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, line.NodeID).Scan(&role, &vlessPort)
 	if errors.Is(err, sql.ErrNoRows) {
-		return subscription.Line{}, errLineNotFound
+		return subscription.Line{}, common.ErrLineNotFound
 	}
 	if err != nil {
-		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Line{}, errors.New(common.CodeDatabaseUnavailable)
 	}
-	if role != string(nodeRoleEdge) {
-		return subscription.Line{}, errLineRoleInvalid
+	if role != string(common.NodeRoleEdge) {
+		return subscription.Line{}, common.ErrLineRoleInvalid
 	}
 	if line.Port != vlessPort {
 		return subscription.Line{}, errors.New("LINE_PORT_MISMATCH: the line port must match the vless port of the node")
@@ -56,7 +58,7 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 		line.ShortID = storedShort
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Line{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	// The client-facing address is canonicalized to lower case, so one Line is
 	// never published under two spellings of the same host. An IPv6 address
@@ -88,21 +90,21 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	result, err := tx.Exec(`UPDATE line_settings SET display_name=?, server=?, port=?, sort_order=?, server_name=?, handshake_server=?, handshake_port=?, local=?, updated_at=? WHERE node_id=?`,
 		line.DisplayName, line.Server, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort, local, now.Unix(), line.NodeID)
 	if err != nil {
-		return subscription.Line{}, errLineSettingsFailed
+		return subscription.Line{}, common.ErrLineSettingsFailed
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return subscription.Line{}, errLineSettingsFailed
+		return subscription.Line{}, common.ErrLineSettingsFailed
 	}
 	if affected == 0 {
 		if _, err = tx.Exec(`INSERT INTO line_settings(node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			line.NodeID, line.DisplayName, line.Server, line.Port, line.SortOrder, line.ServerName, line.HandshakeServer, line.HandshakePort,
 			line.PrivateKey, line.PublicKey, line.ShortID, local, now.Unix(), now.Unix()); err != nil {
-			return subscription.Line{}, errLineSettingsFailed
+			return subscription.Line{}, common.ErrLineSettingsFailed
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return subscription.Line{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Line{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	// The stored address IS the authorized source (Ruling R10: membership authorizes a
 	// Line, and its transport address is what the Out observes). A changed address is
@@ -117,22 +119,22 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 func (s *Store) ListLines() ([]subscription.Line, error) {
 	rows, err := s.DB.Query(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)
 	if err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []subscription.Line{}
 	for rows.Next() {
 		line, err := scanLine(rows)
-		if errors.Is(err, errLineSettingsCorrupt) {
+		if errors.Is(err, common.ErrLineSettingsCorrupt) {
 			return nil, err
 		}
 		if err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		out = append(out, line)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -144,7 +146,7 @@ func (s *Store) ListLines() ([]subscription.Line, error) {
 // database was modified outside the Hub. Such a row is reported as a corrupt
 // record instead of reaching a client configuration, and it is never silently
 // canonicalized here.
-func scanLine(row rowScanner) (subscription.Line, error) {
+func scanLine(row common.RowScanner) (subscription.Line, error) {
 	var line subscription.Line
 	var local int
 	err := row.Scan(&line.NodeID, &line.DisplayName, &line.Server, &line.Port, &line.SortOrder,
@@ -160,7 +162,7 @@ func scanLine(row rowScanner) (subscription.Line, error) {
 	return line, nil
 }
 
-// errLineSettingsCorrupt marks a stored Line that does not satisfy the
+// common.ErrLineSettingsCorrupt marks a stored Line that does not satisfy the
 // domain contract. The message carries the stable error code only and never
 // the stored values.
 
@@ -168,7 +170,7 @@ func scanLine(row rowScanner) (subscription.Line, error) {
 // against the node-side REALITY contract of setLine.
 func validateStoredLine(line subscription.Line) error {
 	if err := line.Validate(); err != nil {
-		return errLineSettingsCorrupt
+		return common.ErrLineSettingsCorrupt
 	}
 	reality := nodedomain.RealityConfig{
 		ServerName:      line.ServerName,
@@ -178,7 +180,7 @@ func validateStoredLine(line subscription.Line) error {
 		ShortID:         line.ShortID,
 	}
 	if err := reality.Validate(); err != nil {
-		return errLineSettingsCorrupt
+		return common.ErrLineSettingsCorrupt
 	}
 	return nil
 }

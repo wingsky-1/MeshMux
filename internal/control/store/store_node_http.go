@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
@@ -164,20 +166,20 @@ func (s *Store) CreateHTTPProxyNode(displayName, proxyURL string, now time.Time)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return Node{}, errors.New(CodeDatabaseUnavailable)
+		return Node{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`INSERT INTO nodes(id, role, display_name, vless_port, ssh_port, status, agent_version, kernel_version, last_heartbeat, last_success, created_at, updated_at)
  VALUES(?,?,?,0,0,'external','','',0,'',?,?)`,
 		id, string(nodedomain.RoleHTTP), strings.TrimSpace(displayName), now.Unix(), now.Unix()); err != nil {
-		return Node{}, errNodeCreateFailed
+		return Node{}, common.ErrNodeCreateFailed
 	}
 	if _, err := tx.Exec(`INSERT INTO node_http_proxy(node_id, url, username, password, created_at, updated_at)
  VALUES(?,?,?,?,?,?)`, id, egress.ProxyURL(), username, password, now.Unix(), now.Unix()); err != nil {
-		return Node{}, errNodeCreateFailed
+		return Node{}, common.ErrNodeCreateFailed
 	}
 	if err := tx.Commit(); err != nil {
-		return Node{}, errors.New(CodeDatabaseUnavailable)
+		return Node{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return Node{
 		ID: id, Role: string(nodedomain.RoleHTTP), DisplayName: strings.TrimSpace(displayName),
@@ -187,7 +189,7 @@ func (s *Store) CreateHTTPProxyNode(displayName, proxyURL string, now time.Time)
 
 // scanHTTPProxy reads one stored proxy row into its dial body. The stored URL
 // is canonical and credential-free; the two credential columns are nullable.
-func scanHTTPProxy(row rowScanner) (nodedomain.OutEgress, error) {
+func scanHTTPProxy(row common.RowScanner) (nodedomain.OutEgress, error) {
 	var rawURL string
 	var username, password sql.NullString
 	if err := row.Scan(&rawURL, &username, &password); err != nil {
@@ -217,7 +219,7 @@ func httpProxyTx(tx *sql.Tx, nodeID string) (nodedomain.OutEgress, bool, error) 
 		if strings.HasPrefix(err.Error(), "HTTP_PROXY_CORRUPT") {
 			return nodedomain.OutEgress{}, false, err
 		}
-		return nodedomain.OutEgress{}, false, errors.New(CodeDatabaseUnavailable)
+		return nodedomain.OutEgress{}, false, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return egress, true, nil
 }
@@ -233,7 +235,7 @@ func lineEgressBodyTx(tx *sql.Tx, nodeID string) (nodedomain.OutEgress, bool, er
 		return nodedomain.OutEgress{}, false, errors.New("EGRESS_NOT_FOUND: unknown egress node")
 	}
 	if err != nil {
-		return nodedomain.OutEgress{}, false, errors.New(CodeDatabaseUnavailable)
+		return nodedomain.OutEgress{}, false, errors.New(common.CodeDatabaseUnavailable)
 	}
 	switch nodedomain.Role(role) {
 	case nodedomain.RoleOut:

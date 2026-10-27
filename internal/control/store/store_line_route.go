@@ -29,6 +29,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
@@ -50,17 +52,17 @@ func LineServerRouteTx(tx *sql.Tx, nodeID string, now time.Time) (json.RawMessag
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, errNodeNotFoundDetail
+		return nil, common.ErrNodeNotFoundDetail
 	}
 	if err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if node.Role(role) != node.RoleEdge {
 		return nil, nil
 	}
 	var settings int
 	if err := tx.QueryRow(`SELECT count(*) FROM line_settings WHERE node_id=?`, nodeID).Scan(&settings); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if settings == 0 {
 		return nil, nil
@@ -147,10 +149,10 @@ func outEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, lineID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return OutEgressFacts{}, errLineNotFound
+		return OutEgressFacts{}, common.ErrLineNotFound
 	}
 	if err != nil {
-		return OutEgressFacts{}, errors.New(CodeDatabaseUnavailable)
+		return OutEgressFacts{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if role != string(node.RoleEdge) {
 		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an ai egress")

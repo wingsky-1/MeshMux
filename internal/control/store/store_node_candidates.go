@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 )
@@ -30,7 +32,7 @@ func CandidateSHA256(document []byte) (string, error) {
 	}
 	compiled, err := node.CompileCandidate(parsed.Candidate())
 	if err != nil {
-		return "", errCandidateRenderFailed
+		return "", common.ErrCandidateRenderFailed
 	}
 	sum := sha256.Sum256(compiled)
 	return hex.EncodeToString(sum[:]), nil
@@ -118,7 +120,7 @@ func InsertCandidateTx(tx *sql.Tx, candidate node.Candidate, now int64) error {
 	}
 	document, err := json.Marshal(node.NewCandidateDocument(candidate))
 	if err != nil {
-		return errCandidateRenderFailed
+		return common.ErrCandidateRenderFailed
 	}
 	hash, err := CandidateSHA256(document)
 	if err != nil {
@@ -139,23 +141,23 @@ func (s *Store) Candidate(nodeID string, revision int64) (storedCandidate, error
 	c.Revision = revision
 	err := s.DB.QueryRow(`SELECT candidate_json, config_sha256 FROM node_candidates WHERE node_id=? AND revision=?`, nodeID, revision).Scan(&c.JSON, &c.ConfigSHA256)
 	if errors.Is(err, sql.ErrNoRows) {
-		return storedCandidate{}, errCandidateNotFound
+		return storedCandidate{}, common.ErrCandidateNotFound
 	}
 	if err != nil {
-		return storedCandidate{}, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if string(c.JSON) != string(bytes.TrimSpace(c.JSON)) || len(c.JSON) == 0 {
-		return storedCandidate{}, errCandidateCorrupt
+		return storedCandidate{}, common.ErrCandidateCorrupt
 	}
 	if err := json.Unmarshal(c.JSON, &c.Document); err != nil {
-		return storedCandidate{}, errCandidateCorrupt
+		return storedCandidate{}, common.ErrCandidateCorrupt
 	}
 	if c.Document.Revision != revision {
-		return storedCandidate{}, errCandidateCorrupt
+		return storedCandidate{}, common.ErrCandidateCorrupt
 	}
 	hash, err := CandidateSHA256(c.JSON)
 	if err != nil || hash != c.ConfigSHA256 {
-		return storedCandidate{}, errCandidateCorrupt
+		return storedCandidate{}, common.ErrCandidateCorrupt
 	}
 	return c, nil
 }
@@ -164,10 +166,10 @@ func (s *Store) LatestCandidate(nodeID string) (storedCandidate, error) {
 	var revision sql.NullInt64
 	err := s.DB.QueryRow(`SELECT MAX(revision) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision)
 	if err != nil {
-		return storedCandidate{}, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if !revision.Valid {
-		return storedCandidate{}, errCandidateNotFound
+		return storedCandidate{}, common.ErrCandidateNotFound
 	}
 	return s.Candidate(nodeID, revision.Int64)
 }
@@ -241,7 +243,7 @@ func insertCandidateWithAllowlistTx(tx *sql.Tx, nodeID string, candidate node.Ca
 		AllowedSources []string `json:"allowed_sources"`
 	}{Revision: candidate.Revision, AllowedSources: allowed})
 	if err != nil {
-		return errCandidateRenderFailed
+		return common.ErrCandidateRenderFailed
 	}
 	taskRevision, err := taskRevisionAfter(tx, nodeID)
 	if err != nil {
@@ -270,17 +272,17 @@ func insertCandidateWithAllowlistTx(tx *sql.Tx, nodeID string, candidate node.Ca
 func (s *Store) ReconcileNode(nodeID string, now time.Time) (storedCandidate, []protocol.Task, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return storedCandidate{}, nil, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	var vless int
 	err = tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, nodeID).Scan(&role, &vless)
 	if errors.Is(err, sql.ErrNoRows) {
-		return storedCandidate{}, nil, errNodeNotFound
+		return storedCandidate{}, nil, common.ErrNodeNotFound
 	}
 	if err != nil {
-		return storedCandidate{}, nil, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if role == string(node.RoleHTTP) {
 		// An external HTTP proxy has no Agent, candidate or readback; a
@@ -289,14 +291,14 @@ func (s *Store) ReconcileNode(nodeID string, now time.Time) (storedCandidate, []
 	}
 	var unfinished int
 	if err = tx.QueryRow(`SELECT count(*) FROM agent_tasks WHERE node_id=? AND status IN ('pending','applying','verifying')`, nodeID).Scan(&unfinished); err != nil {
-		return storedCandidate{}, nil, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if unfinished != 0 {
 		return storedCandidate{}, nil, errors.New("TASKS_IN_PROGRESS")
 	}
 	var revision int64
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(revision),0)+1 FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		return storedCandidate{}, nil, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	candidate, err := BuildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
@@ -310,7 +312,7 @@ func (s *Store) ReconcileNode(nodeID string, now time.Time) (storedCandidate, []
 		return storedCandidate{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
-		return storedCandidate{}, nil, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	stored, err := s.Candidate(nodeID, candidate.Revision)
 	if err != nil {
@@ -347,7 +349,7 @@ func candidateTaskParamsTx(tx *sql.Tx, candidate node.Candidate) (json.RawMessag
 func taskRevisionAfter(tx *sql.Tx, nodeID string) (int64, error) {
 	var revision sql.NullInt64
 	if err := tx.QueryRow(`SELECT MAX(revision) FROM agent_tasks WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		return 0, errors.New(CodeDatabaseUnavailable)
+		return 0, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if revision.Valid {
 		return revision.Int64 + 1, nil
@@ -383,7 +385,7 @@ func SeedInitialTasksTx(tx *sql.Tx, nodeID string, now time.Time) error {
 	var unfinished int
 	if err := tx.QueryRow(`SELECT count(*) FROM agent_tasks
  WHERE node_id=? AND status IN ('pending','applying','verifying')`, nodeID).Scan(&unfinished); err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	if unfinished != 0 {
 		return nil
@@ -416,13 +418,13 @@ func candidateTx(tx *sql.Tx, nodeID string) (storedCandidate, error) {
 	var c storedCandidate
 	err := tx.QueryRow(`SELECT revision, candidate_json, config_sha256 FROM node_candidates WHERE node_id=? ORDER BY revision DESC LIMIT 1`, nodeID).Scan(&c.Revision, &c.JSON, &c.ConfigSHA256)
 	if errors.Is(err, sql.ErrNoRows) {
-		return storedCandidate{}, errCandidateNotFound
+		return storedCandidate{}, common.ErrCandidateNotFound
 	}
 	if err != nil {
-		return storedCandidate{}, errors.New(CodeDatabaseUnavailable)
+		return storedCandidate{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if err := json.Unmarshal(c.JSON, &c.Document); err != nil || c.Document.Revision != c.Revision {
-		return storedCandidate{}, errCandidateCorrupt
+		return storedCandidate{}, common.ErrCandidateCorrupt
 	}
 	return c, nil
 }

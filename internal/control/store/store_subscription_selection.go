@@ -36,6 +36,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -155,7 +157,7 @@ func (s *Store) SaveSubscriptionSelection(subscriberID string, spec SelectionSpe
 func writeSelectionEdgesTx(tx *sql.Tx, selection subscription.Selection, now time.Time) error {
 	for _, table := range []string{"subscription_lines", "subscription_outs", "subscription_rules", "subscription_networks"} {
 		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE subscriber_id=?`, selection.SubscriberID); err != nil {
-			return errors.New(CodeDatabaseUnavailable)
+			return errors.New(common.CodeDatabaseUnavailable)
 		}
 	}
 	for _, line := range selection.Lines {
@@ -226,7 +228,7 @@ func storedSelectionVersionTx(tx *sql.Tx, subscriberID string) (int64, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, nil
 	default:
-		return 0, errors.New(CodeDatabaseUnavailable)
+		return 0, errors.New(common.CodeDatabaseUnavailable)
 	}
 }
 
@@ -243,21 +245,21 @@ func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, e
 
 	rows, err := tx.Query(`SELECT node_id, position, line_revision FROM subscription_lines WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	for rows.Next() {
 		var line subscription.SelectionLine
 		if err := rows.Scan(&line.NodeID, &line.Position, &line.LineRevision); err != nil {
 			rows.Close()
-			return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+			return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		selection.Lines = append(selection.Lines, line)
 	}
 	if err := rows.Close(); err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 
 	var out subscription.SelectionOut
@@ -268,45 +270,45 @@ func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, e
 		selection.Out = &out
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 
 	rows, err = tx.Query(`SELECT rule_stable_key, rule_version, position FROM subscription_rules WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	for rows.Next() {
 		var rule subscription.SelectionRule
 		if err := rows.Scan(&rule.StableKey, &rule.Version, &rule.Position); err != nil {
 			rows.Close()
-			return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+			return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		selection.Rules = append(selection.Rules, rule)
 	}
 	if err := rows.Close(); err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 
 	rows, err = tx.Query(`SELECT device_id, position FROM subscription_networks WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	for rows.Next() {
 		var device subscription.SelectionNetwork
 		if err := rows.Scan(&device.DeviceID, &device.Position); err != nil {
 			rows.Close()
-			return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+			return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		selection.Networks = append(selection.Networks, device)
 	}
 	if err := rows.Close(); err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if err := rows.Err(); err != nil {
-		return subscription.Selection{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return selection, nil
 }
@@ -316,11 +318,11 @@ func readSelectionTx(tx *sql.Tx, subscriberID string) (subscription.Selection, e
 // "no selection yet" from "an empty selection".
 func (s *Store) SubscriptionSelection(subscriberID string) (subscription.Selection, bool, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return subscription.Selection{}, false, errSubscriberIDInvalid()
+		return subscription.Selection{}, false, common.ErrSubscriberIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return subscription.Selection{}, false, errors.New(CodeDatabaseUnavailable)
+		return subscription.Selection{}, false, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
@@ -374,7 +376,7 @@ func selectionUsedByTx(tx *sql.Tx, query, id string) ([]string, error) {
 		if strings.Contains(err.Error(), "no such table") {
 			return []string{}, nil
 		}
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return scanNameRows(rows)
 }
@@ -388,7 +390,7 @@ func (s *Store) selectionUsedBy(query, id string) ([]string, error) {
 		if strings.Contains(err.Error(), "no such table") {
 			return []string{}, nil
 		}
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return scanNameRows(rows)
 }
@@ -402,12 +404,12 @@ func scanNameRows(rows *sql.Rows) ([]string, error) {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		out = append(out, name)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return out, nil
 }

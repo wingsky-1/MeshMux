@@ -40,6 +40,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
@@ -159,7 +161,7 @@ func LastGoodDatabaseVersionFrom(db *sql.DB) (DatabaseVersion, bool, error) {
 		return DatabaseVersion{}, false, nil
 	}
 	if err != nil {
-		return DatabaseVersion{}, false, errors.New(CodeDatabaseUnavailable)
+		return DatabaseVersion{}, false, errors.New(common.CodeDatabaseUnavailable)
 	}
 	out.ConfirmedAt = time.Unix(confirmed, 0).UTC()
 	return out, true, nil

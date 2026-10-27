@@ -16,17 +16,6 @@ package store
 // VALUES and requires each Code* constant to carry a string literal, so code
 // literals stay visible in exactly one place per value.
 
-const (
-	// codePublishGate is the "the gate could not run at all" refusal. It is the
-	// fallback code of the publication receipt, the scratch-file refusal of the
-	// gate itself and the refusal of an unusable scratch directory.
-	//
-	// It stays an unexported constant on purpose: it is not part of this
-	// package's exported vocabulary, and the error-code golden freezes only
-	// exported Code* values.
-	codePublishGate = "PUBLISH_GATE_FAILED"
-)
-
 // Mirrors of internal/policy's stable codes that the policy generator does not
 // export yet. Each one is emitted by the policy-write and policy-publish paths
 // of this package and compared by the publication receipt mapping, so a single

@@ -28,6 +28,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
 // DeleteOutAt is the request-clock variant used by the Web handler, so the
@@ -48,22 +50,22 @@ import (
 func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
 	if !validNodeID(outID) {
-		return errOutIDInvalid()
+		return common.ErrOutIDInvalid()
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	var role string
 	err = tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return errOutNotFound
+		return common.ErrOutNotFound
 	}
 	if err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
-	if role != string(nodeRoleOut) && role != string(nodeRoleHTTP) {
+	if role != string(common.NodeRoleOut) && role != string(common.NodeRoleHTTP) {
 		return errors.New("OUT_ROLE_INVALID: only out and http egress nodes can be deleted")
 	}
 	// A subscription that selects this Out is a live reference: the client document
@@ -113,10 +115,10 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	// skips the cascade (schema 15), so history of a deleted node is removed with it
 	// instead of blocking the delete.
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE id=?`, outID); err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	if err := tx.Commit(); err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	// The Out is gone, so any policy that still names it must be re-derived for every
 	// Line: the policy resolver refuses an Out reference the Hub cannot justify, so the Line's

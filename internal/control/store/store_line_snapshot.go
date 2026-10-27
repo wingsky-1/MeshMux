@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
@@ -34,10 +36,10 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 	var vlessPort int
 	err := tx.QueryRow(`SELECT role, vless_port FROM nodes WHERE id=?`, nodeID).Scan(&role, &vlessPort)
 	if errors.Is(err, sql.ErrNoRows) {
-		return node.Candidate{}, errNodeNotFoundDetail
+		return node.Candidate{}, common.ErrNodeNotFoundDetail
 	}
 	if err != nil {
-		return node.Candidate{}, errors.New(CodeDatabaseUnavailable)
+		return node.Candidate{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	candidate := node.Candidate{
 		NodeID:        nodeID,
@@ -75,14 +77,14 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (node.Candi
 		// The Line is not configured yet: keep the frozen v1 baseline.
 		return validateLineCandidate(candidate)
 	}
-	if errors.Is(err, errLineSettingsCorrupt) {
-		return node.Candidate{}, errLineSettingsCorrupt
+	if errors.Is(err, common.ErrLineSettingsCorrupt) {
+		return node.Candidate{}, common.ErrLineSettingsCorrupt
 	}
 	if err != nil {
-		return node.Candidate{}, errors.New(CodeDatabaseUnavailable)
+		return node.Candidate{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if line.NodeID != nodeID {
-		return node.Candidate{}, errLineSettingsCorrupt
+		return node.Candidate{}, common.ErrLineSettingsCorrupt
 	}
 	if line.Port != vlessPort {
 		return node.Candidate{}, errors.New("LINE_PORT_MISMATCH: the stored line port must match the vless port of the node")
@@ -117,22 +119,22 @@ func lineCandidateUsersTx(tx *sql.Tx, nodeID string) ([]node.VLESSUser, error) {
 	 WHERE c.node_id=? AND c.active=1 AND s.state='active'
 	 ORDER BY c.id ASC`, nodeID)
 	if err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	users := []node.VLESSUser{}
 	for rows.Next() {
 		var user node.VLESSUser
 		if err = rows.Scan(&user.CredentialID, &user.UUID); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		users = append(users, user)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
-	if len(users) > maxLineCandidateUsers {
-		return nil, errors.New("CANDIDATE_INVALID: at most " + strconv.Itoa(maxLineCandidateUsers) + " users are allowed")
+	if len(users) > common.MaxLineCandidateUsers {
+		return nil, errors.New("CANDIDATE_INVALID: at most " + strconv.Itoa(common.MaxLineCandidateUsers) + " users are allowed")
 	}
 	return users, nil
 }

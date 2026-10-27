@@ -27,6 +27,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -94,12 +96,12 @@ func (s *Store) PreviewSelectionImpact(subscriberID string, spec SelectionSpec, 
 	}
 	if subscriberID != "" {
 		if err := subscription.ValidateID(subscriberID); err != nil {
-			return SelectionImpact{}, errSubscriberIDInvalid()
+			return SelectionImpact{}, common.ErrSubscriberIDInvalid()
 		}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return SelectionImpact{}, errors.New(CodeDatabaseUnavailable)
+		return SelectionImpact{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	impact, err := buildImpactTx(tx, subscriberID, spec)
@@ -165,20 +167,20 @@ func buildImpactTx(tx *sql.Tx, subscriberID string, spec SelectionSpec) (Selecti
 	// are blocking findings with the save's own code.
 	for _, lineID := range spec.LineIDs {
 		if err := validateLineTx(tx, lineID); err != nil {
-			impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: ErrorCodeOf(err), Detail: err.Error()})
+			impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: common.ErrorCodeOf(err), Detail: err.Error()})
 		}
 	}
 	if err := validateSelectionOutTx(tx, spec.OutID); err != nil {
-		impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: ErrorCodeOf(err), Detail: err.Error()})
+		impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: common.ErrorCodeOf(err), Detail: err.Error()})
 	}
 	for _, revision := range spec.Rules {
 		if err := validateRuleRevisionTx(tx, revision); err != nil {
-			impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: ErrorCodeOf(err), Detail: err.Error()})
+			impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: common.ErrorCodeOf(err), Detail: err.Error()})
 		}
 	}
 	for _, deviceID := range spec.NetworkIDs {
 		if err := validateSelectionDeviceTx(tx, deviceID); err != nil {
-			impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: ErrorCodeOf(err), Detail: err.Error()})
+			impact.Findings = append(impact.Findings, ImpactFinding{Level: subscription.DiagnosticBlocking, Code: common.ErrorCodeOf(err), Detail: err.Error()})
 		}
 	}
 	return impact, nil

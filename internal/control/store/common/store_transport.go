@@ -1,4 +1,4 @@
-package store
+package common
 
 // Fixed values of the store's own transport and lifetime contract.
 //
@@ -22,15 +22,15 @@ import (
 const (
 	// sessionLifetime is the absolute lifetime of one authenticated session.
 	sessionLifetime = 8 * time.Hour
-	// idleLifetime is the inactivity window after which a session is expired.
-	idleLifetime = 30 * time.Minute
-	// authWindow is the rolling window of the durable global authentication
+	// IdleLifetime is the inactivity window after which a session is expired.
+	IdleLifetime = 30 * time.Minute
+	// AuthWindow is the rolling window of the durable global authentication
 	// budget. It opens at the first attempt and is measured from that instant,
 	// so spending a slot never extends the lockout and restarting the service
 	// does not clear it.
-	authWindow = 10 * time.Minute
-	// authBudget is the number of attempts one authWindow permits.
-	authBudget = 10
+	AuthWindow = 10 * time.Minute
+	// AuthBudget is the number of attempts one AuthWindow permits.
+	AuthBudget = 10
 
 	// SessionLifetime is the exported session lifetime the Web layer renders.
 	SessionLifetime = sessionLifetime
@@ -49,8 +49,8 @@ const (
 	sqliteBusyTimeoutMS = 5000
 )
 
-// sqliteDSNPragmas is the exact query string appended to the database path.
-func sqliteDSNPragmas() string {
+// SQLiteDSNPragmas is the exact query string appended to the database path.
+func SQLiteDSNPragmas() string {
 	return "?_pragma=busy_timeout(" + strconv.Itoa(sqliteBusyTimeoutMS) + ")" +
 		"&_pragma=foreign_keys(1)" +
 		"&_pragma=journal_mode(WAL)" +

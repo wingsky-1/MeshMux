@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/control/store/clientdoc"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
@@ -176,7 +178,7 @@ func ParsePolicyPublishRequest(raw json.RawMessage) (PolicyPublishRequest, error
 // layer=client requires an active client revision, layer=server requires an
 // active server revision, and an empty layer publishes every active layer and
 // requires at least one.
-func (s *Store) AssemblePolicyPublication(ctx context.Context, verifier PublishVerifier, request PolicyPublishRequest, now time.Time) (PolicyAssembly, error) {
+func (s *Store) AssemblePolicyPublication(ctx context.Context, verifier common.PublishVerifier, request PolicyPublishRequest, now time.Time) (PolicyAssembly, error) {
 	assembly := PolicyAssembly{
 		OperationID:          request.OperationID,
 		Layer:                request.Layer,
@@ -363,7 +365,7 @@ func (s *Store) publishServerRoute(fallbackToLine bool, operationID string, now 
 func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool, egressState, egressCode string) (PublishTarget, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return PublishTarget{}, errors.New(CodeDatabaseUnavailable)
+		return PublishTarget{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	revision, err := NextCandidateRevisionTx(tx, lineID)
@@ -387,9 +389,9 @@ func (s *Store) PublishTarget(lineID string, fragment []byte, outConfigured bool
 
 // gatePolicyAssembly runs the fixed kernel gates. A missing or unusable kernel
 // is a refusal with its own code; it is never treated as a passing check.
-func (s *Store) gatePolicyAssembly(ctx context.Context, verifier PublishVerifier, assembly *PolicyAssembly) error {
+func (s *Store) gatePolicyAssembly(ctx context.Context, verifier common.PublishVerifier, assembly *PolicyAssembly) error {
 	if verifier == nil {
-		return errors.New(codePublishGate + ": no kernel verifier is configured")
+		return errors.New(common.CodePublishGate + ": no kernel verifier is configured")
 	}
 	evidence := make([]PolicyCheckEvidence, 0, len(assembly.Targets)+2)
 	for _, target := range assembly.Targets {
@@ -397,21 +399,21 @@ func (s *Store) gatePolicyAssembly(ctx context.Context, verifier PublishVerifier
 		if err != nil {
 			return err
 		}
-		evidence = append(evidence, PolicyCheckEvidence{Stage: "line-candidate", Kernel: kernelSingBox, Status: "passed", Detail: detail})
+		evidence = append(evidence, PolicyCheckEvidence{Stage: "line-candidate", Kernel: common.KernelSingBox, Status: "passed", Detail: detail})
 	}
 	if len(assembly.ClientDocument) > 0 {
 		detail, err := verifier.CheckSingBox(ctx, assembly.ClientDocument)
 		if err != nil {
 			return err
 		}
-		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: kernelSingBox, Status: "passed", Detail: detail})
+		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: common.KernelSingBox, Status: "passed", Detail: detail})
 	}
 	if len(assembly.MihomoDocument) > 0 {
 		detail, err := verifier.CheckMihomo(ctx, assembly.MihomoDocument)
 		if err != nil {
 			return err
 		}
-		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: kernelMihomo, Status: "passed", Detail: detail})
+		evidence = append(evidence, PolicyCheckEvidence{Stage: "client-document", Kernel: common.KernelMihomo, Status: "passed", Detail: detail})
 	}
 	assembly.Checks = evidence
 	return nil
@@ -488,7 +490,7 @@ var publishRefusalCodes = []string{
 	policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited,
 	policy.CodeRulesetFetchFailed, policy.CodeRulesetPinInvalid,
 	"OUT_BINDING_INVALID", CodeOutNotAuthorized,
-	CodePublishNoLines, codePublishGate,
+	CodePublishNoLines, common.CodePublishGate,
 	node.CodePublishSingBoxMissing, node.CodePublishCheckSingBox,
 	node.CodePublishMihomoMissing, node.CodePublishMihomoVersion, node.CodePublishCheckMihomo,
 	CodePublishRevisionChanged, CodePublishTasksInProgress, codePublishCandidateChanged,
@@ -511,7 +513,7 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		}
 	}
 	if !known {
-		return 500, codePublishGate, "发布未完成，且失败原因不在已登记的错误码内。"
+		return 500, common.CodePublishGate, "发布未完成，且失败原因不在已登记的错误码内。"
 	}
 	status := 422
 	switch code {
@@ -530,7 +532,7 @@ func PolicyPublishFailure(err error) (int, string, string) {
 		// (409) so a future publication path that does validate a write answers
 		// with the stable code instead of becoming a 500 PUBLISH_GATE_FAILED.
 		status = 409
-	case codePublishGate, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
+	case common.CodePublishGate, node.CodePublishSingBoxMissing, node.CodePublishMihomoMissing:
 		status = 503
 	}
 	return status, code, detail

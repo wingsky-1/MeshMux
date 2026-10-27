@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
 func TestPreviewSelectionImpactWritesNothingAndNamesTheConflict(t *testing.T) {
@@ -159,8 +161,8 @@ func TestBatchApproveRefusesBadInputBeforeAnyWork(t *testing.T) {
 		!strings.HasPrefix(err.Error(), CodeSelectionInvalid) {
 		t.Fatalf("empty batch = %v, want %s", err, CodeSelectionInvalid)
 	}
-	tooMany := make([]string, 0, maxBatchSubscribers+1)
-	for index := range maxBatchSubscribers + 1 {
+	tooMany := make([]string, 0, common.MaxBatchSubscribers+1)
+	for index := range common.MaxBatchSubscribers + 1 {
 		tooMany = append(tooMany, strings.Repeat("a", 31)+string(rune('0'+index%10)))
 	}
 	if _, err := s.BatchApproveSubscriptions(context.Background(), tooMany, &selectionVerifier{}, now); err == nil ||

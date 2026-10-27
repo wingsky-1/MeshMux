@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
@@ -86,7 +88,7 @@ func assembleSelectionTx(tx *sql.Tx, lineIDs []string, credentials []subscriptio
 			continue
 		}
 		if err != nil {
-			return selectionAssembly{}, errors.New(CodeDatabaseUnavailable)
+			return selectionAssembly{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 		assembly.inputs.Network = append(assembly.inputs.Network, subscription.ComposeNetwork{DeviceID: deviceID, DisplayName: name})
 	}
@@ -112,7 +114,7 @@ func selectionOutTx(tx *sql.Tx, outID string) (subscription.ComposeOut, error) {
 		return subscription.ComposeOut{}, errors.New("OUT_NOT_CONFIGURED: the egress does not exist")
 	}
 	if err != nil {
-		return subscription.ComposeOut{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.ComposeOut{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	switch role {
 	case "out":
@@ -161,7 +163,7 @@ func selectionRulesTx(tx *sql.Tx, revisions []RuleRevision) ([]subscription.Comp
 			return nil, errors.New("RULE_NOT_FOUND: a selected rule revision no longer exists")
 		}
 		if err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		var values []string
 		if err := json.Unmarshal([]byte(raw), &values); err != nil {

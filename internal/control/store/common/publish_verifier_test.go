@@ -1,4 +1,4 @@
-package store
+package common
 
 import (
 	"crypto/rand"
@@ -25,15 +25,15 @@ func TestGateScratchNameRefusesEntropyFailure(t *testing.T) {
 	if err == nil || name != "" {
 		t.Fatalf("randomGateName = %q, %v; want an empty name and an error", name, err)
 	}
-	if !strings.Contains(err.Error(), codePublishGate) {
+	if !strings.Contains(err.Error(), CodePublishGate) {
 		t.Fatalf("error %q does not carry PUBLISH_GATE_FAILED", err)
 	}
 
 	v := &execPublishVerifier{dir: t.TempDir(), name: randomGateName}
-	if _, cleanup, err := v.write(kernelSingBox, []byte(`{"log":{}}`)); err == nil {
+	if _, cleanup, err := v.write(KernelSingBox, []byte(`{"log":{}}`)); err == nil {
 		cleanup()
 		t.Fatal("gate wrote a scratch file without entropy")
-	} else if !strings.Contains(err.Error(), codePublishGate) {
+	} else if !strings.Contains(err.Error(), CodePublishGate) {
 		t.Fatalf("write error %q does not carry PUBLISH_GATE_FAILED", err)
 	}
 }

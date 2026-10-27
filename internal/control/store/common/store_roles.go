@@ -1,4 +1,4 @@
-package store
+package common
 
 // Role and kernel names the store compares against stored strings.
 //
@@ -14,16 +14,16 @@ package store
 import "github.com/wingsky-1/MeshMux/internal/core/node"
 
 const (
-	// nodeRoleEdge is a proxy Line node (the only role that serves VLESS).
-	nodeRoleEdge = node.RoleEdge
-	// nodeRoleOut is a managed Out node (an SS guard egress with an Agent).
-	nodeRoleOut = node.RoleOut
-	// nodeRoleHTTP is an external HTTP proxy egress (Hub-only, no Agent).
-	nodeRoleHTTP = node.RoleHTTP
+	// NodeRoleEdge is a proxy Line node (the only role that serves VLESS).
+	NodeRoleEdge = node.RoleEdge
+	// NodeRoleOut is a managed Out node (an SS guard egress with an Agent).
+	NodeRoleOut = node.RoleOut
+	// NodeRoleHTTP is an external HTTP proxy egress (Hub-only, no Agent).
+	NodeRoleHTTP = node.RoleHTTP
 
-	// kernelSingBox is the required gate kernel and the label its evidence
+	// KernelSingBox is the required gate kernel and the label its evidence
 	// carries.
-	kernelSingBox = "sing-box"
-	// kernelMihomo is the optional client gate kernel and its evidence label.
-	kernelMihomo = "mihomo"
+	KernelSingBox = "sing-box"
+	// KernelMihomo is the optional client gate kernel and its evidence label.
+	KernelMihomo = "mihomo"
 )

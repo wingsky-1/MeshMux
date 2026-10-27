@@ -13,6 +13,8 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 )
 
@@ -40,25 +42,25 @@ func (ruleUsageSource) RuleUsedBy(q policy.Querier, stableKey string, version in
 		if errors.Is(err, sql.ErrNoRows) {
 			return []policy.RuleUsage{}, nil
 		}
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	rows, err := q.Query(`SELECT r.subscriber_id, COALESCE(s.display_name,'') FROM subscription_rules r
 	  LEFT JOIN subscribers s ON s.id=r.subscriber_id
 	  WHERE r.rule_stable_key=? AND r.rule_version=? ORDER BY COALESCE(s.display_name,''), r.subscriber_id`, stableKey, version)
 	if err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []policy.RuleUsage{}
 	for rows.Next() {
 		var u policy.RuleUsage
 		if err := rows.Scan(&u.SubscriberID, &u.SubscriberName); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		out = append(out, u)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return out, nil
 }

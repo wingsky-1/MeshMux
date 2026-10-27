@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -77,7 +79,7 @@ func (r BatchApproveResult) Complete() bool {
 // what is stored rather than an old form body; a subscriber without a saved
 // selection is reported as failed with SUBSCRIPTION_ARTIFACT_NOT_APPROVED-style
 // vocabulary instead of silently doing nothing.
-func (s *Store) BatchApproveSubscriptions(ctx context.Context, subscriberIDs []string, verifier PublishVerifier, now time.Time) (BatchApproveResult, error) {
+func (s *Store) BatchApproveSubscriptions(ctx context.Context, subscriberIDs []string, verifier common.PublishVerifier, now time.Time) (BatchApproveResult, error) {
 	ids, err := normalizeBatchIDs(subscriberIDs)
 	if err != nil {
 		return BatchApproveResult{}, err
@@ -100,11 +102,11 @@ func (s *Store) BatchApproveSubscriptions(ctx context.Context, subscriberIDs []s
 
 // approveStoredSelection re-approves one subscriber's stored selection. It is
 // one member of a batch and one transaction of its own.
-func (s *Store) approveStoredSelection(ctx context.Context, subscriberID string, verifier PublishVerifier, now time.Time) BatchApproveOutcome {
+func (s *Store) approveStoredSelection(ctx context.Context, subscriberID string, verifier common.PublishVerifier, now time.Time) BatchApproveOutcome {
 	outcome := BatchApproveOutcome{SubscriberID: subscriberID}
 	stored, saved, err := s.SubscriptionSelection(subscriberID)
 	if err != nil {
-		outcome.Status, outcome.Code = refusalStatus(err), ErrorCodeOf(err)
+		outcome.Status, outcome.Code = refusalStatus(err), common.ErrorCodeOf(err)
 		return outcome
 	}
 	if !saved {
@@ -113,7 +115,7 @@ func (s *Store) approveStoredSelection(ctx context.Context, subscriberID string,
 	}
 	draft, err := s.draftStoredSelection(subscriberID, stored)
 	if err != nil {
-		outcome.Status, outcome.Code = refusalStatus(err), ErrorCodeOf(err)
+		outcome.Status, outcome.Code = refusalStatus(err), common.ErrorCodeOf(err)
 		return outcome
 	}
 	preview := runComposeGate(ctx, draft.inputs, verifier, draft.diagnostics)
@@ -122,7 +124,7 @@ func (s *Store) approveStoredSelection(ctx context.Context, subscriberID string,
 		return outcome
 	}
 	if _, err := s.SaveSubscriptionDraft(draft, preview.ContentID, now); err != nil {
-		outcome.Status, outcome.Code = refusalStatus(err), ErrorCodeOf(err)
+		outcome.Status, outcome.Code = refusalStatus(err), common.ErrorCodeOf(err)
 		return outcome
 	}
 	outcome.Status, outcome.ArtifactID = BatchSaved, preview.ContentID
@@ -202,7 +204,7 @@ func sameReferences(left, right subscription.Selection) bool {
 // untouched — the same distinction the single-subscriber path draws between a
 // diagnostic and an error.
 func refusalStatus(err error) BatchOutcomeStatus {
-	if ErrorCodeOf(err) == CodeDatabaseUnavailable {
+	if common.ErrorCodeOf(err) == common.CodeDatabaseUnavailable {
 		return BatchFailed
 	}
 	return BatchBlocked
@@ -214,15 +216,15 @@ func normalizeBatchIDs(subscriberIDs []string) ([]string, error) {
 	if len(subscriberIDs) == 0 {
 		return nil, errors.New(CodeSelectionInvalid + ": name at least one subscriber")
 	}
-	if len(subscriberIDs) > maxBatchSubscribers {
-		return nil, errors.New(CodeSelectionInvalid + ": at most " + strconv.Itoa(maxBatchSubscribers) + " subscribers per batch")
+	if len(subscriberIDs) > common.MaxBatchSubscribers {
+		return nil, errors.New(CodeSelectionInvalid + ": at most " + strconv.Itoa(common.MaxBatchSubscribers) + " subscribers per batch")
 	}
 	seen := make(map[string]struct{}, len(subscriberIDs))
 	ids := make([]string, 0, len(subscriberIDs))
 	for _, raw := range subscriberIDs {
 		id := raw
 		if err := subscription.ValidateID(id); err != nil {
-			return nil, errSubscriberIDInvalid()
+			return nil, common.ErrSubscriberIDInvalid()
 		}
 		if _, duplicate := seen[id]; duplicate {
 			continue

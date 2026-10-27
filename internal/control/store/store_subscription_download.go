@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	nodedomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
@@ -20,7 +22,7 @@ var (
 	// ErrSubscriptionStoreUnavailable marks a database failure. It is the
 	// only rejection that is not hidden behind a generic 404, because the
 	// operator has to be able to tell a broken database from a bad bearer.
-	ErrSubscriptionStoreUnavailable = errors.New(CodeDatabaseUnavailable)
+	ErrSubscriptionStoreUnavailable = errors.New(common.CodeDatabaseUnavailable)
 )
 
 // subscriptionDownload resolves one plaintext bearer into the Lines and the
@@ -85,7 +87,7 @@ func SubscriptionStoreError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrSubscriptionStoreUnavailable) || ErrorCodeOf(err) == CodeDatabaseUnavailable {
+	if errors.Is(err, ErrSubscriptionStoreUnavailable) || common.ErrorCodeOf(err) == common.CodeDatabaseUnavailable {
 		return ErrSubscriptionStoreUnavailable
 	}
 	return ErrSubscriptionRejected
@@ -185,7 +187,7 @@ func lineConvergedTx(tx *sql.Tx, line subscription.Line, credential subscription
 	if err != nil {
 		return ErrSubscriptionStoreUnavailable
 	}
-	if role != string(nodeRoleEdge) {
+	if role != string(common.NodeRoleEdge) {
 		return ErrSubscriptionRejected
 	}
 	// The Line must still hold a valid identity. A revoked identity means the
@@ -201,7 +203,7 @@ func lineConvergedTx(tx *sql.Tx, line subscription.Line, credential subscription
 	if vlessPort != line.Port {
 		return ErrSubscriptionRejected
 	}
-	if lastHeartbeat == 0 || now.Sub(time.Unix(lastHeartbeat, 0)) > OfflineAfter {
+	if lastHeartbeat == 0 || now.Sub(time.Unix(lastHeartbeat, 0)) > common.OfflineAfter {
 		return ErrSubscriptionRejected
 	}
 	if observedAt <= 0 {

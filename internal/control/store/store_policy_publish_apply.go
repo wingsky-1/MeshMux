@@ -20,6 +20,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
 )
 
 // Stable publication-step refusals.
@@ -74,7 +76,7 @@ func (s *Store) PublishPolicyAssembly(assembly PolicyAssembly, now time.Time) (P
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return PolicyPublication{}, errors.New(CodeDatabaseUnavailable)
+		return PolicyPublication{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	result := PolicyPublication{Lines: make([]PolicyLineEvidence, 0, len(assembly.Targets))}
@@ -89,7 +91,7 @@ func (s *Store) PublishPolicyAssembly(assembly PolicyAssembly, now time.Time) (P
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return PolicyPublication{}, errors.New(CodeDatabaseUnavailable)
+		return PolicyPublication{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return result, nil
 }
@@ -100,7 +102,7 @@ func PublishTargetTx(tx *sql.Tx, target PublishTarget, now time.Time) (PolicyLin
 	var unfinished int
 	if err := tx.QueryRow(`SELECT count(*) FROM agent_tasks
  WHERE node_id=? AND status IN ('pending','applying','verifying')`, target.LineID).Scan(&unfinished); err != nil {
-		return PolicyLineEvidence{}, errors.New(CodeDatabaseUnavailable)
+		return PolicyLineEvidence{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if unfinished != 0 {
 		return PolicyLineEvidence{}, errors.New(CodePublishTasksInProgress + ": the line has an unfinished task chain; retry after it finishes")

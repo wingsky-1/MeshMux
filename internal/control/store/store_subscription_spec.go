@@ -30,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -137,8 +139,8 @@ func ParseSelectionSpec(raw []byte) (SelectionSpec, error) {
 // normalizeRuleSelection validates the identity shape and removes duplicates
 // while keeping the caller's order.
 func normalizeRuleSelection(revisions []RuleRevision) ([]RuleRevision, error) {
-	if len(revisions) > maxSelectionRules {
-		return nil, errors.New(CodeSelectionInvalid + ": select at most " + strconv.Itoa(maxSelectionRules) + " rules")
+	if len(revisions) > common.MaxSelectionRules {
+		return nil, errors.New(CodeSelectionInvalid + ": select at most " + strconv.Itoa(common.MaxSelectionRules) + " rules")
 	}
 	seen := make(map[string]struct{}, len(revisions))
 	out := make([]RuleRevision, 0, len(revisions))
@@ -160,15 +162,15 @@ func normalizeRuleSelection(revisions []RuleRevision) ([]RuleRevision, error) {
 // normalizeDeviceSelection validates the identity shape and removes duplicates
 // while keeping the caller's order.
 func normalizeDeviceSelection(deviceIDs []string) ([]string, error) {
-	if len(deviceIDs) > maxSelectionDevices {
-		return nil, errors.New(CodeSelectionInvalid + ": select at most " + strconv.Itoa(maxSelectionDevices) + " mesh devices")
+	if len(deviceIDs) > common.MaxSelectionDevices {
+		return nil, errors.New(CodeSelectionInvalid + ": select at most " + strconv.Itoa(common.MaxSelectionDevices) + " mesh devices")
 	}
 	seen := make(map[string]struct{}, len(deviceIDs))
 	out := make([]string, 0, len(deviceIDs))
 	for _, raw := range deviceIDs {
 		deviceID := strings.TrimSpace(raw)
 		if err := subscription.ValidateID(deviceID); err != nil {
-			return nil, errMeshDeviceIDInvalid()
+			return nil, common.ErrMeshDeviceIDInvalid()
 		}
 		if _, duplicate := seen[deviceID]; duplicate {
 			continue

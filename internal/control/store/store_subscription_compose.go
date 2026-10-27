@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
@@ -110,7 +112,7 @@ func (s *Store) DraftSubscriptionSelection(subscriberID, displayName string, spe
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return SubscriptionDraft{}, errors.New(CodeDatabaseUnavailable)
+		return SubscriptionDraft{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	draft, err := buildSubscriptionDraftTx(tx, subscriberID, displayName, spec)
@@ -118,7 +120,7 @@ func (s *Store) DraftSubscriptionSelection(subscriberID, displayName string, spe
 		return SubscriptionDraft{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return SubscriptionDraft{}, errors.New(CodeDatabaseUnavailable)
+		return SubscriptionDraft{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return draft, nil
 }
@@ -141,7 +143,7 @@ func buildSubscriptionDraftTx(tx *sql.Tx, subscriberID, displayName string, spec
 		draft.Subscriber, draft.Create = sub, true
 	} else {
 		if err := subscription.ValidateID(subscriberID); err != nil {
-			return SubscriptionDraft{}, errSubscriberIDInvalid()
+			return SubscriptionDraft{}, common.ErrSubscriberIDInvalid()
 		}
 		sub, err := getSubscriberTx(tx, subscriberID)
 		if err != nil {
@@ -251,7 +253,7 @@ func buildSelectionTx(tx *sql.Tx, subscriberID string, creating bool, spec Selec
 func latestCandidateRevisionTx(tx *sql.Tx, nodeID string) (int64, error) {
 	var revision int64
 	if err := tx.QueryRow(`SELECT COALESCE(MAX(revision),0) FROM node_candidates WHERE node_id=?`, nodeID).Scan(&revision); err != nil {
-		return 0, errors.New(CodeDatabaseUnavailable)
+		return 0, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return revision, nil
 }
@@ -269,7 +271,7 @@ func storedCredentialTx(tx *sql.Tx, subscriberID, nodeID string) (subscription.C
 		return subscription.Credential{}, errors.New("CREDENTIAL_NOT_FOUND: no active credential for this line")
 	}
 	if err != nil {
-		return subscription.Credential{}, errors.New(CodeDatabaseUnavailable)
+		return subscription.Credential{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return credential, nil
 }
@@ -288,12 +290,12 @@ func reusableCredentialTx(tx *sql.Tx, subscriberID, nodeID string, creating bool
 			return credential, nil
 		case errors.Is(err, sql.ErrNoRows):
 		default:
-			return subscription.Credential{}, errors.New(CodeDatabaseUnavailable)
+			return subscription.Credential{}, errors.New(common.CodeDatabaseUnavailable)
 		}
 	}
 	credential, err := subscription.NewCredential(subscriberID, nodeID)
 	if err != nil {
-		return subscription.Credential{}, errCredentialCreateFailed
+		return subscription.Credential{}, common.ErrCredentialCreateFailed
 	}
 	return credential, nil
 }
@@ -304,7 +306,7 @@ func reusableCredentialTx(tx *sql.Tx, subscriberID, nodeID string, creating bool
 // mihomo optional) -> approved/digest. A blocked composer never runs a binary.
 // The caller's context bounds the gate subprocesses, so an aborted request stops
 // the check instead of leaving it running.
-func (s *Store) PreviewDraftSelection(ctx context.Context, draft SubscriptionDraft, verifier PublishVerifier) SelectionPreview {
+func (s *Store) PreviewDraftSelection(ctx context.Context, draft SubscriptionDraft, verifier common.PublishVerifier) SelectionPreview {
 	return runComposeGate(ctx, draft.inputs, verifier, draft.diagnostics)
 }
 
@@ -318,22 +320,22 @@ func (s *Store) PreviewDraftSelection(ctx context.Context, draft SubscriptionDra
 func (s *Store) SaveSubscriptionDraft(draft SubscriptionDraft, artifactID string, now time.Time) (string, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return "", errors.New(CodeDatabaseUnavailable)
+		return "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	bearer := ""
 	if draft.Create {
 		if _, err = tx.Exec(`INSERT INTO subscribers(id, display_name, state, revision, created_at, updated_at) VALUES(?,?,?,1,?,?)`,
 			draft.Subscriber.ID, draft.Subscriber.DisplayName, string(draft.Subscriber.State), now.Unix(), now.Unix()); err != nil {
-			return "", errSubscriberCreateFailed
+			return "", common.ErrSubscriberCreateFailed
 		}
 		record, token, tErr := subscription.NewSubscriptionToken(draft.Subscriber.ID)
 		if tErr != nil {
-			return "", errTokenCreateFailed
+			return "", common.ErrTokenCreateFailed
 		}
 		if _, err = tx.Exec(`INSERT INTO subscription_tokens(id, subscriber_id, token_hash, revoked, created_at, revoked_at) VALUES(?,?,?,0,?,0)`,
 			record.ID, record.SubscriberID, record.Hash, now.Unix()); err != nil {
-			return "", errTokenCreateFailed
+			return "", common.ErrTokenCreateFailed
 		}
 		bearer = token
 	}
@@ -347,10 +349,10 @@ func (s *Store) SaveSubscriptionDraft(draft SubscriptionDraft, artifactID string
 		return "", err
 	}
 	if _, err = tx.Exec(`UPDATE subscribers SET revision=revision+1, updated_at=? WHERE id=?`, now.Unix(), draft.Subscriber.ID); err != nil {
-		return "", errSubscriberUpdateFailed
+		return "", common.ErrSubscriberUpdateFailed
 	}
 	if err = tx.Commit(); err != nil {
-		return "", errors.New(CodeDatabaseUnavailable)
+		return "", errors.New(common.CodeDatabaseUnavailable)
 	}
 	// The save ends here on purpose (Ruling R10): a subscription selection is not an
 	// ACL input, so it must not republish any Out. The Line's own publication is
@@ -372,13 +374,13 @@ func writeDraftCredentialsTx(tx *sql.Tx, draft SubscriptionDraft, now time.Time)
 		case errors.Is(err, sql.ErrNoRows):
 			if _, err = tx.Exec(`INSERT INTO proxy_credentials(id, subscriber_id, node_id, uuid, active, created_at, updated_at) VALUES(?,?,?,?,1,?,?)`,
 				credential.ID, credential.SubscriberID, credential.NodeID, credential.UUID, now.Unix(), now.Unix()); err != nil {
-				return errCredentialCreateFailed
+				return common.ErrCredentialCreateFailed
 			}
 		case err != nil:
-			return errors.New(CodeDatabaseUnavailable)
+			return errors.New(common.CodeDatabaseUnavailable)
 		case active != 1:
 			if _, err = tx.Exec(`UPDATE proxy_credentials SET active=1, updated_at=? WHERE id=?`, now.Unix(), credential.ID); err != nil {
-				return errCredentialUpdateFailed
+				return common.ErrCredentialUpdateFailed
 			}
 		}
 	}
@@ -407,7 +409,7 @@ type SaveResult struct {
 //
 // It is the composition of three public steps, and each is also callable on its
 // own; this function adds no fourth behaviour.
-func (s *Store) ApproveSubscriptionSelection(ctx context.Context, subscriberID, displayName string, spec SelectionSpec, verifier PublishVerifier, now time.Time) (SaveResult, error) {
+func (s *Store) ApproveSubscriptionSelection(ctx context.Context, subscriberID, displayName string, spec SelectionSpec, verifier common.PublishVerifier, now time.Time) (SaveResult, error) {
 	draft, err := s.DraftSubscriptionSelection(subscriberID, displayName, spec)
 	if err != nil {
 		return SaveResult{}, err
@@ -427,7 +429,7 @@ func (s *Store) ApproveSubscriptionSelection(ctx context.Context, subscriberID, 
 // runComposeGate runs the pure composer and then the kernel gate. A blocking
 // composer finding stops before any binary runs. It is a free function because
 // it holds no store state: the draft already carries every input.
-func runComposeGate(ctx context.Context, inputs selectionInputs, verifier PublishVerifier, diagnostics []subscription.Diagnostic) SelectionPreview {
+func runComposeGate(ctx context.Context, inputs selectionInputs, verifier common.PublishVerifier, diagnostics []subscription.Diagnostic) SelectionPreview {
 	documents, composeDiagnostics := subscription.ComposeSubscription(inputs.Lines, inputs.Out, inputs.Rules, inputs.Network)
 	diagnostics = append(diagnostics, composeDiagnostics...)
 	preview := SelectionPreview{Diagnostics: diagnostics}
@@ -444,7 +446,7 @@ func runComposeGate(ctx context.Context, inputs selectionInputs, verifier Publis
 		preview.Diagnostics = append(preview.Diagnostics, blockingDiagnostic(CodeComposeGateFailed, "sing-box 拒绝组装后的客户端文档"))
 		return preview
 	}
-	preview.Gates = append(preview.Gates, kernelSingBox)
+	preview.Gates = append(preview.Gates, common.KernelSingBox)
 	if _, err := verifier.CheckMihomo(ctx, documents.Mihomo); err != nil {
 		if isMihomoMissing(err) {
 			// An absent Mihomo binary is not a failure of the artifact: the
@@ -461,7 +463,7 @@ func runComposeGate(ctx context.Context, inputs selectionInputs, verifier Publis
 			return preview
 		}
 	} else {
-		preview.Gates = append(preview.Gates, kernelMihomo)
+		preview.Gates = append(preview.Gates, common.KernelMihomo)
 	}
 	preview.Approved = true
 	preview.ContentID = documents.ContentID
@@ -486,7 +488,7 @@ func isMihomoMissing(err error) bool {
 // silently different document.
 func (s *Store) SubscriptionArtifact(subscriberID string) (subscription.ComposeDocuments, string, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return subscription.ComposeDocuments{}, "", errSubscriberIDInvalid()
+		return subscription.ComposeDocuments{}, "", common.ErrSubscriberIDInvalid()
 	}
 	stored, err := s.savedArtifactSelection(subscriberID)
 	if err != nil {
@@ -514,7 +516,7 @@ type savedArtifact struct {
 func (s *Store) savedArtifactSelection(subscriberID string) (savedArtifact, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return savedArtifact{}, errors.New(CodeDatabaseUnavailable)
+		return savedArtifact{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if _, err := getSubscriberTx(tx, subscriberID); err != nil {
@@ -552,7 +554,7 @@ func (s *Store) savedArtifactSelection(subscriberID string) (savedArtifact, erro
 		return savedArtifact{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return savedArtifact{}, errors.New(CodeDatabaseUnavailable)
+		return savedArtifact{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if !hasSnapshot || artifactID == "" {
 		return savedArtifact{}, errors.New(CodeArtifactNotApproved + ": the selection was never approved")
@@ -564,7 +566,7 @@ func (s *Store) savedArtifactSelection(subscriberID string) (savedArtifact, erro
 // download's stable vocabulary: a saved record that no longer resolves is drift,
 // a database failure stays a database failure.
 func artifactAssemblyError(err error) error {
-	if ErrorCodeOf(err) == CodeDatabaseUnavailable {
+	if common.ErrorCodeOf(err) == common.CodeDatabaseUnavailable {
 		return err
 	}
 	return errors.New(CodeArtifactDrift + ": a selected reference is no longer available")

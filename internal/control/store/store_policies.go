@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
@@ -171,7 +173,7 @@ func insertRoutePolicyTx(tx *sql.Tx, p RoutePolicy) error {
 	_, err := tx.Exec(`INSERT INTO route_policies(id, revision, layer, name, payload, pins, status, operation_id, created_at, updated_at)
  VALUES(?,?,?,?,?,?,?,?,?,?)`, p.ID, p.Revision, p.Layer, p.Name, string(p.Payload), string(p.Pins), p.Status, p.OperationID, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
-		if uniqueConstraint(err) {
+		if common.IsUniqueConstraint(err) {
 			return errors.New(policy.CodePolicyConflict + ": the revision or the layer's active slot is already taken")
 		}
 		return errors.New(codePolicyWriteFailed + ": the policy revision was not stored")
@@ -206,7 +208,7 @@ func (s *Store) CreateRoutePolicy(layer PolicyLayer, name string, payload, pins 
 	p := RoutePolicy{ID: id, Layer: layer, Name: name, Payload: append(json.RawMessage(nil), payload...), Pins: append(json.RawMessage(nil), pins...), Revision: 1, Status: PolicyDraft, OperationID: operationID, CreatedAt: now.Unix(), UpdatedAt: now.Unix()}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
+		return RoutePolicy{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	if err = insertRoutePolicyTx(tx, p); err == nil {
@@ -234,7 +236,7 @@ func (s *Store) ReviseRoutePolicy(id string, payload, pins json.RawMessage, oper
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
+		return RoutePolicy{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	latest, err := latestRoutePolicy(tx, id)
@@ -284,7 +286,7 @@ func (s *Store) transitionRoutePolicy(id string, revision int64, target PolicySt
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
+		return RoutePolicy{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
 	latest, err := latestRoutePolicy(tx, id)
@@ -338,7 +340,7 @@ func scanRoutePolicy(row interface{ Scan(...any) error }) (RoutePolicy, error) {
 		return RoutePolicy{}, errors.New(CodePublishNoPolicy + ": unknown policy revision")
 	}
 	if err != nil {
-		return RoutePolicy{}, errors.New(CodeDatabaseUnavailable)
+		return RoutePolicy{}, errors.New(common.CodeDatabaseUnavailable)
 	}
 	p.Layer, p.Status, p.Payload, p.Pins = PolicyLayer(layer), PolicyStatus(status), payload, pins
 	if !json.Valid(p.Payload) || !json.Valid(p.Pins) {
@@ -347,7 +349,7 @@ func scanRoutePolicy(row interface{ Scan(...any) error }) (RoutePolicy, error) {
 	return p, nil
 }
 
-func latestRoutePolicy(q rowQueryer, id string) (RoutePolicy, error) {
+func latestRoutePolicy(q common.RowQueryer, id string) (RoutePolicy, error) {
 	return scanRoutePolicy(q.QueryRow(routePolicySelect+` WHERE p.id=? ORDER BY p.revision DESC LIMIT 1`, id))
 }
 

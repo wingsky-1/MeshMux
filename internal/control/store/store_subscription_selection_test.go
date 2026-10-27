@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/policy"
@@ -468,7 +470,7 @@ func TestMihomoAbsentDegradesWithoutBlocking(t *testing.T) {
 	if !preview.Approved || !preview.MihomoSkipped {
 		t.Fatalf("preview = %+v, want approved with the mihomo gate skipped", preview)
 	}
-	if len(preview.Gates) != 1 || preview.Gates[0] != kernelSingBox {
+	if len(preview.Gates) != 1 || preview.Gates[0] != common.KernelSingBox {
 		t.Fatalf("gates = %q, want [sing-box]", preview.Gates)
 	}
 	var reminder bool

@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
 )
 
@@ -38,16 +40,16 @@ func validateSelectionOutTx(tx *sql.Tx, outID string) error {
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return errOutNotFound
+		return common.ErrOutNotFound
 	}
 	if err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	switch role {
 	case "out":
 		var configured int
 		if err := tx.QueryRow(`SELECT count(*) FROM out_settings WHERE node_id=?`, outID).Scan(&configured); err != nil {
-			return errors.New(CodeDatabaseUnavailable)
+			return errors.New(common.CodeDatabaseUnavailable)
 		}
 		if configured == 0 {
 			return errors.New("OUT_NOT_CONFIGURED: configure the out transport before selecting it")
@@ -55,7 +57,7 @@ func validateSelectionOutTx(tx *sql.Tx, outID string) error {
 	case "http":
 		var configured int
 		if err := tx.QueryRow(`SELECT count(*) FROM node_http_proxy WHERE node_id=?`, outID).Scan(&configured); err != nil {
-			return errors.New(CodeDatabaseUnavailable)
+			return errors.New(common.CodeDatabaseUnavailable)
 		}
 		if configured == 0 {
 			return errors.New("OUT_NOT_CONFIGURED: configure the http proxy before selecting it")
@@ -72,7 +74,7 @@ func validateRuleRevisionTx(tx *sql.Tx, revision RuleRevision) error {
 	var count int
 	if err := tx.QueryRow(`SELECT count(*) FROM policy_rules WHERE stable_key=? AND version=?`,
 		revision.StableKey, revision.Version).Scan(&count); err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	if count == 0 {
 		return errors.New("RULE_NOT_FOUND: the selected rule revision does not exist")
@@ -89,7 +91,7 @@ func validateSelectionDeviceTx(tx *sql.Tx, deviceID string) error {
 		return errors.New("MESH_DEVICE_NOT_FOUND: unknown mesh device")
 	}
 	if err != nil {
-		return errors.New(CodeDatabaseUnavailable)
+		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	switch mesh.Status(status) {
 	case mesh.StatusRevoked, mesh.StatusRevoking, mesh.StatusExpired, mesh.StatusFailed:
@@ -128,19 +130,19 @@ func lineOutConflictsTx(tx *sql.Tx, subscriberID, lineID, outID string) ([]strin
 	  WHERE l.node_id=? AND l.subscriber_id<>? AND COALESCE(o.out_id,'')<>?
 	  ORDER BY s.display_name, s.id`, lineID, subscriberID, outID)
 	if err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	conflicts := []string{}
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		conflicts = append(conflicts, name)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	sort.Strings(conflicts)
 	return conflicts, nil
@@ -159,13 +161,13 @@ func lineSubscribersTx(tx *sql.Tx, subscriberID string, lineIDs []string) ([]str
 		  WHERE l.node_id=? AND l.subscriber_id<>? AND s.state='active'
 		  ORDER BY s.display_name, s.id`, lineID, subscriberID)
 		if err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
 				rows.Close()
-				return nil, errors.New(CodeDatabaseUnavailable)
+				return nil, errors.New(common.CodeDatabaseUnavailable)
 			}
 			if _, duplicate := seen[name]; duplicate {
 				continue
@@ -174,10 +176,10 @@ func lineSubscribersTx(tx *sql.Tx, subscriberID string, lineIDs []string) ([]str
 			names = append(names, name)
 		}
 		if err := rows.Close(); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		if err := rows.Err(); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 	}
 	sort.Strings(names)

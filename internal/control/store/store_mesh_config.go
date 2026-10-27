@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -51,7 +53,7 @@ func subscriptionForSubscriberTx(tx *sql.Tx, subscriberID string, now time.Time)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(credentials) == 0 || len(credentials) > maxSubscriberLines {
+	if len(credentials) == 0 || len(credentials) > common.MaxSubscriberLines {
 		return nil, nil, ErrSubscriptionRejected
 	}
 

@@ -1,4 +1,4 @@
-package store
+package common
 
 // The store's local limits, in one place.
 //
@@ -19,33 +19,33 @@ package store
 // bound cannot leave a stale number in operator text.
 
 const (
-	// maxSubscriberLines is the number of Lines one subscriber may select. The
+	// MaxSubscriberLines is the number of Lines one subscriber may select. The
 	// owner is subscription.Selection.Validate, which refuses the same value;
 	// the store checks it earlier so a request is refused before any write.
-	maxSubscriberLines = 32
+	MaxSubscriberLines = 32
 
-	// maxLineCandidateUsers mirrors the node candidate user bound
+	// MaxLineCandidateUsers mirrors the node candidate user bound
 	// (internal/node, maxCandidateUsers). A Line snapshot refuses an oversized
 	// user set before the candidate document is built, independent of the later
 	// document validation. Delete this once internal/node exports its bound.
-	maxLineCandidateUsers = 1024
+	MaxLineCandidateUsers = 1024
 
-	// maxOutAllowlistSources mirrors the frozen protocol and Agent bound
+	// MaxOutAllowlistSources mirrors the frozen protocol and Agent bound
 	// (internal/node/protocol, maxAllowedSources). One Out may be selected by
 	// several subscriptions, so this is a defensive ceiling that keeps the
 	// derived list inside the envelope the Agent accepts.
-	maxOutAllowlistSources = 256
+	MaxOutAllowlistSources = 256
 
-	// maxSelectionRules bounds how many rule revisions one wizard save may
+	// MaxSelectionRules bounds how many rule revisions one wizard save may
 	// pin. It exists so one save cannot produce an unbounded document.
-	maxSelectionRules = 64
+	MaxSelectionRules = 64
 
-	// maxSelectionDevices bounds how many mesh devices one wizard save may
+	// MaxSelectionDevices bounds how many mesh devices one wizard save may
 	// record on a subscription.
-	maxSelectionDevices = 64
+	MaxSelectionDevices = 64
 
-	// maxBatchSubscribers bounds one batch re-approval request. Each member is
+	// MaxBatchSubscribers bounds one batch re-approval request. Each member is
 	// its own transaction and its own gate run, so the ceiling keeps one HTTP
 	// request from turning into an unbounded sequence of kernel invocations.
-	maxBatchSubscribers = 100
+	MaxBatchSubscribers = 100
 )

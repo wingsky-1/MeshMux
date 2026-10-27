@@ -14,6 +14,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
@@ -22,26 +24,26 @@ import (
 // subscriber page; a credential row alone is never read as "selected".
 func (s *Store) SubscriberLineIDs(subscriberID string) ([]string, error) {
 	if err := subscription.ValidateID(subscriberID); err != nil {
-		return nil, errSubscriberIDInvalid()
+		return nil, common.ErrSubscriberIDInvalid()
 	}
 	rows, err := s.DB.Query(`SELECT node_id FROM subscription_lines WHERE subscriber_id=? ORDER BY position ASC`, subscriberID)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
 			return []string{}, nil
 		}
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
 		var nodeID string
 		if err := rows.Scan(&nodeID); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		out = append(out, nodeID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
@@ -60,19 +62,19 @@ func (s *Store) LineSubscriberIDs(nodeID string) ([]string, error) {
 	  SELECT subscriber_id FROM proxy_credentials WHERE node_id=?
 	) ORDER BY subscriber_id`, nodeID, nodeID)
 	if err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer rows.Close()
 	out := []string{}
 	for rows.Next() {
 		var subscriberID string
 		if err := rows.Scan(&subscriberID); err != nil {
-			return nil, errors.New(CodeDatabaseUnavailable)
+			return nil, errors.New(common.CodeDatabaseUnavailable)
 		}
 		out = append(out, subscriberID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.New(CodeDatabaseUnavailable)
+		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
 	return out, nil
 }
