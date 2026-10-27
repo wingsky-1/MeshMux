@@ -2,6 +2,10 @@ package store
 
 // The Hub database gate of #11c-3 (spec §4.5, §4.13, §4.15, §6).
 //
+// It lives in the root because it is the database's own lifecycle, not a domain:
+// it owns `database_versions`, reads the file's user_version and the backup
+// record, and is the only reader of the data directory outside OpenStore.
+//
 // Two version numbers are deliberately kept apart:
 //
 //   - `PRAGMA user_version` is the storage schema of this SQLite file. This
