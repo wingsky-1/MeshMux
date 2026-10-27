@@ -66,7 +66,7 @@ func TestWizardPageRendersFourGroupsAndExecutionBoundary(t *testing.T) {
 	body := w.Body.String()
 	for _, want := range []string{
 		"订阅向导", "一 · 线路", "二 · 出口", "三 · 规则", "四 · 组网",
-		"Out / HTTP 代理 · 单选", "预览（不保存）", "保存并校验",
+		"Out / HTTP 代理 · 单选", "预览（不保存）", "创建订阅并校验",
 		"line_" + lineID, "out_id", "rule_", "四 · 组网",
 	} {
 		if !strings.Contains(body, want) {

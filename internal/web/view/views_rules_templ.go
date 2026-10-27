@@ -204,7 +204,7 @@ func RulesLibraryPage(p PageData, v RulesLibraryView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/policies.css\"><p class=\"subtitle\">规则库是全部订阅分流的唯一真相源：预置规则随版本迁移替换、不可写；自定义规则按稳定键 + 版本不可变保存，修改只产生新版本。订阅按（稳定键，版本）引用规则，被引用的版本删除时会被拒绝并列出订阅名。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/policies.css\"><p class=\"subtitle\">规则库是订阅分流的唯一真相源：预置规则随版本迁移替换、不可写；自定义规则按稳定键 + 版本不可变保存，修改只产生新版本。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -365,7 +365,7 @@ func RulesLibraryPage(p PageData, v RulesLibraryView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, " 条</span></div><p class=\"muted\">预置规则由版本种子下发，随版本迁移替换、不原地修改；存量订阅停留在旧版本语义并标注可升级，不自动变。</p><p class=\"hint\">！ 预置规则不可写：任何创建、修改、删除预置规则的请求都会被 RULE_PRESET_IMMUTABLE 拒绝。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, " 条</span></div><p class=\"muted\">预置规则由版本种子下发，不原地修改；存量订阅停留在旧版本语义并标注可升级。</p><p class=\"hint\" title=\"任何创建、修改、删除预置规则的请求都会被 RULE_PRESET_IMMUTABLE 拒绝。\">！ 预置规则不可写。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -489,7 +489,7 @@ func RulesLibraryPage(p PageData, v RulesLibraryView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, " 条</span><a class=\"text-button\" href=\"#rule-new\">新建规则</a></div><p class=\"muted\">自定义规则按“稳定键 + 版本”不可变保存：修改匹配或动作只产生新版本，旧版本订阅的下载字节不变。</p><p class=\"hint\">！ 一条规则只能有一种匹配器（域名 / 域名后缀 / IP 网段 / GeoSite / GeoIP / 规则集），非法值在保存时被拒绝，不静默修正。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, " 条</span><a class=\"text-button\" href=\"#rule-new\">新建规则</a></div><p class=\"muted\">自定义规则按“稳定键 + 版本”不可变保存：修改只产生新版本，旧版本订阅的下载字节不变。</p><p class=\"hint\" title=\"一条规则只能有一种匹配器（域名 / 域名后缀 / IP 网段 / GeoSite / GeoIP / 规则集）；非法值在保存时被拒绝，不静默修正。\">！ 一条规则只能有一种匹配器。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -629,7 +629,7 @@ func RulesLibraryPage(p PageData, v RulesLibraryView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "\"> <label for=\"rule-new-key\">稳定键</label> <input id=\"rule-new-key\" name=\"stable_key\" type=\"text\" required maxlength=\"64\" placeholder=\"例如 proxy-ai\" pattern=\"[a-z0-9][a-z0-9-]*\"><p class=\"hint\">小写字母、数字、连字符；以 preset- 开头为预置保留，会被拒绝。</p><label for=\"rule-new-name\">展示名</label> <input id=\"rule-new-name\" name=\"name\" type=\"text\" required maxlength=\"80\" placeholder=\"例如 AI 走代理\"> <label for=\"rule-new-action\">动作</label> <select id=\"rule-new-action\" name=\"action\"><option value=\"direct\">直连</option><option value=\"proxy\">代理</option><option value=\"reject\">拒绝</option></select> <label for=\"rule-new-kind\">匹配器（六选一）</label> <select id=\"rule-new-kind\" name=\"matcher_kind\"><option value=\"domain\">域名（完全匹配）</option><option value=\"domain_suffix\">域名后缀</option><option value=\"ipcidr\">IP 网段（CIDR）</option><option value=\"geosite\">GeoSite 标签</option><option value=\"geoip\">GeoIP 标签</option><option value=\"ruleset\">规则集标签</option></select> <label for=\"rule-new-values\">匹配值（每行一个）</label> <textarea id=\"rule-new-values\" name=\"values\" rows=\"4\" required placeholder=\"域名 dl.example.invalid / 后缀 ads.example.invalid / 网段 198.51.100.0/24 / 标签小写如 cn、ai\"></textarea><p class=\"hint\">！ 保存时校验：非法域名、非规范 CIDR、大写标签都会被拒绝；重复值也会被拒绝。</p><button type=\"submit\">创建 v1 →</button></form></section></div></div><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>规则库：预置随版本迁移替换</span></footer></main></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 57, "\"> <label for=\"rule-new-key\">稳定键</label> <input id=\"rule-new-key\" name=\"stable_key\" type=\"text\" required maxlength=\"64\" placeholder=\"例如 proxy-ai\" pattern=\"[a-z0-9][a-z0-9-]*\"><p class=\"hint\">小写字母、数字、连字符；以 preset- 开头为预置保留，会被拒绝。</p><label for=\"rule-new-name\">展示名</label> <input id=\"rule-new-name\" name=\"name\" type=\"text\" required maxlength=\"80\" placeholder=\"例如 AI 走代理\"> <label for=\"rule-new-action\">动作</label> <select id=\"rule-new-action\" name=\"action\"><option value=\"direct\">直连</option><option value=\"proxy\">代理</option><option value=\"reject\">拒绝</option></select> <label for=\"rule-new-kind\">匹配器（六选一）</label> <select id=\"rule-new-kind\" name=\"matcher_kind\"><option value=\"domain\">域名（完全匹配）</option><option value=\"domain_suffix\">域名后缀</option><option value=\"ipcidr\">IP 网段（CIDR）</option><option value=\"geosite\">GeoSite 标签</option><option value=\"geoip\">GeoIP 标签</option><option value=\"ruleset\">规则集标签</option></select> <label for=\"rule-new-values\">匹配值（每行一个）</label> <textarea id=\"rule-new-values\" name=\"values\" rows=\"4\" required placeholder=\"域名 dl.example.invalid / 后缀 ads.example.invalid / 网段 198.51.100.0/24 / 标签小写如 cn、ai\"></textarea><p class=\"hint\">保存时校验：非法域名、非规范 CIDR、大写标签与重复值都会被拒绝。</p><button type=\"submit\">创建 v1 →</button></form></section></div></div><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>规则库：预置随版本迁移替换</span></footer></main></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

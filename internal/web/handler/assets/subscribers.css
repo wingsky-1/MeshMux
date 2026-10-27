@@ -119,9 +119,10 @@
   background: #fff;
 }
 
-/* app.css styles every input as a full-width block; a checkbox needs the
-   native control size instead. */
-.sub-check input[type="checkbox"] {
+/* app.css styles every input as a full-width block; checkbox and radio controls
+   need the native control size instead. */
+.sub-check input[type="checkbox"],
+.sub-check input[type="radio"] {
   display: inline-block;
   width: 18px;
   min-height: 18px;
@@ -216,6 +217,24 @@
 .sub-links a {
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+/* The one-time token disclosure: the secret and its copy trigger. */
+.copy-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.copy-row .sub-secret {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.copy-row .copy-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .sub-note {

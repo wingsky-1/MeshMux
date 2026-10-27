@@ -16,7 +16,8 @@ import templruntime "github.com/a-h/templ/runtime"
 //   - 已确认 (confirmed): what the Line itself proved by its own readback.
 //
 // A queued publication, a delivered task or a successful Hub write is never
-// rendered as a confirmed remote state.
+// rendered as a confirmed remote state. The "已确认" boundary is stated once,
+// next to the wizard link where the operator acts on it.
 import "github.com/wingsky-1/MeshMux/internal/control/store"
 
 func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
@@ -73,7 +74,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					var templ_7745c5c3_Var3 templ.SafeURL
 					templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 24, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 25, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 					if templ_7745c5c3_Err != nil {
@@ -86,7 +87,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					var templ_7745c5c3_Var4 string
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 24, Col: 115}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 25, Col: 115}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -99,7 +100,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 24, Col: 136}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 25, Col: 136}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -117,7 +118,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					var templ_7745c5c3_Var6 templ.SafeURL
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 26, Col: 41}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 27, Col: 41}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {
@@ -130,7 +131,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					var templ_7745c5c3_Var7 string
 					templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 26, Col: 80}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 27, Col: 80}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 					if templ_7745c5c3_Err != nil {
@@ -143,7 +144,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					var templ_7745c5c3_Var8 string
 					templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 26, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 27, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 					if templ_7745c5c3_Err != nil {
@@ -162,7 +163,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 			var templ_7745c5c3_Var9 string
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 33, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 34, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
@@ -175,7 +176,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 33, Col: 246}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 34, Col: 246}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 			if templ_7745c5c3_Err != nil {
@@ -188,7 +189,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 			var templ_7745c5c3_Var11 string
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 35, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 36, Col: 87}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -204,7 +205,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/subscribers.css\"><p class=\"subtitle\">订阅用户与 VLESS 凭据、节点身份、订阅 Token 是四类独立身份。暂停或删除会立即撤销公开下载，但已缓存的客户端配置在远端确认前仍然有效。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/subscribers.css\"><p class=\"subtitle\">快速创建只选线路；需要同时选择 Out、规则与组网设备时，用右侧提示的<a href=\"/subscribers/wizard\">订阅向导</a>（四组选择一次保存）。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -216,33 +217,33 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var12 string
 				templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(v.TokenOwner)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 43, Col: 125}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 44, Col: 125}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</span></div><p class=\"hint\">原始 Token 只在本次响应中出现，Hub 只保存它的 SHA-256 摘要。离开此页面后无法再次查看；遗失时请轮换。</p><pre class=\"sub-secret\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "</span></div><p class=\"hint\">Token 只在本次响应中出现（Hub 只存 SHA-256）；离开此页无法再查看，遗失请轮换。订阅地址同样包含 Token，勿写入日志或公开页面。</p><div class=\"copy-row\"><div id=\"sub-token-value\"><pre class=\"sub-secret\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(v.Token)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 45, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 46, Col: 88}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</pre><div class=\"sub-links\"><a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 19, "</pre></div><button type=\"button\" class=\"copy-button text-button\" data-copy-target=\"#sub-token-value\">复制</button></div><div class=\"sub-links\"><a href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var14 templ.SafeURL
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(subscriptionDownloadURL(v.Origin, v.Token, "sing-box.json")))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 47, Col: 92}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 48, Col: 92}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -255,18 +256,18 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var15 templ.SafeURL
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(subscriptionDownloadURL(v.Origin, v.Token, "mihomo.yaml")))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 48, Col: 90}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 49, Col: 90}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "\" rel=\"noreferrer noopener\">mihomo.yaml 订阅地址</a></div><p class=\"hint\">订阅地址包含原始 Token，请勿写入日志、诊断包或公开页面。链接使用 no-referrer，避免 Token 经 Referer 泄露到第三方站点。</p></section>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "\" rel=\"noreferrer noopener\">mihomo.yaml 订阅地址</a></div></section>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<div class=\"sub-split\"><section class=\"panel\"><h2>创建订阅用户</h2><p class=\"muted\">创建时会为每个所选 Line 生成独立 VLESS UUID，并签发第一个订阅 Token。</p><form method=\"post\" action=\"/subscribers\"><input type=\"hidden\" name=\"csrf\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "<div class=\"sub-split\"><section class=\"panel\"><h2>创建订阅用户</h2><p class=\"muted\">创建时为每个所选 Line 生成独立 VLESS UUID，并签发第一个订阅 Token。</p><form method=\"post\" action=\"/subscribers\"><input type=\"hidden\" name=\"csrf\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -284,7 +285,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if len(v.Lines) == 0 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<p class=\"hint\">还没有已配置的线路。请先在下方保存至少一条 Line。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<p class=\"hint\">还没有已配置的线路。请先在右侧保存至少一条 Line。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -369,14 +370,14 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "<p class=\"hint\">展示名只是标签，随时可改；订阅用户 ID、VLESS UUID 和 Token 都不随它变化。</p><button type=\"submit\">创建订阅用户 →</button></form><p class=\"hint\">需要同时选择 Out、规则与组网设备时，使用 <a href=\"/subscribers/wizard\">订阅向导</a>：预览只提醒，保存被门禁阻断时不写入任何选择。</p></section><section class=\"panel\"><h2>线路参数</h2><p class=\"muted\">一条 Line 对应一个已纳管的 Line 节点（edge）。REALITY 密钥在服务端生成，页面与接口都不显示私钥。</p><form method=\"post\" action=\"/lines\"><input type=\"hidden\" name=\"csrf\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "<p class=\"hint\">展示名只是标签，随时可改。</p><button type=\"submit\">创建订阅用户 →</button></form><p class=\"hint\">要同时选择 Out、规则与组网设备，请使用 <a href=\"/subscribers/wizard\">订阅向导</a>（四组选择一次保存并过门禁）。</p></section><section class=\"panel\"><h2>线路参数</h2><p class=\"muted\">一条 Line 对应一个已纳管的 Line 节点（edge）；REALITY 私钥不出页面。</p><form method=\"post\" action=\"/lines\"><input type=\"hidden\" name=\"csrf\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var22 string
 			templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 83, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 83, Col: 56}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 			if templ_7745c5c3_Err != nil {
@@ -400,7 +401,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var23 string
 				templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue(node.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 90, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 90, Col: 34}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 				if templ_7745c5c3_Err != nil {
@@ -413,7 +414,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(node.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 90, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 90, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 				if templ_7745c5c3_Err != nil {
@@ -426,7 +427,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var25 string
 				templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(node.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 90, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 90, Col: 70}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 				if templ_7745c5c3_Err != nil {
@@ -437,7 +438,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</select><div class=\"sub-inline\"><div><label for=\"line_display\">展示名</label> <input id=\"line_display\" name=\"display_name\" type=\"text\" required maxlength=\"80\" placeholder=\"例如 香港 01\"></div><div><label for=\"line_order\">排序</label> <input id=\"line_order\" name=\"sort_order\" type=\"number\" min=\"0\" max=\"65535\" value=\"0\" required></div></div><label for=\"line_server\">对外地址</label> <input id=\"line_server\" name=\"server\" type=\"text\" required maxlength=\"253\" placeholder=\"例如 line.example.invalid\"> <label for=\"line_port\">对外端口</label> <input id=\"line_port\" name=\"port\" type=\"number\" min=\"1\" max=\"65535\" required placeholder=\"8443\"> <label for=\"line_server_name\">server_name</label> <input id=\"line_server_name\" name=\"server_name\" type=\"text\" required maxlength=\"253\" placeholder=\"例如 handshake.example.invalid\"> <label for=\"line_handshake\">握手伪装地址</label> <input id=\"line_handshake\" name=\"handshake_server\" type=\"text\" required maxlength=\"253\" placeholder=\"例如 handshake.example.invalid\"> <label for=\"line_handshake_port\">握手伪装端口</label> <input id=\"line_handshake_port\" name=\"handshake_port\" type=\"number\" min=\"1\" max=\"65535\" required placeholder=\"443\"><p class=\"hint\">保存已存在的 Line 时保留其 REALITY 密钥与 short id，因此改展示名或排序不会让已发布的客户端配置失效。参数只写入 Hub 本地状态，不会自动改到已纳管主机。</p><button type=\"submit\">保存线路参数 →</button></form></section></div><section class=\"panel\"><div class=\"panel-heading\"><h2>订阅用户</h2><span class=\"badge\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</select><div class=\"sub-inline\"><div><label for=\"line_display\">展示名</label> <input id=\"line_display\" name=\"display_name\" type=\"text\" required maxlength=\"80\" placeholder=\"例如 香港 01\"></div><div><label for=\"line_order\">排序</label> <input id=\"line_order\" name=\"sort_order\" type=\"number\" min=\"0\" max=\"65535\" value=\"0\" required></div></div><label for=\"line_server\">对外地址</label> <input id=\"line_server\" name=\"server\" type=\"text\" required maxlength=\"253\" placeholder=\"例如 line.example.invalid\"> <label for=\"line_port\">对外端口</label> <input id=\"line_port\" name=\"port\" type=\"number\" min=\"1\" max=\"65535\" required placeholder=\"8443\"> <label for=\"line_server_name\">server_name</label> <input id=\"line_server_name\" name=\"server_name\" type=\"text\" required maxlength=\"253\" placeholder=\"例如 handshake.example.invalid\"> <label for=\"line_handshake\">握手伪装地址</label> <input id=\"line_handshake\" name=\"handshake_server\" type=\"text\" required maxlength=\"253\" placeholder=\"例如 handshake.example.invalid\"> <label for=\"line_handshake_port\">握手伪装端口</label> <input id=\"line_handshake_port\" name=\"handshake_port\" type=\"number\" min=\"1\" max=\"65535\" required placeholder=\"443\"><p class=\"hint\">保存已存在的 Line 时保留其 REALITY 密钥，改展示名或排序不会让已发布的客户端配置失效；参数只写入 Hub，不会自动改到主机。</p><button type=\"submit\">保存线路参数 →</button></form></section></div><section class=\"panel\"><div class=\"panel-heading\"><h2>订阅用户</h2><span class=\"badge\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -509,14 +510,14 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "</span></div><dl class=\"details\"><dt>Subscriber ID</dt><dd><code>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "</span></div><dl class=\"details\"><dt>Subscriber ID</dt><dd><code data-copy>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var31 string
 				templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 130, Col: 49}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 130, Col: 59}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 				if templ_7745c5c3_Err != nil {
@@ -803,7 +804,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 							return templ_7745c5c3_Err
 						}
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "</span> <span></span></div>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "</span></div>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -815,7 +816,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 164, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 163, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var50)
 				if templ_7745c5c3_Err != nil {
@@ -828,7 +829,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var51 string
 				templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 165, Col: 65}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 164, Col: 65}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var51)
 				if templ_7745c5c3_Err != nil {
@@ -841,7 +842,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var52 string
 				templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.ResolveAttributeValue("rename_" + sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 168, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 167, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var52)
 				if templ_7745c5c3_Err != nil {
@@ -854,7 +855,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var53 string
 				templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.ResolveAttributeValue("rename_" + sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 169, Col: 41}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 168, Col: 41}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var53)
 				if templ_7745c5c3_Err != nil {
@@ -867,7 +868,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var54 string
 				templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 169, Col: 123}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 168, Col: 123}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var54)
 				if templ_7745c5c3_Err != nil {
@@ -880,7 +881,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var55 string
 				templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 175, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 174, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var55)
 				if templ_7745c5c3_Err != nil {
@@ -893,7 +894,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 				var templ_7745c5c3_Var56 string
 				templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 176, Col: 65}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 175, Col: 65}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var56)
 				if templ_7745c5c3_Err != nil {
@@ -921,7 +922,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 						var templ_7745c5c3_Var57 string
 						templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue("line_" + line.NodeID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 184, Col: 64}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 183, Col: 64}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 						if templ_7745c5c3_Err != nil {
@@ -944,7 +945,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 						var templ_7745c5c3_Var58 string
 						templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(line.DisplayName)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 185, Col: 60}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 184, Col: 60}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 						if templ_7745c5c3_Err != nil {
@@ -957,7 +958,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 						var templ_7745c5c3_Var59 string
 						templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinStringErrs(line.Server)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 185, Col: 82}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 184, Col: 82}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 						if templ_7745c5c3_Err != nil {
@@ -970,7 +971,7 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 						var templ_7745c5c3_Var60 string
 						templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(line.Port)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 185, Col: 96}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 184, Col: 96}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 						if templ_7745c5c3_Err != nil {
@@ -986,229 +987,216 @@ func SubscribersPage(p PageData, v SubscriberPageView) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 95, "<p class=\"hint\">保留的线路沿用历史 UUID；新增线路获得新凭据；移除的线路只在本 Hub 标记停用，其 UUID 仍保留可审计记录。</p><button type=\"submit\">更新线路选择 →</button></form><p class=\"hint\"><a href=\"")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var61 templ.SafeURL
-				templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/subscribers/wizard?subscriber_id=" + sub.ID))
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 193, Col: 94}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 96, "\">打开订阅向导</a> · 四组选择（线路 / Out / 规则 / 组网）一次保存并过内核门禁。</p><div class=\"sub-actions\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 95, "<p class=\"hint\">保留的线路沿用历史 UUID；新增线路获得新凭据；移除的线路只停用、UUID 保留可审计。</p><button type=\"submit\">更新线路选择 →</button></form><div class=\"sub-actions\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if sub.State == "active" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 97, "<form method=\"post\" action=\"/subscribers/state\"><input type=\"hidden\" name=\"csrf\" value=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 96, "<form method=\"post\" action=\"/subscribers/state\"><input type=\"hidden\" name=\"csrf\" value=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var61 string
+					templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 194, Col: 105}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var61)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 97, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var62 string
-					templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+					templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 196, Col: 105}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 194, Col: 165}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var62)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 98, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var63 string
-					templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 196, Col: 165}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var63)
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 99, "\"><input type=\"hidden\" name=\"action\" value=\"pause\"><button class=\"secondary-button\" type=\"submit\">暂停</button></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 98, "\"><input type=\"hidden\" name=\"action\" value=\"pause\"><button class=\"secondary-button\" type=\"submit\">暂停</button></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
 				if sub.State == "paused" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 100, "<form method=\"post\" action=\"/subscribers/state\"><input type=\"hidden\" name=\"csrf\" value=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 99, "<form method=\"post\" action=\"/subscribers/state\"><input type=\"hidden\" name=\"csrf\" value=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var63 string
+					templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 197, Col: 105}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var63)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 100, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var64 string
-					templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+					templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 199, Col: 105}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 197, Col: 165}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var64)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var65 string
-					templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 199, Col: 165}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var65)
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 102, "\"><input type=\"hidden\" name=\"action\" value=\"resume\"><button class=\"secondary-button\" type=\"submit\">恢复</button></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, "\"><input type=\"hidden\" name=\"action\" value=\"resume\"><button class=\"secondary-button\" type=\"submit\">恢复</button></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
 				if sub.State != "deleting" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "<form method=\"post\" action=\"/subscribers/state\"><input type=\"hidden\" name=\"csrf\" value=\"")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 102, "<form method=\"post\" action=\"/subscribers/state\"><input type=\"hidden\" name=\"csrf\" value=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var65 string
+					templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 200, Col: 105}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var65)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var66 string
-					templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+					templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 202, Col: 105}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 200, Col: 165}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var66)
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 104, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					var templ_7745c5c3_Var67 string
-					templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
-					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 202, Col: 165}
-					}
-					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var67)
-					if templ_7745c5c3_Err != nil {
-						return templ_7745c5c3_Err
-					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 105, "\"><input type=\"hidden\" name=\"action\" value=\"delete\"><button class=\"danger-button\" type=\"submit\">删除</button></form>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 104, "\"><input type=\"hidden\" name=\"action\" value=\"delete\"><button class=\"danger-button\" type=\"submit\">删除</button></form>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 106, "<form method=\"post\" action=\"/subscribers/token/rotate\"><input type=\"hidden\" name=\"csrf\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 105, "<form method=\"post\" action=\"/subscribers/token/rotate\"><input type=\"hidden\" name=\"csrf\" value=\"")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var67 string
+				templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 202, Col: 111}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var67)
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 106, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var68 string
-				templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+				templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 204, Col: 111}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 202, Col: 171}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var68)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 107, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 107, "\"><button class=\"secondary-button\" type=\"submit\">轮换 Token</button></form><form method=\"post\" action=\"/subscribers/token/revoke\"><input type=\"hidden\" name=\"csrf\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var69 string
-				templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
+				templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 204, Col: 171}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 203, Col: 111}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var69)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 108, "\"><button class=\"secondary-button\" type=\"submit\">轮换 Token</button></form><form method=\"post\" action=\"/subscribers/token/revoke\"><input type=\"hidden\" name=\"csrf\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 108, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var70 string
-				templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+				templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 205, Col: 111}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 203, Col: 171}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var70)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 109, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 109, "\"><button class=\"secondary-button\" type=\"submit\">吊销 Token</button></form><form method=\"post\" action=\"/subscribers/sync\"><input type=\"hidden\" name=\"csrf\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var71 string
-				templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
+				templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 205, Col: 171}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 204, Col: 103}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var71)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "\"><button class=\"secondary-button\" type=\"submit\">吊销 Token</button></form><form method=\"post\" action=\"/subscribers/sync\"><input type=\"hidden\" name=\"csrf\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var72 string
-				templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+				templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 206, Col: 103}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 204, Col: 163}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var72)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 111, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 111, "\"><input type=\"hidden\" name=\"action\" value=\"publish\"><button type=\"submit\">同步到线路</button></form><form method=\"post\" action=\"/subscribers/sync\"><input type=\"hidden\" name=\"csrf\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var73 string
-				templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
+				templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 206, Col: 163}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 205, Col: 103}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var73)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 112, "\"><input type=\"hidden\" name=\"action\" value=\"publish\"><button type=\"submit\">同步到线路</button></form><form method=\"post\" action=\"/subscribers/sync\"><input type=\"hidden\" name=\"csrf\" value=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 112, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var74 string
-				templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
+				templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 207, Col: 103}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 205, Col: 163}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var74)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 113, "\"><input type=\"hidden\" name=\"subscriber_id\" value=\"")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var75 string
-				templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_subscribers.templ`, Line: 207, Col: 163}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var75)
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "\"><input type=\"hidden\" name=\"action\" value=\"retry\"><button class=\"secondary-button\" type=\"submit\">重试未确认线路</button></form></div><p class=\"sub-note\">暂停、删除与吊销 Token 立即让公开订阅 URL 失效；但已下载并缓存的客户端配置仍持有 VLESS UUID，只有在线路本机回读确认凭据集合已更新后才真正停止授权。轮换 Token 只更换下载凭据，不会改变任何已发放的 VLESS UUID。</p></article>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 113, "\"><input type=\"hidden\" name=\"action\" value=\"retry\"><button class=\"secondary-button\" type=\"submit\">重试未确认线路</button></form></div><p class=\"sub-note\">暂停、删除与吊销 Token 立即让公开订阅 URL 失效；已缓存的客户端配置在线路本机回读确认后才真正停止授权。轮换 Token 只更换下载凭据，不改变 VLESS UUID。</p></article>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 115, "</section><p class=\"hint\">本页面显示的“已确认”只表示该 Line 的本机回读与它自己的最新不可变修订一致；它不证明公网可达、真实协议握手或客户端可用。</p><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>订阅用户 · 开发预览</span></footer></main></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "</section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>订阅用户 · 开发预览</span></footer></main></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

@@ -204,7 +204,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/policies.css\"><p class=\"subtitle\">路由策略分两层：客户端层（只读）与服务端层，每层从上到下匹配，先命中先生效。服务端层会下发到 Line；客户端层已停写，既有 revision 仅做预览与门禁校验，客户端分流请在规则库维护。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/policies.css\"><p class=\"subtitle\">路由策略分两层：客户端层（只读预览）与服务端层，每层从上到下匹配、先命中先生效；客户端分流请在规则库维护。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -262,22 +262,22 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if v.Out == PolicyOutActive {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<p class=\"hint\">AI 与指定分流优先经 Out 直出。Out 不可用时按 fail-closed 处理，不会自动改走 Line。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<p class=\"hint\">指定分流优先经 Out 直出；Out 不可用时 fail-closed，不会自动改走 Line。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else if v.Out == PolicyOutDegraded {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<p class=\"hint\">Out 健康检查未通过。指定到 Out 的分流进入 fail-closed：拒绝转发并提示目标不可达，不隐式回落到 Line 直出；恢复后自动退出该状态。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<p class=\"hint\">Out 健康检查未通过：指定到 Out 的分流拒绝转发，不隐式回落 Line；恢复后自动退出该状态。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else if v.Out == PolicyOutExternal {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<p class=\"hint\">出口位是外部 HTTP 代理：Hub 没有它的 ACL、回读或机器控制器，因此这里报告的是<b>操作员声明</b>，不是已证明可用的出口。链路是否真的通，只能由该代理自己的日志与客户端实测证明（<code>LINE_EGRESS_EXTERNAL_DECLARED</code>）。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<p class=\"hint\" title=\"Hub 没有它的 ACL、回读或控制器（LINE_EGRESS_EXTERNAL_DECLARED）。链路是否真的通，只能由该代理自己的日志与客户端实测证明。\">出口位是外部 HTTP 代理：这是<b>操作员声明</b>，不是已证明可用的出口。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<p class=\"hint\">Out 是可选节点，未配置不是错误。AI 与指定分流按默认路径走 Line 直出，不生成任何指向 Out 的规则。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<p class=\"hint\">Out 是可选节点，未配置不是错误；指定分流按默认路径走 Line 直出。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -295,7 +295,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "</span></div><p class=\"muted\">客户端层规则决定设备端是否分流，但当前版本<b>没有消费者</b>：标准订阅下载由固定导出器按 Line 与凭据生成，不读取客户端层，也不包含这些规则；发布客户端层只会渲染文档并交 sing-box / Mihomo 门禁，用于校验策略本身是否可渲染，不生成节点候选、不改变任何订阅字节。</p><p class=\"muted\">客户端层自 Task 6 起<b>停写</b>（创建/改版/激活/撤销均返回 <code>POLICY_LAYER_RETIRED</code>）：既有 revision 在这里只读预览，`exceptions`/`ssids` 字段已退役。需要设备侧分流时，请在<b>规则库</b>维护（六种匹配器，暂不含 SSID）；服务端层只决定 Line 的出口。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "</span></div><p class=\"muted\">客户端层当前<b>没有消费者</b>：标准订阅由固定导出器按 Line 与凭据生成，不读取客户端层，也不包含这些规则。</p><p class=\"hint\" title=\"创建/改版/激活/撤销均返回 POLICY_LAYER_RETIRED；既有 revision 只读预览，exceptions/ssids 字段已退役。\">客户端层已停写；设备侧分流请在<b>规则库</b>维护（六种匹配器，暂不含 SSID）。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -370,7 +370,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "</span></div><p class=\"muted\">服务端层规则在 Line 上直接分流，设备不需要任何额外配置。本页展示已激活的服务端策略与 Out 三态；尚未激活时按默认意图预览。发布走 `POST /policies/publish`：装配出的路线先经 sing-box check，再与固定四任务链在同一事务写入候选；门禁或读取失败时不写入任何修订。</p><ul class=\"policy-rules\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "</span></div><p class=\"muted\" title=\"发布走 POST /policies/publish：装配出的路线先经 sing-box check，再与固定四任务链在同一事务写入候选；门禁或读取失败时不写入任何修订。\">服务端层规则在 Line 上直接分流，设备不需要额外配置；本页展示已激活策略与 Out 三态。</p><ul class=\"policy-rules\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -470,7 +470,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "</ul><p class=\"hint\">调整顺序或合并条件后重新校验；已启用的规则停用后，命中它的流量回到该层兜底。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>命中说明</h2><span class=\"badge\">只读查询</span></div><p class=\"muted\">输入域名或 IP，按“规则 → 动作 → 实际出口 → DNS”四段链展示第一条命中的客户端规则；未命中任何规则时展示兜底。这是客户端层预览的命中说明，不改变订阅内容。geo 与远端 ruleset 需要已锁定的数据，本页不猜测结果。</p><form class=\"policy-explain\" method=\"get\" action=\"/policies/explain\"><label for=\"policy_target\">目标域名或 IP</label> <input id=\"policy_target\" name=\"target\" type=\"text\" maxlength=\"253\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "</ul><p class=\"hint\">调整顺序或合并条件后重新校验；已启用的规则停用后，命中它的流量回到该层兜底。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>命中说明</h2><span class=\"badge\">只读查询</span></div><p class=\"muted\">输入域名或 IP，按“规则 → 动作 → 实际出口 → DNS”四段链展示第一条命中的规则；未命中展示兜底。这是只读查询，不改变订阅内容。</p><form class=\"policy-explain\" method=\"get\" action=\"/policies/explain\"><label for=\"policy_target\">目标域名或 IP</label> <input id=\"policy_target\" name=\"target\" type=\"text\" maxlength=\"253\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -580,7 +580,7 @@ func PoliciesPage(p PageData, v PolicyPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "</section></div><section class=\"panel mobile-loop\"><div class=\"panel-heading\"><h2>移动端提示</h2><span class=\"badge\">防回环</span></div><p class=\"hint\">标准订阅只包含 Line 与凭据，不含客户端层规则，因此导入后不会出现代理回环；客户端层已停写，客户端分流请在规则库维护（标准订阅同样不读取客户端层）。Out 未配置或故障时，下发配置不会生成引用 Out 的规则，避免产生无法启动的无效配置。</p></section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer></main></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 63, "</section></div><section class=\"panel mobile-loop\"><div class=\"panel-heading\"><h2>移动端提示</h2><span class=\"badge\">防回环</span></div><p class=\"hint\" title=\"标准订阅只包含 Line 与凭据，不含客户端层规则；Out 未配置或故障时，下发配置不会生成引用 Out 的规则。\">标准订阅不含客户端层规则，导入后不会出现代理回环。</p></section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>开发预览，不用于生产环境</span></footer></main></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

@@ -35,14 +35,18 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 						<div class="notice">本地开发模式：仅用于隔离验收，未启用 HTTPS。</div>
 					}
 					<link rel="stylesheet" href="/assets/subscribers.css"/>
-					<p class="subtitle">订阅是纯函数产物：同一选择永远组装出同样的字节，下载时按快照重新组装并与已批准摘要比对。预览只提醒（!），保存被组装冲突或内核门禁拒绝时阻断（✖），且不写入任何选择。</p>
+					if v.Create {
+						<p class="subtitle">四组选择一次保存：预览只提醒（!），保存被拒绝时（✖）不写入任何选择。</p>
+					} else {
+						<p class="subtitle">调整 { v.SubscriberName } 的四组选择；预览只提醒（!），保存被拒绝时（✖）不写入任何选择。</p>
+					}
 					if v.Notice != "" {
 						<section class="panel">
 							<div class="panel-heading"><h2>上次操作</h2><span class={ wizardNoticeClass(v) }>{ v.Notice }</span></div>
 							if v.Saved {
 								<dl class="details">
 									<dt>内核门禁</dt><dd>{ v.GateLabel() }</dd>
-									<dt>产物摘要</dt><dd><code>{ v.ContentID }</code></dd>
+									<dt>产物摘要</dt><dd><code data-copy>{ v.ContentID }</code></dd>
 								</dl>
 							}
 						</section>
@@ -92,11 +96,11 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 									}
 								</div>
 							}
-							<p class="hint">凭据与线路一一对应：保留的线路沿用历史 UUID，新增线路在保存时获得新凭据，移除的线路只停用、UUID 保留可审计。</p>
+							<p class="hint">凭据与线路一一对应：保留的沿用历史 UUID，新增的在保存时签发，移除的只停用。</p>
 						</section>
 						<section class="panel">
 							<div class="panel-heading"><h2>二 · 出口</h2><span class="badge">Out / HTTP 代理 · 单选</span></div>
-							<p class="hint">！1.0 每个订阅最多选择 1 个出口：MeshMux Out 或外部 HTTP 代理。同一 Line 的所有订阅必须选择同一个出口，否则后选会被拒绝。</p>
+							<p class="hint">！ 1.0 每个订阅最多 1 个出口；同一 Line 的所有订阅必须选同一个出口，否则后选被拒绝。</p>
 							<label class="sub-check">
 								<input type="radio" name="out_id" value="" checked?={ v.noOutSelected() }/>
 								<span class="sub-check-text">不使用出口<small>Line 直出；代理规则也走 Line</small></span>
@@ -113,7 +117,7 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 									}
 								</div>
 							}
-							<p class="hint">出口选择只决定 Line 路由片段渲染的出口并过内核门禁：Out 使用 Hub 签发的 Shadowsocks link key，HTTP 代理使用其 URL/凭据渲染 http 出站。服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。HTTP 代理是外部声明：无 ACL、无回读、无控制器，客户端是否真能出网只能由代理自身日志与实测证明。</p>
+							<p class="hint" title="Out 授权来自节点成员（纳管即互通），选择不改动它；HTTP 代理是外部声明，客户端可用性只能由代理自身日志与实测证明。">出口选择只决定订阅渲染的出口并过内核门禁，不改变服务端授权。</p>
 						</section>
 						<section class="panel">
 							<div class="panel-heading"><h2>三 · 规则</h2><span class="badge">{ len(v.Rules) } 个版本</span></div>
@@ -132,7 +136,7 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 									}
 								</div>
 							}
-							<p class="hint">订阅按（稳定键，版本）引用规则：被引用的版本不会被原地修改，删除会被拒绝并列出订阅名；新版本需要显式迁移。</p>
+							<p class="hint" title="被引用的版本不会被原地修改，删除会被拒绝并列出订阅名；新版本需要显式迁移。">订阅按（稳定键，版本）引用规则；旧版本不受新版本影响。</p>
 						</section>
 						<section class="panel">
 							<div class="panel-heading"><h2>四 · 组网</h2><span class="badge">已记录，执行待 1.1</span></div>
@@ -148,14 +152,18 @@ templ SubscriptionWizardPage(p PageData, v SubscriptionWizardView) {
 									}
 								</div>
 							}
-							<p class="hint">组网选择参与订阅分组与引用判断，不改变标准订阅字节；子网路由执行以既有 Headscale 接线为准。</p>
+							<p class="hint" title="组网选择参与订阅分组与引用判断，不改变标准订阅字节；子网路由执行以既有 Headscale 接线为准。">组网选择已记录，执行待 1.1；不改变标准订阅字节。</p>
 						</section>
 						<div class="sub-actions">
 							<button class="secondary-button" type="submit" formaction="/subscribers/wizard/preview">预览（不保存）</button>
-							<button type="submit">保存并校验</button>
+							if v.Create {
+								<button type="submit">创建订阅并校验</button>
+							} else {
+								<button type="submit">保存并校验</button>
+							}
 						</div>
 					</form>
-					<p class="hint">“已确认”只表示该 Line 的本机回读与它自己的最新不可变修订一致；它不证明公网可达、真实协议握手或客户端可用。</p>
+					<p class="hint">“已确认”只表示该 Line 的本机回读与它自己的最新不可变修订一致；不证明公网可达、真实协议握手或客户端可用。</p>
 					<footer class="page-footer"><span>MeshMux · 自托管网络控制台</span><span>订阅向导</span></footer>
 				</main>
 			</div>
