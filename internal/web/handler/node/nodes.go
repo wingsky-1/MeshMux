@@ -288,6 +288,7 @@ func (s *Server) agentMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	metadata := nodedomain.Metadata{
 		NodeID: n.ID, Role: nodedomain.Role(n.Role), VLESSPort: n.VlessPort, SSHPort: n.SSHPort,
+		ConfigRevision: n.LatestConfigRevision,
 	}
 	if err := metadata.Validate(); err != nil {
 		s.agentFail(w, r, 500, "METADATA_INVALID", "节点身份绑定无效。", "请在 Web 重签身份。")

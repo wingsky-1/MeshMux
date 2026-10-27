@@ -457,6 +457,50 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 	return outDrainPublished, nil
 }
 
+// publishPairingOutCandidateTx publishes the Out's current desired candidate
+// when it differs from the newest stored revision.
+//
+// A Web-first Out is created before its dial address exists, so revision 1 is
+// the transport-free baseline. SetOutTransport cannot publish while the node is
+// still pending: the offline guard keeps state-changing tasks off a host that
+// has not enrolled. Pairing is therefore the first moment the link-key document
+// can be committed, and doing it before SeedInitialTasksTx makes that revision
+// the one a fresh install fetches and applies. Without it the node boots the
+// baseline guard, which carries no authorization at all.
+func publishPairingOutCandidateTx(tx *sql.Tx, nodeID, role string, now time.Time) error {
+	if role != string(common.NodeRoleOut) {
+		return nil
+	}
+	revision, digest, _, found, err := candidatepkg.LatestPublishedTx(tx, nodeID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	desired, err := BuildLineCandidateTx(tx, nodeID, revision)
+	if err != nil {
+		return err
+	}
+	desiredDigest, err := candidatepkg.CompiledHash(desired)
+	if err != nil {
+		return err
+	}
+	if desiredDigest == digest {
+		return nil
+	}
+	next, err := candidatepkg.NextCandidateRevisionTx(tx, nodeID)
+	if err != nil {
+		return err
+	}
+	desired, err = BuildLineCandidateTx(tx, nodeID, next)
+	if err != nil {
+		return err
+	}
+	_, err = candidatepkg.PublishTx(tx, nodeID, desired, now)
+	return err
+}
+
 // outCandidateAtRevisionTx is the compiled digest the Hub expects for one Out
 // revision. An Out carries no users and no REALITY block, but it may carry the
 // link key (v4) for its SS guard; its baseline tag is revision-scoped, so the

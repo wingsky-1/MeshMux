@@ -1065,6 +1065,44 @@ func containsUnit(units []string, unit string) bool {
 	return false
 }
 
+// TestNodeFreshInstallFetchesTheMetadataRevision pins that a fresh install
+// applies the revision the Hub currently publishes rather than assuming
+// revision 1. An Out whose dial address was configured before pairing carries
+// its SS link key in a later candidate; fetching revision 1 would boot the
+// transport-free baseline instead of the guard.
+func TestNodeFreshInstallFetchesTheMetadataRevision(t *testing.T) {
+	f := makeNodeFixture(t, node.RoleOut)
+	const revision = int64(2)
+	linkKey, err := node.NewOutLinkKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.opts.Metadata = func(context.Context, node.Config, node.Identity) (node.Metadata, error) {
+		metadata := f.cfg.Metadata()
+		metadata.ConfigRevision = revision
+		return metadata, nil
+	}
+	requested := int64(0)
+	f.opts.Candidate = func(_ context.Context, _ node.Config, _ node.Identity, rev int64) (node.CandidateDocument, error) {
+		requested = rev
+		return node.NewCandidateDocument(node.Candidate{
+			NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: rev,
+			VLESSPort: f.cfg.VLESSPort, KernelVersion: node.KernelVersion,
+			Out: &node.OutEgress{Server: "out.example.invalid", Port: f.cfg.VLESSPort, Key: linkKey},
+		}), nil
+	}
+	if _, err := f.install(t, false, strings.Repeat("A", 43)); err != nil {
+		t.Fatalf("fresh install at the published revision: %v", err)
+	}
+	if requested != revision {
+		t.Fatalf("installer fetched revision %d, want %d", requested, revision)
+	}
+	active, ok := currentNodeCandidate(f.root, f.cfg)
+	if !ok || active.Revision != revision || active.Out == nil || active.Out.Key != linkKey {
+		t.Fatalf("fresh install did not apply the link-key candidate: %+v", active)
+	}
+}
+
 func TestStateNodeJSONCompatibility(t *testing.T) {
 	state := InstallState{Schema: 1, OperationID: strings.Repeat("a", 32), Status: "installed", ManagedFiles: map[string]string{}}
 	body, err := json.Marshal(state)

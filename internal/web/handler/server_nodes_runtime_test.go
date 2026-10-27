@@ -43,6 +43,41 @@ func fixedTasksForRevision(t *testing.T, app *Server, nodeID string, revision in
 	return tasks
 }
 
+// TestAgentMetadataNamesTheLinkKeyRevision pins the installer's fetch target
+// over the real Agent endpoint: an Out whose transport was configured before
+// pairing reports the revision that carries the SS link key, not the immutable
+// baseline it was created with. A fresh install that trusted revision 1 would
+// boot the transport-free document instead of the guard.
+func TestAgentMetadataNamesTheLinkKeyRevision(t *testing.T) {
+	app, _ := testApp(t)
+	out, code := createPendingNode(t, app, "out", "meta-out", 9443, 2223)
+	if _, err := app.Store.SetOutTransport(out.ID, "out.example.invalid", out.VlessPort, app.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w := pairJSON(t, app, out.ID, "out", code)
+	requireStatus(t, w, 200)
+	var paired map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &paired); err != nil || paired["identity_token"] == "" {
+		t.Fatalf("pair body: %v %.200s", err, w.Body.String())
+	}
+	w = bearerReq(app, "GET", "/api/agent/node", paired["identity_token"], nil)
+	requireStatus(t, w, 200)
+	var metadata node.Metadata
+	if err := json.Unmarshal(w.Body.Bytes(), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ConfigRevision < 2 {
+		t.Fatalf("agent metadata reports revision %d, want the published link-key revision", metadata.ConfigRevision)
+	}
+	candidate, err := app.Store.Candidate(out.ID, metadata.ConfigRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Document.Out == nil {
+		t.Fatalf("revision %d carries no Out link key", metadata.ConfigRevision)
+	}
+}
+
 func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	app, _ := testApp(t)
 	created, firstCode := createPendingNode(t, app, "edge", "repair-edge", 8443, 2222)

@@ -91,12 +91,21 @@ type Identity struct {
 	IdentityToken string `json:"identity_token"`
 }
 
-// Metadata binds a node's immutable enrollment identity to its listener ports.
+// Metadata binds a node's immutable enrollment identity to its listener ports
+// and the newest published candidate revision.
+//
+// The revision is part of the binding so a fresh install applies the document
+// the Hub currently publishes instead of assuming revision 1: an Out configured
+// with its dial address before pairing carries the SS link key in a later
+// candidate, and the first boot must run the guard that same candidate names.
+// Zero means the caller did not report one (an older fixture); the installer
+// falls back to the initial revision in that case.
 type Metadata struct {
-	NodeID    string `json:"node_id"`
-	Role      Role   `json:"role"`
-	VLESSPort int    `json:"vless_port"`
-	SSHPort   int    `json:"ssh_port"`
+	NodeID         string `json:"node_id"`
+	Role           Role   `json:"role"`
+	VLESSPort      int    `json:"vless_port"`
+	SSHPort        int    `json:"ssh_port"`
+	ConfigRevision int64  `json:"config_revision"`
 }
 
 // Candidate is the complete dynamic configuration input. The first five
@@ -515,10 +524,15 @@ func (m Metadata) Validate() error {
 	if err := validatePorts(m.VLESSPort, m.SSHPort); err != nil {
 		return errors.New("METADATA_INVALID: node metadata does not match")
 	}
+	if m.ConfigRevision < 0 {
+		return errors.New("METADATA_INVALID: node metadata does not match")
+	}
 	return nil
 }
 
 // ValidateFor rejects metadata for any node, role or port other than Config.
+// The candidate revision is an observation, not part of the identity binding,
+// so it never makes metadata from the right node invalid.
 func (m Metadata) ValidateFor(c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -526,7 +540,7 @@ func (m Metadata) ValidateFor(c Config) error {
 	if err := m.Validate(); err != nil {
 		return err
 	}
-	if m != c.Metadata() {
+	if m.NodeID != c.NodeID || m.Role != c.Role || m.VLESSPort != c.VLESSPort || m.SSHPort != c.SSHPort {
 		return errors.New("METADATA_MISMATCH: node metadata does not match")
 	}
 	return nil

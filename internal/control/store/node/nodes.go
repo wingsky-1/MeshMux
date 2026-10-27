@@ -310,6 +310,13 @@ func (s *Store) ConsumePairing(nodeID, role, code, agentVersion, kernelVersion s
 		if _, err = tx.Exec(`UPDATE nodes SET status='paired', agent_version=?, kernel_version=?, last_heartbeat=?, updated_at=? WHERE id=?`, agentVersion, kernelVersion, now.Unix(), now.Unix(), nodeID); err != nil {
 			return "", errors.New(common.CodeDatabaseUnavailable)
 		}
+		// An Out configured before pairing (the Web-first order: create the
+		// node, save its dial address, then install) must publish its link-key
+		// document now. SetOutTransport could not while the node was pending,
+		// and this revision is what a fresh install fetches and applies.
+		if err = publishPairingOutCandidateTx(tx, nodeID, storedRole, now); err != nil {
+			return "", err
+		}
 		if err = candidatepkg.SeedInitialTasksTx(tx, nodeID, now); err != nil {
 			return "", err
 		}
