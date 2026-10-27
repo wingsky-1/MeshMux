@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/wingsky-1/MeshMux/internal/logging"
 	"github.com/wingsky-1/MeshMux/internal/web"
 )
 
@@ -310,5 +312,74 @@ func TestWebConfigValidationContract(t *testing.T) {
 				t.Fatalf("Validate()=%v, want error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestNewLoggerDefaultFloorIsWarn pins the launcher's log contract: the process
+// log sink defaults to Warn, so a healthy 1s-heartbeat fleet does not fill
+// journald. Info and Debug come back only through MESHMUX_LOG_LEVEL.
+func TestNewLoggerDefaultFloorIsWarn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		env     string
+		floor   slog.Level
+		invalid bool
+	}{
+		{"unset", "", slog.LevelWarn, false},
+		{"info", "info", slog.LevelInfo, false},
+		{"debug", "debug", slog.LevelDebug, false},
+		{"error", "error", slog.LevelError, false},
+		{"typo keeps the floor", "verbose", slog.LevelWarn, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(logging.EnvLevel, tc.env)
+			var logs bytes.Buffer
+			logger := newLoggerFor(&logs)
+			// Write one line per level, then read back which reached the sink. This
+			// asserts the level is applied to the real handler, not only to the
+			// Enabled() fast path.
+			logger.Debug("probe_debug", "stage", "test", "error_code", "PROBE_DEBUG")
+			logger.Info("probe_info", "stage", "test", "error_code", "PROBE_INFO")
+			logger.Warn("probe_warn", "stage", "test", "error_code", "PROBE_WARN")
+			logger.Error("probe_error", "stage", "test", "error_code", "PROBE_ERROR")
+			written := logs.String()
+			for _, level := range []struct {
+				name string
+				tag  string
+				lvl  slog.Level
+			}{
+				{"debug", "PROBE_DEBUG", slog.LevelDebug},
+				{"info", "PROBE_INFO", slog.LevelInfo},
+				{"warn", "PROBE_WARN", slog.LevelWarn},
+				{"error", "PROBE_ERROR", slog.LevelError},
+			} {
+				got := strings.Contains(written, level.tag)
+				if want := level.lvl >= tc.floor; got != want {
+					t.Fatalf("%s line written = %t, want %t (floor %s): %s", level.name, got, want, tc.floor, written)
+				}
+			}
+			if tc.invalid && !strings.Contains(written, `"error_code":"LOG_LEVEL_INVALID"`) {
+				t.Fatalf("an ignored %s value was not reported: %s", logging.EnvLevel, written)
+			}
+			if !tc.invalid && strings.Contains(written, "LOG_LEVEL_INVALID") {
+				t.Fatalf("a valid %s value was reported as invalid: %s", logging.EnvLevel, written)
+			}
+		})
+	}
+}
+
+// TestStartupEvidenceSurvivesTheWarnFloor proves the two lifecycle lines reach
+// the default sink: an operator who raises nothing must still find the start and
+// stop of a restart in the journal.
+func TestStartupEvidenceSurvivesTheWarnFloor(t *testing.T) {
+	t.Setenv(logging.EnvLevel, "")
+	var logs bytes.Buffer
+	logger := newLoggerFor(&logs)
+	logger.Warn("web_started", "stage", "startup", "error_code", "WEB_STARTED", "development_http", false)
+	if !strings.Contains(logs.String(), `"error_code":"WEB_STARTED"`) {
+		t.Fatalf("web_started was not written at the default floor: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatalf("web_started is not a Warn line: %s", logs.String())
 	}
 }

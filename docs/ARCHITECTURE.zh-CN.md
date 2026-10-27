@@ -27,7 +27,7 @@ flowchart TB
 
 Web 不直接操作 sing-box JSON 的任意字段；由业务模型生成版本化、可审阅的候选配置。候选文档当前为严格 `meshmux-node/v1`（非秘密、空 `users`）；#7 PR-A 已加入严格 `meshmux-node/v2` REALITY 文档（含用户与秘密字段），v1 行为逐字节不变，未知 schema 拒绝。Hub 可选兼任 Line。Agent 只执行固定能力协议，不接受命令字符串。Headscale 管理采用经版本验证的本地官方 API/CLI 适配器，不暴露公网管理端点。
 
-当前 Node 安装路径把用户命令限制为 `meshmux install edge|out`，安装事务完成后由 systemd 启动固定服务：`meshmux-agent.service` 以受限 root 运行私有 `__internal-agent` 协议入口，独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行 kernel。Agent 只接受固定任务类型、固定 binary/config 路径和固定 argv，不提供任意 shell、路径、URL 或管理命令；其动态写事务与 repair 通过 `/var/lib/meshmux-agent/runtime.lock` 串行化。Agent 离线不会自行停止 kernel。
+当前 Node 安装路径把用户命令限制为 `meshmux install edge|out`，安装事务完成后由 systemd 启动固定服务：`meshmux-agent.service` 以受限 root 运行私有 `__internal-agent` 协议入口，独立 `meshmux-sing-box.service` 以非 root `meshmux-singbox` 运行 kernel。Agent 只接受固定任务类型、固定 binary/config 路径和固定 argv，不提供任意 shell、路径、URL 或管理命令；其动态写事务与 repair 通过 `/var/lib/meshmux-agent/runtime.lock` 串行化。Agent 离线不会自行停止 kernel。Agent 的心跳与任务拉取共用一个 1s ticker，因此配置任务从入队到被取走约 1s；Hub 侧离线判定仍是 2 分钟窗口，不随该间隔改变。Hub 与 Agent 的日志默认级别都是 Warn，可用 `MESHMUX_LOG_LEVEL=info|debug` 恢复详细行（见 [OBSERVABILITY](OBSERVABILITY.zh-CN.md)）。
 
 ## 3. Data Architecture — 数据
 

@@ -10,6 +10,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -90,6 +91,8 @@ func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess infra.
 		// is validated and stored.
 		proxyURL := strings.TrimSpace(r.PostForm.Get("proxy_url"))
 		if _, err := s.Store.CreateHTTPProxyNode(displayName, proxyURL, s.Now()); err != nil {
+			// The store refusal carries its own code, which differs from the
+			// generic one Fail writes, so both lines are kept.
 			s.Event(r, "NODE_CREATE_FAILED")
 			status, code, message, next := httpProxyCreateFailure(err)
 			s.Fail(w, r, status, code, message, next)
@@ -107,7 +110,7 @@ func (s *Server) nodesCreate(w http.ResponseWriter, r *http.Request, sess infra.
 	}
 	node, code, err := s.Store.CreateNode(role, displayName, vless, ssh, s.Now())
 	if err != nil {
-		s.Event(r, "NODE_CREATE_FAILED")
+		// No separate event: Fail already writes NODE_CREATE_FAILED at Warn.
 		s.Fail(w, r, 400, "NODE_CREATE_FAILED", "无法创建待纳管节点。", "请检查输入并重试。")
 		return
 	}
@@ -453,8 +456,13 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// can reconcile the authorization direction that starts here. The state is
 	// logged with stable codes only and never echoes an address, an allowlist
 	// entry or a node identifier.
-	s.logCoordinationReadback(r, node.ID)
-	s.Event(r, "AGENT_HEARTBEAT")
+	//
+	// Both lines are Debug: at the 1s heartbeat cadence a line per tick would
+	// dominate the journal for no new fact. The result path still records the
+	// same readback at Info, because a recorded result is the event that can
+	// actually change a state; a readback failure keeps its own Warn.
+	s.logCoordinationReadback(r, node.ID, slog.LevelDebug)
+	s.EventAt(r, slog.LevelDebug, "AGENT_HEARTBEAT")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "paired", "operation_id": infra.Operation(r)})
 }
@@ -600,24 +608,33 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 	}
 	if changed {
 		// The request operation is deliberately separate from the task
-		// operation. Only stable, already-validated fields are logged.
+		// operation. Only stable, already-validated fields are logged. Info is
+		// the per-step detail tier: one line per task step, restored by
+		// MESHMUX_LOG_LEVEL=info. The durable audit event of the action is the
+		// web_event line the request itself wrote.
 		s.Log.Info("agent_task_result", "operation_id", res.OperationID,
 			"request_operation_id", infra.Operation(r), "stage", "agent",
 			"status", res.Status, "error_code", res.ErrorCode)
 		// A recorded result is the readback event of the node: the Out side
 		// proves its allowlist and releases the Lines it serves, while the Line
 		// side reports its own inbound evidence. Each fact is logged with its
-		// stable code so a partially converged pair is visible per fact.
-		s.logCoordinationReadback(r, node.ID)
+		// stable code so a partially converged pair is visible per fact. Info,
+		// matching the line above: same per-step cadence, not per-poll.
+		s.logCoordinationReadback(r, node.ID, slog.LevelInfo)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "recorded", "operation_id": infra.Operation(r)})
 }
 
 // logCoordinationReadback writes the per-fact readback of one node as an audit
-// event. Only stable codes, the node's own operation and the non-secret
-// confirmed revision/digest are logged: never an address, an allowlist entry, a
-// subscriber identity or a credential.
+// event at the caller's level. Only stable codes, the node's own operation and
+// the non-secret confirmed revision/digest are logged: never an address, an
+// allowlist entry, a subscriber identity or a credential.
+//
+// The level is the caller's decision because the same projection is reached from
+// two very different cadences: a recorded result happens once per task step
+// (Info), while the heartbeat repeats every poll interval and demotes it to
+// Debug so a 1s tick does not fill the journal with an unchanged state.
 //
 // retry_pending is the operator-facing retry pointer. It is true only for a
 // terminal failure; the affordance is the existing node retry route
@@ -626,15 +643,17 @@ func (s *Server) agentResult(w http.ResponseWriter, r *http.Request) {
 // to finish.
 //
 // A readback failure never fails the request that triggered it: the evidence is
-// informational, and the next heartbeat, poll or result recomputes it.
-func (s *Server) logCoordinationReadback(r *http.Request, nodeID string) {
+// informational, and the next heartbeat, poll or result recomputes it. That
+// failure stays Warn regardless of the caller's level: it is a real loss of
+// evidence, not a repeated success.
+func (s *Server) logCoordinationReadback(r *http.Request, nodeID string, level slog.Level) {
 	readback, err := s.Store.NodeCoordinationReadback(nodeID, s.Now())
 	if err != nil {
 		s.Log.Warn("out_readback_unavailable", "request_operation_id", infra.Operation(r),
 			"stage", "web", "error_code", store.CodeDatabaseUnavailable)
 		return
 	}
-	s.Log.Info("out_readback", "request_operation_id", infra.Operation(r), "stage", "web",
+	s.Log.Log(r.Context(), level, "out_readback", "request_operation_id", infra.Operation(r), "stage", "web",
 		"allowlist", readback.Allowlist, "allowlist_code", readback.AllowlistCode,
 		"inbound", readback.Inbound, "inbound_code", readback.InboundCode,
 		"reality", readback.Reality,

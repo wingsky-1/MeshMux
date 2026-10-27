@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -37,7 +38,15 @@ func (f pairedWebOutSyncApp) logsForTest() string {
 
 func newPairedWebOutSyncApp(t *testing.T) pairedWebOutSyncApp {
 	t.Helper()
-	app, logs := testApp(t)
+	return newPairedWebOutSyncAppWithLevel(t, slog.LevelInfo)
+}
+
+// newPairedWebOutSyncAppWithLevel builds the same fixture with an explicit log
+// level. The heartbeat's readback audit is Debug (it repeats every poll), so a
+// test that reads that line from a heartbeat asks for Debug here.
+func newPairedWebOutSyncAppWithLevel(t *testing.T, level slog.Level) pairedWebOutSyncApp {
+	t.Helper()
+	app, logs := testAppWithLevel(t, level)
 	now := time.Now()
 	out := createPairedWebNode(t, app, "out", "out-sync", 9443, 2223)
 	line := createPairedWebNode(t, app, "edge", "line-sync", 8443, 2222)
@@ -97,6 +106,60 @@ func heartbeatJSON(t *testing.T, app *Server, token string) *httptest.ResponseRe
 	t.Helper()
 	body, _ := json.Marshal(protocol.HeartbeatRequest{AgentVersion: "meshmux-agent test", KernelVersion: node.KernelVersion})
 	return bearerReq(app, "POST", "/api/agent/heartbeat", token, body)
+}
+
+// TestHeartbeatSuccessStaysOutOfTheDefaultJournal pins the log contract of the
+// Agent heartbeat at its 1s cadence. One tick must not write anything at the
+// default Warn floor: the per-tick AGENT_HEARTBEAT event and the coordination
+// readback are Debug. The failure path is unchanged and must still reach the
+// operator at Warn.
+func TestHeartbeatSuccessStaysOutOfTheDefaultJournal(t *testing.T) {
+	f := newPairedWebOutSyncApp(t)
+	app := f.app
+
+	// Success: nothing at all at the production floor.
+	before := f.logsForTest()
+	requireStatus(t, heartbeatJSON(t, app, f.lineToken), 200)
+	after := f.logsForTest()
+	if after != before {
+		t.Fatalf("a successful heartbeat wrote to the default journal: %.600s", after[len(before):])
+	}
+	if strings.Contains(after, "AGENT_HEARTBEAT") || strings.Contains(after, `"msg":"out_readback"`) {
+		t.Fatalf("a successful heartbeat wrote its audit event at the default level: %.600s", after)
+	}
+
+	// Failure: the same event still reaches the operator, unchanged.
+	w := bearerReq(app, "POST", "/api/agent/heartbeat", f.lineToken, []byte(`{"agent_version":""}`))
+	requireStatus(t, w, 400)
+	failure := f.logsForTest()
+	if !strings.Contains(failure, `"error_code":"HEARTBEAT_INVALID"`) {
+		t.Fatalf("the refused heartbeat lost its stable code: %.600s", failure)
+	}
+	if !strings.Contains(failure, `"level":"WARN"`) {
+		t.Fatalf("the refused heartbeat is not a Warn line: %.600s", failure)
+	}
+
+	// The Debug level still carries both success events, so the audit is
+	// reachable when an operator raises the level on purpose.
+	debug := newPairedWebOutSyncAppWithLevel(t, slog.LevelDebug)
+	requireStatus(t, heartbeatJSON(t, debug.app, debug.lineToken), 200)
+	logs := debug.logsForTest()
+	for _, needle := range []string{"AGENT_HEARTBEAT", `"msg":"out_readback"`} {
+		if _, ok := logLineAt(logs, slog.LevelDebug, needle); !ok {
+			t.Fatalf("%s is not a Debug line: %.600s", needle, logs)
+		}
+	}
+}
+
+// logLineAt returns the first log line written at level that mentions needle.
+func logLineAt(logs string, level slog.Level, needle string) (string, bool) {
+	want := `"level":"` + level.String() + `"`
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, want) && strings.Contains(line, needle) {
+			return line, true
+		}
+	}
+	return "", false
 }
 
 // TestOutSyncHeartbeatAndResultReadback drives the real Agent endpoints: a

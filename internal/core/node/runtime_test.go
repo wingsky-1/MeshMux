@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
+	"github.com/wingsky-1/MeshMux/internal/logging"
 )
 
 type runtimeTestController struct {
@@ -738,5 +740,102 @@ func TestRuntimeLockSerializesAgentAndRepair(t *testing.T) {
 	defer cancel()
 	if _, err = AcquireRuntimeLock(ctx, root); err == nil {
 		t.Fatal("concurrent runtime writer acquired the shared lock")
+	}
+}
+
+// TestDefaultPollInterval pins the Agent heartbeat cadence. One ticker carries
+// both the heartbeat and the task poll, so the default is also how quickly a
+// queued task is picked up. The default is 1s; a configured override still wins
+// above that, and anything shorter is clamped so a node cannot multiply its own
+// request rate.
+func TestDefaultPollInterval(t *testing.T) {
+	if defaultAgentPollInterval != time.Second {
+		t.Fatalf("default agent poll interval = %s, want 1s", defaultAgentPollInterval)
+	}
+	cases := []struct {
+		name  string
+		input time.Duration
+		want  time.Duration
+	}{
+		{"unset", 0, time.Second},
+		{"negative", -time.Second, time.Second},
+		{"sub-second", 500 * time.Millisecond, time.Second},
+		{"override", 5 * time.Second, 5 * time.Second},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := defaultPollInterval(testCase.input); got != testCase.want {
+				t.Fatalf("defaultPollInterval(%s) = %s, want %s", testCase.input, got, testCase.want)
+			}
+		})
+	}
+
+	// The production constructor must actually use that default: the unit
+	// above only proves the helper, and a caller that forgot to route
+	// RuntimeOptions.PollInterval through it would keep the old cadence.
+	root, cfg, identity, base := createRuntimeFixture(t, RoleEdge, 9)
+	runtime, err := NewRuntime(cfg, identity, RuntimeOptions{Root: root, Runner: base,
+		Controller: &runtimeTestController{candidate: testCandidate(9)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.pollInterval != defaultAgentPollInterval {
+		t.Fatalf("runtime poll interval = %s, want %s", runtime.pollInterval, defaultAgentPollInterval)
+	}
+}
+
+// TestAgentLogFloor pins the Agent's log contract: the run sink defaults to
+// Warn, so a healthy 1s-heartbeat Agent writes nothing to journald, while the
+// stable-code lines an operator needs still appear. MESHMUX_LOG_LEVEL=info
+// restores the per-task detail.
+func TestAgentLogFloor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+	}{
+		{"unset", ""}, {"info", "info"}, {"debug", "debug"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(logging.EnvLevel, tc.env)
+			level, ok := logging.FromEnv()
+			if !ok {
+				t.Fatalf("%s=%q was rejected", logging.EnvLevel, tc.env)
+			}
+			var logs strings.Builder
+			logger := newRunLoggerAt(&logs, level, ok)
+			logger.Debug("probe_debug", "error_code", "PROBE_DEBUG")
+			logger.Info("task stage", "error_code", "PROBE_INFO")
+			logger.Warn("heartbeat unavailable", "error_code", "CONTROL_PLANE_UNAVAILABLE")
+			written := logs.String()
+			wantInfo := level <= slog.LevelInfo
+			if got := strings.Contains(written, "PROBE_INFO"); got != wantInfo {
+				t.Fatalf("Info line written = %t, want %t for floor %s: %s", got, wantInfo, level, written)
+			}
+			wantDebug := level <= slog.LevelDebug
+			if got := strings.Contains(written, "PROBE_DEBUG"); got != wantDebug {
+				t.Fatalf("Debug line written = %t, want %t for floor %s: %s", got, wantDebug, level, written)
+			}
+			if !strings.Contains(written, "CONTROL_PLANE_UNAVAILABLE") {
+				t.Fatalf("the Warn failure line was lost at floor %s: %s", level, written)
+			}
+		})
+	}
+}
+
+// TestAgentRejectsAnUnknownLogLevel pins the fallback: a bad MESHMUX_LOG_LEVEL
+// keeps the Warn floor, says so once with a stable code, and never echoes the
+// operator's unvetted value.
+func TestAgentRejectsAnUnknownLogLevel(t *testing.T) {
+	level, ok := logging.Parse("verbose")
+	if ok {
+		t.Fatal("an unknown level name was accepted")
+	}
+	var logs strings.Builder
+	newRunLoggerAt(&logs, level, ok)
+	if !strings.Contains(logs.String(), `"error_code":"LOG_LEVEL_INVALID"`) {
+		t.Fatalf("the ignored value was not reported: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "verbose") {
+		t.Fatalf("the operator's unvetted value reached the log: %s", logs.String())
 	}
 }

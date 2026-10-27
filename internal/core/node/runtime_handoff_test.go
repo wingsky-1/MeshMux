@@ -95,9 +95,11 @@ func (c *countingHeartbeatController) Heartbeat(context.Context, protocol.Heartb
 }
 
 // TestAgentLockTimeout is the Agent-side lock bound: a contended runtime lock
-// makes one cycle return in well under the poll interval, the heartbeat of that
-// cycle still goes out, and the busy task is not reported as a terminal
-// failure — it is simply redelivered on the next poll (spec §4.9).
+// makes one cycle wait for the lock at most agentLockTimeout, the heartbeat of
+// that cycle still goes out, and the busy task is not reported as a terminal
+// failure — it is simply redelivered on the next poll (spec §4.9). The bound
+// is longer than the 1s poll interval on purpose: the heartbeat is sent before
+// the lock is taken, so a slow cycle costs a tick, never the liveness signal.
 func TestAgentLockTimeout(t *testing.T) {
 	if agentLockTimeout != 5*time.Second {
 		t.Fatalf("agent lock timeout = %s, want 5s", agentLockTimeout)

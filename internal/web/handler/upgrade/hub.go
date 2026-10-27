@@ -73,8 +73,10 @@ func (app *Server) tasksHubUpgradeBackup(w http.ResponseWriter, r *http.Request,
 		Log: func(code, operationID string) {
 			// Allowlisted fields only: a stable code and the operation id. The
 			// code is either HUB_BACKUP_POINTER_STALE (nothing new published) or
-			// HUB_BACKUP_POINTER_UNFLUSHED (published but not fsynced).
-			app.Log.Info("web_event", "operation_id", infra.Operation(r), "backup_operation_id", operationID, "stage", "hub_backup", "error_code", code)
+			// HUB_BACKUP_POINTER_UNFLUSHED (published but not fsynced). Warn
+			// because the process floor is Warn: an Info line would never reach
+			// the journal, and this is an audit fact of one operator action.
+			app.Log.Warn("web_event", "operation_id", infra.Operation(r), "backup_operation_id", operationID, "stage", "hub_backup", "error_code", code)
 		},
 	})
 	if err != nil {
@@ -239,7 +241,9 @@ func (app *Server) hubReconcileConfig(startup bool) hubupgrade.ReconcileConfig {
 					// Allowlisted fields only: a stable code and the operation
 					// id. Either HUB_BACKUP_POINTER_STALE/_UNFLUSHED or
 					// HUB_BACKUP_GC_FAILED; the confirmation stands regardless.
-					app.Log.Info("web_event", "backup_operation_id", backupOperationID, "stage", "hub_upgrade_confirm", "error_code", code)
+					// Warn for the same reason as the backup audit line: it must
+					// survive the default Warn floor.
+					app.Log.Warn("web_event", "backup_operation_id", backupOperationID, "stage", "hub_upgrade_confirm", "error_code", code)
 				},
 			})
 			return err
@@ -260,7 +264,10 @@ func (app *Server) reconcileHubUpgrade(ctx context.Context, startup bool) hubupg
 		return report
 	}
 	for _, change := range report.Changes {
-		app.Log.Info("web_event", "stage", "hub_upgrade_reconcile", "startup", startup,
+		// Warn, not Info: the reconcile runs on a 30s ticker and its audit facts
+		// must survive the default Warn floor. A pass that changes nothing emits
+		// no line at all, so this stays proportional to real transitions.
+		app.Log.Warn("web_event", "stage", "hub_upgrade_reconcile", "startup", startup,
 			"backup_operation_id", change.OperationID, "from", string(change.From), "to", string(change.To), "error_code", change.Code)
 	}
 	for _, failure := range report.Errors {

@@ -37,6 +37,10 @@ var internalDAGLeafs = []struct {
 	// internal/cli/upgrade's own edges are checked by the hubupgrade guard below and
 	// by the install-side dependency assertions.
 	{"buildinfo", []string{"internal/cli/buildinfo"}},
+	// logging is the shared log-level policy of both long-running entrypoints
+	// (Hub Web and node Agent). It must stay a leaf so node can depend on it
+	// without gaining a path into a domain.
+	{"logging", []string{"internal/logging"}},
 	// versions is the leaf that carries pins two roles must agree on (Task 6):
 	// it exists so internal/cli/install can read the Headscale pin without importing
 	// the meshnet domain.
@@ -48,9 +52,11 @@ var internalDAGLeafs = []struct {
 var internalDAGHubUpgradeCandidates = []string{"internal/cli/hubupgrade", "internal/cli/upgrade/hub"}
 
 // internalDAGNodeAllowed is node's complete internal dependency set: the frozen
-// protocol contract (at either path) and the build identity. Anything else
-// means node reached into a domain it does not own.
-var internalDAGNodeAllowed = []string{"internal/protocol", "internal/core/node/protocol", "internal/cli/buildinfo"}
+// protocol contract (at either path), the build identity, and the log-level
+// leaf. The log-level leaf is a policy both long-running entrypoints must agree
+// on; it has no internal imports of its own, so it cannot become a way for node
+// to reach into a domain it does not own.
+var internalDAGNodeAllowed = []string{"internal/protocol", "internal/core/node/protocol", "internal/cli/buildinfo", "internal/logging"}
 
 // internalDAGMeshnetAllowed is meshnet's complete internal dependency set. The
 // adapter used to repeat the Headscale pin as a literal to stay a leaf; the pin
