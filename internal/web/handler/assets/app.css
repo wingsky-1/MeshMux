@@ -375,6 +375,28 @@ nav a.active {
   background: #edf3ef;
   color: var(--green);
 }
+/* One-click copy: trigger sits beside the value it copies. */
+.copy-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.copy-row pre {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+.copy-row .hint {
+  margin: 0;
+}
+.copy-row .copy-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+code[data-copy] {
+  cursor: copy;
+  border-bottom: 1px dashed #b7c6be;
+}
 .content {
   max-width: 1440px;
   padding: 36px 38px;

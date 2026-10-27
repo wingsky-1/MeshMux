@@ -43,7 +43,7 @@ func Document(title string) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 16, Col: 17}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 16, Col: 17}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -140,7 +140,7 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 				return templ_7745c5c3_Err
 			}
 			if setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<h2>初始化你的控制台</h2><p class=\"muted\">需要本机引导凭据。初始化完成后，此入口关闭。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<h2>初始化你的控制台</h2><p class=\"muted\">需要本机引导凭据；初始化完成后此入口关闭。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -164,7 +164,7 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 				var templ_7745c5c3_Var6 string
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(message)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 53, Col: 46}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 53, Col: 46}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -177,7 +177,7 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 				var templ_7745c5c3_Var7 string
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(op)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 53, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 53, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -195,7 +195,7 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 			var templ_7745c5c3_Var8 templ.SafeURL
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(authAction(setup)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 55, Col: 65}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 55, Col: 65}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {
@@ -208,7 +208,7 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 			var templ_7745c5c3_Var9 string
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(csrf)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 56, Col: 50}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 56, Col: 50}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 			if templ_7745c5c3_Err != nil {
@@ -219,12 +219,12 @@ func AuthPage(setup bool, csrf string, dev bool, message string, op string) temp
 				return templ_7745c5c3_Err
 			}
 			if setup {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<label for=\"bootstrap\">一次性引导凭据</label><input id=\"bootstrap\" name=\"bootstrap\" type=\"password\" autocomplete=\"off\" required maxlength=\"128\"><p class=\"hint\">从服务私有目录的 bootstrap.token 文件读取；有效期 30 分钟。不要分享此凭据。</p><label for=\"password\">设置管理员密码</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符，最多 256 字节。建议使用密码管理器。</p><button type=\"submit\">初始化管理员 <span aria-hidden=\"true\">→</span></button>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<label for=\"bootstrap\">一次性引导凭据</label><input id=\"bootstrap\" name=\"bootstrap\" type=\"password\" autocomplete=\"off\" required maxlength=\"128\" title=\"来自服务私有目录的 bootstrap.token，有效期 30 分钟\"><p class=\"hint\">从服务私有目录的 bootstrap.token 读取，有效期 30 分钟，勿外传。</p><label for=\"password\">设置管理员密码</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符；建议使用密码管理器。</p><button type=\"submit\">初始化管理员</button>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<label for=\"password\">密码</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\" autofocus> <button type=\"submit\">登录控制台 <span aria-hidden=\"true\">→</span></button>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "<label for=\"password\">密码</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\" autofocus> <button type=\"submit\">登录控制台</button>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -297,7 +297,7 @@ func Dashboard(p PageData) templ.Component {
 					var templ_7745c5c3_Var12 templ.SafeURL
 					templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 85, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 85, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 					if templ_7745c5c3_Err != nil {
@@ -310,7 +310,7 @@ func Dashboard(p PageData) templ.Component {
 					var templ_7745c5c3_Var13 string
 					templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 85, Col: 115}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 85, Col: 115}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 					if templ_7745c5c3_Err != nil {
@@ -323,7 +323,7 @@ func Dashboard(p PageData) templ.Component {
 					var templ_7745c5c3_Var14 string
 					templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 85, Col: 136}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 85, Col: 136}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 					if templ_7745c5c3_Err != nil {
@@ -341,7 +341,7 @@ func Dashboard(p PageData) templ.Component {
 					var templ_7745c5c3_Var15 templ.SafeURL
 					templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 87, Col: 41}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 87, Col: 41}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 					if templ_7745c5c3_Err != nil {
@@ -354,7 +354,7 @@ func Dashboard(p PageData) templ.Component {
 					var templ_7745c5c3_Var16 string
 					templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 87, Col: 80}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 87, Col: 80}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 					if templ_7745c5c3_Err != nil {
@@ -367,7 +367,7 @@ func Dashboard(p PageData) templ.Component {
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 87, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 87, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -386,7 +386,7 @@ func Dashboard(p PageData) templ.Component {
 			var templ_7745c5c3_Var18 string
 			templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 94, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 93, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 			if templ_7745c5c3_Err != nil {
@@ -399,7 +399,7 @@ func Dashboard(p PageData) templ.Component {
 			var templ_7745c5c3_Var19 string
 			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 94, Col: 246}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 93, Col: 246}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var19)
 			if templ_7745c5c3_Err != nil {
@@ -412,7 +412,7 @@ func Dashboard(p PageData) templ.Component {
 			var templ_7745c5c3_Var20 string
 			templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 96, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 95, Col: 87}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 			if templ_7745c5c3_Err != nil {
@@ -429,7 +429,7 @@ func Dashboard(p PageData) templ.Component {
 				}
 			}
 			if p.Path == "/" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "<p class=\"subtitle\">欢迎回来。控制台已就绪，从这里查看后续纳管状态。</p><section class=\"stats\" aria-label=\"资源概览\"><article><div class=\"stat-label\">代理节点 <span>◇</span></div><strong>0</strong><p>尚未纳管 Line / Out</p></article><article><div class=\"stat-label\">订阅用户 <span>◎</span></div><strong>0</strong><p>尚未创建订阅</p></article><article><div class=\"stat-label\">Mesh 设备 <span>⌘</span></div><strong>0</strong><p>尚未连接私有网络</p></article><article><div class=\"stat-label\">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器 · pending-verification</p></article></section><div class=\"overview-grid\"><section class=\"panel network-panel\"><div class=\"panel-heading\"><h2>网络状态</h2><span class=\"badge\">未部署</span></div><div class=\"empty-network\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h3>你的网络，从第一个节点开始</h3><p>节点纳管将在后续阶段开放。<br>当前没有连接任何代理或 Mesh 服务。</p><a href=\"/nodes\">查看代理节点 <span aria-hidden=\"true\">→</span></a></div></section><section class=\"panel\"><div class=\"panel-heading\"><h2>控制台状态</h2><span class=\"badge accent\">本机</span></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "<p class=\"subtitle\">欢迎回来。控制台已就绪，从这里查看后续纳管状态。</p><section class=\"stats\" aria-label=\"资源概览\"><article><div class=\"stat-label\">代理节点 <span>◇</span></div><strong>0</strong><p>尚未纳管 Line / Out</p></article><article><div class=\"stat-label\">订阅用户 <span>◎</span></div><strong>0</strong><p>尚未创建订阅</p></article><article><div class=\"stat-label\">Mesh 设备 <span>⌘</span></div><strong>0</strong><p>尚未连接私有网络</p></article><article><div class=\"stat-label\">待处理任务 <span>▤</span></div><strong>—</strong><p>任务执行器尚未接入</p></article></section><div class=\"overview-grid\"><section class=\"panel network-panel\"><div class=\"panel-heading\"><h2>网络状态</h2><span class=\"badge\">未部署</span></div><div class=\"empty-network\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h3>你的网络，从第一个节点开始</h3><p>当前没有连接任何代理或 Mesh 服务。<br>节点纳管将在后续阶段开放。</p><a href=\"/nodes\">查看代理节点</a></div></section><section class=\"panel\"><div class=\"panel-heading\"><h2>控制台状态</h2><span class=\"badge accent\">本机</span></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -449,13 +449,13 @@ func Dashboard(p PageData) templ.Component {
 				var templ_7745c5c3_Var21 string
 				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 121, Col: 236}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 120, Col: 236}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><label for=\"current\">当前密码</label><input id=\"current\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\"><label for=\"new\">新密码</label><input id=\"new\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符，最多 256 字节。</p><button type=\"submit\">修改密码并退出登录</button></form></section><section class=\"panel\"><h2>认证边界</h2><dl class=\"details\"><dt>账号</dt><dd>admin · 单管理员</dd><dt>会话</dt><dd>最长 8 小时 / 空闲 30 分钟</dd><dt>并行登录</dt><dd>新登录替换旧会话</dd><dt>登录保护</dt><dd>全局 10 次 / 10 分钟 · 成功认证即清零</dd><dt>代理 IP 信任</dt><dd>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\"><label for=\"current\">当前密码</label><input id=\"current\" name=\"current_password\" type=\"password\" autocomplete=\"current-password\" required maxlength=\"256\"><label for=\"new\">新密码</label><input id=\"new\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required minlength=\"12\" maxlength=\"256\"><p class=\"hint\">至少 12 个字符。</p><button type=\"submit\">修改密码并退出登录</button></form></section><section class=\"panel\"><h2>认证边界</h2><dl class=\"details\"><dt>账号</dt><dd>admin · 单管理员</dd><dt>会话</dt><dd>最长 8 小时 / 空闲 30 分钟</dd><dt>并行登录</dt><dd>新登录替换旧会话</dd><dt>登录保护</dt><dd>10 次失败 / 10 分钟锁定，成功认证即清零</dd><dt>代理 IP 信任</dt><dd>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -465,17 +465,17 @@ func Dashboard(p PageData) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				} else {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "<span>关闭 · 不生成封禁候选</span>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "<span>关闭</span>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</dd><dt>Fail2ban</dt><dd>候选配置 · 未验证主机状态</dd></dl><p class=\"hint\">软件升级与 Web 备份 · pending-verification。</p></section></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</dd></dl><p class=\"hint\">Fail2ban 候选配置与软件升级将在后续版本接入。</p></section></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else if p.Path == "/tasks" || p.Path == "/logs" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "<p class=\"subtitle\">操作结果需要可追踪，也需要真实的验证证据。</p><div class=\"notice\">以下是静态失败示例，不是真实任务或主机探测结果。</div><section class=\"panel\"><div class=\"panel-heading\"><h2>SSH 监听端口预检 · 示例</h2><span class=\"badge failure\">模拟失败</span></div><dl class=\"details\"><dt>operation_id</dt><dd><code>demo-ssh-preflight</code></dd><dt>阶段</dt><dd>validate · 只读预检设计</dd><dt>error_code</dt><dd><code>SSH_LISTENER_MISMATCH</code></dd><dt>原因</dt><dd>示例中 SSH 实际监听端口与 jail 覆盖不一致。</dd><dt>建议动作</dt><dd>在后续安装阶段对照 sshd 有效配置、监听套接字与 Fail2ban action 的端口，分别核对 IPv4 / IPv6。</dd></dl><p class=\"hint\">本阶段不读取系统 SSH 配置，不执行命令、不启用 jail、不修改防火墙。真实任务与日志查询尚未实现。</p></section>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "<p class=\"subtitle\">操作结果需要可追踪，也需要真实的验证证据。</p><div class=\"notice\">以下是静态失败示例，不是真实任务或主机探测结果。</div><section class=\"panel\"><div class=\"panel-heading\"><h2>SSH 监听端口预检 · 示例</h2><span class=\"badge failure\">模拟失败</span></div><dl class=\"details\"><dt>operation_id</dt><dd><code>demo-ssh-preflight</code></dd><dt>阶段</dt><dd>validate · 只读预检</dd><dt>error_code</dt><dd><code>SSH_LISTENER_MISMATCH</code></dd><dt>原因</dt><dd>示例中 SSH 实际监听端口与 jail 覆盖不一致。</dd><dt>建议动作</dt><dd>在安装阶段核对 sshd 实际监听端口与 Fail2ban action 的端口（IPv4 / IPv6 分开核对）。</dd></dl><p class=\"hint\">本阶段不读取系统配置、不执行命令；真实任务与日志查询尚未实现。</p></section>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -487,13 +487,13 @@ func Dashboard(p PageData) templ.Component {
 				var templ_7745c5c3_Var22 string
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 152, Col: 35}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 149, Col: 35}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "将在后续开发阶段开放。</p><section class=\"panel empty-page\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h2>pending-verification</h2><p>此入口尚无可用页面。<br>状态以各功能页和任务记录为准。</p><a href=\"/\">返回概览 →</a></section>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "将在后续开发阶段开放。</p><section class=\"panel empty-page\"><span class=\"network-symbol\" aria-hidden=\"true\">◇</span><h2>此入口尚无可用页面</h2><p>状态以各功能页和任务记录为准。</p><a href=\"/\">返回概览 →</a></section>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -566,7 +566,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var25 templ.SafeURL
 					templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 172, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 169, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 					if templ_7745c5c3_Err != nil {
@@ -579,7 +579,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var26 string
 					templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 172, Col: 115}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 169, Col: 115}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 					if templ_7745c5c3_Err != nil {
@@ -592,7 +592,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var27 string
 					templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 172, Col: 136}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 169, Col: 136}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 					if templ_7745c5c3_Err != nil {
@@ -610,7 +610,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var28 templ.SafeURL
 					templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 174, Col: 41}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 171, Col: 41}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 					if templ_7745c5c3_Err != nil {
@@ -623,7 +623,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var29 string
 					templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 174, Col: 80}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 171, Col: 80}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 					if templ_7745c5c3_Err != nil {
@@ -636,7 +636,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var30 string
 					templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 174, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 171, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 					if templ_7745c5c3_Err != nil {
@@ -655,7 +655,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 181, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 178, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 			if templ_7745c5c3_Err != nil {
@@ -668,7 +668,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 181, Col: 246}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 178, Col: 246}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var32)
 			if templ_7745c5c3_Err != nil {
@@ -681,7 +681,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var33 string
 			templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 183, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 180, Col: 87}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 			if templ_7745c5c3_Err != nil {
@@ -697,7 +697,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<p class=\"subtitle\">创建节点后，在目标 Debian 主机上核验本地 CLI 的 SHA-256，再通过交互 stdin 完成配对。全部安装动作都属于宿主机变更。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 60, "<p class=\"subtitle\">创建节点后，在目标 Debian 主机核验本地 CLI 的 SHA-256，再在安装器提示处输入一次性配对码完成配对。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -709,7 +709,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 				var templ_7745c5c3_Var34 string
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(data.Notice)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 189, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 186, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 				if templ_7745c5c3_Err != nil {
@@ -727,7 +727,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var35 string
 			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(len(data.Pool))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 191, Col: 141}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 188, Col: 141}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 			if templ_7745c5c3_Err != nil {
@@ -757,7 +757,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var36 string
 			templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(bound)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 201, Col: 30}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 198, Col: 30}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 			if templ_7745c5c3_Err != nil {
@@ -770,13 +770,13 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(missing)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 201, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 198, Col: 64}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 68, " 个未配置出口地址。出口池本身不限个数；Out 与 Line 默认互通（纳管即加入 ACL），HTTP 代理是外部端点（无 Agent / 无回读 / 不参与 ACL），订阅只决定客户端走哪个出口。同一 Line 的订阅必须选择同一个出口（由订阅向导保证）。</p><a class=\"button\" href=\"#enroll\">纳管节点 →</a></section>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 68, " 个未配置出口地址。Out 与 Line 纳管即互通；HTTP 代理是外部端点（无 Agent、不参与 ACL），订阅只决定客户端走哪个出口。</p><a class=\"button\" href=\"#enroll\">纳管节点</a></section>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -796,14 +796,14 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "<dl class=\"details\"><dt>Node ID（不可变）</dt><dd><code>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 72, "<dl class=\"details\"><dt>Node ID（不可变）</dt><dd><code data-copy>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var38 string
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(created.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 211, Col: 80}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 208, Col: 90}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 				if templ_7745c5c3_Err != nil {
@@ -816,20 +816,20 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(created.Role)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 211, Col: 127}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 208, Col: 137}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "</dd><dt>一次性配对码</dt><dd><code>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "</dd><dt>一次性配对码</dt><dd><code data-copy>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var40 string
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(pairingCode)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 211, Col: 184}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 208, Col: 204}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -848,14 +848,14 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "<div class=\"settings-grid\"><section class=\"panel\"><h2>创建待纳管节点</h2><p class=\"muted\">节点纳管不限个数，Out 池可按需扩展；Out 出口地址在下方节点卡片中配置。</p><a class=\"button\" href=\"#enroll\">纳管节点 →</a></section><section class=\"panel\"><h2>安装制品</h2><dl class=\"details\"><dt>Agent 版本</dt><dd><code>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 77, "<div class=\"settings-grid\"><section class=\"panel\"><h2>创建待纳管节点</h2><p class=\"muted\">节点纳管不限个数，Out 池可按需扩展；Out 出口地址在下方节点卡片中配置。</p><a class=\"button\" href=\"#enroll\">纳管节点</a></section><section class=\"panel\"><h2>安装制品</h2><dl class=\"details\"><dt>Agent 版本</dt><dd><code>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var41 string
 			templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(nodedomain.CurrentAgentVersion())
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 217, Col: 135}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 214, Col: 135}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 			if templ_7745c5c3_Err != nil {
@@ -868,7 +868,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var42 string
 			templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(nodedomain.KernelVersion)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 217, Col: 200}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 214, Col: 200}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 			if templ_7745c5c3_Err != nil {
@@ -886,31 +886,31 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 				var templ_7745c5c3_Var43 string
 				templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(artifact.Architecture)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 219, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 216, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 81, "</dd><dt>CLI SHA-256</dt><dd><code>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 81, "</dd><dt title=\"下载后请先核对再执行\">CLI SHA-256</dt><dd><code data-copy>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var44 string
 				templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(artifact.SHA256)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 219, Col: 110}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 216, Col: 159}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, "</code></dd><p class=\"hint\">只提供当前 Hub 架构的同一运行中 CLI。其他架构必须使用同源、已核验的构建；不使用 latest 或 curl | sh。</p><a href=\"/api/nodes/cli\">下载当前同源 CLI</a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, "</code></dd><p class=\"hint\">只提供当前 Hub 架构的 CLI；其他架构请使用同源、已核验的构建，不使用 latest 或 curl | sh。</p><a href=\"/api/nodes/cli\">下载当前同源 CLI</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "<dt>下载制品</dt><dd class=\"muted\">开发预览无 CLI 制品，节点管理仍可使用</dd><p class=\"hint\">由独立 meshmux-web 启动时不会伪造版本或 SHA；请从已安装的 meshmux __internal-web 获取固定制品。</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 83, "<dt>下载制品</dt><dd class=\"muted\">开发预览无 CLI 制品，节点管理仍可使用</dd><p class=\"hint\">请从已安装的 meshmux __internal-web 获取固定制品。</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -922,13 +922,13 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 			var templ_7745c5c3_Var45 string
 			templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 228, Col: 306}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 225, Col: 306}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var45)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 85, "\"><span class=\"field-label\">角色</span><div class=\"radio-row\"><label><input type=\"radio\" name=\"role\" value=\"edge\" checked required>Line（edge）· 客户端入口</label><label><input type=\"radio\" name=\"role\" value=\"out\" required>Out · 可选私有出口</label><label><input type=\"radio\" name=\"role\" value=\"http\" required>HTTP 代理 · 外部出口</label></div><label for=\"display_name\">展示名</label><input id=\"display_name\" name=\"display_name\" type=\"text\" required maxlength=\"64\" placeholder=\"例如 line-hk-01\"><div id=\"node-port-fields\"><label for=\"vless_port\">VLESS 端口</label><input id=\"vless_port\" name=\"vless_port\" type=\"number\" min=\"1\" max=\"65535\" placeholder=\"例如 8443\"><label for=\"ssh_port\">期望 SSH 端口</label><input id=\"ssh_port\" name=\"ssh_port\" type=\"number\" min=\"1\" max=\"65535\" placeholder=\"例如 2222\"></div><div id=\"http-proxy-fields\"><label for=\"proxy_url\">HTTP 代理 URL</label><input id=\"proxy_url\" name=\"proxy_url\" type=\"text\" maxlength=\"512\" placeholder=\"http://user:pass@proxy.example.invalid:8080\"><p class=\"hint\">仅接受 http://主机:端口，可带用户名与密码，不要带路径或查询参数。URL 中的凭据单独存放，页面只显示 host:port。HTTP 代理是外部节点：无 Agent、无配对、无回读，也不参与 Out ACL。</p></div><p class=\"hint\">Line / Out 需要 VLESS 与 SSH 端口，且两者必须不同；SSH 端口由你在目标主机上准备。Out 节点创建后，在下方节点卡片中配置其出口地址，再到订阅向导中选择它。HTTP 代理保存 URL 后即可在订阅向导中选择。配对码 15 分钟过期、一次性使用，不记日志（HTTP 代理不需要配对码）。</p><button type=\"submit\">创建节点 →</button></form></section></div></div><section class=\"panel\"><div class=\"panel-heading\"><h2>节点列表</h2><span class=\"badge\">待纳管</span></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 85, "\"><span class=\"field-label\">角色</span><div class=\"radio-row\"><label><input type=\"radio\" name=\"role\" value=\"edge\" checked required>Line（edge）· 客户端入口</label><label><input type=\"radio\" name=\"role\" value=\"out\" required>Out · 可选私有出口</label><label><input type=\"radio\" name=\"role\" value=\"http\" required>HTTP 代理 · 外部出口</label></div><label for=\"display_name\">展示名</label><input id=\"display_name\" name=\"display_name\" type=\"text\" required maxlength=\"64\" placeholder=\"例如 line-hk-01\"><div id=\"node-port-fields\"><label for=\"vless_port\">VLESS 端口</label><input id=\"vless_port\" name=\"vless_port\" type=\"number\" min=\"1\" max=\"65535\" placeholder=\"例如 8443\"><label for=\"ssh_port\">期望 SSH 端口</label><input id=\"ssh_port\" name=\"ssh_port\" type=\"number\" min=\"1\" max=\"65535\" placeholder=\"例如 2222\"></div><div id=\"http-proxy-fields\"><label for=\"proxy_url\">HTTP 代理 URL</label><input id=\"proxy_url\" name=\"proxy_url\" type=\"text\" maxlength=\"512\" placeholder=\"http://user:pass@proxy.example.invalid:8080\"><p class=\"hint\">仅接受 http://主机:端口，可带用户名与密码，不带路径或查询参数；页面与日志只显示 host:port。HTTP 代理是外部节点：无 Agent、无配对、不参与 ACL。</p></div><p class=\"hint\">Line / Out 需要 VLESS 与 SSH 端口（两者必须不同）；Out 创建后在节点卡片配置出口地址。配对码 15 分钟过期、一次性使用、不记日志（HTTP 代理不需要配对码）。</p><button type=\"submit\">创建节点</button></form></section></div></div><section class=\"panel\"><div class=\"panel-heading\"><h2>节点列表</h2><span class=\"badge\">待纳管</span></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -950,7 +950,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 				var templ_7745c5c3_Var46 string
 				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(n.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 238, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 235, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 				if templ_7745c5c3_Err != nil {
@@ -976,14 +976,14 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 92, "</div><dl class=\"details\"><dt>Node ID</dt><dd><code>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 92, "</div><dl class=\"details\"><dt>Node ID</dt><dd><code data-copy>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var47 string
 				templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(n.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 248, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 245, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 				if templ_7745c5c3_Err != nil {
@@ -994,7 +994,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					return templ_7745c5c3_Err
 				}
 				if n.Role == "http" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 94, "<dt>角色</dt><dd>http · 外部 HTTP 代理（无 Agent / 无回读 / 无控制器 / 不参与 ACL）</dd>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 94, "<dt>角色</dt><dd>http · 外部 HTTP 代理（无 Agent、不参与 ACL）</dd>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -1006,7 +1006,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var48 string
 					templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(n.Role)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 252, Col: 47}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 249, Col: 47}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 					if templ_7745c5c3_Err != nil {
@@ -1019,7 +1019,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var49 string
 					templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(n.VlessPortString())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 252, Col: 80}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 249, Col: 80}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 					if templ_7745c5c3_Err != nil {
@@ -1032,7 +1032,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var50 string
 					templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(n.SSHPortString())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 252, Col: 109}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 249, Col: 109}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 					if templ_7745c5c3_Err != nil {
@@ -1044,14 +1044,14 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					}
 				}
 				if n.Role != "http" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 99, "<dt>声明心跳版本</dt><dd>Agent ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 99, "<dt title=\"节点心跳自报，未经回读验证\">声明心跳版本</dt><dd>Agent ")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var51 string
 					templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(n.AgentVersion)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 255, Col: 63}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 252, Col: 111}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 					if templ_7745c5c3_Err != nil {
@@ -1064,20 +1064,20 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var52 string
 					templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(n.KernelVersion)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 255, Col: 93}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 252, Col: 141}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, "（节点声明，未由回读验证）</dd><dt>严格回读版本</dt><dd>Agent ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 101, "</dd><dt title=\"严格回读 = 本机实际运行版本，与心跳声明区分\">回读版本</dt><dd>Agent ")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var53 string
 					templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedAgentVersion)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 256, Col: 71}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 253, Col: 137}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 					if templ_7745c5c3_Err != nil {
@@ -1090,62 +1090,62 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var54 string
 					templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedKernelVersion)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 256, Col: 109}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 253, Col: 175}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "</dd><dt>Agent SHA-256</dt><dd><code>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 103, "</dd><dt title=\"Agent 哈希为节点自报，未与 Hub 制品清单比对\">Agent SHA-256</dt><dd><code data-copy>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var55 string
 					templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedAgentSHA256)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 257, Col: 65}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 254, Col: 143}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 104, "</code> · 节点自报，未与 Hub 制品清单比对</dd><dt>内核 SHA-256</dt><dd><code>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 104, "</code></dd><dt title=\"回读时已对照架构内核发行清单\">内核 SHA-256</dt><dd><code data-copy>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var56 string
 					templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedKernelSHA256)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 258, Col: 67}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 255, Col: 128}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 105, "</code> · 回读时已对照架构内核发行清单</dd><dt>CLI 制品 SHA-256</dt><dd>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 105, "</code></dd><dt title=\"当前 Hub 同源 CLI；不是 Agent 回读 pin\">CLI 制品 SHA-256</dt><dd>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					if artifact != nil {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 106, "<code>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 106, "<code data-copy>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 						var templ_7745c5c3_Var57 string
 						templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.JoinStringErrs(artifact.SHA256)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 262, Col: 35}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 259, Col: 45}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var57))
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 107, "</code><span>· 当前 Hub 同源 CLI，实际下载 bytes 已绑定；不是 Agent 回读 pin</span>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 107, "</code>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					} else {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 108, "<span>无可用制品；不能用于证明 Agent binary pin</span>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 108, "<span class=\"muted\">无可用制品</span>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -1157,20 +1157,20 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var58 string
 					templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(heartbeatAt)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 267, Col: 48}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 264, Col: 48}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "</dd><dt>最新配置 / 任务</dt><dd>candidate rev ")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "</dd><dt title=\"candidate 为最新期望，task 为最新任务修订\">最新配置 / 任务</dt><dd>candidate rev ")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var59 string
 					templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinStringErrs(n.LatestConfigRevision)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 268, Col: 82}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 265, Col: 145}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 					if templ_7745c5c3_Err != nil {
@@ -1183,7 +1183,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var60 string
 					templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastTaskRevision)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 268, Col: 113}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 265, Col: 176}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 					if templ_7745c5c3_Err != nil {
@@ -1196,7 +1196,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var61 string
 					templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedRevision)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 269, Col: 68}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 266, Col: 68}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
 					if templ_7745c5c3_Err != nil {
@@ -1209,7 +1209,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var62 string
 					templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedTaskOperationID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 269, Col: 112}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 266, Col: 112}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 					if templ_7745c5c3_Err != nil {
@@ -1222,7 +1222,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var63 string
 					templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(n.ObservedAtString())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 269, Col: 147}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 266, Col: 147}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 					if templ_7745c5c3_Err != nil {
@@ -1235,7 +1235,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var64 string
 					templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastTaskKind)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 270, Col: 51}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 267, Col: 51}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var64))
 					if templ_7745c5c3_Err != nil {
@@ -1248,7 +1248,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var65 string
 					templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastTaskStatus)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 270, Col: 75}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 267, Col: 75}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 					if templ_7745c5c3_Err != nil {
@@ -1261,7 +1261,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var66 string
 					templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastTaskOperationID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 270, Col: 110}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 267, Col: 110}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var66))
 					if templ_7745c5c3_Err != nil {
@@ -1279,7 +1279,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						var templ_7745c5c3_Var67 string
 						templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastTaskErrorCode)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 272, Col: 60}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 269, Col: 60}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 						if templ_7745c5c3_Err != nil {
@@ -1302,7 +1302,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						var templ_7745c5c3_Var68 string
 						templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastFailureTaskKind)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 275, Col: 59}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 272, Col: 59}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 						if templ_7745c5c3_Err != nil {
@@ -1315,7 +1315,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						var templ_7745c5c3_Var69 string
 						templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastFailureTaskRevision)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 275, Col: 97}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 272, Col: 97}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var69))
 						if templ_7745c5c3_Err != nil {
@@ -1328,7 +1328,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						var templ_7745c5c3_Var70 string
 						templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastFailureTaskOperationID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 275, Col: 139}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 272, Col: 139}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 						if templ_7745c5c3_Err != nil {
@@ -1341,7 +1341,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						var templ_7745c5c3_Var71 string
 						templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(n.LastFailureTaskErrorCode)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 275, Col: 186}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 272, Col: 186}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var71))
 						if templ_7745c5c3_Err != nil {
@@ -1352,17 +1352,17 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							return templ_7745c5c3_Err
 						}
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 127, " <dt>历史成功边界</dt><dd class=\"muted\">仅保留为“最近回读”；可能早于最新 candidate / task，不覆盖当前 partial、failed 或 queued 状态</dd><dt>当前 Native 状态</dt><dd>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 127, " <dt title=\"只有最新 desired revision 与最新回读一致才标为已确认；旧回读不会覆盖 partial / failed / queued\">服务状态</dt><dd>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					if n.NativeReady {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 128, "<span>最近严格回读与当前 desired 一致</span>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 128, "<span class=\"badge accent\">本机服务已确认</span>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
 					} else {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 129, "<span>未确认；旧回读不会标为 current ready</span>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 129, "<span class=\"badge\">未确认</span>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -1372,7 +1372,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						return templ_7745c5c3_Err
 					}
 					if n.Offline {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 131, "<span>离线 · 当前不可下发改动任务</span>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 131, "<span>离线 · 暂不下发任务</span>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -1406,7 +1406,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var72 string
 								templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.JoinStringErrs(entry.Server)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 301, Col: 33}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 297, Col: 33}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var72))
 								if templ_7745c5c3_Err != nil {
@@ -1419,7 +1419,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var73 string
 								templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.JoinStringErrs(entry.Port)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 301, Col: 48}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 297, Col: 48}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var73))
 								if templ_7745c5c3_Err != nil {
@@ -1442,7 +1442,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var74 string
 							templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 306, Col: 139}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 302, Col: 139}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var74)
 							if templ_7745c5c3_Err != nil {
@@ -1455,7 +1455,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var75 string
 							templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 306, Col: 190}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 302, Col: 190}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var75)
 							if templ_7745c5c3_Err != nil {
@@ -1468,7 +1468,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var76 string
 							templ_7745c5c3_Var76, templ_7745c5c3_Err = templ.ResolveAttributeValue("out-server-" + n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 306, Col: 227}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 302, Col: 227}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var76)
 							if templ_7745c5c3_Err != nil {
@@ -1481,7 +1481,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var77 string
 							templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.ResolveAttributeValue("out-server-" + n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 306, Col: 282}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 302, Col: 282}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var77)
 							if templ_7745c5c3_Err != nil {
@@ -1494,26 +1494,26 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var78 string
 							templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.ResolveAttributeValue(entry.Server)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 306, Col: 414}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 302, Col: 414}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var78)
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
-							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 145, "\"><button type=\"submit\">保存出口地址 →</button></form><p class=\"hint\">端口须与 VLESS 端口（")
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 145, "\"><button type=\"submit\">保存出口地址</button></form><p class=\"hint\">端口须与 VLESS 端口（")
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
 							var templ_7745c5c3_Var79 string
 							templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(n.VlessPortString())
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 306, Col: 543}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 302, Col: 539}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
-							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "）一致。保存后，选中该 Out 的订阅所涉 Line 在下一次收敛中获得真实 Shadowsocks 出站；凭据由 Hub 签发，不显示、不进日志。</p></dd><dt>服务对象</dt><dd>")
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "）一致；保存后选中该 Out 的订阅在下一次收敛中获得真实出站，凭据由 Hub 签发、不进日志。</p></dd><dt>服务对象</dt><dd>")
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
@@ -1531,7 +1531,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 									var templ_7745c5c3_Var80 string
 									templ_7745c5c3_Var80, templ_7745c5c3_Err = templ.JoinStringErrs(lineID)
 									if templ_7745c5c3_Err != nil {
-										return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 312, Col: 51}
+										return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 308, Col: 51}
 									}
 									_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var80))
 									if templ_7745c5c3_Err != nil {
@@ -1550,7 +1550,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var81 string
 							templ_7745c5c3_Var81, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 317, Col: 106}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 313, Col: 106}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var81)
 							if templ_7745c5c3_Err != nil {
@@ -1563,7 +1563,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var82 string
 							templ_7745c5c3_Var82, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 317, Col: 157}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 313, Col: 157}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var82)
 							if templ_7745c5c3_Err != nil {
@@ -1581,7 +1581,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var83 string
 								templ_7745c5c3_Var83, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 319, Col: 107}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 315, Col: 107}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var83)
 								if templ_7745c5c3_Err != nil {
@@ -1594,7 +1594,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var84 string
 								templ_7745c5c3_Var84, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 319, Col: 158}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 315, Col: 158}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var84)
 								if templ_7745c5c3_Err != nil {
@@ -1612,7 +1612,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var85 string
 								templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 321, Col: 107}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 317, Col: 107}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var85)
 								if templ_7745c5c3_Err != nil {
@@ -1625,7 +1625,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var86 string
 								templ_7745c5c3_Var86, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 321, Col: 158}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 317, Col: 158}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var86)
 								if templ_7745c5c3_Err != nil {
@@ -1641,7 +1641,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								return templ_7745c5c3_Err
 							}
 							if data.PendingDeleteOut == n.ID {
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 160, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 Out：先把它自身的 ACL 重算为空（默认拒绝）并等待主机确认，再删除节点行、出口地址与 Hub 签发的 link key；引用过它的 Line 路由按 fail-closed 重算，不会静默改走直连。<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名；Out 离线或仍有未完成的链时同样拒绝（本次不删除任何内容）。</p>")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 160, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 Out（节点行、出口地址与 link key），引用它的 Line 路由按 fail-closed 重算，不会静默改走直连；<strong>仍被订阅选中、离线或有未完成链时删除会被拒绝</strong>并列出订阅名。</p>")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
@@ -1667,7 +1667,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var87 string
 								templ_7745c5c3_Var87, templ_7745c5c3_Err = templ.JoinStringErrs(entry.Server)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 335, Col: 33}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 331, Col: 33}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var87))
 								if templ_7745c5c3_Err != nil {
@@ -1680,7 +1680,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var88 string
 								templ_7745c5c3_Var88, templ_7745c5c3_Err = templ.JoinStringErrs(entry.Port)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 335, Col: 48}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 331, Col: 48}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var88))
 								if templ_7745c5c3_Err != nil {
@@ -1703,7 +1703,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var89 string
 							templ_7745c5c3_Var89, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 340, Col: 134}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 336, Col: 134}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var89)
 							if templ_7745c5c3_Err != nil {
@@ -1716,7 +1716,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var90 string
 							templ_7745c5c3_Var90, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 340, Col: 185}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 336, Col: 185}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var90)
 							if templ_7745c5c3_Err != nil {
@@ -1729,7 +1729,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var91 string
 							templ_7745c5c3_Var91, templ_7745c5c3_Err = templ.ResolveAttributeValue("http-proxy-url-" + n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 340, Col: 226}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 336, Col: 226}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var91)
 							if templ_7745c5c3_Err != nil {
@@ -1742,13 +1742,13 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var92 string
 							templ_7745c5c3_Var92, templ_7745c5c3_Err = templ.ResolveAttributeValue("http-proxy-url-" + n.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 340, Col: 288}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 336, Col: 288}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var92)
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
-							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 171, "\" name=\"proxy_url\" type=\"text\" maxlength=\"512\" placeholder=\"http://user:pass@proxy.example.invalid:8080\"><button type=\"submit\">保存代理 URL →</button></form><p class=\"hint\">仅接受 http://主机:端口，可带用户名与密码，不要带路径或查询参数。凭据单独存放，页面与日志只显示 host:port。保存后引用该代理的 Line 在下一次收敛中获得新的 http 出站；Hub 没有它的 ACL、回读或控制器。</p></dd><dt>服务对象</dt><dd>")
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 171, "\" name=\"proxy_url\" type=\"text\" maxlength=\"512\" placeholder=\"http://user:pass@proxy.example.invalid:8080\"><button type=\"submit\">保存代理 URL</button></form><p class=\"hint\">仅接受 http://主机:端口，不带路径或查询参数；页面与日志只显示 host:port。保存后引用该代理的 Line 在下一次收敛中获得新的 http 出站。</p></dd><dt>服务对象</dt><dd>")
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
@@ -1766,7 +1766,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 									var templ_7745c5c3_Var93 string
 									templ_7745c5c3_Var93, templ_7745c5c3_Err = templ.JoinStringErrs(lineID)
 									if templ_7745c5c3_Err != nil {
-										return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 346, Col: 51}
+										return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 342, Col: 51}
 									}
 									_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var93))
 									if templ_7745c5c3_Err != nil {
@@ -1790,7 +1790,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var94 string
 								templ_7745c5c3_Var94, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 352, Col: 107}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 348, Col: 107}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var94)
 								if templ_7745c5c3_Err != nil {
@@ -1803,7 +1803,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var95 string
 								templ_7745c5c3_Var95, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 352, Col: 158}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 348, Col: 158}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var95)
 								if templ_7745c5c3_Err != nil {
@@ -1821,7 +1821,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var96 string
 								templ_7745c5c3_Var96, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 354, Col: 107}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 350, Col: 107}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var96)
 								if templ_7745c5c3_Err != nil {
@@ -1834,7 +1834,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								var templ_7745c5c3_Var97 string
 								templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 								if templ_7745c5c3_Err != nil {
-									return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 354, Col: 158}
+									return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 350, Col: 158}
 								}
 								_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var97)
 								if templ_7745c5c3_Err != nil {
@@ -1850,7 +1850,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								return templ_7745c5c3_Err
 							}
 							if data.PendingDeleteOut == n.ID {
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 183, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 HTTP 代理：节点行与存储的 URL/凭据一并删除；引用过它的 Line 路由按 fail-closed 重算，不会静默改走直连。<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名（本次未删除任何内容）。</p>")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 183, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 HTTP 代理（节点行与 URL/凭据），引用它的 Line 路由按 fail-closed 重算；<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名。</p>")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
@@ -1867,7 +1867,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 						return templ_7745c5c3_Err
 					}
 					if len(data.ByLine[n.ID]) == 0 {
-						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 186, "<span class=\"muted\">没有订阅选择该 Line 的 Out · 客户端走直连出口（该 Line 仍被所有 Out 默认接受）</span>")
+						templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 186, "<span class=\"muted\">没有订阅选择该 Line 的 Out · 客户端走直连出口</span>")
 						if templ_7745c5c3_Err != nil {
 							return templ_7745c5c3_Err
 						}
@@ -1880,7 +1880,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							var templ_7745c5c3_Var98 string
 							templ_7745c5c3_Var98, templ_7745c5c3_Err = templ.JoinStringErrs(entry.DisplayName)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 369, Col: 42}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 365, Col: 42}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var98))
 							if templ_7745c5c3_Err != nil {
@@ -1902,7 +1902,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					return templ_7745c5c3_Err
 				}
 				if n.Role == "http" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 191, "<p class=\"hint\">外部 HTTP 代理没有 Agent、配对、回读或 ACL：无需安装、重签或吊销，也没有可等待的机器回读，页面的“外部声明”只是操作员声明的端点。凭据只用于渲染 Line 的 http 出站，页面与日志只显示 host:port。</p>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 191, "<p class=\"hint\">外部 HTTP 代理没有 Agent、配对或 ACL：“外部声明”只是操作员声明的端点，页面与日志只显示 host:port。</p>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -1914,7 +1914,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var99 string
 					templ_7745c5c3_Var99, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 379, Col: 103}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 375, Col: 103}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var99)
 					if templ_7745c5c3_Err != nil {
@@ -1927,7 +1927,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var100 string
 					templ_7745c5c3_Var100, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 379, Col: 155}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 375, Col: 155}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var100)
 					if templ_7745c5c3_Err != nil {
@@ -1940,7 +1940,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var101 string
 					templ_7745c5c3_Var101, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 380, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 376, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var101)
 					if templ_7745c5c3_Err != nil {
@@ -1953,7 +1953,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var102 string
 					templ_7745c5c3_Var102, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 380, Col: 153}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 376, Col: 153}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var102)
 					if templ_7745c5c3_Err != nil {
@@ -1966,7 +1966,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var103 string
 					templ_7745c5c3_Var103, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 381, Col: 100}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 377, Col: 100}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var103)
 					if templ_7745c5c3_Err != nil {
@@ -1979,7 +1979,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					var templ_7745c5c3_Var104 string
 					templ_7745c5c3_Var104, templ_7745c5c3_Err = templ.ResolveAttributeValue(n.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 381, Col: 152}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 377, Col: 152}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var104)
 					if templ_7745c5c3_Err != nil {
@@ -1995,7 +1995,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 200, "<p class=\"hint\">check/stage/apply 成功不等于 Native ready。只有最新 desired revision 与严格本机回读一致才标为“本机服务已确认”；旧成功仅作为最近回读。离线不会下发停线任务。</p></section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>节点配对 · 开发预览</span></footer></main></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 200, "<p class=\"hint\">“本机服务已确认”= 最新期望配置与本机回读一致；check/stage/apply 成功本身不算确认。离线节点不会下发任务。</p></section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>节点配对 · 开发预览</span></footer></main></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2030,24 +2030,24 @@ func InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifac
 			templ_7745c5c3_Var105 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 201, "<label for=\"pairing\">仅在交互提示中输入配对码</label><textarea id=\"pairing\" readonly rows=\"1\">请在安装器的 Pairing code stdin 提示处粘贴上方配对码；不要放入命令行、URL 或日志。</textarea> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 201, "<p class=\"hint\">配对码请在安装器的 Pairing code 提示处输入；不要放入命令行、URL 或日志。</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if artifact == nil {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 202, "<p class=\"hint\">当前开发预览或非 HTTPS CLI Hub 不提供安装制品与可执行安装命令。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 202, "<p class=\"hint\">当前开发预览不提供安装制品与可执行安装命令。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 203, "<p class=\"hint\">先下载当前同源 CLI。下面会核对固定 SHA-256 后再执行，且命令不含配对码：</p><pre><code>echo ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 203, "<div class=\"copy-row\"><p class=\"hint\">先下载同源 CLI，核对固定 SHA-256 后再执行（命令不含配对码）：</p></div><div class=\"copy-row\"><div id=\"install-command\"><pre><code>echo ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var106 string
 			templ_7745c5c3_Var106, templ_7745c5c3_Err = templ.JoinStringErrs(ShellQuote(artifact.SHA256 + "  meshmux"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 401, Col: 61}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 397, Col: 109}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var106))
 			if templ_7745c5c3_Err != nil {
@@ -2060,7 +2060,7 @@ func InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifac
 			var templ_7745c5c3_Var107 string
 			templ_7745c5c3_Var107, templ_7745c5c3_Err = templ.JoinStringErrs(ShellQuote(n.Role))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 403, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 399, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var107))
 			if templ_7745c5c3_Err != nil {
@@ -2073,7 +2073,7 @@ func InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifac
 			var templ_7745c5c3_Var108 string
 			templ_7745c5c3_Var108, templ_7745c5c3_Err = templ.JoinStringErrs(ShellQuote(hubOrigin))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 403, Col: 70}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 399, Col: 70}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var108))
 			if templ_7745c5c3_Err != nil {
@@ -2086,7 +2086,7 @@ func InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifac
 			var templ_7745c5c3_Var109 string
 			templ_7745c5c3_Var109, templ_7745c5c3_Err = templ.JoinStringErrs(ShellQuote(n.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 403, Col: 98}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 399, Col: 98}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var109))
 			if templ_7745c5c3_Err != nil {
@@ -2099,7 +2099,7 @@ func InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifac
 			var templ_7745c5c3_Var110 string
 			templ_7745c5c3_Var110, templ_7745c5c3_Err = templ.JoinStringErrs(ShellQuote(n.VlessPortString()))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 403, Col: 147}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 399, Col: 147}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var110))
 			if templ_7745c5c3_Err != nil {
@@ -2112,13 +2112,13 @@ func InstallCommand(n *store.Node, pairingCode string, hubOrigin string, artifac
 			var templ_7745c5c3_Var111 string
 			templ_7745c5c3_Var111, templ_7745c5c3_Err = templ.JoinStringErrs(ShellQuote(n.SSHPortString()))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 403, Col: 192}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 399, Col: 192}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var111))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 209, "</code></pre>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 209, "</code></pre></div><button type=\"button\" class=\"copy-button text-button\" data-copy-target=\"#install-command\">复制安装命令</button></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2175,33 +2175,33 @@ func NodeActionPage(p PageData, nodeID string, configRevision int64, configSHA s
 			var templ_7745c5c3_Var114 string
 			templ_7745c5c3_Var114, templ_7745c5c3_Err = templ.JoinStringErrs(nodeID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 414, Col: 28}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 410, Col: 28}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var114))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 212, "</code> 的不可变 baseline 为配置修订 <strong>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 212, "</code> 的配置修订 <strong>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var115 string
 			templ_7745c5c3_Var115, templ_7745c5c3_Err = templ.JoinStringErrs(configRevision)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 414, Col: 100}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 410, Col: 78}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var115))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 213, "</strong>，四任务已在同一事务中排队。</p><dl class=\"details\"><dt>编译配置 SHA-256</dt><dd><code>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 213, "</strong> 已在四任务链中排队。</p><dl class=\"details\"><dt>编译配置 SHA-256</dt><dd><code data-copy>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var116 string
 			templ_7745c5c3_Var116, templ_7745c5c3_Err = templ.JoinStringErrs(configSHA)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 415, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 411, Col: 84}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var116))
 			if templ_7745c5c3_Err != nil {
@@ -2214,13 +2214,13 @@ func NodeActionPage(p PageData, nodeID string, configRevision int64, configSHA s
 			var templ_7745c5c3_Var117 string
 			templ_7745c5c3_Var117, templ_7745c5c3_Err = templ.JoinStringErrs(taskCount)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 415, Col: 121}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 411, Col: 131}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var117))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 215, "</dd></dl><p class=\"hint\">任务序号与配置修订分开；Agent 必须先 check、stage、apply，再提交严格 readback。本页的成功仅表示已排队，不表示已应用。</p><a href=\"/nodes\">返回节点列表 →</a></section></main>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 215, "</dd></dl><p class=\"hint\">本页只表示已排队；Agent 需完成 check、stage、apply 与回读后才算应用。</p><a href=\"/nodes\">返回节点列表 →</a></section></main>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2255,14 +2255,14 @@ func Status(checked string) templ.Component {
 			templ_7745c5c3_Var118 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, "<div id=\"web-status\" aria-live=\"polite\"><dl class=\"status-list\"><div><dt><span class=\"dot\"></span> Web 服务</dt><dd>运行中</dd></div><div><dt>代理服务</dt><dd class=\"muted\">unknown</dd></div><div><dt>Mesh 网络</dt><dd class=\"muted\">unknown</dd></div><div><dt>公网与协议验证</dt><dd class=\"muted\">pending-verification</dd></div></dl><p class=\"hint\">更新于 ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, "<div id=\"web-status\" aria-live=\"polite\"><dl class=\"status-list\"><div><dt><span class=\"dot\"></span> Web 服务</dt><dd>运行中</dd></div><div><dt>代理服务</dt><dd class=\"muted\">未知</dd></div><div><dt>Mesh 网络</dt><dd class=\"muted\">未知</dd></div><div><dt>公网与协议验证</dt><dd class=\"muted\">待验证</dd></div></dl><p class=\"hint\">更新于 ")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var119 string
 		templ_7745c5c3_Var119, templ_7745c5c3_Err = templ.JoinStringErrs(checked)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 424, Col: 386}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 420, Col: 373}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var119))
 		if templ_7745c5c3_Err != nil {
@@ -2324,7 +2324,7 @@ func ErrorPage(code string, message string, next string, op string) templ.Compon
 			var templ_7745c5c3_Var122 string
 			templ_7745c5c3_Var122, templ_7745c5c3_Err = templ.JoinStringErrs(message)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 431, Col: 85}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 427, Col: 85}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var122))
 			if templ_7745c5c3_Err != nil {
@@ -2337,7 +2337,7 @@ func ErrorPage(code string, message string, next string, op string) templ.Compon
 			var templ_7745c5c3_Var123 string
 			templ_7745c5c3_Var123, templ_7745c5c3_Err = templ.JoinStringErrs(next)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 431, Col: 101}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 427, Col: 101}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var123))
 			if templ_7745c5c3_Err != nil {
@@ -2350,7 +2350,7 @@ func ErrorPage(code string, message string, next string, op string) templ.Compon
 			var templ_7745c5c3_Var124 string
 			templ_7745c5c3_Var124, templ_7745c5c3_Err = templ.JoinStringErrs(code)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 431, Col: 161}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 427, Col: 161}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var124))
 			if templ_7745c5c3_Err != nil {
@@ -2363,7 +2363,7 @@ func ErrorPage(code string, message string, next string, op string) templ.Compon
 			var templ_7745c5c3_Var125 string
 			templ_7745c5c3_Var125, templ_7745c5c3_Err = templ.JoinStringErrs(op)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views.templ`, Line: 431, Col: 210}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views.templ`, Line: 427, Col: 210}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var125))
 			if templ_7745c5c3_Err != nil {

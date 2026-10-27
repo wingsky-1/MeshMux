@@ -15,6 +15,49 @@ document.addEventListener("htmx:afterSwap", () => {
   if (feedback) feedback.textContent = "";
 });
 
+// Shared one-click copy: any element with data-copy-target="#id" copies the
+// text of that target; any <code data-copy> copies its own text. Progressive:
+// without JavaScript the values stay selectable as before.
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-copy-target],code[data-copy]");
+  if (!trigger) return;
+  const source = trigger.dataset.copyTarget
+    ? document.querySelector(trigger.dataset.copyTarget)
+    : trigger;
+  if (!source) return;
+  const text = source.textContent.trim();
+  const done = () => {
+    const original = trigger.textContent;
+    trigger.textContent = "已复制";
+    trigger.disabled = true;
+    setTimeout(() => {
+      trigger.textContent = original;
+      trigger.disabled = false;
+    }, 1500);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+});
+
+function fallbackCopy(text, done) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  try {
+    document.execCommand("copy");
+    done();
+  } finally {
+    area.remove();
+  }
+}
+
 // Nodes page: the role radio switches between the port fields (Line/Out) and
 // the URL field (external HTTP proxy). Progressive: without this script both
 // groups are visible and the server validates by role.

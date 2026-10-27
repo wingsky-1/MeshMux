@@ -75,7 +75,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var3 templ.SafeURL
 					templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 27, Col: 56}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 27, Col: 56}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 					if templ_7745c5c3_Err != nil {
@@ -88,7 +88,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var4 string
 					templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 27, Col: 115}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 27, Col: 115}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 					if templ_7745c5c3_Err != nil {
@@ -101,7 +101,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 27, Col: 136}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 27, Col: 136}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -119,7 +119,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var6 templ.SafeURL
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(item.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 29, Col: 41}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 29, Col: 41}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {
@@ -132,7 +132,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var7 string
 					templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(item.Icon)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 29, Col: 80}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 29, Col: 80}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 					if templ_7745c5c3_Err != nil {
@@ -145,7 +145,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var8 string
 					templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(item.Title)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 29, Col: 101}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 29, Col: 101}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 					if templ_7745c5c3_Err != nil {
@@ -164,7 +164,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 			var templ_7745c5c3_Var9 string
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 36, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 36, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
@@ -177,7 +177,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 36, Col: 246}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 36, Col: 246}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 			if templ_7745c5c3_Err != nil {
@@ -190,7 +190,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 			var templ_7745c5c3_Var11 string
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 38, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 38, Col: 87}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -206,7 +206,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/mesh.css\"><p class=\"subtitle\">Mesh 设备是独立的 Headscale 身份，与订阅 Token、VLESS 凭据互不影响；注册证据只来自观测到的 Headscale Node ID，未观测到之前一律显示“待注册”。</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<link rel=\"stylesheet\" href=\"/assets/mesh.css\"><p class=\"subtitle\">Mesh 设备是独立的 Headscale 身份，与订阅 Token、VLESS 凭据互不影响；注册证据只来自观测到的 Headscale Node ID。</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -223,7 +223,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var12).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 				if templ_7745c5c3_Err != nil {
@@ -236,7 +236,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(v.Notice)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 45, Col: 76}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 45, Col: 76}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -255,33 +255,33 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(v.Disclosure.Device)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 49, Col: 139}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 49, Col: 139}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "</span></div><p class=\"hint\">此 Key 只在本次响应中出现，Hub 只保存它的 SHA-256 摘要。离开本页后无法再次查看；遗失请在设备列表中重新签发。请勿把它写入命令行、URL、Shell 历史或日志。</p><pre class=\"sub-secret\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "</span></div><p class=\"hint\">Key 与设备配置只在本次响应中出现（Hub 只存 SHA-256）；遗失请重新签发，勿写入命令行、URL 或日志。</p><div class=\"copy-row\"><div id=\"mesh-key-value\"><pre class=\"sub-secret\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(v.Disclosure.Secret)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 51, Col: 52}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 51, Col: 99}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "</pre><dl class=\"details\"><dt>有效期至</dt><dd>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "</pre></div><button type=\"button\" class=\"copy-button text-button\" data-copy-target=\"#mesh-key-value\">复制</button></div><dl class=\"details\"><dt>有效期至</dt><dd>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(v.Disclosure.Expires)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 53, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 53, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
@@ -292,48 +292,48 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if v.Disclosure.Config != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<h3>设备专属 sing-box 配置 · 仅显示一次</h3><p class=\"hint\">这份配置把订阅的代理出站与这台设备的 Tailscale Endpoint 合并在一个文档中；Tailscale 网段由首条路由规则直连，其余流量走代理 selector。配置含一次性 Headscale 入网 Key，只在本次响应中出现，不会写入数据库、URL 或日志。</p><pre class=\"config-disclosure\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<h3>设备专属 sing-box 配置 · 仅显示一次</h3><p class=\"hint\">Tailscale 网段直连，其余流量走代理；配置含一次性入网 Key，只在本次响应中出现。</p><div class=\"copy-row\"><div id=\"mesh-config-value\"><pre class=\"config-disclosure\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var18 string
 					templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(v.Disclosure.Config)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 59, Col: 60}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 59, Col: 110}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "</pre>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "</pre></div><button type=\"button\" class=\"copy-button text-button\" data-copy-target=\"#mesh-config-value\">复制配置</button></div>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				} else if v.Disclosure.JoinCommand != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<h3>标准 Tailscale 入网命令</h3><p class=\"hint\">Mesh-only 与子网路由设备使用现成 Tailscale 客户端入网：把上方 Key 填入对应位置后执行，15 分钟内有效。子网路由设备入网时需带上已声明的前缀，批准仍需在设备列表中单独确认。</p><pre class=\"sub-secret\">")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "<h3>标准 Tailscale 入网命令</h3><p class=\"hint\">把上方 Key 填入对应位置后执行，15 分钟内有效；子网路由设备需带上已声明的前缀，批准在设备列表单独确认。</p><div class=\"copy-row\"><div id=\"mesh-join-value\"><pre class=\"sub-secret\">")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var19 string
 					templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(v.Disclosure.JoinCommand)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 63, Col: 58}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 63, Col: 106}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "</pre>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "</pre></div><button type=\"button\" class=\"copy-button text-button\" data-copy-target=\"#mesh-join-value\">复制命令</button></div>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				} else {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<p class=\"hint\">未配置 Headscale 控制面地址，无法给出标准入网命令；请管理员配置启动参数 --headscale-origin 后重新签发。</p>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "<p class=\"hint\">未配置 Headscale 控制面地址，无法给出标准入网命令；请配置启动参数 --headscale-origin 后重新签发。</p>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<p class=\"hint\">一次性 Key 与设备配置都只在本次响应中出现；刷新页面或再次打开设备列表不会重放。Mesh-only 与子网路由设备仍使用标准 Tailscale 客户端入网。</p></section>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</section>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -345,7 +345,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 			var templ_7745c5c3_Var20 string
 			templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 79, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 78, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 			if templ_7745c5c3_Err != nil {
@@ -363,7 +363,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var21 string
 				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(v.DefaultUser)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 98, Col: 110}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 97, Col: 110}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 				if templ_7745c5c3_Err != nil {
@@ -381,7 +381,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var22 string
 					templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(v.UsersNotice)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 100, Col: 85}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 99, Col: 85}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 					if templ_7745c5c3_Err != nil {
@@ -394,7 +394,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var23 string
 					templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(v.DefaultUser)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 100, Col: 182}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 99, Col: 182}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 					if templ_7745c5c3_Err != nil {
@@ -412,7 +412,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var24 string
 					templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(v.DefaultUser)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 102, Col: 109}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 101, Col: 109}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 					if templ_7745c5c3_Err != nil {
@@ -436,7 +436,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var25 string
 					templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue(user.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 107, Col: 36}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 106, Col: 36}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 					if templ_7745c5c3_Err != nil {
@@ -459,7 +459,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var26 string
 					templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(user.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 107, Col: 91}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 106, Col: 91}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 					if templ_7745c5c3_Err != nil {
@@ -472,7 +472,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var27 string
 					templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(user.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 107, Col: 109}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 106, Col: 109}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 					if templ_7745c5c3_Err != nil {
@@ -490,7 +490,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var28 string
 				templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(v.DefaultUser)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 110, Col: 152}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 109, Col: 152}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 				if templ_7745c5c3_Err != nil {
@@ -513,7 +513,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var29 string
 				templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue(sub.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 116, Col: 32}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 115, Col: 32}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 				if templ_7745c5c3_Err != nil {
@@ -526,7 +526,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var30 string
 				templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(sub.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 116, Col: 52}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 115, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 				if templ_7745c5c3_Err != nil {
@@ -539,7 +539,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var31 string
 				templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(sub.State)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 116, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 115, Col: 69}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 				if templ_7745c5c3_Err != nil {
@@ -550,20 +550,20 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "</select><p class=\"hint\">代理 + Mesh 必须选择一个订阅用户；仅 Mesh 必须留空；子网路由可留空。删除一台设备不会停用整个订阅用户。</p><label for=\"mesh_routes\">子网前缀（每行一个，子网路由用途必填）</label> <textarea id=\"mesh_routes\" name=\"declared_prefixes\" rows=\"2\" placeholder=\"192.168.1.0/24&#10;10.0.0.0/8\"></textarea><p class=\"hint\">只创建“已通告、待批准”的声明；批准必须在下方设备列表的子网路由表中单独确认。仅“子网路由”用途可声明，且至少需要一个规范 CIDR 前缀。</p><button type=\"submit\">创建并签发 Key →</button></form></section></div></div><section class=\"panel\"><h2>核对与边界</h2><p class=\"muted\">按钮会执行一次真实的 Headscale <code>nodes list</code>，并把观测结果写入设备记录；请求结束即完成，没有后台任务。</p><form method=\"post\" action=\"/mesh/reconcile\"><input type=\"hidden\" name=\"csrf\" value=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 53, "</select><p class=\"hint\">代理 + Mesh 必须选择一个订阅用户；仅 Mesh 必须留空；子网路由可留空。删除一台设备不会停用整个订阅用户。</p><label for=\"mesh_routes\">子网前缀（每行一个，子网路由用途必填）</label> <textarea id=\"mesh_routes\" name=\"declared_prefixes\" rows=\"2\" placeholder=\"192.168.1.0/24&#10;10.0.0.0/8\"></textarea><p class=\"hint\">只创建“已通告、待批准”的声明；批准必须在下方设备列表的子网路由表中单独确认。仅“子网路由”用途可声明，且至少需要一个规范 CIDR 前缀。</p><button type=\"submit\">创建并签发 Key →</button></form></section></div></div><section class=\"panel\"><h2>核对与边界</h2><p class=\"muted\">执行一次真实的 Headscale <code>nodes list</code> 并把观测结果写入设备记录；没有后台任务。</p><form method=\"post\" action=\"/mesh/reconcile\"><input type=\"hidden\" name=\"csrf\" value=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var32 string
 			templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 130, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 129, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var32)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "\"> <button type=\"submit\">重新核对全部设备</button></form><dl class=\"details\"><dt>注册证据</dt><dd>只来自观测到的 Headscale Node ID；主机名与在线状态不算注册证据。</dd><dt>在线列</dt><dd>本次页面渲染的 Headscale 快照，不持久化；读取失败显示“未核对”，不会显示成“离线”。</dd><dt>最后观察</dt><dd>最近一次成功核对写入的时间。</dd><dt>客户端配置</dt><dd class=\"muted\">代理 + Mesh 设备可在设备卡中生成一次性 sing-box 单 VPN 配置；配置中的 Tailnet 路由走 Tailscale Endpoint，其余流量走代理。SSID、远程家庭网段与真机可用性属于 #10 及 C 级验收，本页不声称已完成。</dd></dl>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "\"> <button type=\"submit\">重新核对全部设备</button></form><dl class=\"details\"><dt>注册证据</dt><dd>只来自观测到的 Headscale Node ID。</dd><dt title=\"本次页面渲染的 Headscale 快照，不持久化；读取失败显示“未核对”\">在线列</dt><dd>本次渲染的快照，不持久化。</dd><dt>最后观察</dt><dd>最近一次成功核对写入的时间。</dd><dt>客户端配置</dt><dd class=\"muted\">代理 + Mesh 设备可生成一次性 sing-box 单 VPN 配置；真机可用性属于后续验收。</dd></dl>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -575,7 +575,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var33 string
 				templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(v.UsersNotice)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 140, Col: 76}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 139, Col: 76}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 				if templ_7745c5c3_Err != nil {
@@ -594,7 +594,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var34 string
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(v.NodesNotice)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 143, Col: 76}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 142, Col: 76}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 				if templ_7745c5c3_Err != nil {
@@ -612,7 +612,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 			var templ_7745c5c3_Var35 string
 			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(len(v.Devices))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 148, Col: 90}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 147, Col: 90}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 			if templ_7745c5c3_Err != nil {
@@ -623,7 +623,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if len(v.Devices) == 0 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "<div class=\"empty-network\"><span class=\"network-symbol\" aria-hidden=\"true\">⌘</span><h3>还没有 Mesh 设备</h3><p>尚未创建 Mesh 设备，因此没有签发过入网 Key，也没有观测到 Headscale 节点。<br>用“添加设备”创建第一台设备；创建后这里会列出用途、绑定订阅用户、Node ID、Tailnet 地址、在线证据与 Key 状态。</p></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 61, "<div class=\"empty-network\"><span class=\"network-symbol\" aria-hidden=\"true\">⌘</span><h3>还没有 Mesh 设备</h3><p>尚未创建 Mesh 设备；用“添加设备”创建第一台。创建后这里会列出用途、绑定订阅用户、Node ID、Tailnet 地址与 Key 状态。</p></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -636,7 +636,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var36 string
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 157, Col: 66}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 156, Col: 66}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var36)
 				if templ_7745c5c3_Err != nil {
@@ -658,7 +658,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var38 string
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var37).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var38)
 				if templ_7745c5c3_Err != nil {
@@ -671,7 +671,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(d.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 160, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 159, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
@@ -684,7 +684,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var40 string
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(d.PurposeLabel)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 161, Col: 58}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 160, Col: 58}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -706,7 +706,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var42 string
 				templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var41).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var42)
 				if templ_7745c5c3_Err != nil {
@@ -719,7 +719,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var43 string
 				templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(d.Online)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 162, Col: 49}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 161, Col: 49}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 				if templ_7745c5c3_Err != nil {
@@ -732,7 +732,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var44 string
 				templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(meshRouteSummary(d.Routes))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 163, Col: 69}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 162, Col: 69}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 				if templ_7745c5c3_Err != nil {
@@ -750,7 +750,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var45 templ.SafeURL
 					templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("#mesh-remove-modal-" + d.ID))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 166, Col: 64}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 165, Col: 64}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 					if templ_7745c5c3_Err != nil {
@@ -773,7 +773,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var46 string
 				templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(d.DisplayName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 173, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 172, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 				if templ_7745c5c3_Err != nil {
@@ -795,7 +795,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var48 string
 				templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var47).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var48)
 				if templ_7745c5c3_Err != nil {
@@ -808,20 +808,20 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var49 string
 				templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(d.StatusLabel)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 174, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 173, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 79, "</span></div><dl class=\"details\"><dt>Device ID</dt><dd><code>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 79, "</span></div><dl class=\"details\"><dt>Device ID</dt><dd><code data-copy>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(d.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 177, Col: 43}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 176, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
@@ -834,7 +834,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var51 string
 				templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(d.PurposeLabel)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 178, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 177, Col: 53}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 				if templ_7745c5c3_Err != nil {
@@ -847,7 +847,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var52 string
 				templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs(d.PlatformLabel)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 178, Col: 76}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 177, Col: 76}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 				if templ_7745c5c3_Err != nil {
@@ -870,7 +870,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var53 string
 					templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(d.SubscriberName)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 184, Col: 35}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 183, Col: 35}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 					if templ_7745c5c3_Err != nil {
@@ -883,7 +883,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var54 string
 					templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(d.SubscriberID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 184, Col: 63}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 183, Col: 63}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 					if templ_7745c5c3_Err != nil {
@@ -901,7 +901,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var55 string
 					templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(d.SubscriberID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 186, Col: 52}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 185, Col: 52}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 					if templ_7745c5c3_Err != nil {
@@ -919,7 +919,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var56 string
 				templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.JoinStringErrs(d.HeadscaleUser)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 189, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 188, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var56))
 				if templ_7745c5c3_Err != nil {
@@ -932,7 +932,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var57 string
 				templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.JoinStringErrs(d.NodeName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 189, Col: 90}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 188, Col: 90}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var57))
 				if templ_7745c5c3_Err != nil {
@@ -955,7 +955,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var58 string
 					templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.JoinStringErrs(d.NodeID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 195, Col: 27}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 194, Col: 27}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var58))
 					if templ_7745c5c3_Err != nil {
@@ -973,7 +973,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var59 string
 				templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.JoinStringErrs(d.TailnetIP)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 198, Col: 45}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 197, Col: 45}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var59))
 				if templ_7745c5c3_Err != nil {
@@ -995,7 +995,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var61 string
 				templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var60).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var61)
 				if templ_7745c5c3_Err != nil {
@@ -1008,7 +1008,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var62 string
 				templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(d.Online)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 199, Col: 68}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 198, Col: 68}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 				if templ_7745c5c3_Err != nil {
@@ -1021,7 +1021,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var63 string
 				templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(meshObservedLabel(d.ObservedAt))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 200, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 199, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 				if templ_7745c5c3_Err != nil {
@@ -1043,7 +1043,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var65 string
 				templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var64).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var65)
 				if templ_7745c5c3_Err != nil {
@@ -1056,7 +1056,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var66 string
 				templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.JoinStringErrs(d.KeyLabel)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 203, Col: 49}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 202, Col: 49}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var66))
 				if templ_7745c5c3_Err != nil {
@@ -1074,7 +1074,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var67 string
 					templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(d.KeyExpires)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 205, Col: 62}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 204, Col: 62}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 					if templ_7745c5c3_Err != nil {
@@ -1097,7 +1097,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var68 string
 					templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs(d.RevokeReason)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 209, Col: 60}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 208, Col: 60}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 					if templ_7745c5c3_Err != nil {
@@ -1113,7 +1113,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					return templ_7745c5c3_Err
 				}
 				if len(d.Claims) > 0 {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "<div class=\"route-block\"><div class=\"panel-heading\"><h4>待认领的 Headscale 节点</h4><span class=\"badge\">同名 · 未被其他设备占用</span></div><p class=\"hint\">Headscale 已存在与这台设备同名的节点。认领会把观测到的 Node ID 写入本设备（与核对相同的证据路径）；不会创建新节点，也不会删除或迁移其他设备。</p><div class=\"route-table-wrap\"><table class=\"route-table\"><thead><tr><th>Node ID</th><th>名称</th><th>用户</th><th>操作</th></tr></thead> <tbody>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 110, "<div class=\"route-block\"><div class=\"panel-heading\"><h4>待认领的 Headscale 节点</h4><span class=\"badge\">同名 · 未被其他设备占用</span></div><p class=\"hint\">Headscale 已存在与这台设备同名的节点；认领与核对走同一证据路径，不会创建、删除或迁移其他设备。</p><div class=\"route-table-wrap\"><table class=\"route-table\"><thead><tr><th>Node ID</th><th>名称</th><th>用户</th><th>操作</th></tr></thead> <tbody>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -1125,7 +1125,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var69 string
 						templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.JoinStringErrs(claim.NodeID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 222, Col: 39}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 221, Col: 39}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var69))
 						if templ_7745c5c3_Err != nil {
@@ -1138,7 +1138,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var70 string
 						templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(claim.Name)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 223, Col: 37}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 222, Col: 37}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 						if templ_7745c5c3_Err != nil {
@@ -1151,7 +1151,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var71 string
 						templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(claim.UserName)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 224, Col: 35}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 223, Col: 35}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var71))
 						if templ_7745c5c3_Err != nil {
@@ -1164,7 +1164,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var72 string
 						templ_7745c5c3_Var72, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 226, Col: 104}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 225, Col: 104}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var72)
 						if templ_7745c5c3_Err != nil {
@@ -1177,7 +1177,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var73 string
 						templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 226, Col: 158}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 225, Col: 158}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var73)
 						if templ_7745c5c3_Err != nil {
@@ -1190,7 +1190,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var74 string
 						templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.ResolveAttributeValue(claim.NodeID)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 226, Col: 218}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 225, Col: 218}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var74)
 						if templ_7745c5c3_Err != nil {
@@ -1213,7 +1213,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 				var templ_7745c5c3_Var75 string
 				templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.JoinStringErrs(len(d.Routes))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 236, Col: 111}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 235, Col: 111}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var75))
 				if templ_7745c5c3_Err != nil {
@@ -1229,7 +1229,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				} else {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 122, "<p class=\"hint\">“已批准 / 已通告 / 已服务”来自本次页面渲染的同一次 <code>nodes list</code> 快照，不持久化；意图、最后观测与 operation_id 来自 Hub 记录。批准只改变 Headscale 的 approved 集合，不表示客户端已实际转发，也不证明跨网可达。</p><div class=\"route-table-wrap\"><table class=\"route-table\"><thead><tr><th>前缀</th><th>MeshMux 意图</th><th>已批准 <span class=\"muted\">approved</span></th><th>已通告 <span class=\"muted\">available</span></th><th>已服务 <span class=\"muted\">served</span></th><th>最后观测 / 记录</th><th>operation_id</th><th>操作</th></tr></thead> <tbody>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 122, "<p class=\"hint\" title=\"“已批准 / 已通告 / 已服务”来自本次渲染的同一 nodes list 快照，不持久化；意图与 operation_id 来自 Hub 记录。批准只改变 Headscale 的 approved 集合，不表示客户端已实际转发。\">三列证据来自本次渲染的 Headscale 快照；批准只改变 approved 集合。</p><div class=\"route-table-wrap\"><table class=\"route-table\"><thead><tr><th>前缀</th><th>MeshMux 意图</th><th>已批准 <span class=\"muted\">approved</span></th><th>已通告 <span class=\"muted\">available</span></th><th>已服务 <span class=\"muted\">served</span></th><th>最后观测 / 记录</th><th>operation_id</th><th>操作</th></tr></thead> <tbody>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -1241,7 +1241,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var76 string
 						templ_7745c5c3_Var76, templ_7745c5c3_Err = templ.JoinStringErrs(rt.Prefix)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 249, Col: 36}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 248, Col: 36}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var76))
 						if templ_7745c5c3_Err != nil {
@@ -1263,7 +1263,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var78 string
 						templ_7745c5c3_Var78, templ_7745c5c3_Err = templ.ResolveAttributeValue(templ.CSSClasses(templ_7745c5c3_Var77).String())
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 1, Col: 0}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 1, Col: 0}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var78)
 						if templ_7745c5c3_Err != nil {
@@ -1276,7 +1276,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var79 string
 						templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(rt.DesiredLabel)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 250, Col: 68}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 249, Col: 68}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
 						if templ_7745c5c3_Err != nil {
@@ -1349,7 +1349,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var80 string
 						templ_7745c5c3_Var80, templ_7745c5c3_Err = templ.JoinStringErrs(rt.ObservedLabel)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 278, Col: 57}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 277, Col: 57}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var80))
 						if templ_7745c5c3_Err != nil {
@@ -1362,7 +1362,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						var templ_7745c5c3_Var81 string
 						templ_7745c5c3_Var81, templ_7745c5c3_Err = templ.JoinStringErrs(rt.ObservedAt)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 278, Col: 106}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 277, Col: 106}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var81))
 						if templ_7745c5c3_Err != nil {
@@ -1385,7 +1385,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 							var templ_7745c5c3_Var82 string
 							templ_7745c5c3_Var82, templ_7745c5c3_Err = templ.JoinStringErrs(rt.OperationID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 283, Col: 39}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 282, Col: 39}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var82))
 							if templ_7745c5c3_Err != nil {
@@ -1408,7 +1408,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 							var templ_7745c5c3_Var83 templ.SafeURL
 							templ_7745c5c3_Var83, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("#mesh-approve-modal-" + d.ID + "-" + strconv.Itoa(i)))
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 289, Col: 111}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 288, Col: 111}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var83))
 							if templ_7745c5c3_Err != nil {
@@ -1427,7 +1427,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 							var templ_7745c5c3_Var84 string
 							templ_7745c5c3_Var84, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 292, Col: 114}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 291, Col: 114}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var84)
 							if templ_7745c5c3_Err != nil {
@@ -1440,7 +1440,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 							var templ_7745c5c3_Var85 string
 							templ_7745c5c3_Var85, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 292, Col: 168}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 291, Col: 168}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var85)
 							if templ_7745c5c3_Err != nil {
@@ -1453,7 +1453,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 							var templ_7745c5c3_Var86 string
 							templ_7745c5c3_Var86, templ_7745c5c3_Err = templ.ResolveAttributeValue(rt.Prefix)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 292, Col: 224}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 291, Col: 224}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var86)
 							if templ_7745c5c3_Err != nil {
@@ -1504,7 +1504,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var87 string
 					templ_7745c5c3_Var87, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 314, Col: 99}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 313, Col: 99}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var87)
 					if templ_7745c5c3_Err != nil {
@@ -1517,7 +1517,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var88 string
 					templ_7745c5c3_Var88, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 314, Col: 153}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 313, Col: 153}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var88)
 					if templ_7745c5c3_Err != nil {
@@ -1536,7 +1536,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var89 string
 					templ_7745c5c3_Var89, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 317, Col: 98}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 316, Col: 98}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var89)
 					if templ_7745c5c3_Err != nil {
@@ -1549,7 +1549,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var90 string
 					templ_7745c5c3_Var90, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 317, Col: 152}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 316, Col: 152}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var90)
 					if templ_7745c5c3_Err != nil {
@@ -1568,7 +1568,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var91 string
 					templ_7745c5c3_Var91, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 320, Col: 98}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 319, Col: 98}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var91)
 					if templ_7745c5c3_Err != nil {
@@ -1581,7 +1581,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var92 string
 					templ_7745c5c3_Var92, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 320, Col: 152}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 319, Col: 152}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var92)
 					if templ_7745c5c3_Err != nil {
@@ -1600,7 +1600,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var93 templ.SafeURL
 					templ_7745c5c3_Var93, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("#mesh-remove-modal-" + d.ID))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 323, Col: 85}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 322, Col: 85}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var93))
 					if templ_7745c5c3_Err != nil {
@@ -1613,7 +1613,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var94 string
 					templ_7745c5c3_Var94, templ_7745c5c3_Err = templ.ResolveAttributeValue("mesh-remove-modal-" + d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 324, Col: 47}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 323, Col: 47}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var94)
 					if templ_7745c5c3_Err != nil {
@@ -1626,7 +1626,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var95 string
 					templ_7745c5c3_Var95, templ_7745c5c3_Err = templ.JoinStringErrs(d.DisplayName)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 324, Col: 301}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 323, Col: 301}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var95))
 					if templ_7745c5c3_Err != nil {
@@ -1639,7 +1639,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var96 string
 					templ_7745c5c3_Var96, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.CSRF)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 324, Col: 504}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 323, Col: 504}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var96)
 					if templ_7745c5c3_Err != nil {
@@ -1652,7 +1652,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					var templ_7745c5c3_Var97 string
 					templ_7745c5c3_Var97, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 324, Col: 558}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 323, Col: 558}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var97)
 					if templ_7745c5c3_Err != nil {
@@ -1663,7 +1663,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 						return templ_7745c5c3_Err
 					}
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 173, "</div><p class=\"sub-note\">“注销”会移除这台设备的 Headscale 节点，远端确认后即为终态；不影响订阅用户、Token 轮换或其他设备。远端删除失败时设备保持“注销中”，可重试。未观测到 Node ID 的设备没有可删除的远端节点；如果它可能已经入网，请先“重新核对”，再删除观测到的节点。</p></article>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 173, "</div><p class=\"sub-note\">注销会移除这台设备的 Headscale 节点，远端确认后即为终态，不影响订阅用户或其他设备；未观测到 Node ID 的设备请先“重新核对”。</p></article>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1678,7 +1678,7 @@ func MeshPage(p PageData, v MeshPageView) templ.Component {
 					}
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 174, "</section><p class=\"hint\">本页只显示 Hub 侧记录与 Headscale 观测；“在线”不证明公网可达、真实协议握手或客户端可用。已签发 Key 的明文只在签发响应中出现，任何页面、URL 与日志都不会再次包含。</p><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>Mesh 设备 · 开发预览</span></footer></main></div></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 174, "</section><footer class=\"page-footer\"><span>MeshMux · 自托管网络控制台</span><span>Mesh 设备 · 开发预览</span></footer></main></div></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1724,7 +1724,7 @@ func meshApproveModal(csrf string, d MeshDeviceView, i int, rt MeshRouteView) te
 		var templ_7745c5c3_Var99 string
 		templ_7745c5c3_Var99, templ_7745c5c3_Err = templ.ResolveAttributeValue("mesh-approve-modal-" + d.ID + "-" + strconv.Itoa(i))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 351, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 349, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var99)
 		if templ_7745c5c3_Err != nil {
@@ -1737,7 +1737,7 @@ func meshApproveModal(csrf string, d MeshDeviceView, i int, rt MeshRouteView) te
 		var templ_7745c5c3_Var100 string
 		templ_7745c5c3_Var100, templ_7745c5c3_Err = templ.JoinStringErrs(d.DisplayName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 351, Col: 317}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 349, Col: 317}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var100))
 		if templ_7745c5c3_Err != nil {
@@ -1750,7 +1750,7 @@ func meshApproveModal(csrf string, d MeshDeviceView, i int, rt MeshRouteView) te
 		var templ_7745c5c3_Var101 string
 		templ_7745c5c3_Var101, templ_7745c5c3_Err = templ.JoinStringErrs(rt.Prefix)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 351, Col: 353}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 349, Col: 353}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var101))
 		if templ_7745c5c3_Err != nil {
@@ -1763,7 +1763,7 @@ func meshApproveModal(csrf string, d MeshDeviceView, i int, rt MeshRouteView) te
 		var templ_7745c5c3_Var102 string
 		templ_7745c5c3_Var102, templ_7745c5c3_Err = templ.ResolveAttributeValue(csrf)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 351, Col: 575}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 349, Col: 575}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var102)
 		if templ_7745c5c3_Err != nil {
@@ -1776,7 +1776,7 @@ func meshApproveModal(csrf string, d MeshDeviceView, i int, rt MeshRouteView) te
 		var templ_7745c5c3_Var103 string
 		templ_7745c5c3_Var103, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.ID)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 351, Col: 629}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 349, Col: 629}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var103)
 		if templ_7745c5c3_Err != nil {
@@ -1789,7 +1789,7 @@ func meshApproveModal(csrf string, d MeshDeviceView, i int, rt MeshRouteView) te
 		var templ_7745c5c3_Var104 string
 		templ_7745c5c3_Var104, templ_7745c5c3_Err = templ.ResolveAttributeValue(rt.Prefix)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views_mesh.templ`, Line: 351, Col: 685}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/view/views_mesh.templ`, Line: 349, Col: 685}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var104)
 		if templ_7745c5c3_Err != nil {
