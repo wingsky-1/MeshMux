@@ -220,6 +220,10 @@ func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, root
 
 	fail2ban := packageAvailability(ctx, runner, "fail2ban")
 	checks = append(checks, fail2ban)
+	// The packaged baseline must satisfy its own self-test before any pairing
+	// code is consumed; a broken jail/logpath configuration otherwise only
+	// surfaces in apply/verify after files were already replaced.
+	checks = append(checks, nodeFail2banBaselineCheck(ctx, runner))
 	nftPackage := packageAvailability(ctx, runner, "nftables")
 	checks = append(checks, nftPackage)
 	if nftPackage.Detail == "installed" {

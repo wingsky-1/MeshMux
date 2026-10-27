@@ -210,7 +210,7 @@ T1r 删除 layout 后，`TestRecordByteCompatNodeAndHub` 不再比较同一目�
 
 ### root 控制台恢复：执行前摘要（强制）
 
-在执行旧包前，root **必须先**从该操作的 per-op 记录读取 `from_agent_sha256`，并用 `sha256sum -c` 核对旧包字节。安装器只显式安装 `ca-certificates`/`fail2ban`/`nftables`（见 `internal/cli/install/apply_shared.go`）；`grep`/`sha256sum`/`printf` 属于 Debian essential/coreutils，不能假设 `jq` 或 `python3` 一定存在。下列是固定形式（无新工具依赖）：
+在执行旧包前，root **必须先**从该操作的 per-op 记录读取 `from_agent_sha256`，并用 `sha256sum -c` 核对旧包字节。安装器只显式安装 `ca-certificates`/`fail2ban`/`nftables`/`python3-systemd`（见 `internal/cli/install/apply_shared.go`）；`grep`/`sha256sum`/`printf` 属于 Debian essential/coreutils，不能假设 `jq` 或 `python3` 一定存在。下列是固定形式（无新工具依赖）：
 
 ```sh
 RECORD="<data-dir>/database-backup/<op32hex>/record.json"

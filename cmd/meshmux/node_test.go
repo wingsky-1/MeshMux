@@ -24,6 +24,11 @@ type fakeNodeRunner struct {
 	installs    []nodeInstallCall
 	preflights  int
 	reads       int
+	// checksAfterRepair replaces checks once a baseline repair was confirmed,
+	// emulating a host whose self-test now passes.
+	checksAfterRepair []install.Check
+	repairs           []install.Fail2banBaselineRepair
+	repairErr         error
 }
 
 type nodeInstallCall struct {
@@ -37,7 +42,15 @@ type nodeInstallCall struct {
 
 func (f *fakeNodeRunner) PreflightNode(context.Context, node.Config, bool) ([]install.Check, []int) {
 	f.preflights++
+	if len(f.repairs) > 0 && f.checksAfterRepair != nil {
+		return f.checksAfterRepair, f.ssh
+	}
 	return f.checks, f.ssh
+}
+
+func (f *fakeNodeRunner) RepairNodeFail2banBaseline(_ context.Context, _ string, repair install.Fail2banBaselineRepair) error {
+	f.repairs = append(f.repairs, repair)
+	return f.repairErr
 }
 
 func (f *fakeNodeRunner) BuildNodePlanForRoot(_, _ string, cfg node.Config, _ string, checks []install.Check, ssh []int) install.NodePlan {

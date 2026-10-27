@@ -50,6 +50,7 @@ type nodeRunner interface {
 	PreflightNode(context.Context, node.Config, bool) ([]install.Check, []int)
 	BuildNodePlanForRoot(string, string, node.Config, string, []install.Check, []int) install.NodePlan
 	InstallNode(context.Context, node.Config, string, bool, string, install.NodeApplyOptions) (install.InstallResult, error)
+	RepairNodeFail2banBaseline(context.Context, string, install.Fail2banBaselineRepair) error
 	ReadNodeState(string) (install.InstallState, bool, error)
 }
 
@@ -65,6 +66,13 @@ func (productionNodeRunner) BuildNodePlanForRoot(root, id string, cfg node.Confi
 
 func (productionNodeRunner) InstallNode(ctx context.Context, cfg node.Config, operationID string, repair bool, pairingCode string, opts install.NodeApplyOptions) (install.InstallResult, error) {
 	return install.InstallNode(ctx, cfg, operationID, repair, pairingCode, opts)
+}
+
+// RepairNodeFail2banBaseline applies only the repair the operator confirmed.
+// The CLI installs the root layout, so the ledger and journal are resolved by
+// the installer itself.
+func (productionNodeRunner) RepairNodeFail2banBaseline(ctx context.Context, operationID string, repair install.Fail2banBaselineRepair) error {
+	return install.RepairNodeFail2banBaseline(ctx, "/", operationID, repair, nil)
 }
 
 // ReadNodeState reads the Node ledger this host actually owns. On a
@@ -242,9 +250,27 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), nodePlanTimeout)
-	checks, sshPorts := runner.PreflightNode(ctx, cfg, state.Node != nil)
-	cancel()
+	reader := bufio.NewReader(stdin)
+	preflight := func() ([]install.Check, []int) {
+		ctx, cancel := context.WithTimeout(context.Background(), nodePlanTimeout)
+		defer cancel()
+		return runner.PreflightNode(ctx, cfg, state.Node != nil)
+	}
+	checks, sshPorts := preflight()
+	// A broken Fail2ban baseline is the one preflight failure the installer
+	// can repair, but only after an explicit operator confirmation: the repair
+	// either installs rsyslog or writes a MeshMux-owned backend override for
+	// the packaged sshd jail. --yes and the Web handoff never prompt; they stop
+	// with the check's next_action instead.
+	if recovery, blocked := fail2banBaselineOnlyFailure(checks); blocked &&
+		!*planOnly && !*yes && !*nonInteractive && !*fromRecordedState {
+		if offerFail2banBaselineRepair(reader, stdout, stderr, runner, operationID) {
+			checks, sshPorts = preflight()
+		} else {
+			fmt.Fprintf(stderr, "%s: no host changes were made. %s\n", install.CodeFail2banBaselineInvalid, recovery)
+			return 3
+		}
+	}
 	plan := runner.BuildNodePlanForRoot("/", operationID, cfg, runtime.GOARCH, checks, sshPorts)
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
@@ -265,13 +291,20 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 			}
 			return refusal("preflight", code, recovery, 3)
 		}
+		for _, check := range plan.Checks {
+			if check.Status == "fail" && check.Code == install.CodeFail2banBaselineInvalid {
+				// --yes must still carry the exact repair instruction, because
+				// it deliberately refuses the interactive repair prompt.
+				fmt.Fprintf(stderr, "%s: %s\n", check.Code, check.Recovery)
+				break
+			}
+		}
 		return 3
 	}
 	if *planOnly {
 		return 0
 	}
 
-	reader := bufio.NewReader(stdin)
 	confirmed := *yes || *fromRecordedState
 	if !confirmed {
 		fmt.Fprintf(stdout, "Type 'install %s' to apply this plan, or anything else to stop:\n", role)
@@ -290,7 +323,7 @@ func runNodeInstall(role node.Role, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 	opts := install.NodeApplyOptions{NonInteractive: *nonInteractive, FromRecordedState: *fromRecordedState}
-	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, opts, reader, stdout, stderr)
+	result, applyErr := applyNode(runner, cfg, operationID, *repair, pairingCode, opts, reader, stdout, stderr, !*yes)
 	if applyErr != nil {
 		if ie, ok := errors.AsType[*install.InstallError](applyErr); ok {
 			result.ErrorCode, result.Stage, result.Recovery = ie.Code, ie.Stage, ie.Recovery
@@ -396,24 +429,94 @@ func readPairingCodeFile(path string, stderr io.Writer) (string, bool) {
 	return code, true
 }
 
-func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bool, pairingCode string, opts install.NodeApplyOptions, reader *bufio.Reader, stdout, stderr io.Writer) (install.InstallResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), nodeApplyTimeout)
-	result, err := runner.InstallNode(ctx, cfg, operationID, repair, pairingCode, opts)
+func applyNode(runner nodeRunner, cfg node.Config, operationID string, repair bool, pairingCode string, opts install.NodeApplyOptions, reader *bufio.Reader, stdout, stderr io.Writer, allowRepair bool) (install.InstallResult, error) {
+	attempt := func() (install.InstallResult, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), nodeApplyTimeout)
+		defer cancel()
+		return runner.InstallNode(ctx, cfg, operationID, repair, pairingCode, opts)
+	}
+	result, err := attempt()
+	if err != nil && allowRepair && isFail2banBaselineError(err) {
+		// The stage gate repeats the self-test once the fixed Debian packages
+		// (including python3-systemd) are installed. Nothing has consumed the
+		// pairing code at that point, so a confirmed repair retries the same
+		// operation with the same code instead of asking for a fresh one.
+		if offerFail2banBaselineRepair(reader, stdout, stderr, runner, operationID) {
+			result, err = attempt()
+		}
+	}
 	if !repair || !pairingRequired(err) || opts.NonInteractive {
-		cancel()
 		return result, err
 	}
 	// The first attempt deliberately reuses the persisted identity. The
 	// installer asks for a fresh code only when that identity cannot be reused.
-	cancel()
 	fmt.Fprintln(stdout, "This repair needs a fresh pairing code. Reissue it in Hub Web and paste it below.")
 	code, ok := readPairingCode(reader, stdout, stderr)
 	if !ok {
 		return result, err
 	}
-	ctx, cancel = context.WithTimeout(context.Background(), nodeApplyTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), nodeApplyTimeout)
 	defer cancel()
 	return runner.InstallNode(ctx, cfg, operationID, true, code, opts)
+}
+
+// fail2banBaselineOnlyFailure reports the next_action of the one preflight
+// failure the installer can repair. Any other blocking check means editing
+// Fail2ban would not unblock this host, so no repair is offered.
+func fail2banBaselineOnlyFailure(checks []install.Check) (string, bool) {
+	recovery := ""
+	for _, check := range checks {
+		if check.Status != "fail" {
+			continue
+		}
+		if check.Code != install.CodeFail2banBaselineInvalid || recovery != "" {
+			return "", false
+		}
+		recovery = check.Recovery
+	}
+	return recovery, recovery != ""
+}
+
+func isFail2banBaselineError(err error) bool {
+	var ie *install.InstallError
+	return errors.As(err, &ie) && ie.Code == install.CodeFail2banBaselineInvalid
+}
+
+// offerFail2banBaselineRepair asks for one explicit choice and applies only
+// that repair. Empty input, any other answer and a failed repair all leave the
+// host unchanged and report why the install stopped.
+func offerFail2banBaselineRepair(reader *bufio.Reader, stdout, stderr io.Writer, runner nodeRunner, operationID string) bool {
+	fmt.Fprintln(stdout, "Fail2ban baseline self-test failed (fail2ban-client -t). No pairing code has been used.")
+	fmt.Fprintln(stdout, "Choose a repair; nothing is changed without your answer:")
+	fmt.Fprintln(stdout, "  1) install rsyslog so /var/log/auth.log exists")
+	fmt.Fprintln(stdout, "  2) override only backend=systemd for the packaged sshd jail")
+	fmt.Fprint(stdout, "Repair [1/2, empty=stop]: ")
+	answer, err := readLineLimited(reader, 8)
+	if err != nil {
+		return false
+	}
+	var repair install.Fail2banBaselineRepair
+	switch strings.TrimSpace(answer) {
+	case "1":
+		repair = install.Fail2banRepairRsyslog
+	case "2":
+		repair = install.Fail2banRepairSystemdBackend
+	default:
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nodeApplyTimeout)
+	defer cancel()
+	if err := runner.RepairNodeFail2banBaseline(ctx, operationID, repair); err != nil {
+		var ie *install.InstallError
+		if errors.As(err, &ie) {
+			fmt.Fprintf(stderr, "%s: %s\n", ie.Code, ie.Recovery)
+		} else {
+			fmt.Fprintf(stderr, "%s: the repair did not complete; no jail was changed without proof.\n", install.CodeFail2banRepairFailed)
+		}
+		return false
+	}
+	fmt.Fprintln(stdout, "Fail2ban baseline repaired; re-running the baseline check.")
+	return true
 }
 
 func pairingRequired(err error) bool {

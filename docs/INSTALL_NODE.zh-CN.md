@@ -44,7 +44,8 @@ meshmux install edge|out \
 - Hub origin 与官方 GitHub 下载源可通过 HTTPS 访问，且不跟随重定向。
 - VLESS TCP/UDP 可绑定，或 repair 时确认为 MeshMux kernel unit 与固定二进制持有的 listener。
 - 从 `ssh.socket`、`ss` 和传统模式下的 `sshd -T` 读取实际 SSH listener；配置的 `--ssh-port` 必须命中实际 listener，VLESS 不能与任一 SSH listener 冲突。
-- 只查询 `ca-certificates`、`fail2ban`、`nftables` 是否为 Debian 已安装包；缺失时，apply 只安装这些固定包，不升级其他包，也不添加第三方仓库。
+- 只查询 `ca-certificates`、`fail2ban`、`nftables`、`python3-systemd` 是否为 Debian 已安装包；缺失时，apply 只安装这些固定包，不升级其他包，也不添加第三方仓库。MeshMux 的 jail 全部使用 `backend = systemd`，而 Debian 只 Recommends `python3-systemd`，精简镜像（Debian 12/13 均可能）必须由安装器显式补齐。
+- 执行 `fail2ban-client -t` 基线自检：已安装的 fail2ban 配置若不能通过自检，preflight 直接以 `FAIL2BAN_BASELINE_INVALID` 阻断，且发生在配对码被消费之前。交互模式只提供两种需明确确认的修复：安装 rsyslog 以生成 `/var/log/auth.log`，或新增 MeshMux 专属 `/etc/fail2ban/jail.d/meshmux-backend.local` 仅覆盖默认 sshd jail 的 `backend = systemd`（不改动其它 key，失败时回滚）；确认与结果写入本次 operation 的 `events.jsonl`。`--yes` 与非交互 handoff 不提示、不修改 jail，只返回稳定错误码和 next_action。fail2ban 尚未安装或只缺 `python3-systemd` 时，基线在固定包安装后、配对前再次自检。
 - Out 的 `inet meshmux_out` 只能是首次不存在的表或已有 MeshMux ledger 明确拥有的表；不会接管、覆盖或删除其他 nftables 表。
 
 公网入站、云安全组、真实协议握手和客户端可用是外部检查，保留 `pending`。本机 listener 或 plan 成功不能证明这些结果。
@@ -82,7 +83,7 @@ install out
 1. 读取并校验 `/var/lib/meshmux-installer/state.json`；已有 Node 配置必须与当前 Hub URL、Node ID、role、VLESS 端口和 SSH 端口相同。
 2. 下载固定 sing-box 归档，校验归档 SHA-256，提取唯一 `sing-box` 文件，并校验解压后二进制 SHA-256。
 3. 以当前运行中的 MeshMux CLI 自复制 Agent 二进制并校验 SHA-256；不采用外部 Agent 二进制。
-4. 生成空 `users` 的 VLESS baseline 候选，使用暂存 sing-box 执行 `check`；Out 还执行 `nft -c -f` 配置语法检查。
+4. 生成空 `users` 的 VLESS baseline 候选，使用暂存 sing-box 执行 `check`；Out 还执行 `nft -c -f` 配置语法检查。固定 Debian 包安装完成后、身份与配对之前，再次执行 `fail2ban-client -t`；基线仍不合格时以 `FAIL2BAN_BASELINE_INVALID` 停止，不消费配对码。
 5. 完成配对并把节点身份以私有 `0600` 文件持久化。配对码本身不写入 identity、config 或 state。
 6. 备份即将替换的 MeshMux 受管文件，原子写入 Agent、kernel、config、unit 和 Fail2ban jail；执行 `systemd-analyze verify`、`fail2ban-client -t` 和 `systemctl daemon-reload`。
 7. Out 先应用并回读 ACL；然后启动/重启 sing-box，执行严格本机 readback，最后才启动或保持 Agent。
@@ -113,7 +114,7 @@ install out
 | sing-box arm64 binary | 1.14.3 | `299f9f6080d9c43504714ddddae6aa9b853d430ccfc816c456a73613b5455689` |
 | MeshMux Agent | `node.CurrentAgentVersion` | 从当前 CLI 自复制后校验 SHA-256 |
 
-sing-box 不允许 `latest` 或调用者自定义下载 URL。Debian `fail2ban`、`nftables` 和 `ca-certificates` 只通过当前发行仓库的包状态查询与安装路径处理，不在本页声称已完成 Debian snapshot 锁定。
+sing-box 不允许 `latest` 或调用者自定义下载 URL。Debian `fail2ban`、`nftables`、`python3-systemd` 和 `ca-certificates` 只通过当前发行仓库的包状态查询与安装路径处理，不在本页声称已完成 Debian snapshot 锁定。
 
 CLI 已提供严格零参数的私有入口 `__internal-agent-version`，成功时只输出 `node.CurrentAgentVersion` 后换行，任何参数返回 2 且不回显参数。安装器侧已在 stage 接入该探针：对输出做 `TrimSpace` 后要求与 `node.CurrentAgentVersion` **完全相等**，禁用 `strings.Contains`；自复制哈希校验仍保留。探针的 L1 覆盖与全仓、隔离宿主机验收回填后方可记作完成。
 

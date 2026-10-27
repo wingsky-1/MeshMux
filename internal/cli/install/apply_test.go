@@ -458,7 +458,7 @@ func TestHubInstallQueriesPackagesBeforeApt(t *testing.T) {
 
 	t.Run("all-present", func(t *testing.T) {
 		f := makeInstallerFixture(t)
-		f.runner.packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}
+		f.runner.packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true, "python3-systemd": true}
 		if result, err := invokeInstaller(t, f, strings.Repeat("7", 32), false); err != nil || result.Status != "installed" {
 			t.Fatalf("install with packages present: %+v %v", result, err)
 		}
@@ -469,7 +469,7 @@ func TestHubInstallQueriesPackagesBeforeApt(t *testing.T) {
 
 	t.Run("one-missing", func(t *testing.T) {
 		f := makeInstallerFixture(t)
-		f.runner.packages = map[string]bool{"fail2ban": true, "nftables": true}
+		f.runner.packages = map[string]bool{"fail2ban": true, "nftables": true, "python3-systemd": true}
 		if result, err := invokeInstaller(t, f, strings.Repeat("8", 32), false); err != nil || result.Status != "installed" {
 			t.Fatalf("install with one missing package: %+v %v", result, err)
 		}
@@ -479,6 +479,22 @@ func TestHubInstallQueriesPackagesBeforeApt(t *testing.T) {
 		}
 		if got[1] != "apt-get install -y --no-install-recommends ca-certificates" {
 			t.Fatalf("apt installed more than the missing package: %q", got[1])
+		}
+	})
+
+	// A minimal Debian image has Fail2ban installed but not the systemd
+	// backend binding: every MeshMux jail uses backend = systemd, so the
+	// installer must supply python3-systemd instead of relying on a
+	// recommendation that --no-install-recommends suppresses.
+	t.Run("systemd-backend-missing", func(t *testing.T) {
+		f := makeInstallerFixture(t)
+		f.runner.packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}
+		if result, err := invokeInstaller(t, f, strings.Repeat("9", 32), false); err != nil || result.Status != "installed" {
+			t.Fatalf("install with python3-systemd missing: %+v %v", result, err)
+		}
+		got := aptCalls(f.runner.calls)
+		if len(got) != 2 || got[1] != "apt-get install -y --no-install-recommends python3-systemd" {
+			t.Fatalf("apt must install exactly python3-systemd: %v", got)
 		}
 	})
 }

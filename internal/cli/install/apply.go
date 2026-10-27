@@ -130,6 +130,7 @@ type operationEvent struct {
 	Stage       string    "json:\"stage\""
 	Status      string    "json:\"status\""
 	ErrorCode   string    "json:\"error_code,omitempty\""
+	Detail      string    "json:\"detail,omitempty\""
 	Time        time.Time "json:\"time\""
 }
 

@@ -157,7 +157,7 @@ func makeLocalLineFixture(t *testing.T) *localLineFixture {
 		VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
 	})
 	runner := &fakeNodeRunner{users: map[string]bool{}, packages: map[string]bool{
-		"ca-certificates": true, "fail2ban": true, "nftables": true,
+		"ca-certificates": true, "fail2ban": true, "nftables": true, "python3-systemd": true,
 	}}
 	profileRunner := &localLineRunner{fakeNodeRunner: runner, sshPorts: []int{2222}}
 	// The readback must report the digest of the compiled active config so

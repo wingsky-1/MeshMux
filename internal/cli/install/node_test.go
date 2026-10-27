@@ -241,7 +241,7 @@ func makeNodeFixture(t *testing.T, role node.Role) *nodeFixture {
 	candidate := node.NewCandidateDocument(node.Candidate{
 		NodeID: cfg.NodeID, Role: role, Revision: 7, VLESSPort: cfg.VLESSPort, KernelVersion: node.KernelVersion,
 	})
-	runner := &fakeNodeRunner{users: map[string]bool{}, packages: map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}}
+	runner := &fakeNodeRunner{users: map[string]bool{}, packages: map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true, "python3-systemd": true}}
 	runner.aclPath = rooted(root, node.ACLPath)
 	readback := node.Readback{
 		Architecture: "amd64", AgentVersion: node.CurrentAgentVersion(),
@@ -1124,7 +1124,7 @@ func TestNodeFirstInstallAndLedger(t *testing.T) {
 		}, nil
 	}
 	runner := f.runner
-	runner.packages = map[string]bool{"fail2ban": true, "nftables": true}
+	runner.packages = map[string]bool{"fail2ban": true, "nftables": true, "python3-systemd": true}
 	runner.packages["ca-certificates"] = false
 	// The real preflight proves it queries the host through the injected
 	// runner, while its read-only network probes remain isolated.

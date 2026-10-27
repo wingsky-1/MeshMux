@@ -333,6 +333,7 @@ func InstallNode(ctx context.Context, cfg node.Config, operationID string, repai
 		kernelConfig:             &InstallError{Stage: "stage", Code: "KERNEL_CONFIG_INVALID", Recovery: "Review the generated native sing-box configuration."},
 		packageIndex:             &InstallError{Stage: "apply", Code: "PACKAGE_INDEX_FAILED", Recovery: "Check Debian repository connectivity; no package upgrade or third-party repository is used."},
 		packageInstall:           &InstallError{Stage: "apply", Code: "PACKAGE_INSTALL_FAILED", Recovery: "Review Debian apt status; only the listed missing packages are installed."},
+		fail2banBaseline:         &InstallError{Stage: "preflight", Code: CodeFail2banBaselineInvalid, Recovery: fail2banBaselineRecovery},
 		aclProbe:                 &InstallError{Stage: "apply", Code: "ACL_TABLE_PROBE_FAILED", Recovery: "Re-run the exact nft ownership readback. MeshMux will not adopt, overwrite or delete an unverified table."},
 		aclRender:                &InstallError{Stage: "stage", Code: "ACL_RENDER_FAILED", Recovery: "Review the Out role configuration."},
 		aclConfig:                &InstallError{Stage: "stage", Code: "ACL_CONFIG_INVALID", Recovery: "Review the generated default-deny Out table; the host ruleset was not changed."},
