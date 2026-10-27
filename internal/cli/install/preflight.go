@@ -26,18 +26,45 @@ func check(name, code, action string, err error) Check {
 	return Check{Name: name, Status: "fail", Code: code, Detail: "validation failed", Recovery: action}
 }
 
-func osSupported(data string) bool {
-	id, version := "", ""
+// hubDebianRelease is the only release the v1.0.0 Hub accepts. Node hosts use
+// nodeOSCheck, which admits one experimental predecessor in addition.
+const hubDebianRelease = "13"
+
+// debianRelease parses /etc/os-release into the Debian major release and its
+// codename. ok is false for any non-Debian host and for content without a
+// numeric VERSION_ID, so an unparseable file never looks supported.
+func debianRelease(data string) (release, codename string, ok bool) {
+	id, version, code := "", "", ""
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "ID=") {
+		switch {
+		case strings.HasPrefix(line, "ID="):
 			id = strings.Trim(strings.TrimPrefix(line, "ID="), "\"'")
-		}
-		if strings.HasPrefix(line, "VERSION_ID=") {
+		case strings.HasPrefix(line, "VERSION_ID="):
 			version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"'")
+		case strings.HasPrefix(line, "VERSION_CODENAME="):
+			code = strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"'")
 		}
 	}
-	return id == "debian" && version == "13"
+	if id != "debian" {
+		return "", "", false
+	}
+	major, _, _ := strings.Cut(version, ".")
+	if major == "" {
+		return "", "", false
+	}
+	for _, r := range major {
+		if r < '0' || r > '9' {
+			return "", "", false
+		}
+	}
+	return major, code, true
+}
+
+// osSupported is the Hub gate: the v1.0.0 Hub is accepted only on Debian 13.
+func osSupported(data string) bool {
+	release, _, ok := debianRelease(data)
+	return ok && release == hubDebianRelease
 }
 
 func DiskAvailable(path string, minimum uint64) error {

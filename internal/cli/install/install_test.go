@@ -119,8 +119,22 @@ func TestPlanDoesNotMisreportInstallation(t *testing.T) {
 }
 
 func TestDebianReleaseParser(t *testing.T) {
+	// The Hub gate stays Debian 13 only; Node uses nodeOSCheck for its wider rule.
 	if !osSupported("ID=debian\nVERSION_ID=\"13\"\n") || osSupported("ID=ubuntu\nVERSION_ID=\"13\"\n") ||
 		osSupported("ID=debian\nVERSION_ID=\"12\"\n") {
 		t.Fatal("OS release parser failed")
+	}
+	release, codename, ok := debianRelease("ID=debian\nVERSION_ID=\"12.4\"\nVERSION_CODENAME=bookworm\n")
+	if !ok || release != "12" || codename != "bookworm" {
+		t.Fatalf("debianRelease = %q, %q, %v", release, codename, ok)
+	}
+	if _, _, ok := debianRelease("ID=debian\nVERSION_ID=\"\"\n"); ok {
+		t.Fatal("an empty VERSION_ID must not parse as a supported release")
+	}
+	if _, _, ok := debianRelease("ID=debian\nVERSION_ID=\"trixie\"\n"); ok {
+		t.Fatal("a non-numeric VERSION_ID must not parse as a supported release")
+	}
+	if _, _, ok := debianRelease("ID=ubuntu\nVERSION_ID=\"24.04\"\n"); ok {
+		t.Fatal("a non-Debian host must not parse as Debian")
 	}
 }

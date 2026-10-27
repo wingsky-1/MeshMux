@@ -19,8 +19,13 @@ func newOperationRecorder(operationID, journalPath string) func(stage, status, c
 // host. The caller supplies the role-specific PACKAGE_INDEX_FAILED and
 // PACKAGE_INSTALL_FAILED errors so Hub and Line keep their exact recovery
 // wording. The missing set is returned because the Line checks it for nftables.
+//
+// python3-systemd is not a recommendation failure to leave to the base image:
+// both Hub and Line jails use `backend = systemd`, and Debian only Recommends
+// the binding package. Installing with --no-install-recommends leaves a
+// minimal Debian 12 or 13 host with a Fail2ban that cannot load any jail.
 func ensureDebianPackages(ctx context.Context, runner CommandRunner, indexErr, installErr *InstallError) ([]string, *InstallError) {
-	missing := missingDebianPackages(ctx, runner, "ca-certificates", "fail2ban", "nftables")
+	missing := missingDebianPackages(ctx, runner, "ca-certificates", "fail2ban", "nftables", "python3-systemd")
 	if len(missing) > 0 {
 		if _, err := runner.Run(ctx, "apt-get", "update"); err != nil {
 			return missing, indexErr

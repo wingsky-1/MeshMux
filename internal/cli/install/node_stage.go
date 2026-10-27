@@ -27,6 +27,7 @@ type nodeStageErrors struct {
 	kernelConfig             *InstallError
 	packageIndex             *InstallError
 	packageInstall           *InstallError
+	fail2banBaseline         *InstallError
 	aclProbe                 *InstallError
 	aclRender                *InstallError
 	aclConfig                *InstallError
@@ -118,6 +119,13 @@ func stageNodeArtifacts(ctx context.Context, result *InstallResult, state *Insta
 	missing, pkgErr := ensureDebianPackages(ctx, opts.Runner, failures.packageIndex, failures.packageInstall)
 	if pkgErr != nil {
 		return fail(pkgErr)
+	}
+	// The fixed package set is now present, so the preflight self-test can
+	// finally run on a host whose fail2ban (or python3-systemd) was missing.
+	// This still happens before identity work and before any pairing code is
+	// consumed.
+	if err := requireFail2banBaseline(ctx, opts.Runner); err != nil {
+		return fail(failures.fail2banBaseline)
 	}
 	if usedPackage(missing, "nftables") {
 		if err := verifyNodeTableOwnershipAfterInstall(ctx, opts.Root, opts.Runner, installedCfg, hasState); err != nil {

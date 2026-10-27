@@ -102,20 +102,78 @@ func PreflightNode(ctx context.Context, cfg node.Config, allowManaged bool) ([]C
 	return preflightNode(ctx, cfg, allowManaged, "/", ExecRunner{})
 }
 
+const (
+	// nodeBaselineDebianRelease is the only Node release with v1.0.0 acceptance
+	// evidence and therefore the baseline every plan claims unless preflight
+	// proved otherwise.
+	nodeBaselineDebianRelease = "13"
+	// nodeExperimentalDebianRelease is bookworm. Its pinned Node artifacts were
+	// exercised, but its Debian package set was not part of the v1.0.0
+	// acceptance run, so it installs as experimental support, not baseline.
+	nodeExperimentalDebianRelease = "12"
+	// nodeOSRecovery is the single next action for every refused Node release.
+	nodeOSRecovery = "Use Debian 13 for the supported baseline, or Debian 12 (bookworm) on amd64 or arm64 as experimental support; older releases are refused."
+)
+
+// debianLabel names a Debian release with the codename the host published.
+func debianLabel(release, codename string) string {
+	if codename == "" {
+		return "Debian " + release
+	}
+	return "Debian " + release + " (" + codename + ")"
+}
+
+// nodeOSCheck classifies /etc/os-release for a Node host. Debian 13 is the
+// v1.0.0 baseline and passes plainly. Debian 12 (bookworm) passes with a
+// recorded warning because its Debian packages lack v1.0.0 acceptance
+// evidence; anything older (or newer than the baseline) is refused so a plan
+// never claims support that was not tested.
+func nodeOSCheck(data string) Check {
+	release, codename, ok := debianRelease(data)
+	if !ok {
+		return Check{Name: "os", Status: "fail", Code: "OS_UNSUPPORTED", Detail: "host is not Debian or does not publish a numeric VERSION_ID", Recovery: nodeOSRecovery}
+	}
+	label := debianLabel(release, codename)
+	switch release {
+	case nodeBaselineDebianRelease:
+		return Check{Name: "os", Status: "pass", Detail: label + " baseline"}
+	case nodeExperimentalDebianRelease:
+		return Check{Name: "os", Status: "pass", Detail: label + ": experimental Node support; v1.0.0 baseline and acceptance evidence remain Debian 13"}
+	}
+	return Check{Name: "os", Status: "fail", Code: "OS_UNSUPPORTED", Detail: label + " is not a supported Node release", Recovery: nodeOSRecovery}
+}
+
+// nodeOSLabel records the release the os check actually saw so a Debian 12 plan
+// never advertises the Debian 13 baseline. Synthetic plans without an os check
+// keep the baseline.
+func nodeOSLabel(checks []Check) string {
+	for _, c := range checks {
+		if c.Name != "os" {
+			continue
+		}
+		rest, found := strings.CutPrefix(c.Detail, "Debian ")
+		if !found {
+			continue
+		}
+		release, _, _ := strings.Cut(rest, " ")
+		if release != "" {
+			return "Debian " + release
+		}
+	}
+	return "Debian " + nodeBaselineDebianRelease
+}
+
 func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, root string, runner CommandRunner) ([]Check, []int) {
 	if runner == nil {
 		runner = ExecRunner{}
 	}
 	var checks []Check
 	checks = append(checks, check("node_config", "CONFIG_INVALID", "Supply a valid HTTPS Hub URL, node identity, role, VLESS port and SSH port.", cfg.Validate()))
-	osErr := errors.New("os-release unavailable")
+	osCheck := Check{Name: "os", Status: "fail", Code: "OS_UNSUPPORTED", Detail: "os-release unavailable", Recovery: nodeOSRecovery}
 	if data, err := os.ReadFile(rooted(root, "/etc/os-release")); err == nil {
-		osErr = nil
-		if !osSupported(string(data)) {
-			osErr = errors.New("not Debian 13")
-		}
+		osCheck = nodeOSCheck(string(data))
 	}
-	checks = append(checks, check("os", "OS_UNSUPPORTED", "Use Debian 13 on amd64 or arm64.", osErr))
+	checks = append(checks, osCheck)
 
 	actualArch, archErr := dpkgArchitecture(ctx, runner)
 	archRelease, archOK := node.KernelReleaseFor(actualArch)
@@ -162,6 +220,10 @@ func preflightNode(ctx context.Context, cfg node.Config, allowManaged bool, root
 
 	fail2ban := packageAvailability(ctx, runner, "fail2ban")
 	checks = append(checks, fail2ban)
+	// The packaged baseline must satisfy its own self-test before any pairing
+	// code is consumed; a broken jail/logpath configuration otherwise only
+	// surfaces in apply/verify after files were already replaced.
+	checks = append(checks, nodeFail2banBaselineCheck(ctx, runner))
 	nftPackage := packageAvailability(ctx, runner, "nftables")
 	checks = append(checks, nftPackage)
 	if nftPackage.Detail == "installed" {
@@ -251,19 +313,20 @@ func buildNodePlan(id string, cfg node.Config, architecture string, checks []Che
 	}
 	release, _ := node.KernelReleaseFor(architecture)
 	artifacts := PinnedNodeArtifacts(architecture)
+	osLabel := nodeOSLabel(checks)
 	agentDistribution := "same executable as the invoked CLI; self-copy SHA-256 verified"
 	if layout.CoLocated {
 		agentDistribution = "reuses the Hub-owned runtime binary verbatim; SHA-256 verified, never written by the Line"
 	}
 	plan := NodePlan{
-		OperationID: id, Stage: "plan", Status: status, OS: "Debian 13",
+		OperationID: id, Stage: "plan", Status: status, OS: osLabel,
 		Architecture: architecture, Config: cfg, Checks: checks,
 		Artifacts: artifacts,
 		Components: []Component{
 			{Name: "MeshMux Agent", Version: node.CurrentAgentVersion(), Distribution: agentDistribution},
 			{Name: "sing-box", Version: node.KernelVersion, Distribution: "pinned official GitHub archive; archive and binary SHA-256 verified"},
-			{Name: "Fail2ban", Version: "Debian 13 package", Distribution: "official Debian repository"},
-			{Name: "nftables", Version: "Debian 13 package", Distribution: "official Debian repository"},
+			{Name: "Fail2ban", Version: osLabel + " package", Distribution: "official Debian repository"},
+			{Name: "nftables", Version: osLabel + " package", Distribution: "official Debian repository"},
 		},
 		Ports: []Port{
 			{Protocol: "tcp", Port: cfg.VLESSPort, Service: "sing-box VLESS"},
