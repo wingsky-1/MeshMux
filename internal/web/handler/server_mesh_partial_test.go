@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -91,7 +92,7 @@ func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 	if !strings.Contains(w.Body.String(), store.CodeDatabaseUnavailable) {
 		t.Fatalf("compensated failure lost its code: %.500s", w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), codeMeshRouteApprovalPartial) {
+	if strings.Contains(w.Body.String(), meshh.CodeMeshRouteApprovalPartial) {
 		t.Fatalf("a reverted mutation was reported as partial: %.500s", w.Body.String())
 	}
 	// The revert is the readback the handler reports on: the prefix the request
@@ -110,7 +111,7 @@ func TestMeshRouteApproveLocalFailureRevertsHeadscale(t *testing.T) {
 	if stored.Desired != mesh.RouteDesiredAdvertised {
 		t.Fatalf("failed local write changed the stored intent: %+v", stored)
 	}
-	if !strings.Contains(logs.String(), codeMeshRouteCompensated) {
+	if !strings.Contains(logs.String(), meshh.CodeMeshRouteCompensated) {
 		t.Fatalf("the confirmed revert was not audited: %.800s", logs.String())
 	}
 }
@@ -131,20 +132,20 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 		AvailableRoutes: []string{"10.5.0.0/16", "192.168.1.0/24"},
 	}}
 	refusing := &routeCompensationRefusingHeadscale{fakeHeadscale: fake, failOn: 2}
-	app.mesh = refusing
+	app.meshServer.SetClient(refusing)
 	refuseMeshRouteIntentUpdates(t, app)
 	fake.resetCalls()
 
 	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusInternalServerError)
 	body := w.Body.String()
-	if !strings.Contains(body, codeMeshRouteApprovalPartial) {
+	if !strings.Contains(body, meshh.CodeMeshRouteApprovalPartial) {
 		t.Fatalf("partial approval lost its code: %.500s", body)
 	}
 	if !strings.Contains(body, "重新核对") {
 		t.Fatalf("partial approval has no recovery action: %.500s", body)
 	}
-	if !strings.Contains(logs.String(), codeMeshRouteApprovalPartial) {
+	if !strings.Contains(logs.String(), meshh.CodeMeshRouteApprovalPartial) {
 		t.Fatalf("partial approval was not audited: %.800s", logs.String())
 	}
 	if !strings.Contains(logs.String(), meshnet.CodeUnavailable) {
@@ -152,7 +153,7 @@ func TestMeshRouteApprovePartialWhenRevertFails(t *testing.T) {
 	}
 	// The control plane really is ahead of the Hub, which is what "partial"
 	// claims: the prefix stays approved remotely and the intent stays advertised.
-	if !meshRoutePrefixIn(fake.nodes[0].ApprovedRoutes, "192.168.1.0/24") {
+	if !meshh.MeshRoutePrefixIn(fake.nodes[0].ApprovedRoutes, "192.168.1.0/24") {
 		t.Fatalf("partial was reported without the remote change: %v", fake.nodes[0].ApprovedRoutes)
 	}
 	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
@@ -188,7 +189,7 @@ func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 	if !strings.Contains(w.Body.String(), store.CodeDatabaseUnavailable) {
 		t.Fatalf("compensated withdrawal lost its code: %.500s", w.Body.String())
 	}
-	if !meshRoutePrefixIn(fake.nodes[0].ApprovedRoutes, "192.168.1.0/24") {
+	if !meshh.MeshRoutePrefixIn(fake.nodes[0].ApprovedRoutes, "192.168.1.0/24") {
 		t.Fatalf("withdrawal was not reverted: %v", fake.nodes[0].ApprovedRoutes)
 	}
 	if len(fake.nodes[0].ApprovedRoutes) != 2 {
@@ -204,7 +205,7 @@ func TestMeshRouteRevokeLocalFailureRestoresApproval(t *testing.T) {
 	if stored.Desired != mesh.RouteDesiredApproved {
 		t.Fatalf("failed withdrawal changed intent: %+v", stored)
 	}
-	if !strings.Contains(logs.String(), codeMeshRouteCompensated) {
+	if !strings.Contains(logs.String(), meshh.CodeMeshRouteCompensated) {
 		t.Fatalf("the confirmed revert was not audited: %.800s", logs.String())
 	}
 }
@@ -226,16 +227,16 @@ func TestMeshRouteRevokePartialWhenClearRevertFails(t *testing.T) {
 		ApprovedRoutes:  []string{"192.168.1.0/24"},
 		AvailableRoutes: []string{"192.168.1.0/24"}}}
 	refusing := &routeCompensationRefusingHeadscale{fakeHeadscale: fake, failOn: 2}
-	app.mesh = refusing
+	app.meshServer.SetClient(refusing)
 	refuseMeshRouteIntentUpdates(t, app)
 	fake.resetCalls()
 
 	w := b.post("/mesh/routes/revoke", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusInternalServerError)
-	if !strings.Contains(w.Body.String(), codeMeshRouteWithdrawPartial) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshRouteWithdrawPartial) {
 		t.Fatalf("partial withdrawal lost its code: %.500s", w.Body.String())
 	}
-	if !strings.Contains(logs.String(), codeMeshRouteWithdrawPartial) {
+	if !strings.Contains(logs.String(), meshh.CodeMeshRouteWithdrawPartial) {
 		t.Fatalf("partial withdrawal was not audited: %.800s", logs.String())
 	}
 	// The request found the prefix approved, so the revert is a set operation,
@@ -265,10 +266,10 @@ func TestMeshRoutePartialWhenTheHubRecordCannotBeRead(t *testing.T) {
 	fake.resetCalls()
 
 	w := httptest.NewRecorder()
-	app.meshRouteLocalFail(w, httptest.NewRequest(http.MethodPost, testOrigin+"/mesh/routes/revoke", nil), session{},
-		errors.New("DATABASE_UNAVAILABLE"), meshRouteLocalFailure{
-			Fallback: codeMeshRouteWithdraw,
-			Partial:  codeMeshRouteWithdrawPartial,
+	app.meshServer.MeshRouteLocalFail(w, httptest.NewRequest(http.MethodPost, testOrigin+"/mesh/routes/revoke", nil), session{},
+		errors.New("DATABASE_UNAVAILABLE"), meshh.MeshRouteLocalFailure{
+			Fallback: meshh.CodeMeshRouteWithdraw,
+			Partial:  meshh.CodeMeshRouteWithdrawPartial,
 			Applied:  "Headscale 已撤销该前缀的批准",
 			Intended: mesh.RouteDesiredAdvertised,
 			DeviceID: router.ID,
@@ -279,7 +280,7 @@ func TestMeshRoutePartialWhenTheHubRecordCannotBeRead(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("unreadable-record status = %d, want 500", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), codeMeshRouteWithdrawPartial) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshRouteWithdrawPartial) {
 		t.Fatalf("unreadable record lost the partial code: %.500s", w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), store.CodeDatabaseUnavailable) {
@@ -289,7 +290,7 @@ func TestMeshRoutePartialWhenTheHubRecordCannotBeRead(t *testing.T) {
 	if len(fake.calls) != 0 {
 		t.Fatalf("an unknown local state was compensated: %v", fake.calls)
 	}
-	if !strings.Contains(logs.String(), codeMeshRouteWithdrawPartial) {
+	if !strings.Contains(logs.String(), meshh.CodeMeshRouteWithdrawPartial) {
 		t.Fatalf("the partial outcome was not audited: %.800s", logs.String())
 	}
 }
@@ -314,10 +315,10 @@ func TestMeshRouteLocalFailureDoesNotRevertACommittedWrite(t *testing.T) {
 	fake.resetCalls()
 
 	w := httptest.NewRecorder()
-	app.meshRouteLocalFail(w, httptest.NewRequest(http.MethodPost, testOrigin+"/mesh/routes/approve", nil), session{},
-		errors.New("DATABASE_UNAVAILABLE"), meshRouteLocalFailure{
-			Fallback: codeMeshRouteApproval,
-			Partial:  codeMeshRouteApprovalPartial,
+	app.meshServer.MeshRouteLocalFail(w, httptest.NewRequest(http.MethodPost, testOrigin+"/mesh/routes/approve", nil), session{},
+		errors.New("DATABASE_UNAVAILABLE"), meshh.MeshRouteLocalFailure{
+			Fallback: meshh.CodeMeshRouteApproval,
+			Partial:  meshh.CodeMeshRouteApprovalPartial,
 			Applied:  "Headscale 已批准该前缀",
 			Intended: mesh.RouteDesiredApproved,
 			DeviceID: router.ID,
@@ -328,7 +329,7 @@ func TestMeshRouteLocalFailureDoesNotRevertACommittedWrite(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("committed-write readback status = %d, want the page to render", w.Code)
 	}
-	if strings.Contains(w.Body.String(), codeMeshRouteApprovalPartial) {
+	if strings.Contains(w.Body.String(), meshh.CodeMeshRouteApprovalPartial) {
 		t.Fatalf("a committed write was reported as partial: %.500s", w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "Hub 也已记录该状态") {

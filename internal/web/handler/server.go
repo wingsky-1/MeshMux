@@ -9,6 +9,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 	corenode "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
@@ -29,10 +30,8 @@ type Server struct {
 	subscriptionServer *subscription.Server
 	// nodeServer is the node lifecycle and Agent channel.
 	nodeServer *node.Server
-	// mesh is the narrow Headscale control-plane adapter behind the mesh
-	// pages. The production value is the fixed local CLI runner; HTTP tests
-	// replace it with a fake so no Headscale binary or socket is required.
-	mesh meshnet.Client
+	// meshServer is the Mesh device, enrollment and subnet-route domain.
+	meshServer *meshh.Server
 	// publishRunner is the fixed process boundary of the publish gate. It is
 	// nil in production (node.ExecRunner) and replaced by a fixture runner in
 	// tests so no kernel binary is required to exercise the gate.
@@ -141,7 +140,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &Server{Runtime: rt, mesh: meshnet.NewCLIRunner(), subscriptionServer: subscription.New(rt), nodeServer: node.New(rt)}
+	app := &Server{Runtime: rt, subscriptionServer: subscription.New(rt), nodeServer: node.New(rt), meshServer: meshh.New(rt, meshnet.NewCLIRunner())}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
@@ -167,8 +166,9 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// The subscriber and Line routes are registered before the generic
 	// navigation loop, so the real subscriber page owns its path.
 	app.registerSubscriberRoutes(r)
-	// The mesh device routes own "/mesh" for the same reason.
-	app.registerMeshRoutes(r)
+	// The mesh device routes own "/mesh" for the same reason. They include the
+	// route approve/revoke pair, which is a separate explicit action.
+	app.meshServer.RegisterRoutes(r, app.Authenticated, app.Mutation)
 	// /policies is a snapshot, two read-only helpers, four intent writes and
 	// the publication gate. Writes persist intent through the 10d-1 store;
 	// /policies/publish assembles, gates and stores a candidate revision.
@@ -217,10 +217,6 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// exists, not a restored host; the result and the restored marker are the
 	// evidence. Root can run the same executor from a console without the Web.
 	r.Post("/tasks/hub-upgrade/restore", infra.JSONAPI(app.Mutation(app.tasksHubUpgradeRestore, true)))
-	// Route approval is a separate, explicit action: the page's read-only
-	// snapshot never moves a prefix to approved on its own.
-	r.Post("/mesh/routes/approve", app.Mutation(app.meshRouteApprove, true))
-	r.Post("/mesh/routes/revoke", app.Mutation(app.meshRouteRevoke, true))
 	for _, page := range view.Navigation {
 		if page.Path == "/nodes" || page.Path == "/subscribers" || page.Path == "/mesh" || page.Path == "/policies" || page.Path == "/rules" || page.Path == "/tasks" {
 			continue

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"strings"
@@ -93,7 +94,7 @@ func TestMeshSubnetRouterKeepsTheStockClient(t *testing.T) {
 	fake.resetCalls()
 	w = b.post("/mesh/config", url.Values{"device_id": {devices[0].ID}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshEndpointPurposeUnsupported) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointPurposeUnsupported) {
 		t.Fatalf("config refusal lost its code: %.400s", w.Body.String())
 	}
 	if fake.callsOf("preauthkeys.create") != 0 {
@@ -164,7 +165,7 @@ func TestMeshRouteApprovalSetDropsUnsendableEntries(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			set, dropped := meshRouteApprovalSet(tc.existing, tc.add, tc.remove)
+			set, dropped := meshh.MeshRouteApprovalSet(tc.existing, tc.add, tc.remove)
 			if strings.Join(set, ",") != strings.Join(tc.want, ",") {
 				t.Fatalf("set = %v, want %v", set, tc.want)
 			}
@@ -284,7 +285,7 @@ func (f *routeRefusingSendableOnlyHeadscale) SetApprovedRoutes(ctx context.Conte
 // audited.
 func TestMeshRouteApproveSurvivesAnUnsendableApprovedPrefix(t *testing.T) {
 	app, b, fake, _ := meshTestApp(t)
-	app.mesh = &routeRefusingSendableOnlyHeadscale{fake}
+	app.meshServer.SetClient(&routeRefusingSendableOnlyHeadscale{fake})
 	router := meshCreateRouter(t, b, "nas", "192.168.1.0/24")
 	if _, err := app.Store.RecordMeshObservation(router.ID, 7, app.Now()); err != nil {
 		t.Fatal(err)
@@ -317,11 +318,11 @@ func TestMeshRouteApproveReadbackMismatchLeavesAdvertised(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.nodes = []meshnet.Node{{ID: 7, Name: router.NodeName, AvailableRoutes: []string{"192.168.1.0/24"}}}
-	app.mesh = &routeReadbackLosingHeadscale{fake}
+	app.meshServer.SetClient(&routeReadbackLosingHeadscale{fake})
 
 	w := b.post("/mesh/routes/approve", url.Values{"device_id": {router.ID}, "prefix": {"192.168.1.0/24"}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshRouteApprovalUnconfirmed) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshRouteApprovalUnconfirmed) {
 		t.Fatalf("unconfirmed readback lost its code: %.400s", w.Body.String())
 	}
 	stored, err := app.Store.GetMeshRoute(router.ID, "192.168.1.0/24")
@@ -481,7 +482,7 @@ func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 		t.Fatalf("dropping an un-sendable prefix blocked the approval: %+v", stored)
 	}
 	log := logs.String()
-	if got := strings.Count(log, codeMeshRouteUntrackedDropped); got != 3 {
+	if got := strings.Count(log, meshh.CodeMeshRouteUntrackedDropped); got != 3 {
 		t.Fatalf("dropped-prefix events = %d, want 3: %s", got, log)
 	}
 	for _, leak := range []string{"0.0.0.0/0", "::/0", "10.0.0.1/8"} {
@@ -490,7 +491,7 @@ func TestMeshRouteApproveDropsUnsendableApprovedPrefix(t *testing.T) {
 		}
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, codeMeshRouteUntrackedDropped) || !strings.Contains(body, "3 条") {
+	if !strings.Contains(body, meshh.CodeMeshRouteUntrackedDropped) || !strings.Contains(body, "3 条") {
 		t.Fatalf("approval page did not disclose the drop: %.600s", body)
 	}
 }
@@ -529,10 +530,10 @@ func TestMeshRouteWithdrawDropsUnsendableApprovedPrefix(t *testing.T) {
 	if stored.Desired != mesh.RouteDesiredAdvertised {
 		t.Fatalf("withdrawal did not return the prefix to advertised: %+v", stored)
 	}
-	if got := strings.Count(logs.String(), codeMeshRouteUntrackedDropped); got != 1 {
+	if got := strings.Count(logs.String(), meshh.CodeMeshRouteUntrackedDropped); got != 1 {
 		t.Fatalf("dropped-prefix events = %d, want 1: %s", got, logs.String())
 	}
-	if body := w.Body.String(); !strings.Contains(body, codeMeshRouteUntrackedDropped) {
+	if body := w.Body.String(); !strings.Contains(body, meshh.CodeMeshRouteUntrackedDropped) {
 		t.Fatalf("withdrawal page did not disclose the drop: %.600s", body)
 	}
 }
@@ -560,7 +561,7 @@ func TestMeshRouteWithdrawClearsWhenOnlyUnsendableRemains(t *testing.T) {
 	if fake.callsOf("nodes.clear-routes") != 1 || fake.callsOf("nodes.approve-routes") != 0 {
 		t.Fatalf("calls = %v, want one clear", fake.calls)
 	}
-	if got := strings.Count(logs.String(), codeMeshRouteUntrackedDropped); got != 1 {
+	if got := strings.Count(logs.String(), meshh.CodeMeshRouteUntrackedDropped); got != 1 {
 		t.Fatalf("dropped-prefix events = %d, want 1: %s", got, logs.String())
 	}
 	if body := w.Body.String(); !strings.Contains(body, "一并撤销") {

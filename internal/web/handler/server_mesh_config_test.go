@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -33,7 +34,7 @@ func meshEndpointTestApp(t *testing.T, headscaleOrigin string) (*Server, *browse
 	}
 	t.Cleanup(func() { app.Close() })
 	fake := &fakeHeadscale{failWith: map[string]string{}, users: []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
-	app.mesh = fake
+	app.meshServer.SetClient(fake)
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -187,7 +188,7 @@ func TestMeshConfigRefusesPurposeWithoutMintingKey(t *testing.T) {
 	fake.resetCalls()
 	w := b.post("/mesh/config", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshEndpointPurposeUnsupported) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointPurposeUnsupported) {
 		t.Fatalf("purpose refusal lost its code: %.400s", w.Body.String())
 	}
 	if fake.callsOf("preauthkeys.create") != 0 {
@@ -238,7 +239,7 @@ func TestMeshConfigRefusesMissingControlURLBeforeKeys(t *testing.T) {
 	fake.resetCalls()
 	w := b.post("/mesh/config", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshEndpointControlURLUnavailable) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointControlURLUnavailable) {
 		t.Fatalf("control URL refusal lost its code: %.400s", w.Body.String())
 	}
 	if fake.callsOf("preauthkeys.create") != 0 {
@@ -260,7 +261,7 @@ func TestMeshConfigRefusesInactiveSubscriberBeforeKeys(t *testing.T) {
 	fake.resetCalls()
 	w := b.post("/mesh/config", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshEndpointSubscriberUnavailable) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointSubscriberUnavailable) {
 		t.Fatalf("subscriber refusal lost its code: %.400s", w.Body.String())
 	}
 	if fake.callsOf("preauthkeys.create") != 0 {
@@ -276,7 +277,7 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := app.meshConfigPreflight(device, now)
+	plan, err := app.meshServer.MeshConfigPreflight(device, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +287,7 @@ func TestMeshConfigCompensatesBothKeysOnRenderFailure(t *testing.T) {
 	plan.Lines = append([]subscription.Line(nil), plan.Lines...)
 	plan.Lines[0].Server = "100.64.0.1"
 	fake.resetCalls()
-	_, err = app.meshConfig(context.Background(), plan, meshnet.User{ID: 1, Name: mesh.DefaultHeadscaleUser}, now)
+	_, err = app.meshServer.MeshConfig(context.Background(), plan, meshnet.User{ID: 1, Name: mesh.DefaultHeadscaleUser}, now)
 	if err == nil || !strings.Contains(err.Error(), "EXPORT_MESH_LINE_IN_TAILNET") {
 		t.Fatalf("render failure = %v", err)
 	}
@@ -380,7 +381,7 @@ func TestMeshClaimRefusesNodeNameMismatch(t *testing.T) {
 	fake.nodes = []meshnet.Node{{ID: 88, Name: "another-node", UserName: mesh.DefaultHeadscaleUser}}
 	w := b.post("/mesh/claim", url.Values{"device_id": {device.ID}, "node_id": {"88"}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshClaimNodeMismatch) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshClaimNodeMismatch) {
 		t.Fatalf("mismatch refusal lost its code: %.400s", w.Body.String())
 	}
 	after, err := app.Store.GetMeshDevice(device.ID)

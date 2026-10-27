@@ -1,4 +1,4 @@
-package handler
+package mesh
 
 // Device-scoped sing-box configuration and explicit Headscale node claiming.
 //
@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"net/http"
 	"strconv"
@@ -79,7 +80,7 @@ type meshConfigPlan struct {
 // model. It performs database reads only; in particular it never calls
 // CreatePreAuthKey, so a purpose, subscriber, Line or control URL refusal
 // leaves the Headscale key count unchanged.
-func (app *Server) meshConfigPreflight(record store.MeshDeviceRecord, now time.Time) (meshConfigPlan, error) {
+func (app *Server) MeshConfigPreflight(record store.MeshDeviceRecord, now time.Time) (meshConfigPlan, error) {
 	if record.Purpose != mesh.PurposeProxyMesh || record.SubscriberID == "" {
 		return meshConfigPlan{}, store.MeshError(codeMeshEndpointPurposeUnsupported,
 			"only proxy_mesh devices combine a proxy subscription with a mesh endpoint")
@@ -115,8 +116,8 @@ func (app *Server) meshConfigPreflight(record store.MeshDeviceRecord, now time.T
 // meshConfig issues one device-scoped document. The Headscale key is minted
 // first and the Hub key second; any failure after the Headscale key exists
 // compensates both keys before the error is returned.
-func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user meshnet.User, now time.Time) (*view.MeshKeyDisclosure, error) {
-	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, meshnet.PreAuthKeyRequest{
+func (app *Server) MeshConfig(ctx context.Context, plan meshConfigPlan, user meshnet.User, now time.Time) (*view.MeshKeyDisclosure, error) {
+	key, authKey, err := app.client.CreatePreAuthKey(ctx, meshnet.PreAuthKeyRequest{
 		UserID:   user.ID,
 		Validity: mesh.KeyTTL,
 	})
@@ -157,18 +158,18 @@ func (app *Server) meshConfig(ctx context.Context, plan meshConfigPlan, user mes
 // created device.
 func (app *Server) meshCreateDisclosure(ctx context.Context, record store.MeshDeviceRecord, user meshnet.User, now time.Time) (*view.MeshKeyDisclosure, string, error) {
 	if record.Purpose == mesh.PurposeProxyMesh && app.Cfg.HeadscaleOrigin != "" {
-		plan, preflightErr := app.meshConfigPreflight(record, now)
+		plan, preflightErr := app.MeshConfigPreflight(record, now)
 		if preflightErr == nil {
-			disclosure, configErr := app.meshConfig(ctx, plan, user, now)
+			disclosure, configErr := app.MeshConfig(ctx, plan, user, now)
 			if configErr == nil {
 				return disclosure, "", nil
 			}
-			return app.issueMeshKeyDisclosure(record.ID, now, meshErrorCode(configErr))
+			return app.issueMeshKeyDisclosure(record.ID, now, MeshErrorCode(configErr))
 		}
 		// A subscriber/Line/control-URL refusal is not a reason to lose the
 		// device: issue the Hub key and report why the combined config was not
 		// generated.
-		return app.issueMeshKeyDisclosure(record.ID, now, meshErrorCode(preflightErr))
+		return app.issueMeshKeyDisclosure(record.ID, now, MeshErrorCode(preflightErr))
 	}
 	return app.issueMeshKeyDisclosure(record.ID, now, "")
 }
@@ -192,15 +193,15 @@ type meshRekeyStage struct {
 // worse than losing the combined document.
 func (app *Server) stageMeshRekey(ctx context.Context, record store.MeshDeviceRecord, user meshnet.User, now time.Time) (meshRekeyStage, error) {
 	if record.Purpose == mesh.PurposeProxyMesh && app.Cfg.HeadscaleOrigin != "" {
-		plan, preflightErr := app.meshConfigPreflight(record, now)
+		plan, preflightErr := app.MeshConfigPreflight(record, now)
 		if preflightErr == nil {
 			stage, configErr := app.stageMeshConfig(ctx, plan, user, now)
 			if configErr == nil {
 				return stage, nil
 			}
-			return app.stageMeshKey(record, now, meshErrorCode(configErr))
+			return app.stageMeshKey(record, now, MeshErrorCode(configErr))
 		}
-		return app.stageMeshKey(record, now, meshErrorCode(preflightErr))
+		return app.stageMeshKey(record, now, MeshErrorCode(preflightErr))
 	}
 	return app.stageMeshKey(record, now, "")
 }
@@ -210,7 +211,7 @@ func (app *Server) stageMeshRekey(ctx context.Context, record store.MeshDeviceRe
 // neither is persisted as plaintext. A failure after the Headscale key exists
 // expires that key; the Hub key never reached storage, so nothing is left behind.
 func (app *Server) stageMeshConfig(ctx context.Context, plan meshConfigPlan, user meshnet.User, now time.Time) (meshRekeyStage, error) {
-	key, authKey, err := app.mesh.CreatePreAuthKey(ctx, meshnet.PreAuthKeyRequest{
+	key, authKey, err := app.client.CreatePreAuthKey(ctx, meshnet.PreAuthKeyRequest{
 		UserID:   user.ID,
 		Validity: mesh.KeyTTL,
 	})
@@ -262,7 +263,7 @@ func (app *Server) stageMeshKey(record store.MeshDeviceRecord, now time.Time, no
 // and the caller reports the refusal that stopped the attempt.
 func (app *Server) discardMeshRekeyStage(ctx context.Context, stage meshRekeyStage) {
 	if stage.preAuth != nil {
-		_ = app.mesh.ExpirePreAuthKey(ctx, stage.preAuth.ID)
+		_ = app.client.ExpirePreAuthKey(ctx, stage.preAuth.ID)
 	}
 }
 
@@ -284,7 +285,7 @@ func (app *Server) issueMeshKeyDisclosure(deviceID string, now time.Time, notice
 // are ignored here: the caller reports the original failure, and the keys keep
 // their fixed short lifetime.
 func (app *Server) compensateMeshConfig(ctx context.Context, key meshnet.PreAuthKey, hubKeyID string) {
-	_ = app.mesh.ExpirePreAuthKey(ctx, key.ID)
+	_ = app.client.ExpirePreAuthKey(ctx, key.ID)
 	if hubKeyID != "" {
 		_, _ = app.Store.RevokeMeshEnrollmentKey(hubKeyID)
 	}
@@ -294,7 +295,7 @@ func (app *Server) compensateMeshConfig(ctx context.Context, key meshnet.PreAuth
 // configuration. There is no GET counterpart: the document contains a one-shot
 // Headscale key and must never be replayed by a browser refresh, history entry,
 // link or cache.
-func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
 	record, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {
@@ -307,14 +308,14 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 		return
 	}
 	now := app.Now()
-	plan, err := app.meshConfigPreflight(record, now)
+	plan, err := app.MeshConfigPreflight(record, now)
 	if err != nil {
 		app.meshFail(w, r, err, codeMeshEndpointRenderFailed, "无法生成设备配置。", "请检查用途、订阅用户与 Line 状态后重试。")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), meshControlPlaneTimeout)
 	defer cancel()
-	user, err := app.ensureMeshUser(ctx, record.HeadscaleUser)
+	user, err := app.EnsureMeshUser(ctx, record.HeadscaleUser)
 	if err != nil {
 		app.meshControlPlaneFail(w, r, err, codeMeshEndpointRenderFailed, "无法确认 Headscale 用户。", "请检查 Headscale 服务后重试。")
 		return
@@ -337,7 +338,7 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 		}
 		app.Event(r, "MESH_DEVICE_ENROLLMENT_KEY_REVOKED")
 	}
-	disclosure, err := app.meshConfig(ctx, plan, user, now)
+	disclosure, err := app.MeshConfig(ctx, plan, user, now)
 	if err != nil {
 		app.meshControlPlaneFail(w, r, err, codeMeshEndpointRenderFailed, "设备配置未生成。", "请检查 Headscale 服务、订阅用户与 Line 状态后重试。")
 		return
@@ -352,7 +353,7 @@ func (app *Server) meshConfigPage(w http.ResponseWriter, r *http.Request, sess s
 // MeshMux device after the operator explicitly confirms the match. It reuses
 // recordMeshObservation, so the same evidence rule applies as a reconcile:
 // registration needs an observed Headscale node id, never a hostname guess.
-func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) meshClaim(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	deviceID := strings.TrimSpace(r.PostForm.Get("device_id"))
 	record, err := app.Store.GetMeshDevice(deviceID)
 	if err != nil {

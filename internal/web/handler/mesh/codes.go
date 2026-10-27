@@ -1,4 +1,4 @@
-package handler
+package mesh
 
 import (
 	"github.com/wingsky-1/MeshMux/internal/control/store"
@@ -164,8 +164,8 @@ func codeSet(codes ...string) map[string]struct{} {
 	return set
 }
 
-// isMeshCode reports whether code is one of the registered Mesh codes.
-func isMeshCode(code string) bool {
+// IsMeshCode reports whether code is one of the registered Mesh codes.
+func IsMeshCode(code string) bool {
 	for _, set := range []map[string]struct{}{meshOwnCodes, meshDomainCodes, headscaleCodes, meshExportCodes} {
 		if _, ok := set[code]; ok {
 			return true

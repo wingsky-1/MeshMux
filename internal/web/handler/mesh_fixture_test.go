@@ -279,10 +279,10 @@ func TestMeshHeadscaleWiringIsPinned(t *testing.T) {
 // value NewCLIRunner returns, so the runtime types must be identical.
 func requirePinnedHeadscaleWiring(t *testing.T, app *Server) {
 	t.Helper()
-	if app.mesh == nil {
-		t.Fatal("app.mesh is nil")
+	if app.meshServer.Client() == nil {
+		t.Fatal("app.meshServer.Client() is nil")
 	}
-	if got, want := fmt.Sprintf("%T", app.mesh), fmt.Sprintf("%T", meshnet.NewCLIRunner()); got != want {
+	if got, want := fmt.Sprintf("%T", app.meshServer.Client()), fmt.Sprintf("%T", meshnet.NewCLIRunner()); got != want {
 		t.Fatalf("wired %s, want the fixed-layout %s", got, want)
 	}
 }
@@ -296,7 +296,7 @@ func TestMeshWithoutHeadscaleRefusesBeforeWrites(t *testing.T) {
 		t.Skip("pinned Headscale binary is installed on this host; refusing to exercise a live control plane")
 	}
 	app, _ := testApp(t)
-	app.mesh = meshnet.NewCLIRunner()
+	app.meshServer.SetClient(meshnet.NewCLIRunner())
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -167,7 +168,7 @@ func meshTestApp(t *testing.T) (*Server, *browser, *fakeHeadscale, *bytes.Buffer
 	t.Helper()
 	app, logs := testApp(t)
 	fake := &fakeHeadscale{failWith: map[string]string{}, users: []meshnet.User{{ID: 1, Name: mesh.DefaultHeadscaleUser}}}
-	app.mesh = fake
+	app.meshServer.SetClient(fake)
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -737,7 +738,7 @@ func TestMeshRekeyWithdrawsOldKey(t *testing.T) {
 	}
 	// The live key is the one the list reports; an older revoked record does not
 	// hide it.
-	if label, _, _ := meshKeyState(keys, app.Now()); label != "已签发 · 未使用" {
+	if label, _, _ := meshh.MeshKeyState(keys, app.Now()); label != "已签发 · 未使用" {
 		t.Fatalf("key column rendered %q after reissue", label)
 	}
 	// Registration spends only the live key: the withdrawn row stays revoked in
@@ -814,11 +815,11 @@ func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
 	// Creating the user again because Headscale raced the list is still success.
 	fake.users = nil
 	fake.failWith["users.create"] = meshnet.CodeAlreadyExists
-	if _, err := b.app.ensureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
+	if _, err := b.app.meshServer.EnsureMeshUser(context.Background(), mesh.DefaultHeadscaleUser); err != nil {
 		t.Fatalf("already-exists user creation failed: %v", err)
 	}
 	// A name other than the shared default is never minted from a form field.
-	if _, err := b.app.ensureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), codeMeshHeadscaleUserUnknown) {
+	if _, err := b.app.meshServer.EnsureMeshUser(context.Background(), "someone-else"); err == nil || !strings.Contains(err.Error(), meshh.CodeMeshHeadscaleUserUnknown) {
 		t.Fatalf("an arbitrary headscale user was created: %v", err)
 	}
 	if fake.callsOf("users.create") != 1 {
@@ -830,16 +831,16 @@ func TestMeshCreateCreatesDefaultUserIdempotently(t *testing.T) {
 // canonical even when the display label has no ASCII characters, and that it is
 // unique per Headscale user.
 func TestMeshNodeNameFallsBackForNonLatinLabels(t *testing.T) {
-	if got := meshNodeName("客厅 NAS"); got != "mesh-nas" {
+	if got := meshh.MeshNodeName("客厅 NAS"); got != "mesh-nas" {
 		t.Fatalf("node name = %q, want mesh-nas", got)
 	}
-	if got := meshNodeName("客厅"); got != "mesh" {
+	if got := meshh.MeshNodeName("客厅"); got != "mesh" {
 		t.Fatalf("node name = %q, want mesh", got)
 	}
-	if got := meshNodeName(strings.Repeat("a", 200)); len(got) > 63 {
+	if got := meshh.MeshNodeName(strings.Repeat("a", 200)); len(got) > 63 {
 		t.Fatalf("node name length = %d", len(got))
 	}
-	if err := mesh.ValidateNodeName(meshNodeName("  -- ")); err != nil {
+	if err := mesh.ValidateNodeName(meshh.MeshNodeName("  -- ")); err != nil {
 		t.Fatalf("fallback node name invalid: %v", err)
 	}
 }
@@ -849,15 +850,15 @@ func TestMeshNodeNameFallsBackForNonLatinLabels(t *testing.T) {
 func TestMeshKeyStateLabels(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	lapsed := store.MeshEnrollmentKeyRecord{State: mesh.KeyIssued, IssuedAt: now.Unix(), ExpiresAt: now.Add(-time.Minute).Unix()}
-	label, class, _ := meshKeyState([]store.MeshEnrollmentKeyRecord{lapsed}, now)
+	label, class, _ := meshh.MeshKeyState([]store.MeshEnrollmentKeyRecord{lapsed}, now)
 	if label != "已过期 · 待回收" || class != "badge" {
 		t.Fatalf("lapsed key rendered as %q/%q", label, class)
 	}
 	live := store.MeshEnrollmentKeyRecord{State: mesh.KeyIssued, IssuedAt: now.Unix(), ExpiresAt: now.Add(time.Minute).Unix()}
-	if label, _, _ = meshKeyState([]store.MeshEnrollmentKeyRecord{live}, now); label != "已签发 · 未使用" {
+	if label, _, _ = meshh.MeshKeyState([]store.MeshEnrollmentKeyRecord{live}, now); label != "已签发 · 未使用" {
 		t.Fatalf("live key rendered as %q", label)
 	}
-	if label, _, _ = meshKeyState(nil, now); label != "尚无 Key" {
+	if label, _, _ = meshh.MeshKeyState(nil, now); label != "尚无 Key" {
 		t.Fatalf("missing key rendered as %q", label)
 	}
 }

@@ -112,7 +112,7 @@ func (app *Server) policyMeshModel(now time.Time) (subscription.MeshConfigModel,
 		if device.Purpose != mesh.PurposeProxyMesh || device.SubscriberID == "" {
 			continue
 		}
-		plan, err := app.meshConfigPreflight(device, now)
+		plan, err := app.meshServer.MeshConfigPreflight(device, now)
 		if err == nil && len(plan.Model.LineLabels) > 0 {
 			return plan.Model, true
 		}

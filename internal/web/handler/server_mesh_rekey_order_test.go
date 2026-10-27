@@ -12,6 +12,7 @@ package handler
 
 import (
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"net/http"
 	"net/url"
 	"strings"
@@ -187,7 +188,7 @@ func TestMeshRekeyRenderFailureKeepsOldKeyUsable(t *testing.T) {
 	if len(match) != 2 {
 		t.Fatalf("a refused document did not disclose a Hub key: %.400s", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), codeMeshEndpointSubscriberUnavailable) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshEndpointSubscriberUnavailable) {
 		t.Fatalf("the document refusal lost its code: %.400s", w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "旧 Key 已作废") {
@@ -413,7 +414,7 @@ func TestMeshRekeyEarlierFailureLeavesTheOldKeyInstallable(t *testing.T) {
 	// a device with no live key — the legacy shape a second rekey must handle.
 	w := b.post("/mesh/rekey", url.Values{"device_id": {device.ID}})
 	requireStatus(t, w, http.StatusConflict)
-	if !strings.Contains(w.Body.String(), codeMeshDeviceNotReenrollable) {
+	if !strings.Contains(w.Body.String(), meshh.CodeMeshDeviceNotReenrollable) {
 		t.Fatalf("registered device accepted a rekey: %.300s", w.Body.String())
 	}
 	// Bring it back to pending the only legal way, then rekey for real.
@@ -543,14 +544,14 @@ func TestMeshRekeyLiveKeyReadback(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := meshEnrollmentKeyLive(tc.keys, tc.id, now); got != tc.want {
-				t.Fatalf("meshEnrollmentKeyLive(%s) = %v, want %v", tc.name, got, tc.want)
+			if got := meshh.MeshEnrollmentKeyLive(tc.keys, tc.id, now); got != tc.want {
+				t.Fatalf("meshh.MeshEnrollmentKeyLive(%s) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
 	}
 	// The helper reports about the named row only: a live sibling cannot make a
 	// retired row look usable.
-	if meshEnrollmentKeyLive([]store.MeshEnrollmentKeyRecord{live, revoked}, revoked.ID, now) {
+	if meshh.MeshEnrollmentKeyLive([]store.MeshEnrollmentKeyRecord{live, revoked}, revoked.ID, now) {
 		t.Fatal("a revoked row was reported live because another row was live")
 	}
 }
