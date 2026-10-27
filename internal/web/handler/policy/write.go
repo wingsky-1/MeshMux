@@ -1,4 +1,4 @@
-package handler
+package policy
 
 // Policy write API for issue #10 (10d-2a): create, revise, activate and revoke
 // through the 10d-1 store methods. One CSRF-protected form field carries the
@@ -31,7 +31,8 @@ type policyWriteRequest struct {
 
 // policyWriteResponse is the stable success receipt; failures use the shared
 // JSON error envelope, which also carries error_code and operation_id.
-type policyWriteResponse struct {
+// PolicyWriteResponse is the receipt of one intent write.
+type PolicyWriteResponse struct {
 	OK          bool   `json:"ok"`
 	ID          string `json:"id,omitempty"`
 	Revision    int64  `json:"revision,omitempty"`
@@ -41,7 +42,7 @@ type policyWriteResponse struct {
 }
 
 // readPolicyWrite parses one write. The mutation wrapper already enforced the
-// admin session, Origin, CSRF token and the 4 KiB form limit.
+// admin infra.Session, Origin, CSRF token and the 4 KiB form limit.
 //
 // Flow: strict-decode the JSON intent → require a non-empty operation_id →
 // return. The store re-validates everything; this guard exists so an anonymous
@@ -61,7 +62,7 @@ func (app *Server) readPolicyWrite(w http.ResponseWriter, r *http.Request) (poli
 	return in, true
 }
 
-func (app *Server) policiesCreate(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesCreate(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	in, ok := app.readPolicyWrite(w, r)
 	if !ok {
 		return
@@ -71,10 +72,10 @@ func (app *Server) policiesCreate(w http.ResponseWriter, r *http.Request, _ sess
 		app.failPolicyWrite(w, r, err)
 		return
 	}
-	app.writePolicyWrite(w, r, http.StatusCreated, policyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
+	app.writePolicyWrite(w, r, http.StatusCreated, PolicyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
 }
 
-func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	in, ok := app.readPolicyWrite(w, r)
 	if !ok {
 		return
@@ -84,14 +85,14 @@ func (app *Server) policiesRevise(w http.ResponseWriter, r *http.Request, _ sess
 		app.failPolicyWrite(w, r, err)
 		return
 	}
-	app.writePolicyWrite(w, r, http.StatusOK, policyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
+	app.writePolicyWrite(w, r, http.StatusOK, PolicyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
 }
 
-func (app *Server) policiesActivate(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesActivate(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	app.policyTransition(w, r, app.Store.ActivateRoutePolicy)
 }
 
-func (app *Server) policiesRevoke(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesRevoke(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	app.policyTransition(w, r, app.Store.RevokeRoutePolicy)
 }
 
@@ -105,7 +106,7 @@ func (app *Server) policyTransition(w http.ResponseWriter, r *http.Request, tran
 		app.failPolicyWrite(w, r, err)
 		return
 	}
-	app.writePolicyWrite(w, r, http.StatusOK, policyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
+	app.writePolicyWrite(w, r, http.StatusOK, PolicyWriteResponse{OK: true, ID: stored.ID, Revision: stored.Revision, Status: string(stored.Status)})
 }
 
 // policyWriteFailure maps a sanitized store error onto the HTTP contract.
@@ -141,7 +142,7 @@ func (app *Server) failPolicyWrite(w http.ResponseWriter, r *http.Request, err e
 	}
 }
 
-func (app *Server) writePolicyWrite(w http.ResponseWriter, r *http.Request, status int, body policyWriteResponse) {
+func (app *Server) writePolicyWrite(w http.ResponseWriter, r *http.Request, status int, body PolicyWriteResponse) {
 	body.OperationID = infra.Operation(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

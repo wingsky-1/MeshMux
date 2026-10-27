@@ -31,7 +31,7 @@ func wizardApp(t *testing.T) (*Server, *browser, *fixturePublishVerifier) {
 	t.Helper()
 	app, _ := testApp(t)
 	verifier := &fixturePublishVerifier{}
-	app.publishGate = func() (store.PublishVerifier, error) { return verifier, nil }
+	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -556,9 +556,9 @@ func TestWizardRequiresCSRFAndOrigin(t *testing.T) {
 func TestWizardGateUsesRealSingBox(t *testing.T) {
 	binary := testSingBoxBinary(t)
 	app, b, _ := wizardApp(t)
-	app.publishGate = nil
+	app.policyServer.SetPublishGate(nil)
 	app.Cfg.SingBoxPath = binary
-	app.publishRunner = node.ExecRunner{}
+	app.policyServer.SetPublishRunner(node.ExecRunner{})
 	now := time.Unix(1_700_000_000, 0)
 	app.Now = func() time.Time { return now }
 	lineID := wizardLine(t, app, "hk-01")

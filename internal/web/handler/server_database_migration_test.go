@@ -12,6 +12,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -34,10 +35,10 @@ func databaseMigrationBrowser(t *testing.T) (*browser, *Server) {
 	return b, app
 }
 
-func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status int) databaseMigrationReceipt {
+func decodeDatabaseMigration(t *testing.T, w *httptest.ResponseRecorder, status int) policy.DatabaseMigrationReceipt {
 	t.Helper()
 	requireStatus(t, w, status)
-	var receipt databaseMigrationReceipt
+	var receipt policy.DatabaseMigrationReceipt
 	if err := json.Unmarshal(w.Body.Bytes(), &receipt); err != nil {
 		t.Fatalf("database migration receipt: %v %.300s", err, w.Body.String())
 	}

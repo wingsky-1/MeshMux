@@ -1,7 +1,8 @@
-package handler
+package policy
 
 import (
 	"errors"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,13 +65,13 @@ func (app *Server) rulesLibraryModel(notice string, pending view.PendingRuleDele
 	return model, nil
 }
 
-func (app *Server) renderRulesLibrary(w http.ResponseWriter, r *http.Request, sess session, model view.RulesLibraryView) {
+func (app *Server) renderRulesLibrary(w http.ResponseWriter, r *http.Request, sess infra.Session, model view.RulesLibraryView) {
 	app.Render(w, r, http.StatusOK, view.RulesLibraryPage(view.PageData{Title: "规则库", Path: "/rules", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP, DirectProxy: app.Cfg.DirectProxy}, model))
 }
 
 // rulesLibraryPage renders the read-only list. A store failure is a 503; it
 // never renders a half-built list as the library.
-func (app *Server) rulesLibraryPage(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) rulesLibraryPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	model, err := app.rulesLibraryModel("", view.PendingRuleDelete{}, false)
 	if err != nil {
 		app.Fail(w, r, http.StatusServiceUnavailable, store.CodeDatabaseUnavailable, "规则库读取失败。", "请检查数据库与服务日志后重试。")
@@ -97,7 +98,7 @@ func readLibraryForm(r *http.Request) (key, name string, action policy.Action, k
 
 // rulesLibraryCreate inserts version 1 of a custom rule and re-renders the
 // list with the receipt. Preset keys are refused, never squatted.
-func (app *Server) rulesLibraryCreate(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) rulesLibraryCreate(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	key, name, action, kind, values := readLibraryForm(r)
 	created, err := app.rulesLib().CreateCustomRule(key, name, action, kind, values, app.Now())
 	if err != nil {
@@ -116,7 +117,7 @@ func (app *Server) rulesLibraryCreate(w http.ResponseWriter, r *http.Request, se
 // rulesLibraryRevise inserts a new revision under the same key. Old rows stay
 // byte-identical so pinned subscriptions are unaffected until Task 4 migrates
 // them explicitly; the notice says so.
-func (app *Server) rulesLibraryRevise(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) rulesLibraryRevise(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	key, name, action, kind, values := readLibraryForm(r)
 	revised, err := app.rulesLib().ReviseCustomRule(key, name, action, kind, values, app.Now())
 	if err != nil {
@@ -136,7 +137,7 @@ func (app *Server) rulesLibraryRevise(w http.ResponseWriter, r *http.Request, se
 // names the revision and re-renders the impacted subscriptions; only a second
 // POST with confirm=1 deletes, and a referenced revision is refused there with
 // the same subscriber names the page just showed.
-func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) rulesLibraryDelete(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	key := strings.TrimSpace(r.PostForm.Get("stable_key"))
 	version, _ := strconv.Atoi(strings.TrimSpace(r.PostForm.Get("version")))
 	if version < 1 {

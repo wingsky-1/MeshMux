@@ -1,8 +1,8 @@
-package handler
+package policy
 
 // The Web surface that stores the explicit irreversible-migration confirmation
 // (#11c-3 Task 5, spec §4.15). It is an admin mutation on the existing boundary:
-// one authenticated session, exact Origin, CSRF token, bounded form and an
+// one authenticated infra.Session, exact Origin, CSRF token, bounded form and an
 // operation id on the receipt. It never starts a migration and never edits the
 // database: 11d applies the Hub upgrade and reads the bit from the backup
 // record before it runs a destructive step.
@@ -28,7 +28,9 @@ const (
 
 // databaseMigrationReceipt reports the stored confirmation, never that a
 // migration was applied.
-type databaseMigrationReceipt struct {
+// DatabaseMigrationReceipt is the answer to an approval request: it reports the
+// stored confirmation, never that a migration was applied.
+type DatabaseMigrationReceipt struct {
 	OK                   bool   `json:"ok"`
 	Status               string `json:"status"`
 	BackupOperationID    string `json:"backup_operation_id,omitempty"`
@@ -50,7 +52,7 @@ type databaseMigrationReceipt struct {
 // Flow: validate the backup operation id against the frozen grammar → require
 // the literal confirmation field value "1" → store the bit → answer one
 // receipt. There is deliberately no flag or environment switch.
-func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	operationID := strings.TrimSpace(r.PostForm.Get("backup_operation_id"))
 	if !infra.IsValidOperationID(operationID) {
 		app.writeDatabaseMigrationFailure(w, r, http.StatusBadRequest, "DB_BACKUP_OPERATION_INVALID",
@@ -73,7 +75,7 @@ func (app *Server) tasksDatabaseMigrationApprove(w http.ResponseWriter, r *http.
 		status = "already_approved"
 	}
 	app.Event(r, "DB_MIGRATION_APPROVED")
-	app.WriteJSON(w, http.StatusOK, databaseMigrationReceipt{
+	app.WriteJSON(w, http.StatusOK, DatabaseMigrationReceipt{
 		OK: true, Status: status, BackupOperationID: operationID, BackupRecord: approval.RecordPath,
 		FromVersion: approval.Record.FromVersion, DBSchema: approval.Record.DBSchema,
 		PolicySchema: approval.Record.PolicySchema, IrreversibleApproved: true,
@@ -117,7 +119,7 @@ func (app *Server) failDatabaseMigration(w http.ResponseWriter, r *http.Request,
 // writeDatabaseMigrationFailure writes the refusal in the management JSON shape.
 func (app *Server) writeDatabaseMigrationFailure(w http.ResponseWriter, r *http.Request, status int, code, message, next string) {
 	app.Event(r, code)
-	app.WriteJSON(w, status, databaseMigrationReceipt{
+	app.WriteJSON(w, status, DatabaseMigrationReceipt{
 		Status: "failed", ErrorCode: code, Detail: message, NextAction: next, OperationID: infra.Operation(r),
 	})
 }

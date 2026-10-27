@@ -1,4 +1,4 @@
-package handler
+package policy
 
 // POST /policies/server/preview for the /policies page: the read-only server
 // policy fragment. It writes nothing, publishes nothing and never touches a
@@ -50,7 +50,8 @@ type policyServerPreviewInput struct {
 	Out       policyServerPreviewOut `json:"out"`
 }
 
-type policyServerPreviewResponse struct {
+// PolicyServerPreviewResponse is the server-preview answer.
+type PolicyServerPreviewResponse struct {
 	OK                   bool   `json:"ok"`
 	EgressState          string `json:"egress_state"`
 	EgressCode           string `json:"egress_code,omitempty"`
@@ -60,7 +61,7 @@ type policyServerPreviewResponse struct {
 }
 
 // policiesServerPreview is the authenticated, CSRF-protected preview route.
-func (app *Server) policiesServerPreview(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesServerPreview(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	input, ok := app.readPolicyServerPreview(w, r)
 	if !ok {
 		return
@@ -70,7 +71,7 @@ func (app *Server) policiesServerPreview(w http.ResponseWriter, r *http.Request,
 		app.failPolicyServerPreview(w, r, err)
 		return
 	}
-	app.writePolicyServerPreview(w, r, http.StatusOK, policyServerPreviewResponse{
+	app.writePolicyServerPreview(w, r, http.StatusOK, PolicyServerPreviewResponse{
 		OK: true, EgressState: state, EgressCode: code, RouteFragmentPreview: fragment,
 	})
 }
@@ -83,7 +84,7 @@ func (app *Server) readPolicyServerPreview(w http.ResponseWriter, r *http.Reques
 	decoder := json.NewDecoder(strings.NewReader(r.PostForm.Get("preview")))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
-		app.writePolicyServerPreview(w, r, http.StatusBadRequest, policyServerPreviewResponse{ErrorCode: policy.CodePolicyInvalid})
+		app.writePolicyServerPreview(w, r, http.StatusBadRequest, PolicyServerPreviewResponse{ErrorCode: policy.CodePolicyInvalid})
 		return policyServerPreviewInput{}, false
 	}
 	return input, true
@@ -159,7 +160,7 @@ func (app *Server) failPolicyServerPreview(w http.ResponseWriter, r *http.Reques
 	case policy.CodeOutOfflineFailClosed, policy.CodeOutFallbackUnaudited, infra.CodeOutBindingInvalid:
 		status = http.StatusConflict
 	}
-	app.writePolicyServerPreview(w, r, status, policyServerPreviewResponse{ErrorCode: code})
+	app.writePolicyServerPreview(w, r, status, PolicyServerPreviewResponse{ErrorCode: code})
 }
 
 // previewFailure extracts the stable code from a policy-domain refusal.
@@ -177,7 +178,7 @@ func previewFailure(err error) string {
 }
 
 // writePolicyServerPreview is the single response writer of this route.
-func (app *Server) writePolicyServerPreview(w http.ResponseWriter, r *http.Request, status int, body policyServerPreviewResponse) {
+func (app *Server) writePolicyServerPreview(w http.ResponseWriter, r *http.Request, status int, body PolicyServerPreviewResponse) {
 	body.OperationID = infra.Operation(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

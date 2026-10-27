@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,10 +25,10 @@ func postPolicy(t *testing.T, b *browser, path, body string) *httptest.ResponseR
 	return b.post(path, url.Values{"policy": {body}})
 }
 
-func policyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) policyWriteResponse {
+func policyReceipt(t *testing.T, w *httptest.ResponseRecorder, status int) policy.PolicyWriteResponse {
 	t.Helper()
 	requireStatus(t, w, status)
-	var out policyWriteResponse
+	var out policy.PolicyWriteResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("write response: %v %.300s", err, w.Body.String())
 	}

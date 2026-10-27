@@ -28,7 +28,7 @@ func publishApp(t *testing.T) (*browser, *fixturePublishVerifier) {
 	t.Helper()
 	app, _ := testApp(t)
 	verifier := &fixturePublishVerifier{}
-	app.publishGate = func() (store.PublishVerifier, error) { return verifier, nil }
+	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)
@@ -208,7 +208,7 @@ func TestPublishEndpointClientOnlyIsGatedNotStored(t *testing.T) {
 func TestPublishEndpointRequiresAdminSession(t *testing.T) {
 	app, _ := testApp(t)
 	verifier := &fixturePublishVerifier{}
-	app.publishGate = func() (store.PublishVerifier, error) { return verifier, nil }
+	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	w := b.req("POST", "/policies/publish", url.Values{"publish": {`{"operation_id":"op"}`}}, nil)
 	if w.Code != http.StatusUnauthorized {
@@ -241,8 +241,8 @@ func TestPublishEndpointRefusesMissingKernel(t *testing.T) {
 	// and no Mihomo binary at all: layer="" must refuse instead of skipping the
 	// client kernel. The runner answers the checks, so the stand-in executable
 	// is never executed.
-	b.app.publishGate = nil
-	b.app.publishRunner = gateFixtureRunner{}
+	b.app.policyServer.SetPublishGate(nil)
+	b.app.policyServer.SetPublishRunner(gateFixtureRunner{})
 	b.app.Cfg.SingBoxPath = os.Args[0]
 	b.app.Cfg.MihomoPath = ""
 	refusal := publishReceipt(t, postPublish(t, b, `{"operation_id":"op-publish"}`), http.StatusServiceUnavailable)

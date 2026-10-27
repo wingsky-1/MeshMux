@@ -53,7 +53,7 @@ func (v *blockingPublishVerifier) CheckMihomo(ctx context.Context, _ []byte) (st
 func TestPublishDoesNotHoldThePasswordSlot(t *testing.T) {
 	app, _ := testApp(t)
 	verifier := newBlockingPublishVerifier()
-	app.publishGate = func() (store.PublishVerifier, error) { return verifier, nil }
+	app.policyServer.SetPublishGate(func() (store.PublishVerifier, error) { return verifier, nil })
 	b := &browser{app: app}
 	initialize(t, b)
 	loginAs(t, b, testPassword)

@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/core/mesh"
-	"github.com/wingsky-1/MeshMux/internal/core/policy"
+	corepolicy "github.com/wingsky-1/MeshMux/internal/core/policy"
+	policy "github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 )
 
 // policiesLiveApp returns a console whose mesh model can be built from one
@@ -129,7 +130,7 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 		{"Priority":200,"Match":{"Domains":["news.example.invalid"]},"Action":"direct"}]}`
 	w := b.post("/policies/validate", url.Values{"rules": {pass}})
 	requireStatus(t, w, http.StatusOK)
-	var ok policyValidationResponse
+	var ok policy.PolicyValidationResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &ok); err != nil || !ok.OK || ok.Rules != 2 || ok.OperationID == "" {
 		t.Fatalf("validate pass body = %+v err=%v: %.300s", ok, err, w.Body.String())
 	}
@@ -139,17 +140,17 @@ func TestPoliciesValidateDryRun(t *testing.T) {
 		{"Priority":200,"Match":{"Domains":["news.example.invalid"]},"Action":"proxy"}]}`
 	w = b.post("/policies/validate", url.Values{"rules": {conflict}})
 	requireStatus(t, w, http.StatusUnprocessableEntity)
-	var refused policyValidationResponse
+	var refused policy.PolicyValidationResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &refused); err != nil {
 		t.Fatalf("validate refusal body: %v %.300s", err, w.Body.String())
 	}
-	if refused.OK || refused.ErrorCode != policy.CodePolicyConflict || !strings.Contains(refused.Detail, "priority 100 shadows") {
+	if refused.OK || refused.ErrorCode != corepolicy.CodePolicyConflict || !strings.Contains(refused.Detail, "priority 100 shadows") {
 		t.Fatalf("validate refusal = %+v", refused)
 	}
 
 	w = b.post("/policies/validate", url.Values{"rules": {"not json"}})
 	requireStatus(t, w, http.StatusBadRequest)
-	if !strings.Contains(w.Body.String(), policy.CodePolicyInvalid) {
+	if !strings.Contains(w.Body.String(), corepolicy.CodePolicyInvalid) {
 		t.Fatalf("malformed rules lost POLICY_INVALID: %.300s", w.Body.String())
 	}
 }

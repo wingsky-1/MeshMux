@@ -1,4 +1,4 @@
-package handler
+package policy
 
 // POST /policies/publish for issue #10 (10d-2b): the single publication
 // endpoint.
@@ -34,7 +34,7 @@ import (
 // a shell: the two kernels are reached through the fixed verifier wrapper. A
 // gate refusal stores nothing and returns the stable code, so a failed
 // publication leaves the previous revision live.
-func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesPublish(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	raw := strings.TrimSpace(r.PostForm.Get("publish"))
 	if raw == "" {
 		app.writePublishFailure(w, r, http.StatusBadRequest, infra.CodePolicyPayloadInvalid, "缺少 publish 字段（JSON）。", "请提交 layer、operation_id 与可选 fallback_to_line。", infra.Operation(r))

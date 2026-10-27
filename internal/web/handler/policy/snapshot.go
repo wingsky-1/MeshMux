@@ -1,4 +1,4 @@
-package handler
+package policy
 
 // /policies snapshot for issue #10: rows rendered from each layer's active
 // revision, falling back to the mesh-derived and built-in defaults. Nothing
@@ -112,9 +112,8 @@ func (app *Server) policyMeshModel(now time.Time) (subscription.MeshConfigModel,
 		if device.Purpose != mesh.PurposeProxyMesh || device.SubscriberID == "" {
 			continue
 		}
-		plan, err := app.meshServer.MeshConfigPreflight(device, now)
-		if err == nil && len(plan.Model.LineLabels) > 0 {
-			return plan.Model, true
+		if model, ok := app.backends.MeshModel(device, now); ok && len(model.LineLabels) > 0 {
+			return model, true
 		}
 	}
 	return subscription.MeshConfigModel{}, false
@@ -145,11 +144,11 @@ func (app *Server) policyOutState(now time.Time) view.PolicyOutState {
 }
 
 // policiesPage renders the read-only snapshot.
-func (app *Server) policiesPage(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) policiesPage(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	page, _, _ := app.policySnapshot(app.Now())
 	app.renderPolicies(w, r, sess, page)
 }
 
-func (app *Server) renderPolicies(w http.ResponseWriter, r *http.Request, sess session, model view.PolicyPageView) {
+func (app *Server) renderPolicies(w http.ResponseWriter, r *http.Request, sess infra.Session, model view.PolicyPageView) {
 	app.Render(w, r, http.StatusOK, view.PoliciesPage(view.PageData{Title: "路由策略", Path: "/policies", CSRF: sess.CSRF, Dev: app.Cfg.DevHTTP, DirectProxy: app.Cfg.DirectProxy}, model))
 }

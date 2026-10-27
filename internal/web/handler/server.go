@@ -7,10 +7,11 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade"
 	"github.com/wingsky-1/MeshMux/internal/control/store"
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
-	corenode "github.com/wingsky-1/MeshMux/internal/core/node"
+	subcore "github.com/wingsky-1/MeshMux/internal/core/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
 	meshh "github.com/wingsky-1/MeshMux/internal/web/handler/mesh"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/node"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/policy"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscriber"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
@@ -35,14 +36,8 @@ type Server struct {
 	meshServer *meshh.Server
 	// subscriberServer is the subscriber workspace and the subscription wizard.
 	subscriberServer *subscriber.Server
-	// publishRunner is the fixed process boundary of the publish gate. It is
-	// nil in production (node.ExecRunner) and replaced by a fixture runner in
-	// tests so no kernel binary is required to exercise the gate.
-	publishRunner corenode.CommandRunner
-	// publishGate replaces the whole gate in tests. Production leaves it nil
-	// so the real kernel verifier is always built from the deployment
-	// configuration; it exists so a unit test never needs a kernel install.
-	publishGate func() (store.PublishVerifier, error)
+	// policyServer is the route-policy, rule-library and publication domain.
+	policyServer *policy.Server
 	// releaseSource is the explicit release check's upstream. Production leaves
 	// it nil so the fixed GitHub releases endpoint is read; tests inject a
 	// deterministic tag without a network. It never approves anything.
@@ -150,9 +145,10 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 		nodeServer:         node.New(rt),
 		meshServer:         meshh.New(rt, meshnet.NewCLIRunner()),
 	}
+	app.policyServer = policy.New(rt, policy.Backends{MeshModel: app.meshModelForPolicy})
 	app.subscriberServer = subscriber.New(rt, subscriber.Backends{
-		RuleLibrary:     app.rulesLib,
-		PublishVerifier: app.publishVerifier,
+		RuleLibrary:     app.policyServer.RuleLibrary,
+		PublishVerifier: app.policyServer.PublishVerifier,
 		Downloads:       subscriptionServer,
 	})
 	r := chi.NewRouter()
@@ -183,29 +179,7 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	// The mesh device routes own "/mesh" for the same reason. They include the
 	// route approve/revoke pair, which is a separate explicit action.
 	app.meshServer.RegisterRoutes(r, app.Authenticated, app.Mutation)
-	// /policies is a snapshot, two read-only helpers, four intent writes and
-	// the publication gate. Writes persist intent through the 10d-1 store;
-	// /policies/publish assembles, gates and stores a candidate revision.
-	r.Get("/policies", app.Authenticated(app.policiesPage))
-	r.Get("/policies/explain", app.Authenticated(app.policiesExplain))
-	r.Post("/policies/validate", infra.JSONAPI(app.Mutation(app.policiesValidate, true)))
-	r.Post("/policies/server/preview", infra.JSONAPI(app.Mutation(app.policiesServerPreview, true)))
-	r.Post("/policies", infra.JSONAPI(app.Mutation(app.policiesCreate, true)))
-	r.Post("/policies/revise", infra.JSONAPI(app.Mutation(app.policiesRevise, true)))
-	r.Post("/policies/activate", infra.JSONAPI(app.Mutation(app.policiesActivate, true)))
-	r.Post("/policies/revoke", infra.JSONAPI(app.Mutation(app.policiesRevoke, true)))
-	// Publication is the gated pipeline: assemble the active revisions, check
-	// them with the pinned kernels and store one immutable candidate revision
-	// per Line. It is never a bare render-to-response.
-	r.Post("/policies/publish", infra.JSONAPI(app.Mutation(app.policiesPublish, true)))
-	// /rules is the Task-3 rule library: the read-only list, the create and
-	// revise mutations (new versions only), and the two-step delete with
-	// used-by protection. Like the nodes-page Out twins, the mutations are
-	// HTML forms that re-render the list instead of answering JSON.
-	r.Get("/rules", app.Authenticated(app.rulesLibraryPage))
-	r.Post("/rules", app.Mutation(app.rulesLibraryCreate, true))
-	r.Post("/rules/revise", app.Mutation(app.rulesLibraryRevise, true))
-	r.Post("/rules/delete", app.Mutation(app.rulesLibraryDelete, true))
+	app.policyServer.RegisterRoutes(r, infra.JSONAPI, app.Authenticated, app.Mutation)
 	// /tasks is the read-only upgrade view of issue #11a: the release manifest
 	// plus each node's staged vs active readback. #11c-1 adds the explicit
 	// "check new version" query and the gated per-node approval; the check is a
@@ -213,10 +187,6 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	r.Get("/tasks", app.Authenticated(app.tasksPage))
 	r.Get("/tasks/check", app.Authenticated(app.tasksCheck))
 	r.Post("/tasks/approve", infra.JSONAPI(app.Mutation(app.tasksApprove, true)))
-	// The irreversible database migration confirmation (11c-3): it stores the
-	// explicit operator bit on the Hub database backup record consumed by 11d.
-	// It performs no migration and no database edit.
-	r.Post("/tasks/db-migration/approve", infra.JSONAPI(app.Mutation(app.tasksDatabaseMigrationApprove, true)))
 	// The Hub backup producer (#11d Task 3r): one authenticated mutation that
 	// reads a root-owned target manifest and commits one per-operation verified
 	// database backup plus its existence-only flat pointer. Apply/restore are
@@ -257,4 +227,15 @@ func (s *Server) Close() error {
 	s.stopHubUpgradeReconcile()
 	s.stopHubIdentityRefresh()
 	return s.Store.Close()
+}
+
+// meshModelForPolicy is the narrow bridge the policy snapshot uses: it resolves
+// one device's read-only mesh model through the Mesh domain and reports whether
+// the result carries usable Line labels. It mints no Headscale key.
+func (app *Server) meshModelForPolicy(record store.MeshDeviceRecord, now time.Time) (subcore.MeshConfigModel, bool) {
+	plan, err := app.meshServer.MeshConfigPreflight(record, now)
+	if err != nil || len(plan.Model.LineLabels) == 0 {
+		return subcore.MeshConfigModel{}, false
+	}
+	return plan.Model, true
 }

@@ -1,4 +1,4 @@
-package handler
+package policy
 
 // /policies read-only helpers: the explain query and the conflict dry run.
 // Neither stores a policy, creates a revision nor publishes to a Line/Out.
@@ -26,7 +26,8 @@ import (
 // neither a domain nor an IP, so it is refused before any evaluation.
 const policyExplainTargetMax = 253
 
-type policyValidationResponse struct {
+// PolicyValidationResponse is the validate dry-run answer.
+type PolicyValidationResponse struct {
 	OK          bool   `json:"ok"`
 	Rules       int    `json:"rules"`
 	ErrorCode   string `json:"error_code,omitempty"`
@@ -35,7 +36,7 @@ type policyValidationResponse struct {
 }
 
 // policiesExplain resolves one target against the same snapshot policy.
-func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess session) {
+func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess infra.Session) {
 	target := strings.TrimSpace(r.URL.Query().Get("target"))
 	page, clientPolicy, ok := app.policySnapshot(app.Now())
 	page.Target = target
@@ -64,15 +65,15 @@ func (app *Server) policiesExplain(w http.ResponseWriter, r *http.Request, sess 
 // policiesValidate is the conflict dry run: the CSRF-protected form carries one
 // policy as JSON; it returns the stable POLICY_* code and overlap detail,
 // writing no row and publishing nothing.
-func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ session) {
+func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ infra.Session) {
 	raw := strings.TrimSpace(r.PostForm.Get("rules"))
 	if raw == "" {
-		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "缺少 rules 字段（JSON）"})
+		app.writePolicyValidation(w, r, http.StatusBadRequest, PolicyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "缺少 rules 字段（JSON）"})
 		return
 	}
 	input, ok := readPolicyValidationInput(raw)
 	if !ok {
-		app.writePolicyValidation(w, r, http.StatusBadRequest, policyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "rules 不是合法的策略 JSON"})
+		app.writePolicyValidation(w, r, http.StatusBadRequest, PolicyValidationResponse{ErrorCode: policy.CodePolicyInvalid, Detail: "rules 不是合法的策略 JSON"})
 		return
 	}
 	if input.Default == "" {
@@ -82,11 +83,11 @@ func (app *Server) policiesValidate(w http.ResponseWriter, r *http.Request, _ se
 	if err := clientPolicy.Validate(); err != nil {
 		code, detail := policyFailure(err)
 		app.Event(r, "POLICY_VALIDATION_REJECTED")
-		app.writePolicyValidation(w, r, http.StatusUnprocessableEntity, policyValidationResponse{ErrorCode: code, Detail: detail, Rules: len(input.Rules)})
+		app.writePolicyValidation(w, r, http.StatusUnprocessableEntity, PolicyValidationResponse{ErrorCode: code, Detail: detail, Rules: len(input.Rules)})
 		return
 	}
 	app.Event(r, "POLICY_VALIDATED")
-	app.writePolicyValidation(w, r, http.StatusOK, policyValidationResponse{OK: true, Rules: len(input.Rules)})
+	app.writePolicyValidation(w, r, http.StatusOK, PolicyValidationResponse{OK: true, Rules: len(input.Rules)})
 }
 
 // readPolicyValidationInput parses the dry-run policy with strict decoding.
@@ -108,7 +109,7 @@ func readPolicyValidationInput(raw string) (struct {
 	return input, true
 }
 
-func (app *Server) writePolicyValidation(w http.ResponseWriter, r *http.Request, status int, body policyValidationResponse) {
+func (app *Server) writePolicyValidation(w http.ResponseWriter, r *http.Request, status int, body PolicyValidationResponse) {
 	body.OperationID = infra.Operation(r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
