@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 )
 
 // previewSeed stores one converged Line whose confirmed candidate carries
@@ -42,8 +44,8 @@ func subscriptionBytes(t *testing.T, app *Server, bearer, format string) string 
 func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 	b, _ := publishApp(t)
 	line, bearer := previewSeed(t, b.app)
-	singBoxBefore := subscriptionBytes(t, b.app, bearer, subscriptionSingBoxFormat)
-	mihomoBefore := subscriptionBytes(t, b.app, bearer, subscriptionMihomoFormat)
+	singBoxBefore := subscriptionBytes(t, b.app, bearer, subscription.SingBoxFormat)
+	mihomoBefore := subscriptionBytes(t, b.app, bearer, subscription.MihomoFormat)
 	// The baseline must be a real export, not an empty body: otherwise
 	// "unchanged" would prove nothing.
 	if !strings.Contains(singBoxBefore, `"meshmux-selector"`) || !strings.Contains(mihomoBefore, "PROXY") {
@@ -80,10 +82,10 @@ func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 	if second.Status != "gated" || second.Candidate != nil {
 		t.Fatalf("second client receipt = %+v", second)
 	}
-	if got := subscriptionBytes(t, b.app, bearer, subscriptionSingBoxFormat); got != singBoxBefore {
+	if got := subscriptionBytes(t, b.app, bearer, subscription.SingBoxFormat); got != singBoxBefore {
 		t.Fatalf("a client publication changed the sing-box download:\n%s\n---\n%s", singBoxBefore, got)
 	}
-	if got := subscriptionBytes(t, b.app, bearer, subscriptionMihomoFormat); got != mihomoBefore {
+	if got := subscriptionBytes(t, b.app, bearer, subscription.MihomoFormat); got != mihomoBefore {
 		t.Fatal("a client publication changed the mihomo download")
 	}
 
@@ -103,10 +105,10 @@ func TestClientPolicyPublishIsPreviewAndKeepsDownloadBytes(t *testing.T) {
 	// gate reopens; the client layer is not what unblocks it.
 	settleTasks(t, b.app.Store, line)
 	confirmChain(t, b.app.Store, line, b.app.Now())
-	if got := subscriptionBytes(t, b.app, bearer, subscriptionSingBoxFormat); got != singBoxBefore {
+	if got := subscriptionBytes(t, b.app, bearer, subscription.SingBoxFormat); got != singBoxBefore {
 		t.Fatal("the applied server publication changed the sing-box download")
 	}
-	if got := subscriptionBytes(t, b.app, bearer, subscriptionMihomoFormat); got != mihomoBefore {
+	if got := subscriptionBytes(t, b.app, bearer, subscription.MihomoFormat); got != mihomoBefore {
 		t.Fatal("the applied server publication changed the mihomo download")
 	}
 }

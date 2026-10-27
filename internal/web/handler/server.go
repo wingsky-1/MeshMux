@@ -9,6 +9,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/core/meshnet"
 	"github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/web/handler/infra"
+	"github.com/wingsky-1/MeshMux/internal/web/handler/subscription"
 	"github.com/wingsky-1/MeshMux/internal/web/view"
 	"io/fs"
 	"log/slog"
@@ -22,6 +23,9 @@ var assets embed.FS
 
 type Server struct {
 	*infra.Runtime
+	// subscriptionServer is the public download boundary. It runs before the
+	// management boundary, so a bearer download never carries a session.
+	subscriptionServer *subscription.Server
 	// mesh is the narrow Headscale control-plane adapter behind the mesh
 	// pages. The production value is the fixed local CLI runner; HTTP tests
 	// replace it with a fake so no Headscale binary or socket is required.
@@ -134,12 +138,12 @@ func newServer(c Config, logger *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &Server{Runtime: rt, mesh: meshnet.NewCLIRunner()}
+	app := &Server{Runtime: rt, mesh: meshnet.NewCLIRunner(), subscriptionServer: subscription.New(rt)}
 	r := chi.NewRouter()
 	// The public download boundary runs before the management boundary: a
 	// bearer download never carries an admin session and never touches the
 	// login rate limit.
-	r.Use(app.route)
+	r.Use(app.subscriptionServer.Route)
 	r.Use(app.Boundary)
 	r.Get("/healthz", infra.JSONAPI(app.Health))
 	static, _ := fs.Sub(assets, "assets")

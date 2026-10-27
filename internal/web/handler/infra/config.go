@@ -48,3 +48,14 @@ func SanitizeInstallArtifact(c Config) Config {
 	}
 	return c
 }
+
+// OriginHost returns the host of one exact origin, or "" when it does not
+// parse. Both the download boundary and the management boundary compare Host
+// values, so the parse lives here once.
+func OriginHost(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}

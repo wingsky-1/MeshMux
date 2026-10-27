@@ -126,7 +126,7 @@ func (app *Server) subscriberViewModel() (view.SubscriberPageView, error) {
 		}
 		page.Subscribers = append(page.Subscribers, entry)
 	}
-	page.Origin = app.subscriptionOrigin()
+	page.Origin = app.subscriptionServer.Origin()
 	return page, nil
 }
 
