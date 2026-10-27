@@ -39,6 +39,8 @@ type (
 	OutPoolEntry = storenode.OutPoolEntry
 	// OutTransport is the stored dial body of one managed Out.
 	OutTransport = storenode.OutTransport
+	// HTTPProxy is the operator-visible half of one external HTTP proxy.
+	HTTPProxy = storenode.HTTPProxy
 	// OutEgressFacts is the read-only Out half of one AI egress decision.
 	OutEgressFacts = storenode.OutEgressFacts
 	// OutAuthorizationPreview is the read-only authorization projection of one Out.
@@ -232,12 +234,14 @@ var (
 	CodeMeshRouteCorrupt          = storemesh.CodeMeshRouteCorrupt
 	CodeMeshRouteUntracked        = storemesh.CodeMeshRouteUntracked
 
-	CodeLineEgressUnverified = storenode.CodeLineEgressUnverified
-	CodeLineNotAuthorized    = storenode.CodeLineNotAuthorized
-	CodeOutSyncInProgress    = storenode.CodeOutSyncInProgress
-	CodeOutSyncPending       = storenode.CodeOutSyncPending
-	CodeOutNotAuthorized     = storenode.CodeOutNotAuthorized
-	OutAclSourceMismatchCode = storenode.OutAclSourceMismatchCode
+	CodeLineEgressUnverified       = storenode.CodeLineEgressUnverified
+	CodeLineEgressExternalDeclared = storenode.CodeLineEgressExternalDeclared
+	CodeLineNotAuthorized          = storenode.CodeLineNotAuthorized
+	CodeOutSyncInProgress          = storenode.CodeOutSyncInProgress
+	CodeOutSyncPending             = storenode.CodeOutSyncPending
+	CodeOutSyncNotApplicable       = storenode.CodeOutSyncNotApplicable
+	CodeOutNotAuthorized           = storenode.CodeOutNotAuthorized
+	OutAclSourceMismatchCode       = storenode.OutAclSourceMismatchCode
 
 	CodePolicyLayerRetired     = storepolicy.CodePolicyLayerRetired
 	CodePolicyPayloadRetired   = storepolicy.CodePolicyPayloadRetired

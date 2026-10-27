@@ -714,7 +714,7 @@ func SubscriptionWizardPage(p PageData, v SubscriptionWizardView) templ.Componen
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "<p class=\"hint\">出口选择只决定 Line 路由片段渲染的出口并过内核门禁：Out 使用 Hub 签发的 Shadowsocks link key，HTTP 代理使用其 URL/凭据渲染 http 出站。服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>三 · 规则</h2><span class=\"badge\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 74, "<p class=\"hint\">出口选择只决定 Line 路由片段渲染的出口并过内核门禁：Out 使用 Hub 签发的 Shadowsocks link key，HTTP 代理使用其 URL/凭据渲染 http 出站。服务端 Out 授权的来源是节点成员（纳管即互通，Line/Out 删除或身份吊销才移除），选择或取消选择不会改动它。HTTP 代理是外部声明：无 ACL、无回读、无控制器，客户端是否真能出网只能由代理自身日志与实测证明。</p></section><section class=\"panel\"><div class=\"panel-heading\"><h2>三 · 规则</h2><span class=\"badge\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -966,10 +966,12 @@ func (o WizardOut) Endpoint() string {
 }
 
 // StateLabel renders one egress's availability. An external HTTP proxy is
-// always 外部: the Hub has no heartbeat for it and never claims one.
+// always 外部声明: the Hub has no heartbeat, no ACL, no readback and no
+// controller for it, so this is the operator's declaration and never a proven
+// health.
 func (o WizardOut) StateLabel() string {
 	if o.External() {
-		return "外部 · HTTP 代理"
+		return "外部声明 · HTTP 代理"
 	}
 	if o.Online {
 		return "在线"
