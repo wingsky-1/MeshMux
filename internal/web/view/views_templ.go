@@ -1513,7 +1513,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
-							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "）一致；保存后选中该 Out 的订阅在下一次收敛中获得真实出站，凭据由 Hub 签发、不进日志。</p></dd><dt>服务对象</dt><dd>")
+							templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 146, "）一致；保存后选中该 Out 的订阅在下一次收敛中获得真实出站，凭据由 Hub 签发、不进日志。出口地址会公开给订阅者：订阅文档直接携带出口与 link key，客户端凭 key 接入。</p></dd><dt>服务对象</dt><dd>")
 							if templ_7745c5c3_Err != nil {
 								return templ_7745c5c3_Err
 							}
@@ -1641,7 +1641,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								return templ_7745c5c3_Err
 							}
 							if data.PendingDeleteOut == n.ID {
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 160, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 Out（节点行、出口地址与 link key），引用它的 Line 路由按 fail-closed 重算，不会静默改走直连；<strong>仍被订阅选中、离线或有未完成链时删除会被拒绝</strong>并列出订阅名。</p>")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 160, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 Out（节点行、出口地址与 Hub 签发的 link key）；引用它的订阅在下次下载时重新组装，客户端文档会随之变化。<strong>仍被订阅选中、离线或有未完成链时删除会被拒绝</strong>并列出订阅名。</p>")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}
@@ -1850,7 +1850,7 @@ func NodesPage(p PageData, nodes []store.Node, data NodesData, created *store.No
 								return templ_7745c5c3_Err
 							}
 							if data.PendingDeleteOut == n.ID {
-								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 183, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 HTTP 代理（节点行与 URL/凭据），引用它的 Line 路由按 fail-closed 重算；<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名。</p>")
+								templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 183, "<p class=\"hint\">删除会<strong>彻底清除</strong>该 HTTP 代理（节点行与 URL/凭据）；引用它的订阅在下次下载时重新组装，客户端文档会随之变化。<strong>仍被订阅选中时删除会被拒绝</strong>并列出订阅名。</p>")
 								if templ_7745c5c3_Err != nil {
 									return templ_7745c5c3_Err
 								}

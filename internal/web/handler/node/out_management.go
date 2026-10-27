@@ -6,10 +6,9 @@ package node
 // edited no longer exists:
 //
 //	POST /nodes/out/bind   — selecting an Out is a subscription edit now. The
-//	                         subscription wizard owns it, and the same-Line
-//	                         consistency rule (SUBSCRIPTION_OUT_CONFLICT) lives
-//	                         there too, so a second write path could only create a
-//	                         way to violate it.
+//	                         subscription wizard owns it as the single write
+//	                         path, so this API could only create a second,
+//	                         conflicting way to edit the same choice.
 //	POST /nodes/out/unbind — a subscription that stops selecting the Out is the
 //	                         unbind, and it republishes the empty guard through
 //	                         the same store drain.
