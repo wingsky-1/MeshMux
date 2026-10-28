@@ -250,20 +250,135 @@ func TestSessionRotationExpiryAndNoFixation(t *testing.T) {
 	old := *b.cookie
 	other := &browser{app: app}
 	loginAs(t, other, testPassword)
+	// A second login is a second device: it must not revoke the first one.
 	stale.cookie = &old
-	requireStatus(t, stale.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, stale.req("GET", "/api/status", nil, nil), 200)
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 200)
+	var rows int
+	if err := app.Store.DB.QueryRow("SELECT count(*) FROM sessions WHERE authenticated=1").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("authenticated sessions = %d, want 2", rows)
+	}
+	// Logout revokes only the session that issued it; the other device stays in.
+	requireStatus(t, other.post("/logout", nil), 303)
+	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 200)
 	now := time.Now()
 	app.Now = func() time.Time { return now.Add(31 * time.Minute) }
-	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 401)
 	// Refreshing seen cannot extend the absolute lifetime.
 	app.Now = time.Now
-	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
-	other.cookie = nil
-	loginAs(t, other, testPassword)
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 401)
+	b.cookie = nil
+	loginAs(t, b, testPassword)
 	if _, err := app.Store.DB.Exec("UPDATE sessions SET expires=? WHERE authenticated=1", time.Now().Add(-time.Second).Unix()); err != nil {
 		t.Fatal(err)
 	}
-	requireStatus(t, other.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, b.req("GET", "/api/status", nil, nil), 401)
+}
+
+func TestMultiDeviceLoginRecordsAndIndependentCSRF(t *testing.T) {
+	app, logs := testApp(t)
+	first := &browser{app: app}
+	initialize(t, first)
+	requireStatus(t, first.req("GET", "/login", nil, nil), 200)
+	firstLogin := first.post("/login", url.Values{"password": {testPassword}})
+	requireStatus(t, firstLogin, 303)
+	firstOp := firstLogin.Header().Get("X-Operation-ID")
+	requireStatus(t, first.req("GET", "/", nil, nil), 200)
+	firstCSRF := first.csrf
+	firstToken := first.cookie.Value
+
+	second := &browser{app: app}
+	requireStatus(t, second.req("GET", "/login", nil, nil), 200)
+	secondLogin := second.post("/login", url.Values{"password": {testPassword}})
+	requireStatus(t, secondLogin, 303)
+	secondOp := secondLogin.Header().Get("X-Operation-ID")
+	requireStatus(t, second.req("GET", "/", nil, nil), 200)
+	secondCSRF := second.csrf
+	secondToken := second.cookie.Value
+
+	if firstOp == "" || secondOp == "" || firstOp == secondOp {
+		t.Fatalf("login operation ids = %q and %q, want two distinct values", firstOp, secondOp)
+	}
+	if firstToken == secondToken || firstCSRF == secondCSRF {
+		t.Fatal("sessions must not share a token or a CSRF value")
+	}
+
+	// The login audit carries exactly the time and operation id: no password,
+	// token, CSRF value, URL, IP address or user agent.
+	rows, err := app.Store.DB.Query("SELECT name FROM pragma_table_info('login_records') ORDER BY cid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var columns []string
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, name)
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	wantColumns := []string{"id", "operation_id", "created_at"}
+	if strings.Join(columns, ",") != strings.Join(wantColumns, ",") {
+		t.Fatalf("login_records columns = %v, want %v", columns, wantColumns)
+	}
+	var records int
+	if err = app.Store.DB.QueryRow("SELECT count(*) FROM login_records").Scan(&records); err != nil {
+		t.Fatal(err)
+	}
+	if records != 2 {
+		t.Fatalf("login records = %d, want 2", records)
+	}
+	var storedOp string
+	var storedAt int64
+	if err = app.Store.DB.QueryRow("SELECT operation_id, created_at FROM login_records ORDER BY id LIMIT 1").Scan(&storedOp, &storedAt); err != nil {
+		t.Fatal(err)
+	}
+	if storedOp != firstOp || storedAt == 0 {
+		t.Fatalf("first login record = (%q, %d), want (%q, non-zero)", storedOp, storedAt, firstOp)
+	}
+	var audit string
+	if err = app.Store.DB.QueryRow("SELECT group_concat(operation_id, '|') FROM login_records").Scan(&audit); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{testPassword, firstToken, secondToken, firstCSRF, secondCSRF, "/login"} {
+		if strings.Contains(audit, secret) {
+			t.Fatalf("login record contains sensitive value %q", secret)
+		}
+	}
+	for _, secret := range []string{testPassword, firstToken, secondToken, firstCSRF, secondCSRF} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("login log contains sensitive value %q", secret)
+		}
+	}
+	if strings.Contains(logs.String(), "/login") {
+		t.Fatal("login log contains a URL")
+	}
+
+	// CSRF is per session: one device's value cannot authorize another device.
+	requireStatus(t, second.req("POST", "/logout", url.Values{"csrf": {firstCSRF}}, nil), 403)
+	requireStatus(t, first.req("POST", "/logout", url.Values{"csrf": {secondCSRF}}, nil), 403)
+	requireStatus(t, first.req("GET", "/api/status", nil, nil), 200)
+	requireStatus(t, second.req("GET", "/api/status", nil, nil), 200)
+
+	// Logout only removes the current row.
+	requireStatus(t, first.post("/logout", nil), 303)
+	requireStatus(t, first.req("GET", "/api/status", nil, nil), 401)
+	requireStatus(t, second.req("GET", "/api/status", nil, nil), 200)
+	var remaining int
+	if err = app.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 1 {
+		t.Fatalf("sessions after one logout = %d, want 1", remaining)
+	}
 }
 
 func TestBootstrapExpiryAndConcurrentInitialization(t *testing.T) {

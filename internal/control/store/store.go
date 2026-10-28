@@ -365,6 +365,12 @@ func (s *Store) migrateSchemaChain() error {
 	if err = storenode.EnsureOutTransportTable(tx); err != nil {
 		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
 	}
+	// The login audit table is likewise additive and versionless: it has no
+	// reader in older binaries, so a database carrying it remains usable by
+	// them, and a fresh or upgraded database converges on every open.
+	if err = ensureLoginRecordsTable(tx); err != nil {
+		return fmt.Errorf("SCHEMA_MIGRATION_FAILED: %w", err)
+	}
 	return tx.Commit()
 }
 
@@ -454,11 +460,57 @@ func (s *Store) PrepareBootstrap(now time.Time) error {
 	return err
 }
 
+// Login records are the append-only audit trail of successful logins. One row
+// is written in the same transaction that creates the session, so a login
+// cannot be recorded without a session or a session created without a record.
+//
+// The record deliberately carries only the operation id and the time. It never
+// stores the password, the session token, the CSRF value, a URL, an IP address
+// or a user agent: those are not needed to answer "when did an administrator
+// log in, and which operation was it". Address data stays out of the database;
+// the only address log is the Fail2ban candidate in AuthFailure, already gated
+// by the trusted loopback proxy boundary and never written for a normal login.
+//
+// The table is created idempotently on every open and needs no user_version
+// step. It is purely additive: an older binary ignores it, and no existing
+// table or index changes. A fresh and an upgraded database converge here.
+func ensureLoginRecordsTable(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+CREATE TABLE IF NOT EXISTS login_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  operation_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS login_records_created ON login_records(created_at);
+`)
+	return err
+}
+
+// RecordLogin appends one successful login to the audit trail. The caller runs
+// it inside the session transaction; operationID is the request's operation id
+// and at is the same clock value used for the session expiry.
+func RecordLogin(tx *sql.Tx, operationID string, at time.Time) error {
+	_, err := tx.Exec("INSERT INTO login_records(operation_id, created_at) VALUES(?,?)", operationID, at.Unix())
+	return err
+}
+
+// PruneSessions removes rows that can never authenticate again: legacy
+// anonymous rows from builds that minted one for the login form, expired rows,
+// and rows past the idle window. A successful login calls it in the same
+// transaction as the new session, so the multi-device table stays bounded
+// without ever deleting another device's live session.
+func PruneSessions(tx *sql.Tx, now time.Time) error {
+	_, err := tx.Exec("DELETE FROM sessions WHERE authenticated=0 OR expires<=? OR seen<=?", now.Unix(), now.Add(-common.IdleLifetime).Unix())
+	return err
+}
+
 // newSession is gone: the login and setup forms no longer store an anonymous
-// row (see form_token.go), and the single administrator session is inserted by
-// login in its own transaction. `sessions` therefore only ever holds
-// authenticated rows, so no anonymous flood can fill a cap and lock the
-// administrator out of the page that exists to restore access (#113 3-3).
+// row (see form_token.go), and each successful login inserts one authenticated
+// row in its own transaction. `sessions` can hold several rows at once, one per
+// signed-in device, each with its own token hash, CSRF value and expiry; a
+// successful login never deletes another device's row. Legacy anonymous rows
+// are removed by PruneSessions, so no anonymous flood can fill a cap and lock
+// the administrator out of the page that exists to restore access (#113 3-3).
 
 func (s *Store) Session(token string, now time.Time) (Session, error) {
 	var sess Session

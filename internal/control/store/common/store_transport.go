@@ -4,7 +4,8 @@ package common
 //
 // Each appears exactly once and is referenced by name:
 //   - session lifetime, idle lifetime and the authentication budget are the
-//     security contract of the single administrator session;
+//     security contract of every administrator session (one per signed-in
+//     device);
 //   - the SQLite DSN pragmas are the durability boundary (WAL, FULL sync,
 //     foreign keys, busy timeout);
 //   - the offline window is shared by every projection that reports whether a
