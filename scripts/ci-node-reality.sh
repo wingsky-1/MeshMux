@@ -265,7 +265,7 @@ run_route_gate() {
   fi
 }
 
-run_route_gate node "${TEST_BINARY}" '^TestCompileCandidateRouteNativeCheck$'
+run_route_gate node "${REPO_ROOT}/.ci/bin/node-render.test" '^TestCompileCandidateRouteNativeCheck$'
 run_route_gate client "${SUBSCRIPTION_TEST}" '^TestComposeSubscriptionOutClientChainDataPath$'
 
 printf 'PASS: the pinned sing-box %s accepted the compiled candidate and the client-chain document with its Out egress, the real SS guard admitted the Hub-issued link key, and the fixture served a real isolated VLESS/REALITY handshake.\n' "${PIN_VERSION}"
