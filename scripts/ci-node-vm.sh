@@ -82,7 +82,7 @@ require_test() {
   echo "$binary lists $test_name"
 }
 
-require_test .ci/bin/install.test TestNodeSystemVM
+require_test .ci/bin/install-node.test TestNodeSystemVM
 require_test .ci/bin/web-handler.test TestNodeHubFixture
 require_test .ci/bin/node.test TestRealityNativeCheck
 require_test .ci/bin/node.test TestRealityIntegrationHandshakeAcceptsAndDeniesCredentials
@@ -169,7 +169,7 @@ wait_time_sync() {
 }
 copy_test_binaries() {
   scp_vm .ci/bin/meshmux /tmp/meshmux
-  scp_vm .ci/bin/install.test /tmp/install.test
+  scp_vm .ci/bin/install-node.test /tmp/install.test
   scp_vm .ci/bin/web-handler.test /tmp/web-handler.test
   scp_vm .ci/bin/node.test /tmp/node.test
   ssh_vm 'sudo chmod 755 /tmp/meshmux /tmp/install.test /tmp/web-handler.test /tmp/node.test'

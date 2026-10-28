@@ -534,7 +534,7 @@ func localLineVMAssertSubscription(t *testing.T, client *http.Client, subscripti
 	if err := json.Unmarshal(candidateBody, &document); err != nil {
 		localLineVMFatal(t, "", "agent", "ACTIVE_CANDIDATE_INVALID", "the Agent active candidate is not valid JSON")
 	}
-	if document.Schema != corenode.CandidateSchemaV2 {
+	if document.Schema != corenode.CandidateSchema {
 		localLineVMFatal(t, "", "agent", "ACTIVE_CANDIDATE_NOT_V2",
 			"the Agent active candidate is not a v2 document (schema=%q)", document.Schema)
 	}

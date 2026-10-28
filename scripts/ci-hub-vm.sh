@@ -153,6 +153,7 @@ echo 'Hub Debian 13 full-system installation/restart/recovery acceptance PASS'
 # pairing flow and proves the Hub ledger, pins and services survive; then the
 # guest really reboots and phase 2 proves both ledgers persist.
 phase_timing_start 'local-line-install'
+scp_vm .ci/bin/install-node.test /tmp/install.test
 ssh_vm 'sudo env MESHMUX_LOCAL_LINE_VM=1 MESHMUX_LOCAL_LINE_PHASE=install /tmp/install.test -test.run "^TestLocalLineSystemVM$" -test.timeout=30m -test.v'
 phase_timing_end 'local-line-install'
 boot_before_line="$(ssh_vm 'cat /proc/sys/kernel/random/boot_id')"
@@ -164,7 +165,7 @@ if [[ "$boot_before_line" == "$boot_after_line" ]]; then
   echo 'VM did not actually reboot before local-Line post-reboot; refusing to count persistence as verified' >&2
   exit 1
 fi
-scp_vm .ci/bin/install.test /tmp/install.test
+scp_vm .ci/bin/install-node.test /tmp/install.test
 ssh_vm "sudo chmod 755 /tmp/install.test"
 phase_timing_start 'local-line-post-reboot'
 ssh_vm 'sudo env MESHMUX_LOCAL_LINE_VM=1 MESHMUX_LOCAL_LINE_PHASE=post-reboot /tmp/install.test -test.run "^TestLocalLineSystemVM$" -test.timeout=10m -test.v'
