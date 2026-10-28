@@ -446,18 +446,18 @@ func TestHubRepairRejectsMismatchingSharedBinary(t *testing.T) {
 	}
 	// The Hub now stages a different MeshMux build.
 	hubFixture := makeHubInstallerFixture(t)
-	hubFixture.root = f.root
-	hubFixture.opts.Root = f.root
-	hubFixture.c = core.Config{
+	hubFixture.Root = f.root
+	hubFixture.Options.Root = f.root
+	hubFixture.Config = core.Config{
 		ManagementDomain:   "hub.example.invalid",
 		SubscriptionDomain: "sub.example.invalid",
 		HeadscaleDomain:    "mesh.example.invalid",
 	}
-	hubFixture.opts.Artifacts = core.PinnedArtifacts("amd64")
-	hubFixture.opts.DownloadArtifact = func(context.Context, core.Artifact, string) (string, error) {
+	hubFixture.Options.Artifacts = core.PinnedArtifacts("amd64")
+	hubFixture.Options.DownloadArtifact = func(context.Context, core.Artifact, string) (string, error) {
 		return "", errors.New("fixture: pinned artifact unavailable")
 	}
-	result, err := hub.InstallHub(context.Background(), hubFixture.c, strings.Repeat("7", 32), true, hubFixture.opts)
+	result, err := hub.InstallHub(context.Background(), hubFixture.Config, strings.Repeat("7", 32), true, hubFixture.Options)
 	if err == nil || result.ErrorCode != "SHARED_BINARY_MISMATCH" {
 		t.Fatalf("Hub repair with a different build = %+v %v", result, err)
 	}
@@ -493,21 +493,21 @@ func TestHubRepairWithSameSharedBinaryStaysGreen(t *testing.T) {
 		t.Fatalf("fixture build digest = %s, want %s", sum, f.hubRuntimeHash)
 	}
 	hubFixture := makeHubInstallerFixture(t)
-	hubFixture.root = f.root
-	hubFixture.opts.Root = f.root
-	hubFixture.c = core.Config{
+	hubFixture.Root = f.root
+	hubFixture.Options.Root = f.root
+	hubFixture.Config = core.Config{
 		ManagementDomain:   "hub.example.invalid",
 		SubscriptionDomain: "sub.example.invalid",
 		HeadscaleDomain:    "mesh.example.invalid",
 	}
-	hubFixture.opts.Executable = source
-	hubFixture.opts.Artifacts = core.PinnedArtifacts("amd64")
-	hubFixture.opts.DownloadArtifact = func(context.Context, core.Artifact, string) (string, error) {
+	hubFixture.Options.Executable = source
+	hubFixture.Options.Artifacts = core.PinnedArtifacts("amd64")
+	hubFixture.Options.DownloadArtifact = func(context.Context, core.Artifact, string) (string, error) {
 		return "", errors.New("fixture: pinned artifact unavailable")
 	}
 	// The shared binary check runs before the artifact download, so the
 	// refusal is not masked by the unreachable fixture artifact.
-	result, err := hub.InstallHub(context.Background(), hubFixture.c, strings.Repeat("8", 32), true, hubFixture.opts)
+	result, err := hub.InstallHub(context.Background(), hubFixture.Config, strings.Repeat("8", 32), true, hubFixture.Options)
 	if err == nil {
 		t.Fatalf("a Hub repair with an unreachable artifact unexpectedly succeeded: %+v", result)
 	}

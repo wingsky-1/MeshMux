@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade/ledger/manifestfixture"
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 )
 
@@ -128,7 +129,7 @@ func newHandoffFixture(t *testing.T, mutate func(*upgrade.Manifest)) *handoffFix
 	if err := os.Mkdir(manifestDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeHubManifest(t, manifestDir, handoffTarget, mutate)
+	manifestfixture.WriteHubManifest(manifestDir, handoffTarget, mutate)
 	manifest, err := readRootManifest(manifestDir, handoffTarget, os.Geteuid())
 	if err != nil {
 		t.Fatal(err)
@@ -407,7 +408,7 @@ func TestHandoffPreconditions(t *testing.T) {
 
 	t.Run("manifest no longer names the package", func(t *testing.T) {
 		fx := newHandoffFixture(t, nil)
-		writeHubManifest(t, fx.manifestDir, handoffTarget, func(m *upgrade.Manifest) {
+		manifestfixture.WriteHubManifest(fx.manifestDir, handoffTarget, func(m *upgrade.Manifest) {
 			m.Components[0].SHA256 = strings.Repeat("d", 64)
 		})
 		before := fx.journalBytes(t)

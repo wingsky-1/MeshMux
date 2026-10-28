@@ -104,12 +104,12 @@ func TestHubInstallWritesJournaldQuota(t *testing.T) {
 	if _, err := invokeHubInstaller(t, f, strings.Repeat("a", 32), false); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	target := core.Rooted(f.root, core.JournaldDropInPath)
+	target := core.Rooted(f.Root, core.JournaldDropInPath)
 	data, err := os.ReadFile(target)
 	if err != nil || string(data) != hub.JournaldDropIn {
 		t.Fatalf("journald drop-in = %q, %v", data, err)
 	}
-	state, _, err := core.ReadState(f.root)
+	state, _, err := core.ReadState(f.Root)
 	if err != nil {
 		t.Fatal(err)
 	}

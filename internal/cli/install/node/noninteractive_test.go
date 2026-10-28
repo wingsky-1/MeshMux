@@ -35,8 +35,8 @@ func TestInstallNodeNonInteractiveRefusesPrompts(t *testing.T) {
 // handoff must carry --repair, because anything else is an operator decision.
 func TestInstallHubNonInteractiveRefusesPrompts(t *testing.T) {
 	f := makeHubInstallerFixture(t)
-	f.opts.NonInteractive = true
-	result, err := hub.InstallHub(context.Background(), f.c, strings.Repeat("a", 32), false, f.opts)
+	f.Options.NonInteractive = true
+	result, err := hub.InstallHub(context.Background(), f.Config, strings.Repeat("a", 32), false, f.Options)
 	ie, ok := err.(*core.InstallError)
 	if !ok || ie.Code != "UPDATE_INTERACTIVE_REFUSED" {
 		t.Fatalf("err = %v, want UPDATE_INTERACTIVE_REFUSED", err)

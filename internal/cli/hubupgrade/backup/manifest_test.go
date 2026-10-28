@@ -8,45 +8,14 @@ package backup
 // writes.
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade/ledger/manifestfixture"
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 )
-
-func hubManifest(target string) upgrade.Manifest {
-	return upgrade.Manifest{
-		Schema:       upgrade.Schema,
-		Version:      target,
-		Architecture: runtime.GOARCH,
-		PolicySchema: upgrade.PolicySchema,
-		Components: []upgrade.Component{{
-			Name: "meshmuxd", Version: "dev-" + target, Architecture: runtime.GOARCH,
-			Source: "file:///tmp/meshmuxd-dev", SHA256: strings.Repeat("a", 64), Dev: true,
-		}},
-	}
-}
-
-func writeHubManifest(t *testing.T, dir, target string, mutate func(*upgrade.Manifest)) string {
-	t.Helper()
-	m := hubManifest(target)
-	if mutate != nil {
-		mutate(&m)
-	}
-	body, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "manifest-"+target+".json")
-	if err := os.WriteFile(path, body, 0644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
 
 func TestManifestGate(t *testing.T) {
 	readerOwner := os.Geteuid()
@@ -93,7 +62,7 @@ func TestManifestGate(t *testing.T) {
 			if tc.dir != nil {
 				dir = tc.dir(t)
 			} else {
-				writeHubManifest(t, dir, tc.target, tc.mutate)
+				manifestfixture.WriteHubManifest(dir, tc.target, tc.mutate)
 				if tc.after != nil {
 					tc.after(t, dir, tc.target)
 				}
@@ -137,7 +106,7 @@ func TestManifestRejectsUnknownFieldAndTrailingData(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			path := writeHubManifest(t, dir, "1.0.1", nil)
+			path := manifestfixture.WriteHubManifest(dir, "1.0.1", nil)
 			body, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -155,7 +124,7 @@ func TestManifestRejectsUnknownFieldAndTrailingData(t *testing.T) {
 func TestManifestTargetMustMatchRequestedVersion(t *testing.T) {
 	readerOwner := os.Geteuid()
 	dir := t.TempDir()
-	writeHubManifest(t, dir, "1.0.2", nil)
+	manifestfixture.WriteHubManifest(dir, "1.0.2", nil)
 	if _, err := readRootManifest(dir, "1.0.1", readerOwner); err == nil || codeOf(err) != "MANIFEST_UNAVAILABLE" {
 		t.Fatalf("a manifest for another target was accepted: %v", err)
 	}

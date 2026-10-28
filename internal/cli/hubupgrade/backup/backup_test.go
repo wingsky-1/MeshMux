@@ -21,6 +21,7 @@ import (
 
 	"github.com/wingsky-1/MeshMux/internal/cli/backup"
 	"github.com/wingsky-1/MeshMux/internal/cli/buildinfo"
+	"github.com/wingsky-1/MeshMux/internal/cli/hubupgrade/ledger/manifestfixture"
 	"github.com/wingsky-1/MeshMux/internal/cli/upgrade"
 )
 
@@ -84,7 +85,7 @@ func newHubBackupFixture(t *testing.T) *hubBackupFixture {
 	if err := os.Mkdir(f.manifestDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeHubManifest(t, f.manifestDir, hubBackupTestTarget, nil)
+	manifestfixture.WriteHubManifest(f.manifestDir, hubBackupTestTarget, nil)
 	return f
 }
 

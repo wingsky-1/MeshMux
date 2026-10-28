@@ -4,11 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -27,65 +25,12 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/cli/versions"
 )
 
-type fakeInstallerRunner struct {
-	users    map[string]bool
-	calls    []string
-	failUnit string
-	// failCall fails the first command whose rendered call contains this
-	// substring, then stops firing so rollback itself can still proceed.
-	failCall string
-	failUsed bool
-	// packages records dpkg's "install ok installed" answers.
-	packages map[string]bool
-}
+// The fixture is shared with the node package's co-location tests; both read
+// the same non-test helper from install/core because a _test.go declaration
+// cannot cross package boundaries.
+type fakeInstallerRunner = core.HubTestRunner
 
-func (f *fakeInstallerRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	call := name + " " + strings.Join(args, " ")
-	f.calls = append(f.calls, call)
-	if f.failCall != "" && !f.failUsed && strings.Contains(call, f.failCall) {
-		f.failUsed = true
-		return nil, errors.New("fault injected")
-	}
-	switch name {
-	case "getent":
-		if len(args) == 2 && f.users[args[1]] {
-			return []byte("existing-user"), nil
-		}
-		return nil, errors.New("user not found")
-	case "useradd":
-		if f.users == nil {
-			f.users = map[string]bool{}
-		}
-		f.users[args[len(args)-1]] = true
-	case "systemctl":
-		if f.failUnit != "" && (strings.Contains(call, "enable --now "+f.failUnit) || strings.Contains(call, "restart "+f.failUnit)) {
-			return nil, errors.New("fault injected")
-		}
-	case "chown":
-		// Unit tests use a private filesystem root without changing system users.
-	case "dpkg-query":
-		// args are ["-W", "-f=${Status}", pkg].
-		if len(args) == 3 && f.packages[args[2]] {
-			return []byte("install ok installed"), nil
-		}
-		return nil, errors.New("package not installed")
-	default:
-		if len(args) == 1 && args[0] == "version" {
-			if strings.Contains(name, "caddy") {
-				return []byte("v2.11.7"), nil
-			}
-			return []byte("v0.29.5"), nil
-		}
-	}
-	return nil, nil
-}
-
-type installerFixture struct {
-	root   string
-	runner *fakeInstallerRunner
-	opts   core.ApplyOptions
-	c      core.Config
-}
+type installerFixture = core.HubInstallerFixture
 
 // TestRollbackDisablesHubDispatchPath pins the T4 review item: a failed fresh
 // install must not leave the root path unit armed while its unit files are
@@ -108,16 +53,16 @@ func TestRollbackDisablesHubDispatchPath(t *testing.T) {
 		{Target: serviceTarget, Exists: false},
 	}
 	if ok := core.RollbackManaged(context.Background(), core.ApplyOptions{Root: root, Runner: runner}, snapshots, false); !ok {
-		t.Fatalf("rollback reported failure: %v", runner.calls)
+		t.Fatalf("rollback reported failure: %v", runner.Calls)
 	}
 	found := false
-	for _, call := range runner.calls {
+	for _, call := range runner.Calls {
 		if call == "systemctl disable --now meshmux-hub-dispatch.path" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("rollback did not disable the hub dispatch path: %v", runner.calls)
+		t.Fatalf("rollback did not disable the hub dispatch path: %v", runner.Calls)
 	}
 	for _, target := range []string{pathTarget, serviceTarget} {
 		if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -144,10 +89,10 @@ func TestActivateUnitRepairClearsStartLimitBeforeRestart(t *testing.T) {
 	if err := core.ActivateUnit(context.Background(), runner, "meshmux-web.service", true); err != nil {
 		t.Fatalf("repair activation failed: %v", err)
 	}
-	reset := callIndex(runner.calls, "systemctl reset-failed meshmux-web.service")
-	restart := callIndex(runner.calls, "systemctl restart meshmux-web.service")
+	reset := callIndex(runner.Calls, "systemctl reset-failed meshmux-web.service")
+	restart := callIndex(runner.Calls, "systemctl restart meshmux-web.service")
 	if reset < 0 || restart < 0 || reset > restart {
-		t.Fatalf("reset-failed must precede restart: %v", runner.calls)
+		t.Fatalf("reset-failed must precede restart: %v", runner.Calls)
 	}
 }
 
@@ -155,12 +100,12 @@ func TestActivateUnitRepairClearsStartLimitBeforeRestart(t *testing.T) {
 // a unit with no recorded failure makes reset-failed exit non-zero, which must
 // not turn a valid repair into a failed one.
 func TestActivateUnitRepairToleratesResetFailedError(t *testing.T) {
-	runner := &fakeInstallerRunner{failCall: "systemctl reset-failed meshmux-caddy.service"}
+	runner := &fakeInstallerRunner{FailCall: "systemctl reset-failed meshmux-caddy.service"}
 	if err := core.ActivateUnit(context.Background(), runner, "meshmux-caddy.service", true); err != nil {
 		t.Fatalf("reset-failed error aborted the repair restart: %v", err)
 	}
-	if callIndex(runner.calls, "systemctl restart meshmux-caddy.service") < 0 {
-		t.Fatalf("repair did not restart the unit after reset-failed failed: %v", runner.calls)
+	if callIndex(runner.Calls, "systemctl restart meshmux-caddy.service") < 0 {
+		t.Fatalf("repair did not restart the unit after reset-failed failed: %v", runner.Calls)
 	}
 }
 
@@ -172,8 +117,8 @@ func TestActivateUnitFreshInstallSkipsResetFailed(t *testing.T) {
 		t.Fatalf("fresh activation failed: %v", err)
 	}
 	want := []string{"systemctl enable --now meshmux-web.service"}
-	if len(runner.calls) != 1 || runner.calls[0] != want[0] {
-		t.Fatalf("fresh activation calls = %v, want %v", runner.calls, want)
+	if len(runner.Calls) != 1 || runner.Calls[0] != want[0] {
+		t.Fatalf("fresh activation calls = %v, want %v", runner.Calls, want)
 	}
 }
 
@@ -185,13 +130,13 @@ func TestRollbackClearsStartLimitBeforeStart(t *testing.T) {
 	runner := &fakeInstallerRunner{}
 	opts := core.ApplyOptions{Root: t.TempDir(), Runner: runner}
 	if ok := core.RollbackManaged(context.Background(), opts, nil, true); !ok {
-		t.Fatalf("rollback reported failure: %v", runner.calls)
+		t.Fatalf("rollback reported failure: %v", runner.Calls)
 	}
 	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service", "meshmux-caddy.service"} {
-		reset := callIndex(runner.calls, "systemctl reset-failed "+unit)
-		start := callIndex(runner.calls, "systemctl start "+unit)
+		reset := callIndex(runner.Calls, "systemctl reset-failed "+unit)
+		start := callIndex(runner.Calls, "systemctl start "+unit)
 		if reset < 0 || start < 0 || reset > start {
-			t.Fatalf("rollback must reset-failed before starting %s: %v", unit, runner.calls)
+			t.Fatalf("rollback must reset-failed before starting %s: %v", unit, runner.Calls)
 		}
 	}
 }
@@ -200,66 +145,26 @@ func TestRollbackClearsStartLimitBeforeStart(t *testing.T) {
 // in the same way as the repair path: a reset failure must not fail the
 // rollback nor skip the start.
 func TestRollbackToleratesResetFailedError(t *testing.T) {
-	runner := &fakeInstallerRunner{failCall: "systemctl reset-failed meshmux-web.service"}
+	runner := &fakeInstallerRunner{FailCall: "systemctl reset-failed meshmux-web.service"}
 	opts := core.ApplyOptions{Root: t.TempDir(), Runner: runner}
 	if ok := core.RollbackManaged(context.Background(), opts, nil, true); !ok {
-		t.Fatalf("reset-failed error turned the rollback into a failure: %v", runner.calls)
+		t.Fatalf("reset-failed error turned the rollback into a failure: %v", runner.Calls)
 	}
 	for _, unit := range []string{"meshmux-headscale.service", "meshmux-web.service", "meshmux-caddy.service"} {
-		if callIndex(runner.calls, "systemctl start "+unit) < 0 {
-			t.Fatalf("rollback skipped starting %s after reset-failed failed: %v", unit, runner.calls)
+		if callIndex(runner.Calls, "systemctl start "+unit) < 0 {
+			t.Fatalf("rollback skipped starting %s after reset-failed failed: %v", unit, runner.Calls)
 		}
 	}
 }
 
 func MakeInstallerFixture(t *testing.T) installerFixture {
 	t.Helper()
-	root := t.TempDir()
-	binaryDir := t.TempDir()
-	source := filepath.Join(binaryDir, "meshmuxd")
-	if err := os.WriteFile(source, []byte("isolated MeshMux test executable"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	assets := []core.Artifact{}
-	for _, item := range []struct {
-		component, version string
-	}{
-		{"caddy", "2.11.7"}, {"headscale", "0.29.5"},
-	} {
-		sourcePath := filepath.Join(binaryDir, item.component)
-		data := []byte("verified test artifact " + item.component)
-		if err := os.WriteFile(sourcePath, data, 0755); err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256(data)
-		assets = append(assets, core.Artifact{
-			Component: item.component, Version: item.version,
-			Source: "fixture://" + item.component, SHA256: hex.EncodeToString(sum[:]), Format: "elf",
-		})
-	}
-	runner := &fakeInstallerRunner{users: map[string]bool{}}
-	download := func(_ context.Context, a core.Artifact, _ string) (string, error) {
-		return filepath.Join(binaryDir, a.Component), nil
-	}
-	return installerFixture{
-		root: root, runner: runner,
-		c: core.Config{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org"},
-		opts: core.ApplyOptions{
-			Root: root, Runner: runner, Executable: source, Artifacts: assets,
-			DownloadArtifact: download,
-			Preflight: func(context.Context, core.Config, bool) ([]core.Check, []int) {
-				return []core.Check{{Name: "system", Status: "pass"}, {Name: "public_https", Status: "pending"}}, []int{60794}
-			},
-			Verify: func(context.Context, core.Config, core.CommandRunner, func(context.Context, string) error) error {
-				return nil
-			},
-		},
-	}
+	return core.NewHubInstallerFixture(t.TempDir(), t.TempDir())
 }
 
 func InvokeInstaller(t *testing.T, fixture installerFixture, op string, repair bool) (core.InstallResult, error) {
 	t.Helper()
-	return InstallHub(context.Background(), fixture.c, op, repair, fixture.opts)
+	return InstallHub(context.Background(), fixture.Config, op, repair, fixture.Options)
 }
 
 func TestHubInstallFirstRunIdempotentAndStatePreservation(t *testing.T) {
@@ -268,25 +173,25 @@ func TestHubInstallFirstRunIdempotentAndStatePreservation(t *testing.T) {
 	if err != nil || result.Status != "installed" {
 		t.Fatalf("first install = %+v, %v", result, err)
 	}
-	state, ok, err := core.ReadState(f.root)
+	state, ok, err := core.ReadState(f.Root)
 	if err != nil || !ok || state.Status != "installed" || len(state.ManagedFiles) < 10 {
 		t.Fatalf("missing managed state: %+v, %v", state, err)
 	}
-	web := core.Rooted(f.root, "/var/lib/meshmux")
-	noise := core.Rooted(f.root, "/var/lib/meshmux-headscale")
+	web := core.Rooted(f.Root, "/var/lib/meshmux")
+	noise := core.Rooted(f.Root, "/var/lib/meshmux-headscale")
 	if err := os.WriteFile(filepath.Join(web, "sentinel.db"), []byte("admin must survive"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(noise, "noise_private.key"), []byte("keep key"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	before := len(f.runner.calls)
+	before := len(f.Runner.Calls)
 	result, err = InvokeInstaller(t, f, strings.Repeat("b", 32), false)
 	if err != nil || result.Status != "already_installed" {
 		t.Fatalf("idempotent readback = %+v, %v", result, err)
 	}
-	if len(f.runner.calls) != before {
-		t.Fatalf("idempotent call wrote to host: %v", f.runner.calls[before:])
+	if len(f.Runner.Calls) != before {
+		t.Fatalf("idempotent call wrote to host: %v", f.Runner.Calls[before:])
 	}
 	result, err = InvokeInstaller(t, f, strings.Repeat("c", 32), true)
 	if err != nil || result.Status != "installed" {
@@ -301,7 +206,7 @@ func TestHubInstallFirstRunIdempotentAndStatePreservation(t *testing.T) {
 			t.Fatalf("repair damaged user data %s: %q, %v", path, got, err)
 		}
 	}
-	jail, err := os.ReadFile(core.Rooted(f.root, "/etc/fail2ban/jail.d/meshmux-ssh.local"))
+	jail, err := os.ReadFile(core.Rooted(f.Root, "/etc/fail2ban/jail.d/meshmux-ssh.local"))
 	if err != nil || !strings.Contains(string(jail), "port = 60794") {
 		t.Fatalf("actual SSH port missing: %s, %v", jail, err)
 	}
@@ -311,7 +216,7 @@ func TestHubInstallRejectsThirdPartyFilesAndSymlinks(t *testing.T) {
 	for _, tc := range []string{"third-party", "symlink"} {
 		t.Run(tc, func(t *testing.T) {
 			f := MakeInstallerFixture(t)
-			target := core.Rooted(f.root, "/etc/meshmux/Caddyfile")
+			target := core.Rooted(f.Root, "/etc/meshmux/Caddyfile")
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				t.Fatal(err)
 			}
@@ -326,7 +231,7 @@ func TestHubInstallRejectsThirdPartyFilesAndSymlinks(t *testing.T) {
 			if err == nil || result.Status != "failed" {
 				t.Fatalf("third-party conflict silently adopted: %+v %v", result, err)
 			}
-			if _, found, err := core.ReadState(f.root); err != nil || found {
+			if _, found, err := core.ReadState(f.Root); err != nil || found {
 				t.Fatalf("conflict created installer state: found=%v err=%v", found, err)
 			}
 			if tc == "third-party" {
@@ -341,26 +246,26 @@ func TestHubInstallRejectsThirdPartyFilesAndSymlinks(t *testing.T) {
 
 func TestHubInstallBadChecksumAndInterruptedServiceRecovery(t *testing.T) {
 	f := MakeInstallerFixture(t)
-	f.opts.Artifacts[0].SHA256 = strings.Repeat("0", 64)
+	f.Options.Artifacts[0].SHA256 = strings.Repeat("0", 64)
 	result, err := InvokeInstaller(t, f, strings.Repeat("e", 32), false)
 	if err == nil || result.ErrorCode != "ARTIFACT_CHECKSUM_MISMATCH" {
 		t.Fatalf("checksum fail-open: %+v %v", result, err)
 	}
-	if _, err := os.Stat(core.Rooted(f.root, "/usr/local/libexec/meshmux-caddy")); !os.IsNotExist(err) {
+	if _, err := os.Stat(core.Rooted(f.Root, "/usr/local/libexec/meshmux-caddy")); !os.IsNotExist(err) {
 		t.Fatalf("failed checksum installed a binary: %v", err)
 	}
 	original := MakeInstallerFixture(t)
-	f.opts.Artifacts = original.opts.Artifacts
-	f.opts.DownloadArtifact = original.opts.DownloadArtifact
-	f.runner.failUnit = "meshmux-headscale.service"
+	f.Options.Artifacts = original.Options.Artifacts
+	f.Options.DownloadArtifact = original.Options.DownloadArtifact
+	f.Runner.FailUnit = "meshmux-headscale.service"
 	result, err = InvokeInstaller(t, f, strings.Repeat("f", 32), true)
 	if err == nil || result.ErrorCode != "HEADSCALE_START_FAILED" || result.Status != "partial" {
 		t.Fatalf("service fault not recoverable: %+v %v", result, err)
 	}
-	if _, err := os.Stat(core.Rooted(f.root, "/etc/meshmux/headscale.yaml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(core.Rooted(f.Root, "/etc/meshmux/headscale.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("failed first activation did not roll back candidate: %v", err)
 	}
-	f.runner.failUnit = ""
+	f.Runner.FailUnit = ""
 	result, err = InvokeInstaller(t, f, strings.Repeat("1", 32), true)
 	if err != nil || result.Status != "installed" {
 		t.Fatalf("repair after startup fault: %+v %v", result, err)
@@ -372,7 +277,7 @@ func TestHubInstallRefusesModifiedManagedFile(t *testing.T) {
 	if result, err := InvokeInstaller(t, f, strings.Repeat("2", 32), false); err != nil || result.Status != "installed" {
 		t.Fatalf("initial install: %+v %v", result, err)
 	}
-	target := core.Rooted(f.root, "/etc/meshmux/Caddyfile")
+	target := core.Rooted(f.Root, "/etc/meshmux/Caddyfile")
 	const manual = "operator-edited Caddyfile"
 	if err := os.WriteFile(target, []byte(manual), 0640); err != nil {
 		t.Fatal(err)
@@ -399,12 +304,12 @@ func TestHubRepairRollbackKeepsManagedLedgerConsistent(t *testing.T) {
 	// Simulate an apply that died mid-flight after writing and hashing every
 	// file: the files exist on disk with matching hashes, but the run never
 	// recorded "installed".
-	state, ok, err := core.ReadState(f.root)
+	state, ok, err := core.ReadState(f.Root)
 	if err != nil || !ok {
 		t.Fatalf("read state: %+v %v", state, err)
 	}
 	state.Status, state.Stage = "installing", "apply"
-	if err := core.WriteState(f.root, state); err != nil {
+	if err := core.WriteState(f.Root, state); err != nil {
 		t.Fatal(err)
 	}
 	before := state.ManagedFiles
@@ -413,12 +318,12 @@ func TestHubRepairRollbackKeepsManagedLedgerConsistent(t *testing.T) {
 	}
 
 	// Fault after snapshots exist, so the repair performs a real rollback.
-	f.runner.failCall = "systemd-analyze verify"
+	f.Runner.FailCall = "systemd-analyze verify"
 	result, err := InvokeInstaller(t, f, strings.Repeat("5", 32), true)
 	if err == nil || result.ErrorCode != "SYSTEMD_UNIT_INVALID" || result.Status != "partial" {
 		t.Fatalf("injected fault did not roll back to partial: %+v %v", result, err)
 	}
-	rolled, ok, err := core.ReadState(f.root)
+	rolled, ok, err := core.ReadState(f.Root)
 	if err != nil || !ok {
 		t.Fatalf("read rolled-back state: %+v %v", rolled, err)
 	}
@@ -432,7 +337,7 @@ func TestHubRepairRollbackKeepsManagedLedgerConsistent(t *testing.T) {
 		if digest != before[target] {
 			t.Fatalf("ledger digest drifted for %s: %s != %s", target, digest, before[target])
 		}
-		actual, hashErr := core.SHA256File(core.Rooted(f.root, target))
+		actual, hashErr := core.SHA256File(core.Rooted(f.Root, target))
 		if hashErr != nil {
 			t.Fatalf("ledger entry %s is not on disk: %v", target, hashErr)
 		}
@@ -442,7 +347,7 @@ func TestHubRepairRollbackKeepsManagedLedgerConsistent(t *testing.T) {
 	}
 
 	// The decisive regression: repair must not reject its own restored files.
-	f.runner.failCall = ""
+	f.Runner.FailCall = ""
 	result, err = InvokeInstaller(t, f, strings.Repeat("6", 32), true)
 	if err != nil || result.Status != "installed" {
 		t.Fatalf("second repair after rollback: %+v %v", result, err)
@@ -465,22 +370,22 @@ func TestHubInstallQueriesPackagesBeforeApt(t *testing.T) {
 
 	t.Run("all-present", func(t *testing.T) {
 		f := MakeInstallerFixture(t)
-		f.runner.packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true, "python3-systemd": true}
+		f.Runner.Packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true, "python3-systemd": true}
 		if result, err := InvokeInstaller(t, f, strings.Repeat("7", 32), false); err != nil || result.Status != "installed" {
 			t.Fatalf("install with packages present: %+v %v", result, err)
 		}
-		if got := aptCalls(f.runner.calls); len(got) != 0 {
+		if got := aptCalls(f.Runner.Calls); len(got) != 0 {
 			t.Fatalf("apt ran although every package was installed: %v", got)
 		}
 	})
 
 	t.Run("one-missing", func(t *testing.T) {
 		f := MakeInstallerFixture(t)
-		f.runner.packages = map[string]bool{"fail2ban": true, "nftables": true, "python3-systemd": true}
+		f.Runner.Packages = map[string]bool{"fail2ban": true, "nftables": true, "python3-systemd": true}
 		if result, err := InvokeInstaller(t, f, strings.Repeat("8", 32), false); err != nil || result.Status != "installed" {
 			t.Fatalf("install with one missing package: %+v %v", result, err)
 		}
-		got := aptCalls(f.runner.calls)
+		got := aptCalls(f.Runner.Calls)
 		if len(got) != 2 || got[0] != "apt-get update" {
 			t.Fatalf("expected one update plus one install, got %v", got)
 		}
@@ -495,11 +400,11 @@ func TestHubInstallQueriesPackagesBeforeApt(t *testing.T) {
 	// recommendation that --no-install-recommends suppresses.
 	t.Run("systemd-backend-missing", func(t *testing.T) {
 		f := MakeInstallerFixture(t)
-		f.runner.packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}
+		f.Runner.Packages = map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true}
 		if result, err := InvokeInstaller(t, f, strings.Repeat("9", 32), false); err != nil || result.Status != "installed" {
 			t.Fatalf("install with python3-systemd missing: %+v %v", result, err)
 		}
-		got := aptCalls(f.runner.calls)
+		got := aptCalls(f.Runner.Calls)
 		if len(got) != 2 || got[1] != "apt-get install -y --no-install-recommends python3-systemd" {
 			t.Fatalf("apt must install exactly python3-systemd: %v", got)
 		}
@@ -675,8 +580,8 @@ func TestHubRollbackNamesThePreMigrationDatabaseBackup(t *testing.T) {
 	if result, err := InvokeInstaller(t, f, strings.Repeat("5", 32), false); err != nil || result.Status != "installed" {
 		t.Fatalf("first install = %+v, %v", result, err)
 	}
-	recordPath, payloadPath := plantHubDatabaseBackup(t, f.root)
-	f.opts.Verify = func(context.Context, core.Config, core.CommandRunner, func(context.Context, string) error) error {
+	recordPath, payloadPath := plantHubDatabaseBackup(t, f.Root)
+	f.Options.Verify = func(context.Context, core.Config, core.CommandRunner, func(context.Context, string) error) error {
 		return &core.InstallError{Stage: "verify", Code: "WEB_HEALTH_FAILED", Recovery: "Check meshmux-web.service, the loopback Web port, and the private SQLite directory."}
 	}
 	result, err := InvokeInstaller(t, f, strings.Repeat("6", 32), true)
@@ -692,7 +597,7 @@ func TestHubRollbackNamesThePreMigrationDatabaseBackup(t *testing.T) {
 	if !errors.As(err, &ie) || !strings.Contains(ie.Recovery, recordPath) {
 		t.Fatalf("the error the CLI prints lost the backup path: %v", err)
 	}
-	journal, readErr := os.ReadFile(filepath.Join(f.root, "var/lib/meshmux-installer/operations", strings.Repeat("6", 32), "events.jsonl"))
+	journal, readErr := os.ReadFile(filepath.Join(f.Root, "var/lib/meshmux-installer/operations", strings.Repeat("6", 32), "events.jsonl"))
 	if readErr != nil {
 		t.Fatal(readErr)
 	}

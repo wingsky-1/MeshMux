@@ -59,14 +59,6 @@ type (
 	RestoredMarker = dispatch.RestoredMarker
 	// ConfirmHooks are the side effects after a record is confirmed.
 	ConfirmHooks = dispatch.ConfirmHooks
-	// ReconcileConfig is one reconcile pass.
-	ReconcileConfig = dispatch.ReconcileConfig
-	// ReconcileChange is one journal transition of a pass.
-	ReconcileChange = dispatch.ReconcileChange
-	// ReconcileError is one operation a pass could not judge.
-	ReconcileError = dispatch.ReconcileError
-	// ReconcileReport is one pass's honest result.
-	ReconcileReport = dispatch.ReconcileReport
 )
 
 // Fixed locations and document schemas.
@@ -93,8 +85,22 @@ const (
 	RequestDoneDir = dispatch.RequestDoneDir
 	// PointerName is the flat pointer file inside DatabaseBackupDir.
 	PointerName = backup.PointerName
+)
 
-	// Operation kinds.
+// The reconcile vocabulary of the dispatch group.
+type (
+	// ReconcileConfig is one reconcile pass.
+	ReconcileConfig = dispatch.ReconcileConfig
+	// ReconcileChange is one journal transition of a pass.
+	ReconcileChange = dispatch.ReconcileChange
+	// ReconcileError is one operation a pass could not judge.
+	ReconcileError = dispatch.ReconcileError
+	// ReconcileReport is one pass's honest result.
+	ReconcileReport = dispatch.ReconcileReport
+)
+
+// Operation kinds and document schemas.
+const (
 	KindUpdate  = ledger.KindUpdate
 	KindRestore = ledger.KindRestore
 
