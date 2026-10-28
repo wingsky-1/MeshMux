@@ -134,11 +134,6 @@ func TestComposeGoldenArtifacts(t *testing.T) {
 	}
 	assertGolden(t, "standard.singbox.json", documents.SingBox)
 	assertGolden(t, "standard.mihomo.yaml", documents.Mihomo)
-	// The Line publishes no route for a subscription any more (client-chain
-	// egress): the retired field is empty and its golden is gone.
-	if len(documents.LineRoutes) != 0 {
-		t.Fatalf("line routes = %d, want none", len(documents.LineRoutes))
-	}
 	assertGolden(t, "standard.content-id.txt", []byte(documents.ContentID))
 
 	baseLines, credentials := composeBaseLines(lines)

@@ -71,18 +71,12 @@ const (
 	ACLUnit             = spec.ACLUnit
 	ACLTable            = spec.ACLTable
 	CandidateSchema     = spec.CandidateSchema
-	// Deprecated: the candidate document has a single schema.
-	CandidateSchemaV2 = spec.CandidateSchemaV2
-	// Deprecated: the candidate document has a single schema.
-	CandidateSchemaV3 = spec.CandidateSchemaV3
-	// Deprecated: the candidate document has a single schema.
-	CandidateSchemaV4 = spec.CandidateSchemaV4
-	RoleEdge          = spec.RoleEdge
-	RoleOut           = spec.RoleOut
-	RoleHTTP          = spec.RoleHTTP
-	KernelVersion     = spec.KernelVersion
-	OutLinkMethod     = spec.OutLinkMethod
-	OutEgressHTTP     = spec.OutEgressHTTP
+	RoleEdge            = spec.RoleEdge
+	RoleOut             = spec.RoleOut
+	RoleHTTP            = spec.RoleHTTP
+	KernelVersion       = spec.KernelVersion
+	OutLinkMethod       = spec.OutLinkMethod
+	OutEgressHTTP       = spec.OutEgressHTTP
 )
 
 // Agent host and publish contracts.

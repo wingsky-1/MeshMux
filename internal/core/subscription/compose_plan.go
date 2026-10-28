@@ -437,9 +437,8 @@ func composeDocuments(selection composeSelection) (ComposeDocuments, []Diagnosti
 		return ComposeDocuments{}, diagnostics
 	}
 
-	// LineRoutes stays nil: the Line publishes no route for a subscription any
-	// more (client-chain egress). The field is kept only for source
-	// compatibility and is removed in a later v1 release.
+	// The Line publishes no server route for a subscription: the Out is a
+	// client-side hop rendered into the two client documents below.
 	documents := ComposeDocuments{SingBox: singBox, Mihomo: mihomo}
 	documents.SelectionID = composeSelectionID(baseLines, selection.Out, selection.Rules, selection.Network)
 	documents.ContentID = composeContentID(documents)

@@ -217,13 +217,21 @@ func canonicalTaskPayload(task protocol.Task) ([]byte, error) {
 	return result, nil
 }
 
+// taskRevision returns the candidate revision a config task must apply. Every
+// config kind requires one explicit positive revision (fail-closed): there is
+// no empty-params default to the task revision, and the retired
+// allowed_sources key is rejected by protocol.ValidateTask instead of being
+// interpreted here. Status queries carry no parameters and keep the task
+// revision only for the runtime bookkeeping that runs for every kind.
 func taskRevision(task protocol.Task) (int64, error) {
+	switch task.Kind {
+	case protocol.KindConfigCheck, protocol.KindConfigStage, protocol.KindConfigApply, protocol.KindConfigReadback:
+	default:
+		return task.Revision, nil
+	}
 	var values map[string]json.RawMessage
 	if err := json.Unmarshal(task.Params, &values); err != nil {
 		return 0, errors.New("PARAMS_INVALID")
-	}
-	if len(values) == 0 {
-		return task.Revision, nil
 	}
 	raw, ok := values["revision"]
 	if !ok {
@@ -235,11 +243,6 @@ func taskRevision(task protocol.Task) (int64, error) {
 	}
 	return revision, nil
 }
-
-// taskAllowedSources was retired with the Out source allowlist. A config task
-// no longer carries a source set: the Out admits by link key, so the Agent has
-// nothing to derive, stage or read back. Older task params may still contain
-// `allowed_sources`; taskRevision ignores unknown keys.
 
 func currentOperation(ctx context.Context) string {
 	if value, ok := ctx.Value(operationContextKey{}).(string); ok {

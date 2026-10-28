@@ -78,6 +78,36 @@ func TestAgentMetadataNamesTheLinkKeyRevision(t *testing.T) {
 	}
 }
 
+// TestAgentMetadataWithoutCandidateIsExplicit pins the v1 metadata contract:
+// there is no zero-revision sentinel and no installer fallback. A node whose
+// candidate set is empty gets 404 CANDIDATE_NOT_FOUND rather than a document
+// that would make the installer apply revision 1 by guess.
+func TestAgentMetadataWithoutCandidateIsExplicit(t *testing.T) {
+	app, _ := testApp(t)
+	out, code := createPendingNode(t, app, "out", "meta-empty-out", 9443, 2223)
+	w := pairJSON(t, app, out.ID, "out", code)
+	requireStatus(t, w, 200)
+	var paired map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &paired); err != nil || paired["identity_token"] == "" {
+		t.Fatalf("pair body: %v %.200s", err, w.Body.String())
+	}
+	if _, err := app.Store.DB.Exec(`DROP TRIGGER IF EXISTS node_candidates_immutable_delete`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Store.DB.Exec(`DELETE FROM node_candidates WHERE node_id=?`, out.ID); err != nil {
+		t.Fatal(err)
+	}
+	w = bearerReq(app, "GET", "/api/agent/node", paired["identity_token"], nil)
+	requireStatus(t, w, 404)
+	var failure map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &failure); err != nil {
+		t.Fatalf("failure body: %v %.200s", err, w.Body.String())
+	}
+	if failure["error_code"] != "CANDIDATE_NOT_FOUND" {
+		t.Fatalf("error_code = %q, want CANDIDATE_NOT_FOUND", failure["error_code"])
+	}
+}
+
 func TestReissuePairingSeedsCurrentCandidateTasks(t *testing.T) {
 	app, _ := testApp(t)
 	created, firstCode := createPendingNode(t, app, "edge", "repair-edge", 8443, 2222)

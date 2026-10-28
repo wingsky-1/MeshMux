@@ -49,15 +49,6 @@ const (
 	CandidateSchema = "meshmux-node/v1"
 )
 
-// Deprecated: the candidate document has a single schema, meshmux-node/v1.
-// These names remain only so existing callers keep compiling; they must not
-// be used to select or reject a document shape.
-const (
-	CandidateSchemaV2 = CandidateSchema
-	CandidateSchemaV3 = CandidateSchema
-	CandidateSchemaV4 = CandidateSchema
-)
-
 // CurrentAgentVersion is this build's Agent identity, projected read-only from
 // the single source internal/buildinfo (#11d spec §5.3, N7).
 //
@@ -110,8 +101,10 @@ type Identity struct {
 // the Hub currently publishes instead of assuming revision 1: an Out configured
 // with its dial address before pairing carries the SS link key in a later
 // candidate, and the first boot must run the guard that same candidate names.
-// Zero means the caller did not report one (an older fixture); the installer
-// falls back to the initial revision in that case.
+// The v1 contract reports the newest published revision and never a zero
+// sentinel: when the node has no candidate the Hub answers 404 before this
+// document is produced, and a missing or non-positive revision fails validation
+// instead of falling back to the initial revision.
 type Metadata struct {
 	NodeID         string `json:"node_id"`
 	Role           Role   `json:"role"`
@@ -316,7 +309,11 @@ func (c Config) ValidateInstalled() error {
 	return nil
 }
 
-// Metadata returns the immutable identity and port binding from Config.
+// Metadata returns the immutable identity and port binding from Config. The
+// newest published candidate revision is Hub state and not part of Config, so
+// the returned document carries the zero value; callers that need a complete
+// v1 Metadata copy the Hub-reported revision into the result before validating
+// it. Config itself never guesses a revision.
 func (c Config) Metadata() Metadata {
 	return Metadata{NodeID: c.NodeID, Role: c.Role, VLESSPort: c.VLESSPort, SSHPort: c.SSHPort}
 }
@@ -417,15 +414,16 @@ func (m Metadata) Validate() error {
 	if err := validatePorts(m.VLESSPort, m.SSHPort); err != nil {
 		return errors.New("METADATA_INVALID: node metadata does not match")
 	}
-	if m.ConfigRevision < 0 {
+	if m.ConfigRevision < 1 {
 		return errors.New("METADATA_INVALID: node metadata does not match")
 	}
 	return nil
 }
 
 // ValidateFor rejects metadata for any node, role or port other than Config.
-// The candidate revision is an observation, not part of the identity binding,
-// so it never makes metadata from the right node invalid.
+// The candidate revision is Hub-published state rather than identity, but the
+// v1 document still requires a positive one, so the zero sentinel fails here
+// instead of becoming an installer fallback.
 func (m Metadata) ValidateFor(c Config) error {
 	if err := c.Validate(); err != nil {
 		return err

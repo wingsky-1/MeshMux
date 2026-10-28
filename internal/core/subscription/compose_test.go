@@ -66,11 +66,6 @@ func TestComposeSubscriptionIsByteDeterministic(t *testing.T) {
 	if string(first.Mihomo) != string(second.Mihomo) {
 		t.Fatal("mihomo document is not byte-identical")
 	}
-	// The Line publishes no route for a subscription any more: the Out is a
-	// client-side hop, so the retired field stays empty.
-	if len(first.LineRoutes) != 0 || len(second.LineRoutes) != 0 {
-		t.Fatalf("line routes = %d / %d, want none", len(first.LineRoutes), len(second.LineRoutes))
-	}
 	if len(network) != 1 {
 		t.Fatal("the network selection must not block the artifact")
 	}
@@ -87,9 +82,6 @@ func TestComposeSubscriptionRendersOutIntoClientDocuments(t *testing.T) {
 	documents, diagnostics := ComposeSubscription(lines, out, composeRules(), nil)
 	if anyBlocking(diagnostics) {
 		t.Fatalf("unexpected blocking diagnostics: %+v", diagnostics)
-	}
-	if len(documents.LineRoutes) != 0 {
-		t.Fatalf("line routes = %+v, want none (the Line no longer forwards)", documents.LineRoutes)
 	}
 	client := string(documents.SingBox)
 	// The client document keeps the Line outbound and grows exactly one Out

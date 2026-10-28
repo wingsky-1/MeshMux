@@ -46,7 +46,9 @@ func TestClientTLSUnknownCAAndHostnameMismatch(t *testing.T) {
 
 func configMetadataForClientTest() Metadata {
 	config := validConfig()
-	return config.Metadata()
+	metadata := config.Metadata()
+	metadata.ConfigRevision = 1
+	return metadata
 }
 
 func TestClientTLSMinimumVersion(t *testing.T) {

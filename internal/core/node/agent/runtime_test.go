@@ -264,6 +264,32 @@ func task(kind string, operationID, key string, revision, configRevision int64) 
 	}
 }
 
+// TestTaskRevisionRequiresConfigRevision pins the v1 params contract: every
+// config kind needs an explicit revision (fail-closed), while status queries
+// carry no parameters and keep the task revision for bookkeeping.
+func TestTaskRevisionRequiresConfigRevision(t *testing.T) {
+	for _, kind := range []string{
+		protocol.KindConfigCheck, protocol.KindConfigStage,
+		protocol.KindConfigApply, protocol.KindConfigReadback,
+	} {
+		for _, params := range []string{`{}`, `{"revision":0}`, `{"revision":"3"}`, `{"source":"x"}`} {
+			task := task(kind, strings.Repeat("c", 32), strings.Repeat("d", 32), 4, 7)
+			task.Params = json.RawMessage(params)
+			if _, err := taskRevision(task); err == nil {
+				t.Fatalf("%s accepted params %s without a revision", kind, params)
+			}
+		}
+		task := task(kind, strings.Repeat("c", 32), strings.Repeat("d", 32), 4, 7)
+		if revision, err := taskRevision(task); err != nil || revision != 7 {
+			t.Fatalf("%s revision = %d, %v; want 7", kind, revision, err)
+		}
+	}
+	status := task(protocol.KindHealthStatus, strings.Repeat("c", 32), strings.Repeat("d", 32), 4, 0)
+	if revision, err := taskRevision(status); err != nil || revision != 4 {
+		t.Fatalf("status revision = %d, %v; want the task revision 4", revision, err)
+	}
+}
+
 func TestReadbackLocalFreshInstallIsReadOnly(t *testing.T) {
 	root, cfg, _, runner := createRuntimeFixture(t, RoleEdge, 7)
 	readback, err := ReadbackLocal(context.Background(), cfg, root, runner)

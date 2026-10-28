@@ -171,7 +171,7 @@ func TestClientPairPollReportAndReconnect(t *testing.T) {
 		if r.URL.Path != agentMetadataPath || r.Header.Get("Authorization") != "Bearer "+testIdentity {
 			t.Errorf("metadata request path/auth mismatch")
 		}
-		writeJSON(t, w, http.StatusOK, Metadata{NodeID: config.NodeID, Role: config.Role, VLESSPort: config.VLESSPort, SSHPort: config.SSHPort})
+		writeJSON(t, w, http.StatusOK, Metadata{NodeID: config.NodeID, Role: config.Role, VLESSPort: config.VLESSPort, SSHPort: config.SSHPort, ConfigRevision: 1})
 	}
 	hub.config = func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != agentConfigPrefix+"9" {
@@ -388,7 +388,9 @@ func TestClientBoundsErrorBodies(t *testing.T) {
 func TestClientRejectsUntrustedOrMismatchedTLS(t *testing.T) {
 	hub, config := newTestHub(t)
 	hub.meta = func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(t, w, http.StatusOK, config.Metadata())
+		metadata := config.Metadata()
+		metadata.ConfigRevision = 1
+		writeJSON(t, w, http.StatusOK, metadata)
 	}
 	client := newTestClient(t, hub, config, validIdentity(config))
 	if _, err := client.Metadata(context.Background()); err != nil {
@@ -433,6 +435,7 @@ func TestClientRejectsWrongRoleMetadataAndBadCandidate(t *testing.T) {
 	hub, config := newTestHub(t)
 	hub.meta = func(w http.ResponseWriter, r *http.Request) {
 		m := config.Metadata()
+		m.ConfigRevision = 1
 		m.Role = RoleEdge
 		writeJSON(t, w, http.StatusOK, m)
 	}
@@ -482,6 +485,24 @@ func TestClientRejectsWrongRoleMetadataAndBadCandidate(t *testing.T) {
 	}
 	if _, err := client.Candidate(context.Background(), 9); err == nil {
 		t.Fatal("candidate duplicate revision accepted")
+	}
+
+	hub.meta = func(w http.ResponseWriter, r *http.Request) {
+		writeRawJSON(t, w, http.StatusOK, `{"node_id":"`+config.NodeID+`","role":"out","vless_port":8443,"ssh_port":2222}`)
+	}
+	if _, err := client.Metadata(context.Background()); err == nil {
+		t.Fatal("metadata without config_revision accepted")
+	} else {
+		requireClientError(t, err, "SERVER_RESPONSE_INVALID", http.StatusOK)
+	}
+
+	hub.meta = func(w http.ResponseWriter, r *http.Request) {
+		writeRawJSON(t, w, http.StatusOK, `{"node_id":"`+config.NodeID+`","role":"out","vless_port":8443,"ssh_port":2222,"config_revision":0}`)
+	}
+	if _, err := client.Metadata(context.Background()); err == nil {
+		t.Fatal("metadata with the zero-revision sentinel accepted")
+	} else {
+		requireClientError(t, err, "METADATA_INVALID", http.StatusOK)
 	}
 
 	hub.meta = func(w http.ResponseWriter, r *http.Request) {

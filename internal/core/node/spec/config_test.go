@@ -89,7 +89,9 @@ func TestConfigEnrollmentAndInstalledValidation(t *testing.T) {
 	if err := config.ValidateInstalled(); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.Metadata().ValidateFor(config); err != nil {
+	metadata := config.Metadata()
+	metadata.ConfigRevision = 1
+	if err := metadata.ValidateFor(config); err != nil {
 		t.Fatal(err)
 	}
 	identity := Identity{NodeID: config.NodeID, IdentityToken: strings.Repeat("A", 43)}
@@ -137,14 +139,20 @@ func TestIdentityRoleAndMetadataBindings(t *testing.T) {
 	}
 
 	metadata := config.Metadata()
+	metadata.ConfigRevision = 1
 	metadata.Role = RoleEdge
 	if err := metadata.ValidateFor(config); err == nil {
 		t.Fatal("metadata with the wrong role accepted")
 	}
 	metadata = config.Metadata()
+	metadata.ConfigRevision = 1
 	metadata.VLESSPort++
 	if err := metadata.ValidateFor(config); err == nil {
 		t.Fatal("metadata with a different port accepted")
+	}
+	metadata = config.Metadata()
+	if err := metadata.ValidateFor(config); err == nil {
+		t.Fatal("metadata without a published revision accepted")
 	}
 }
 

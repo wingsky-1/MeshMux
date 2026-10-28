@@ -21,9 +21,6 @@ func TestComposeSubscriptionAcceptsHTTPProxyEgress(t *testing.T) {
 	if anyBlocking(diagnostics) {
 		t.Fatalf("http egress blocked the artifact: %+v", diagnostics)
 	}
-	if len(documents.LineRoutes) != 0 {
-		t.Fatalf("line routes = %d, want none (the Line no longer forwards)", len(documents.LineRoutes))
-	}
 	// The http proxy is one client outbound named by the proxy rules.
 	for _, required := range []string{`"type": "http"`, `"tag": "out"`, `"server": "proxy.example.invalid"`, `"server_port": 8080`, `"outbound": "out"`} {
 		if !strings.Contains(string(documents.SingBox), required) {

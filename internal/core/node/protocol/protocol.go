@@ -563,12 +563,7 @@ func validateParams(kind string, raw json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	for key, v := range obj {
-		if key == allowedSourcesParam && configTaskKind(kind) {
-			// Validated as an array below; every other config param stays a
-			// scalar.
-			continue
-		}
+	for _, v := range obj {
 		var s string
 		var n float64
 		var b bool
@@ -593,66 +588,19 @@ func validateParams(kind string, raw json.RawMessage) error {
 			return errors.New("PARAMS_INVALID: status queries take no parameters")
 		}
 	case KindConfigCheck, KindConfigStage, KindConfigApply, KindConfigReadback:
-		for key := range obj {
-			if key != "revision" && key != allowedSourcesParam {
-				return errors.New("PARAMS_INVALID: config tasks accept only revision and allowed_sources")
-			}
+		// Every config kind carries exactly one parameter: the candidate
+		// revision the chain must apply. It is mandatory (fail-closed); there
+		// is no empty-params default. The retired source allowlist is not
+		// accepted: the Out admits by link key, so no source set exists.
+		if len(obj) != 1 {
+			return errors.New("PARAMS_INVALID: config tasks accept only revision")
 		}
-		if revRaw, ok := obj["revision"]; ok {
-			if _, ok := parsePositiveInt64(revRaw); !ok {
-				return errors.New("REVISION_INVALID: revision must be a positive integer")
-			}
+		revRaw, ok := obj["revision"]
+		if !ok {
+			return errors.New("PARAMS_INVALID: config tasks require revision")
 		}
-		if sourcesRaw, ok := obj[allowedSourcesParam]; ok {
-			if err := validateAllowedSources(sourcesRaw); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// allowedSourcesParam is the one list-valued config parameter: the per-Line
-// source allowlist the Hub authorizes for an Out revision. It is deliberately
-// a bounded list of plain strings with no path, URL or shell meaning; the
-// Agent re-validates every entry as an IP or CIDR before rendering a rule.
-const allowedSourcesParam = "allowed_sources"
-
-// maxAllowedSources bounds one allowlist envelope. The Agent renders at most
-// one rule per entry, so the bound keeps params inside the frozen 4KiB body
-// and the rendered table inside a single nft -f transaction.
-const maxAllowedSources = 256
-
-func configTaskKind(kind string) bool {
-	switch kind {
-	case KindConfigCheck, KindConfigStage, KindConfigApply, KindConfigReadback:
-		return true
-	}
-	return false
-}
-
-// validateAllowedSources accepts one JSON array of source strings. Address
-// semantics are checked where the ACL is rendered (ACL_SOURCE_INVALID); here
-// only the envelope shape, count and length are bounded.
-func validateAllowedSources(raw json.RawMessage) error {
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return errors.New("PARAMS_INVALID: allowed_sources must be an array of strings")
-	}
-	var values []string
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if err := decoder.Decode(&values); err != nil {
-		return errors.New("PARAMS_INVALID: allowed_sources must be an array of strings")
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return errors.New("PARAMS_INVALID: allowed_sources must be an array of strings")
-	}
-	if len(values) > maxAllowedSources {
-		return errors.New("PARAMS_INVALID: allowed_sources is too long")
-	}
-	for _, value := range values {
-		if value == "" || len(value) > 64 || strings.ContainsRune(value, 0) {
-			return errors.New("PARAMS_INVALID: allowed_sources entries must be 1-64 characters")
+		if _, ok := parsePositiveInt64(revRaw); !ok {
+			return errors.New("REVISION_INVALID: revision must be a positive integer")
 		}
 	}
 	return nil

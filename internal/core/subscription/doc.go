@@ -24,8 +24,7 @@
 // The Line publishes no route for a subscription (client-chain egress,
 // docs/superpowers/plans/2026-10-27-client-chain-egress.md): the Out is one more
 // egress in the client document, so the client hops Line -> Out itself and every
-// proxy rule names the Out tag. ComposeDocuments.LineRoutes is therefore always
-// empty and only kept for source compatibility.
+// proxy rule names the Out tag.
 //
 // The subscription IR vocabulary (matcher kinds, actions, artifact
 // descriptors, tailnet prefixes) lives in the child package ir, the one place

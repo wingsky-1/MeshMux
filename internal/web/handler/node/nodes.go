@@ -286,6 +286,13 @@ func (s *Server) agentMetadata(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if n.LatestConfigRevision < 1 {
+		// The v1 metadata contract reports the newest published revision and
+		// never a zero sentinel. A node without a candidate gets an explicit
+		// refusal instead of a document that would make the installer guess.
+		s.agentFail(w, r, 404, "CANDIDATE_NOT_FOUND", "节点尚无已发布配置。", "请先在 Web 发布节点配置。")
+		return
+	}
 	metadata := nodedomain.Metadata{
 		NodeID: n.ID, Role: nodedomain.Role(n.Role), VLESSPort: n.VlessPort, SSHPort: n.SSHPort,
 		ConfigRevision: n.LatestConfigRevision,
@@ -329,15 +336,9 @@ func (s *Server) agentCandidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256(candidate.JSON)
-	configHash, hashErr := store.CandidateSHA256(candidate.JSON)
-	if hashErr != nil {
-		s.agentFail(w, r, 500, "CANDIDATE_CORRUPT", "配置无法编译校验。", "请在 Web 重新复核配置。")
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("X-MeshMux-Config-SHA256", hex.EncodeToString(sum[:]))
-	w.Header().Set("X-MeshMux-Config-Compiled-SHA256", configHash)
 	_, _ = w.Write(candidate.JSON)
 }
 
