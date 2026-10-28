@@ -1,39 +1,11 @@
 package install
 
-// The installer's own path/unit vocabulary. Everything below is private to this
-// package: no other layer renders these files, so the constants live next to the
-// renderer instead of in the shared versions leaf. Anything a second package
-// needs (installer root, ledger, runtime binary, web unit, ports, architecture)
-// comes from internal/cli/versions.
+// The installer's own path vocabulary (Caddyfile, Headscale config, Fail2ban
+// jail and filter directories, the journald drop-in, the Hub dispatch units and
+// the upgrade-claim record) is owned by install/core's paths.go.
 //
-// agent.json is not declared here: internal/node owns its one path constant
-// (node.AgentConfigPath), because the Agent and the Hub upgrade producer both
-// address that file.
-
-const (
-	// caddyConfigPath and headscaleConfigPath are the two rendered service
-	// configs. hub_stage.go validates them before any file is replaced.
-	caddyConfigPath     = "/etc/meshmux/Caddyfile"
-	headscaleConfigPath = "/etc/meshmux/headscale.yaml"
-
-	// unitDir is the systemd unit directory; node units are named by the node
-	// domain and appended to it.
-	unitDir = "/etc/systemd/system"
-
-	// fail2banJailDir and fail2banFilterDir hold MeshMux's jails and filter.
-	fail2banJailDir   = "/etc/fail2ban/jail.d"
-	fail2banFilterDir = "/etc/fail2ban/filter.d"
-	sshJailFileName   = "meshmux-ssh.local"
-	webFilterName     = "meshmux-web.conf"
-
-	// journaldDropInPath is the one host-level journald drop-in MeshMux owns.
-	// The "99-" prefix sorts last inside journald.conf.d, so the quota wins over
-	// distribution drop-ins while the main journald.conf is never rewritten. The
-	// file is host-level, not per-role: the Hub always writes it, a standalone
-	// Line writes it, and a co-located Line reuses the Hub's copy so exactly one
-	// ledger owns the path.
-	journaldDropInPath = "/etc/systemd/journald.conf.d/99-meshmux.conf"
-)
-
-// unitPath returns the installed unit file of one unit name.
-func unitPath(name string) string { return unitDir + "/" + name }
+// It is deliberately not re-exported here: every one of those paths is read or
+// written by the installer engine only, and no caller outside this tree may
+// name a MeshMux-owned host path. The few paths another package legitimately
+// needs (the installer root, the runtime binary, the Web unit) come from
+// internal/cli/versions, which remains the single shared source.
