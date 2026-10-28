@@ -1,15 +1,4 @@
-package node
-
-import (
-	"database/sql"
-	"errors"
-	"strings"
-	"time"
-
-	"github.com/wingsky-1/MeshMux/internal/control/store/common"
-
-	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
-)
+package out
 
 // Out transport: the operator-entered dial address of one Out node plus the
 // Hub-issued SS link key that Out admits clients with (Ruling R7: the hop is
@@ -21,7 +10,7 @@ import (
 // 3/4/5 and 11 belongs to 11d, so Task 2 takes no number. The table is purely
 // additive — a fresh binary ignores it, an older binary ignores it, and the
 // 11d/T3 migrations never touch it — which keeps the downgrade and rebase
-// contracts intact. ensureOutTransportTable runs on every open, so fresh and
+// contracts intact. EnsureOutTransportTable runs on every open, so fresh and
 // existing databases converge without a version step.
 //
 // Under Ruling R7 the link key is the SS key (16 random bytes,
@@ -34,6 +23,23 @@ import (
 // it is rendered into the bound Line candidates and the Out's own v4
 // document (the private Hub<->Agent channel) and never appears in a list
 // projection, a log line or a subscription artifact.
+//
+// The one read the candidate builder needs is line.OutEgressTx: the Line layer
+// is the bottom of the node domain, so the Out layer reads the dial body through
+// it instead of keeping a second derivation.
+
+import (
+	"database/sql"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storeline "github.com/wingsky-1/MeshMux/internal/control/store/node/line"
+
+	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
+)
+
 // EnsureOutTransportTable creates the Out dial-parameter table on every open.
 func EnsureOutTransportTable(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
@@ -103,7 +109,7 @@ CREATE TABLE IF NOT EXISTS out_settings (
 }
 
 // OutTransport is the operator-visible half of one Out's dial parameters.
-// The link key never leaves this package: list projections and the Web UI only
+// The link key never leaves the store: list projections and the Web UI only
 // see the address, never the key.
 type OutTransport struct {
 	OutID     string `json:"out_id"`
@@ -155,16 +161,19 @@ type HTTPProxy struct {
 // exist with the immutable out role; the port must equal the Out's VLESS
 // port, mirroring the Line port-match rule. The link key is issued on
 // first set and preserved afterwards, mirroring the REALITY key preservation
-// of SetLine: renaming the address never invalidates the egress the bound
+// of line.SetLine: renaming the address never invalidates the egress the bound
 // Line already dials with. Setting transport on a migrated-empty row mints
 // the key now.
-func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (OutTransport, error) {
+//
+// It opens its own transaction; a changed dial body republishes the Out's own
+// candidate after the commit.
+func SetOutTransport(db *sql.DB, outID, server string, port int, now time.Time) (OutTransport, error) {
 	outID = strings.TrimSpace(outID)
-	if !validNodeID(outID) {
+	if !storeline.ValidNodeID(outID) {
 		return OutTransport{}, common.ErrOutIDInvalid()
 	}
 	server = strings.ToLower(strings.TrimSpace(server))
-	tx, err := s.DB.Begin()
+	tx, err := db.Begin()
 	if err != nil {
 		return OutTransport{}, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -222,28 +231,8 @@ func (s *Store) SetOutTransport(outID, server string, port int, now time.Time) (
 	// listener document): republish it. Lines embed nothing of the Out, so no
 	// Line has to converge. The drain owns its own transaction and never fails
 	// the mutation.
-	s.drainOutNode(outID, now)
+	drainOutNode(db, outID, now)
 	return OutTransport{OutID: outID, Server: server, Port: port, UpdatedAt: stamp}, nil
-}
-
-// outEgressTx is the single derivation of one Out's dial body for candidate
-// rendering: the configured server/port plus the Hub-issued link key. The
-// boolean is false when the Out has no transport yet; callers render the frozen
-// baseline in that case instead of inventing an endpoint.
-func outEgressTx(tx *sql.Tx, outID string) (coredomain.OutEgress, bool, error) {
-	var egress coredomain.OutEgress
-	err := tx.QueryRow(`SELECT server, port, link_key FROM out_settings WHERE node_id=?`, outID).
-		Scan(&egress.Server, &egress.Port, &egress.Key)
-	if errors.Is(err, sql.ErrNoRows) {
-		return coredomain.OutEgress{}, false, nil
-	}
-	if err != nil {
-		return coredomain.OutEgress{}, false, errors.New(common.CodeDatabaseUnavailable)
-	}
-	if err := egress.Validate(); err != nil {
-		return coredomain.OutEgress{}, false, errors.New("OUT_TRANSPORT_CORRUPT: the stored out transport is invalid")
-	}
-	return egress, true, nil
 }
 
 // OutPool lists every enrolled Out node with its dial address and the Lines a
@@ -255,8 +244,8 @@ func outEgressTx(tx *sql.Tx, outID string) (coredomain.OutEgress, bool, error) {
 // may offer, and which Lines currently route through it. Nothing here authorizes
 // anything — an Out admits by link key — so a paused subscription simply stops
 // contributing Lines to this projection.
-func (s *Store) OutPool(now time.Time) ([]OutPoolEntry, error) {
-	rows, err := s.DB.Query(`
+func OutPool(db *sql.DB, now time.Time) ([]OutPoolEntry, error) {
+	rows, err := db.Query(`
 SELECT n.id, n.role, n.display_name, n.vless_port, n.status, n.last_heartbeat,
  o2.server, o2.port, h.url, l.node_id, b.state
 FROM nodes n

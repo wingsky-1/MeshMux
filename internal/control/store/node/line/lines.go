@@ -1,4 +1,4 @@
-package node
+package line
 
 import (
 	"database/sql"
@@ -12,7 +12,7 @@ import (
 	"github.com/wingsky-1/MeshMux/internal/core/subscription"
 )
 
-// setLine stores the transport of one Line. The node must be an existing edge
+// SetLine stores the transport of one Line. The node must be an existing edge
 // node; an Out node never carries a proxy Line.
 //
 // The REALITY key pair and the short ID identify the transport. For an
@@ -22,11 +22,13 @@ import (
 // The listening port must equal the VLESS port of the node. A Line that points
 // at a different port would publish a client configuration the Line can never
 // serve.
-func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Line, error) {
+//
+// It opens its own transaction: the write is complete when it commits.
+func SetLine(db *sql.DB, line subscription.Line, now time.Time) (subscription.Line, error) {
 	if err := subscription.ValidateID(line.NodeID); err != nil {
 		return subscription.Line{}, common.ErrLineNodeIDInvalid()
 	}
-	tx, err := s.DB.Begin()
+	tx, err := db.Begin()
 	if err != nil {
 		return subscription.Line{}, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -113,9 +115,9 @@ func (s *Store) SetLine(line subscription.Line, now time.Time) (subscription.Lin
 	return line, nil
 }
 
-// listLines returns every stored Line ordered by its sort order.
-func (s *Store) ListLines() ([]subscription.Line, error) {
-	rows, err := s.DB.Query(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)
+// ListLines returns every stored Line ordered by its sort order.
+func ListLines(db *sql.DB) ([]subscription.Line, error) {
+	rows, err := db.Query(`SELECT node_id, display_name, server, port, sort_order, server_name, handshake_server, handshake_port, private_key, public_key, short_id, local FROM line_settings ORDER BY sort_order ASC, display_name ASC`)
 	if err != nil {
 		return nil, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -138,7 +140,7 @@ func (s *Store) ListLines() ([]subscription.Line, error) {
 }
 
 // scanLine reads one stored Line and validates it against the contract that
-// setLine enforces on write.
+// SetLine enforces on write.
 //
 // The write path only stores canonical values, so an invalid row means the
 // database was modified outside the Hub. Such a row is reported as a corrupt
@@ -160,12 +162,8 @@ func scanLine(row common.RowScanner) (subscription.Line, error) {
 	return line, nil
 }
 
-// common.ErrLineSettingsCorrupt marks a stored Line that does not satisfy the
-// domain contract. The message carries the stable error code only and never
-// the stored values.
-
 // validateStoredLine checks the persisted Line against the domain contract and
-// against the node-side REALITY contract of setLine.
+// against the node-side REALITY contract of SetLine.
 func validateStoredLine(line subscription.Line) error {
 	if err := line.Validate(); err != nil {
 		return common.ErrLineSettingsCorrupt

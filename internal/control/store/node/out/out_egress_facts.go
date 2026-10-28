@@ -1,4 +1,4 @@
-package node
+package out
 
 // The egress facts of one Line.
 //
@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storeline "github.com/wingsky-1/MeshMux/internal/control/store/node/line"
+
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
@@ -48,8 +50,8 @@ type OutEgressFacts struct {
 	// endpoint. Code carries CodeLineEgressExternalDeclared in that state.
 	ExternalDeclared bool `json:"external_declared,omitempty"`
 	// Code is the stable reason when Configured is true and Available is false:
-	// OUT_NOT_CONFIGURED (the selected egress has no dial body) or the
-	// declaration code for an external proxy.
+	// OUT_SYNC_PENDING (the selected egress has no dial body) or the declaration
+	// code for an external proxy.
 	Code string `json:"code,omitempty"`
 }
 
@@ -58,7 +60,7 @@ type OutEgressFacts struct {
 // consume, so a projection can never disagree with the client artifact about
 // which egress the selection names.
 func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts, error) {
-	if !validNodeID(lineID) {
+	if !storeline.ValidNodeID(lineID) {
 		return OutEgressFacts{}, common.ErrLineIDInvalid()
 	}
 	var role string
@@ -73,7 +75,7 @@ func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 		return OutEgressFacts{}, errors.New("LINE_ROLE_INVALID: only edge nodes carry an egress")
 	}
 	facts := OutEgressFacts{LineID: lineID}
-	selected, err := selectedEgressIDsForLineTx(tx, lineID)
+	selected, err := storeline.SelectedEgressIDsForLineTx(tx, lineID)
 	if err != nil {
 		return OutEgressFacts{}, err
 	}
@@ -85,7 +87,7 @@ func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 	}
 	facts.Configured = true
 	facts.OutID = selected[0]
-	egressRole, err := nodeRoleTx(tx, selected[0])
+	egressRole, err := storeline.NodeRoleTx(tx, selected[0])
 	if err != nil {
 		return OutEgressFacts{}, err
 	}
@@ -93,33 +95,33 @@ func OutEgressFactsTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressFacts,
 	case string(common.NodeRoleOut):
 		// The Out admits by link key; the only thing the client document still
 		// needs is a dial body to name.
-		if _, configured, err := outEgressTx(tx, selected[0]); err != nil {
+		if _, configured, err := storeline.OutEgressTx(tx, selected[0]); err != nil {
 			return OutEgressFacts{}, err
 		} else if configured {
 			facts.Available = true
 		} else {
-			facts.Code = CodeOutSyncPending
+			facts.Code = storeline.CodeOutSyncPending
 		}
 	case string(common.NodeRoleHTTP):
 		// The egress is the operator's declared proxy (Ruling R11). There is no
 		// Agent and no readback, so the state is the declaration itself.
 		facts.Available = true
 		facts.ExternalDeclared = true
-		facts.Code = CodeLineEgressExternalDeclared
+		facts.Code = storeline.CodeLineEgressExternalDeclared
 	default:
 		return OutEgressFacts{}, errors.New("OUT_ROLE_INVALID: only out and http nodes can be selected as an egress")
 	}
 	return facts, nil
 }
 
-// OutEgressFacts projects one Line's egress preconditions at one clock.
+// ProjectOutEgressFacts projects one Line's egress preconditions at one clock.
 //
 // The Line must exist with the immutable edge role; a wrong role or an unknown
 // id is rejected instead of being reported as "no Out", because silently
 // treating an Out node as a Line would hide an operator mistake behind a
 // healthy-looking direct egress.
-func (s *Store) OutEgressFacts(lineID string, now time.Time) (OutEgressFacts, error) {
-	tx, err := s.DB.Begin()
+func ProjectOutEgressFacts(db *sql.DB, lineID string, now time.Time) (OutEgressFacts, error) {
+	tx, err := db.Begin()
 	if err != nil {
 		return OutEgressFacts{}, errors.New(common.CodeDatabaseUnavailable)
 	}

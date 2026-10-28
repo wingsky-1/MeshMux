@@ -1,4 +1,4 @@
-package node
+package out
 
 // Out lifecycle after Ruling R9: deleting an Out is a real delete.
 //
@@ -31,6 +31,7 @@ import (
 	candidatepkg "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storeline "github.com/wingsky-1/MeshMux/internal/control/store/node/line"
 )
 
 // DeleteOutAt is the request-clock variant used by the Web handler, so the
@@ -48,12 +49,12 @@ import (
 //     rows and the private proxy row go with it through ON DELETE CASCADE.
 //
 // A failure at any step rolls the whole thing back: there is no half-deleted Out.
-func (s *Store) DeleteOutAt(outID string, now time.Time) error {
+func DeleteOutAt(db *sql.DB, subs Subscribers, outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
-	if !validNodeID(outID) {
+	if !storeline.ValidNodeID(outID) {
 		return common.ErrOutIDInvalid()
 	}
-	tx, err := s.DB.Begin()
+	tx, err := db.Begin()
 	if err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -76,12 +77,12 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	// The read must share the delete's transaction: the store runs on a single
 	// connection, so a second DB-level query here would wait on the open
 	// transaction forever.
-	usedBy, err := s.Subscribers.OutUsedByTx(tx, outID)
+	usedBy, err := subs.OutUsedByTx(tx, outID)
 	if err != nil {
 		return err
 	}
 	if len(usedBy) > 0 {
-		return errors.New(s.Subscribers.OutReferencedCode() + ": out " + outID + " is still selected by " + strings.Join(usedBy, "、") + "; migrate those subscriptions first")
+		return errors.New(subs.OutReferencedCode() + ": out " + outID + " is still selected by " + strings.Join(usedBy, "、") + "; migrate those subscriptions first")
 	}
 	// An unfinished chain is a host that has not finished applying its link-key
 	// listener. Deleting the node now would strand that chain: no result could be
@@ -96,7 +97,7 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 		return err
 	}
 	if unfinished != 0 {
-		return errors.Join(errors.New(CodeOutSyncPending+": the out still has an unfinished chain; retry after it settles"), ErrOutCleanupPending)
+		return errors.Join(errors.New(storeline.CodeOutSyncPending+": the out still has an unfinished chain; retry after it settles"), ErrOutCleanupPending)
 	}
 	// Delete the node. Everything keyed to it (out_settings with the dial address and
 	// link key, node_candidates, agent_tasks, node_identities, node_pairing) cascades.
@@ -114,11 +115,11 @@ func (s *Store) DeleteOutAt(outID string, now time.Time) error {
 	// The Out is gone, so any policy that still names it must be re-derived for every
 	// Line: the policy resolver refuses an Out reference the Hub cannot justify, so the Line's
 	// next publication fails closed instead of silently becoming direct.
-	s.RepublishLineAuthorizations(now)
+	RepublishLineAuthorizations(db, subs, now)
 	return nil
 }
 
 // ErrOutCleanupPending is the refusal sentinel of a delete that destroyed
 // nothing because the Out still has an unfinished chain. The name is kept for
 // the Web handler's 409 mapping; there is no ACL cleanup left to wait for.
-var ErrOutCleanupPending = errors.New(CodeOutSyncPending + ": the out still has an unfinished chain; retry the out synchronization")
+var ErrOutCleanupPending = errors.New(storeline.CodeOutSyncPending + ": the out still has an unfinished chain; retry the out synchronization")

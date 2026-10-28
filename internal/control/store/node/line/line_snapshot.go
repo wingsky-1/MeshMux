@@ -1,4 +1,4 @@
-package node
+package line
 
 import (
 	"database/sql"
@@ -10,8 +10,8 @@ import (
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
 )
 
-// buildLineCandidateTx builds the complete desired candidate of one node in
-// the caller's transaction.
+// BuildLineCandidateTx builds the complete desired candidate of one node in the
+// caller's transaction.
 //
 // The frozen baseline always carries the node identity, role, revision, VLESS
 // port and pinned kernel version. An Out node never receives user credentials
@@ -27,11 +27,10 @@ import (
 // the client from the document it downloads, so nothing server-side ever
 // forwards to an Out.
 //
-// The function is read-only. It never commits, mutates subscribers or
-// publishes tasks; the caller owns the transaction and the candidate revision.
-// BuildLineCandidateTx assembles the complete desired candidate of one node in
-// the caller's transaction. It reads only tables, so a caller with no assembled
-// handle (a CLI fixture, a migration check) can use it directly.
+// The function is read-only. It never commits, mutates subscribers or publishes
+// tasks; the caller owns the transaction and the candidate revision. It reads
+// only tables, so a caller with no assembled handle (a CLI fixture, a migration
+// check) can use it directly.
 func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain.Candidate, error) {
 	var role string
 	var vlessPort int
@@ -54,7 +53,7 @@ func BuildLineCandidateTx(tx *sql.Tx, nodeID string, revision int64) (coredomain
 	// Agent renders the SS guard; without transport it keeps the frozen v1
 	// baseline, so its stored digest still verifies.
 	if coredomain.Role(role) == coredomain.RoleOut {
-		if egress, configured, err := outEgressTx(tx, nodeID); err != nil {
+		if egress, configured, err := OutEgressTx(tx, nodeID); err != nil {
 			return coredomain.Candidate{}, err
 		} else if configured {
 			candidate.Out = &egress

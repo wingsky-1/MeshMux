@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storeline "github.com/wingsky-1/MeshMux/internal/control/store/node/line"
 
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
 	"github.com/wingsky-1/MeshMux/internal/core/node/protocol"
@@ -200,7 +201,7 @@ func (s *Store) CreateHTTPProxyNode(displayName, proxyURL string, now time.Time)
 // transaction commits.
 func (s *Store) SetHTTPProxy(proxyID, proxyURL string, now time.Time) (HTTPProxy, error) {
 	proxyID = strings.TrimSpace(proxyID)
-	if !validNodeID(proxyID) {
+	if !storeline.ValidNodeID(proxyID) {
 		return HTTPProxy{}, errors.New("OUT_BINDING_INVALID: proxy_id must be 32 lowercase hex characters")
 	}
 	egress, err := coredomain.ParseHTTPProxyURL(proxyURL)

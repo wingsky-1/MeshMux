@@ -1,4 +1,4 @@
-package node
+package out
 
 // The Out authorization schema legs of the subscription-aggregation rebuild.
 //
@@ -25,14 +25,13 @@ import (
 	"database/sql"
 )
 
-// migrateSchema5 adds the Out binding table. It is the historical PR #8 leg.
+// MigrateSchema5 adds the Out binding table. It is the historical PR #8 leg.
 //
 // It is deliberately kept even though Task 5 drops the table again: the schema
 // version is monotonic, so a database that reports 4 has to pass through 5 to
 // reach the current version, and a leg that silently changed meaning would make
 // the chain untrustworthy for every later leg. A fresh database runs it and the
 // drop in the same transaction, which costs one empty table creation.
-// MigrateSchema5 creates the Out binding table.
 func MigrateSchema5(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 CREATE TABLE out_bindings (
@@ -50,7 +49,7 @@ PRAGMA user_version=5;
 	return nil
 }
 
-// migrateSchema14 drops the Out binding table and its index.
+// MigrateSchema14 drops the Out binding table and its index.
 //
 // It is the only destructive migration of the aggregation rebuild and it is
 // irreversible: from this version on an Out admits by link key, which needs no
@@ -61,7 +60,6 @@ PRAGMA user_version=5;
 //
 // The DDL is idempotent so a replay (a fixture that starts from a pre-14 file whose
 // table was already dropped by hand) cannot fail on its own earlier write.
-// MigrateSchema14 drops the Out binding table; admission is the link key.
 func MigrateSchema14(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 DROP INDEX IF EXISTS out_bindings_line;
@@ -73,7 +71,7 @@ PRAGMA user_version=14;
 	return nil
 }
 
-// migrateSchema15 lets a node row be deleted.
+// MigrateSchema15 lets a node row be deleted.
 //
 // Schema 3 installed an unconditional BEFORE DELETE trigger on node_candidates, so a
 // candidate row can never be rewritten or removed. That is right for a line of
@@ -95,7 +93,6 @@ PRAGMA user_version=14;
 // If a future SQLite version ever ran cascade children first, this trigger would abort
 // the parent delete again — the delete path's own test (Ruling R9) is what would catch
 // it, not a silent data loss.
-// MigrateSchema15 narrows the candidate immutability trigger.
 func MigrateSchema15(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 DROP TRIGGER IF EXISTS node_candidates_immutable_delete;

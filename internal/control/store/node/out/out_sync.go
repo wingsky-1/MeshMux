@@ -1,4 +1,4 @@
-package node
+package out
 
 // Out synchronization after the client-side chain rebuild.
 //
@@ -28,112 +28,15 @@ package node
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
 	candidatepkg "github.com/wingsky-1/MeshMux/internal/control/store/candidate"
 	"github.com/wingsky-1/MeshMux/internal/control/store/common"
+	storeline "github.com/wingsky-1/MeshMux/internal/control/store/node/line"
 
 	coredomain "github.com/wingsky-1/MeshMux/internal/core/node"
-	"github.com/wingsky-1/MeshMux/internal/core/subscription"
-)
-
-// The Out states the Hub can prove about its own chain.
-const (
-	// OutSyncHealthy: the published chain is the desired one and the Agent
-	// readback confirmed it for the current revision.
-	OutSyncHealthy = "healthy"
-	// OutSyncVerifying: a chain is in flight.
-	OutSyncVerifying = "verifying"
-	// OutSyncPending: the desired chain has not been published yet.
-	OutSyncPending = "pending"
-	// OutSyncPartial: the last chain ended in a terminal failure, or the Hub
-	// cannot build the Out's candidate at all.
-	OutSyncPartial = "partial"
-)
-
-// The Line egress states derived from the subscription selection.
-const (
-	// LineEgressDirect: no active subscription selects an egress for this Line,
-	// so its clients egress directly. This is a routing state, not a defect.
-	LineEgressDirect = "direct"
-	// LineEgressExternal: the Line's egress slot holds an external HTTP proxy.
-	// The proxy is not a managed host: there is no Agent, no readback and no
-	// machine controller, so this state is the operator's declaration, never a
-	// proven egress. It always carries CodeLineEgressExternalDeclared, so a
-	// projection or a log line can tell the declaration apart from a managed
-	// Out.
-	LineEgressExternal = "external"
-	// LineEgressHealthy: the Line's selection names a managed Out. The Out
-	// admits clients by the link key its own candidate publishes, so the Hub has
-	// no per-Line authorization left to prove; the Line's inbound snapshot is
-	// reported separately by the convergence view.
-	LineEgressHealthy = "healthy"
-	// LineEgressVerifying: reserved for a projection that still waits on an Out
-	// chain. The current Line derivation never produces it; the constant stays
-	// because the Web projection and the sync vocabulary name it.
-	LineEgressVerifying = "verifying"
-	// LineEgressPartial: the selection names an egress the Hub cannot resolve.
-	LineEgressPartial = "partial"
-)
-
-// OutAclSourceMismatchCode is the Agent readback code of the retired source
-// allowlist. It stays declared because an older Agent may still report it; the
-// Hub no longer publishes an allowlist and no longer interprets the code.
-const OutAclSourceMismatchCode = "OUT_ACL_SOURCE_MISMATCH"
-
-// The stable codes the Hub itself reports for a Line egress.
-const (
-	// CodeLineEgressUnverified is retired with the source allowlist: the Hub no
-	// longer needs a verifiable source address, because the Out admits by key.
-	// It stays declared so a stored diagnosis row and the frozen error-code
-	// vocabulary keep resolving.
-	CodeLineEgressUnverified = "LINE_EGRESS_UNVERIFIED"
-	// CodeLineNotAuthorized is retired with the source allowlist.
-	CodeLineNotAuthorized = "LINE_NOT_AUTHORIZED"
-	// CodeOutSyncInProgress and CodeOutSyncPending are the transition codes.
-	CodeOutSyncInProgress = "OUT_SYNC_IN_PROGRESS"
-	CodeOutSyncPending    = "OUT_SYNC_PENDING"
-	// CodeOutNotAuthorized marks a projected egress that is not established
-	// yet. It is a projection-only code: nothing gates a Line publication on it
-	// any more.
-	CodeOutNotAuthorized = "OUT_NOT_AUTHORIZED"
-	// CodeLineEgressExternalDeclared marks the LineEgressExternal state: the
-	// egress is an external HTTP proxy the operator declared, and the Hub
-	// deliberately holds no proof of it (no readback, no controller). The code
-	// is informational and never blocks a publication; it exists so a readback,
-	// a log line and the UI can say "declared" instead of "healthy".
-	CodeLineEgressExternalDeclared = "LINE_EGRESS_EXTERNAL_DECLARED"
-	// CodeOutSyncNotApplicable marks an operation that has no meaning for an
-	// external HTTP proxy: there is no Agent, no candidate and no readback to
-	// publish or retry. The action reports it explicitly instead of a silent
-	// success, so an operator never believes a chain was sent.
-	CodeOutSyncNotApplicable = "OUT_SYNC_NOT_APPLICABLE"
-)
-
-// outDrainOutcome classifies what one Out drain attempt did. It lets the caller
-// tell "nothing to publish" apart from "publish is blocked", which the operator
-// has to see.
-type outDrainOutcome int
-
-const (
-	// outDrainNoop: the published chain already equals the desired one and is
-	// confirmed, or an unchanged unconfirmed snapshot waits for an explicit
-	// retry.
-	outDrainNoop outDrainOutcome = iota
-	// outDrainPublished: a new immutable revision and its fixed chain were
-	// enqueued in the caller's transaction.
-	outDrainPublished
-	// outDrainDeferred: a publish is required but cannot happen yet (a chain is
-	// in flight, or the Out is offline). The change stays pending.
-	outDrainDeferred
-	// outDrainNotApplicable: the egress is an external HTTP proxy (Ruling R11).
-	// It has no Agent, no candidate and no readback, so there is no out-side
-	// chain to publish at all. The caller reports this explicitly instead of a
-	// silent no-op.
-	outDrainNotApplicable
 )
 
 // OutEgressReadback is the Hub-side readback of one Line that names an egress.
@@ -180,99 +83,29 @@ type OutEgressReadback struct {
 	RetryPending bool `json:"retry_pending"`
 }
 
-// validNodeID accepts exactly the canonical node identity shape that the rest of
-// the domain uses (32 lowercase hex characters).
-func validNodeID(id string) bool {
-	return subscription.ValidateID(id) == nil
-}
-
-// selectedEgressIDsForLineTx returns every egress the Line's selection names:
-// managed Out nodes and external HTTP proxies (Ruling R11). The 1.0 slot holds
-// one egress per subscriber, so a caller sees one distinct id per subscription;
-// the query does not rely on that to stay correct.
-func selectedEgressIDsForLineTx(tx *sql.Tx, lineID string) ([]string, error) {
-	return queryIDsTx(tx, `SELECT DISTINCT o.out_id
-	  FROM subscription_outs o
-	  JOIN subscribers s ON s.id=o.subscriber_id AND s.state='active'
-	  JOIN subscription_lines l ON l.subscriber_id=o.subscriber_id
-	 WHERE l.node_id=?
-	 ORDER BY o.out_id ASC`, lineID)
-}
-
-// nodeRoleTx reads one node's immutable role, mapping a missing row to a stable
-// refusal.
-func nodeRoleTx(tx *sql.Tx, nodeID string) (string, error) {
-	var role string
-	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", common.ErrNodeNotFoundDetail
-	}
-	if err != nil {
-		return "", errors.New(common.CodeDatabaseUnavailable)
-	}
-	return role, nil
-}
-
-// LineOutEgressStatusTx reports the routing state of one Line's egress slot.
-//
-// It reads the subscription selection only: an Out admits clients by the link
-// key its candidate publishes, so there is no per-Line authorization to
-// converge and no publication gate to satisfy. A Line that no active
-// subscription pairs with an egress egresses directly; an HTTP proxy slot is the
-// operator's declaration; a managed Out slot is healthy because the client
-// document carries the key that Out accepts.
-func LineOutEgressStatusTx(tx *sql.Tx, lineID string, now time.Time) (string, string, error) {
-	selected, err := selectedEgressIDsForLineTx(tx, lineID)
-	if err != nil {
-		return LineEgressPartial, common.CodeDatabaseUnavailable, err
-	}
-	if len(selected) == 0 {
-		return LineEgressDirect, "", nil
-	}
-	role, err := nodeRoleTx(tx, selected[0])
-	if err != nil {
-		return LineEgressPartial, common.SanitizeSyncCode(err.Error()), nil
-	}
-	switch role {
-	case string(common.NodeRoleOut):
-		// The Out admits by link key, so the only thing that can still be
-		// missing is the dial body the client document has to name.
-		if _, configured, err := outEgressTx(tx, selected[0]); err != nil {
-			return LineEgressPartial, common.SanitizeSyncCode(err.Error()), nil
-		} else if !configured {
-			return LineEgressPartial, CodeOutSyncPending, nil
-		}
-		return LineEgressHealthy, "", nil
-	case string(common.NodeRoleHTTP):
-		return LineEgressExternal, CodeLineEgressExternalDeclared, nil
-	default:
-		return LineEgressPartial, "OUT_ROLE_INVALID", nil
-	}
-}
-
 // outEgressReadbackTx is the Hub-side readback of one Line.
 //
 // Each fact is derived independently and reported with its own stable code, so a
 // partially converged Line can never be summarized as healthy: the egress
 // routing state, the Line inbound snapshot, the REALITY block of that snapshot,
 // and the resulting final egress.
-func (s *Store) outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (OutEgressReadback, error) {
+func outEgressReadbackTx(tx *sql.Tx, subs Subscribers, lineID string, now time.Time) (OutEgressReadback, error) {
 	readback := OutEgressReadback{LineID: lineID}
-	selected, err := selectedEgressIDsForLineTx(tx, lineID)
+	selected, err := storeline.SelectedEgressIDsForLineTx(tx, lineID)
 	if err != nil {
 		return OutEgressReadback{}, err
 	}
 	if len(selected) > 0 {
 		readback.OutID = selected[0]
 	}
-	state, code, err := LineOutEgressStatusTx(tx, lineID, now)
+	state, code, err := storeline.LineOutEgressStatusTx(tx, lineID, now)
 	if err != nil {
 		return OutEgressReadback{}, err
 	}
 	readback.Allowlist, readback.AllowlistCode = state, code
 	// The Line side facts come from the Line's own confirmed snapshot, which is
 	// what proves its inbound listener, user set and REALITY transport.
-	inbound, inboundCode, inboundErr := s.Subscribers.LineSyncViewTx(tx, lineID, now)
+	inbound, inboundCode, inboundErr := subs.LineSyncViewTx(tx, lineID, now)
 	if inboundErr != nil {
 		return OutEgressReadback{}, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -285,79 +118,38 @@ func (s *Store) outEgressReadbackTx(tx *sql.Tx, lineID string, now time.Time) (O
 	// therefore a redundancy guard against a future change to the inbound
 	// projection, not a currently reachable distinction; it never lets the pair
 	// be reported healthy while the fact is false.
-	readback.Reality = lineRealityConfirmedTx(tx, lineID)
-	readback.ConfirmedRevision, readback.ConfirmedDigest = confirmedLineRevisionTx(tx, lineID)
+	readback.Reality = storeline.RealityConfirmedTx(tx, lineID)
+	readback.ConfirmedRevision, readback.ConfirmedDigest = storeline.ConfirmedRevisionTx(tx, lineID)
 	switch {
-	case readback.Allowlist == LineEgressDirect:
+	case readback.Allowlist == storeline.LineEgressDirect:
 		readback.FinalEgress, readback.FinalEgressCode = inbound, inboundCode
-	case readback.Allowlist == LineEgressExternal:
+	case readback.Allowlist == storeline.LineEgressExternal:
 		// The egress is the operator's external HTTP proxy (Ruling R11): no
 		// readback and no controller can prove it. A converged Line proves only
 		// its own inbound half, so the pair is reported as the declaration it is
 		// instead of a healthy egress the Hub never demonstrated.
 		if inbound == common.SubscriberSyncHealthy && readback.Reality {
-			readback.FinalEgress, readback.FinalEgressCode = LineEgressExternal, CodeLineEgressExternalDeclared
+			readback.FinalEgress, readback.FinalEgressCode = storeline.LineEgressExternal, storeline.CodeLineEgressExternalDeclared
 		} else {
 			readback.FinalEgress, readback.FinalEgressCode = inbound, inboundCode
 		}
-	case readback.Allowlist == LineEgressHealthy && inbound == common.SubscriberSyncHealthy && readback.Reality:
-		readback.FinalEgress = LineEgressHealthy
-	case readback.Allowlist == LineEgressHealthy && inbound == common.SubscriberSyncHealthy:
-		readback.FinalEgress = LineEgressPartial
+	case readback.Allowlist == storeline.LineEgressHealthy && inbound == common.SubscriberSyncHealthy && readback.Reality:
+		readback.FinalEgress = storeline.LineEgressHealthy
+	case readback.Allowlist == storeline.LineEgressHealthy && inbound == common.SubscriberSyncHealthy:
+		readback.FinalEgress = storeline.LineEgressPartial
 		readback.FinalEgressCode = "OUT_EGRESS_REALITY_UNVERIFIED"
-	case readback.Allowlist == LineEgressVerifying || inbound == common.SubscriberSyncPending:
-		readback.FinalEgress = LineEgressVerifying
+	case readback.Allowlist == storeline.LineEgressVerifying || inbound == common.SubscriberSyncPending:
+		readback.FinalEgress = storeline.LineEgressVerifying
 		readback.FinalEgressCode = firstStableCode(readback.AllowlistCode, inboundCode, CodeOutSyncInProgress)
 	default:
-		readback.FinalEgress = LineEgressPartial
+		readback.FinalEgress = storeline.LineEgressPartial
 		readback.FinalEgressCode = firstStableCode(readback.AllowlistCode, inboundCode, "OUT_SYNC_FAILED")
 	}
 	// The retry pointer is derived from the same evidence as the state above:
 	// only a terminal failure is retryable. A transition is still applying its
 	// own chain.
-	readback.RetryPending = readback.FinalEgress == LineEgressPartial
+	readback.RetryPending = readback.FinalEgress == storeline.LineEgressPartial
 	return readback, nil
-}
-
-// confirmedLineRevisionTx returns the newest Line revision the node confirmed
-// together with its compiled digest. It is the rollback pointer of the pair: the
-// host keeps this revision's files as its last-known-good state, so any later
-// failed chain can be rolled back to it.
-func confirmedLineRevisionTx(tx *sql.Tx, lineID string) (int64, string) {
-	revision, digest, _, found, err := candidatepkg.LatestPublishedTx(tx, lineID)
-	if err != nil || !found {
-		return 0, ""
-	}
-	confirmed, err := candidatepkg.LineReadbackConfirmedTx(tx, lineID, revision, digest)
-	if err != nil || !confirmed {
-		return 0, ""
-	}
-	return revision, digest
-}
-
-// lineRealityConfirmedTx reports whether the latest confirmed Line candidate
-// still carries the REALITY block its stored transport describes. A Line without
-// that block could not serve the client configuration the Hub publishes, so the
-// final egress is never claimed healthy on the routing state alone.
-func lineRealityConfirmedTx(tx *sql.Tx, lineID string) bool {
-	revision, digest, _, found, err := candidatepkg.LatestPublishedTx(tx, lineID)
-	if err != nil || !found {
-		return false
-	}
-	confirmed, err := candidatepkg.LineReadbackConfirmedTx(tx, lineID, revision, digest)
-	if err != nil || !confirmed {
-		return false
-	}
-	var candidateJSON string
-	if err := tx.QueryRow(`SELECT candidate_json FROM node_candidates WHERE node_id=? AND revision=?`, lineID, revision).
-		Scan(&candidateJSON); err != nil {
-		return false
-	}
-	var document coredomain.CandidateDocument
-	if json.Unmarshal([]byte(candidateJSON), &document) != nil {
-		return false
-	}
-	return document.Reality != nil && document.Role == coredomain.RoleEdge
 }
 
 // firstStableCode returns the first non-empty value so a transition code is never
@@ -371,7 +163,7 @@ func firstStableCode(values ...string) string {
 	return ""
 }
 
-// drainOutNodeIntentTx reconciles one Out with its own desired candidate.
+// DrainOutNodeIntentTx reconciles one Out with its own desired candidate.
 //
 // The rules mirror the subscriber drain and keep the operation bounded:
 //   - an unfinished chain is never replaced or cancelled;
@@ -381,83 +173,78 @@ func firstStableCode(values ...string) string {
 //   - a changed snapshot is new intent and is published;
 //   - an offline Out keeps the durable intent but receives no state-changing
 //     task.
-func (s *Store) DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bool) (outDrainOutcome, error) {
-	return DrainOutNodeIntentTx(tx, outID, now, allowRetry)
-}
-
-// DrainOutNodeIntentTx is the handle-free spelling of the Out drain.
-func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bool) (outDrainOutcome, error) {
+func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bool) (DrainOutcome, error) {
 	var role string
 	err := tx.QueryRow(`SELECT role FROM nodes WHERE id=?`, outID).Scan(&role)
 	if errors.Is(err, sql.ErrNoRows) {
-		return outDrainNoop, nil
+		return DrainNoop, nil
 	}
 	if err != nil {
-		return outDrainNoop, errors.New(common.CodeDatabaseUnavailable)
+		return DrainNoop, errors.New(common.CodeDatabaseUnavailable)
 	}
 	if role == string(common.NodeRoleHTTP) {
 		// An external HTTP proxy has no Agent and no candidate: there is nothing
 		// an Out drain could publish, so this is "not applicable" rather than a
 		// silent no-op.
-		return outDrainNotApplicable, nil
+		return DrainNotApplicable, nil
 	}
 	if role != string(common.NodeRoleOut) {
-		return outDrainNoop, nil
+		return DrainNoop, nil
 	}
 	latestRevision, latestDigest, _, hasCandidate, err := candidatepkg.LatestPublishedTx(tx, outID)
 	if err != nil {
-		return outDrainNoop, err
+		return DrainNoop, err
 	}
 	if hasCandidate {
 		desiredDigest, err := outCandidateAtRevisionTx(tx, outID, latestRevision)
 		if err != nil {
-			return outDrainNoop, err
+			return DrainNoop, err
 		}
 		confirmed, err := candidatepkg.LineReadbackConfirmedTx(tx, outID, latestRevision, latestDigest)
 		if err != nil {
-			return outDrainNoop, err
+			return DrainNoop, err
 		}
 		unfinished, err := candidatepkg.LineUnfinishedTasksTx(tx, outID)
 		if err != nil {
-			return outDrainNoop, err
+			return DrainNoop, err
 		}
 		if unfinished != 0 {
 			// A chain always finishes first. Publishing a competing chain would
 			// leave two apply steps racing on one host.
-			return outDrainDeferred, nil
+			return DrainDeferred, nil
 		}
 		sameCandidate := latestDigest == desiredDigest
 		if sameCandidate && confirmed {
-			return outDrainNoop, nil
+			return DrainNoop, nil
 		}
 		if sameCandidate && !allowRetry {
 			// The snapshot did not change: an automatic poll never retries it,
 			// whether the last chain failed or ended without matching evidence.
-			return outDrainNoop, nil
+			return DrainNoop, nil
 		}
 	}
-	offline, err := SubscriberLineNodeOfflineTx(tx, outID, now)
+	offline, err := storeline.NodeOfflineTx(tx, outID, now)
 	if err != nil {
-		return outDrainNoop, err
+		return DrainNoop, err
 	}
 	if offline {
-		return outDrainDeferred, errors.New("OUT_OFFLINE: out is offline; the publication stays pending")
+		return DrainDeferred, errors.New("OUT_OFFLINE: out is offline; the publication stays pending")
 	}
 	revision, err := candidatepkg.NextCandidateRevisionTx(tx, outID)
 	if err != nil {
-		return outDrainNoop, err
+		return DrainNoop, err
 	}
-	candidate, err := BuildLineCandidateTx(tx, outID, revision)
+	candidate, err := storeline.BuildLineCandidateTx(tx, outID, revision)
 	if err != nil {
-		return outDrainNoop, err
+		return DrainNoop, err
 	}
 	if _, err := candidatepkg.PublishTx(tx, outID, candidate, now); err != nil {
-		return outDrainNoop, err
+		return DrainNoop, err
 	}
-	return outDrainPublished, nil
+	return DrainPublished, nil
 }
 
-// publishPairingOutCandidateTx publishes the Out's current desired candidate
+// PublishPairingOutCandidateTx publishes the Out's current desired candidate
 // when it differs from the newest stored revision.
 //
 // A Web-first Out is created before its dial address exists, so revision 1 is
@@ -467,7 +254,7 @@ func DrainOutNodeIntentTx(tx *sql.Tx, outID string, now time.Time, allowRetry bo
 // can be committed, and doing it before SeedInitialTasksTx makes that revision
 // the one a fresh install fetches and applies. Without it the node boots the
 // baseline guard, which carries no authorization at all.
-func publishPairingOutCandidateTx(tx *sql.Tx, nodeID, role string, now time.Time) error {
+func PublishPairingOutCandidateTx(tx *sql.Tx, nodeID, role string, now time.Time) error {
 	if role != string(common.NodeRoleOut) {
 		return nil
 	}
@@ -478,7 +265,7 @@ func publishPairingOutCandidateTx(tx *sql.Tx, nodeID, role string, now time.Time
 	if !found {
 		return nil
 	}
-	desired, err := BuildLineCandidateTx(tx, nodeID, revision)
+	desired, err := storeline.BuildLineCandidateTx(tx, nodeID, revision)
 	if err != nil {
 		return err
 	}
@@ -493,7 +280,7 @@ func publishPairingOutCandidateTx(tx *sql.Tx, nodeID, role string, now time.Time
 	if err != nil {
 		return err
 	}
-	desired, err = BuildLineCandidateTx(tx, nodeID, next)
+	desired, err = storeline.BuildLineCandidateTx(tx, nodeID, next)
 	if err != nil {
 		return err
 	}
@@ -507,7 +294,7 @@ func publishPairingOutCandidateTx(tx *sql.Tx, nodeID, role string, now time.Time
 // digest is built at the exact revision under test instead of being treated as
 // revision independent.
 func outCandidateAtRevisionTx(tx *sql.Tx, outID string, revision int64) (string, error) {
-	candidate, err := BuildLineCandidateTx(tx, outID, revision)
+	candidate, err := storeline.BuildLineCandidateTx(tx, outID, revision)
 	if err != nil {
 		return "", err
 	}
@@ -528,7 +315,7 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 		return OutSyncPartial, common.CodeDatabaseUnavailable, err
 	}
 	if !found {
-		return OutSyncPending, CodeOutSyncPending, nil
+		return OutSyncPending, storeline.CodeOutSyncPending, nil
 	}
 	desiredDigest, err := outCandidateAtRevisionTx(tx, outID, revision)
 	if err != nil {
@@ -542,7 +329,7 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 		if unfinished != 0 {
 			return OutSyncVerifying, CodeOutSyncInProgress, nil
 		}
-		return OutSyncPending, CodeOutSyncPending, nil
+		return OutSyncPending, storeline.CodeOutSyncPending, nil
 	}
 	confirmed, err := candidatepkg.LineReadbackConfirmedTx(tx, outID, revision, digest)
 	if err != nil {
@@ -561,38 +348,10 @@ func outSyncStatusTx(tx *sql.Tx, outID string, now time.Time) (string, string, e
 	if failed {
 		return OutSyncPartial, code, nil
 	}
-	return OutSyncPending, CodeOutSyncPending, nil
+	return OutSyncPending, storeline.CodeOutSyncPending, nil
 }
 
-// scanIDRows drains one single-column identifier result set, closing it before the
-// caller opens another statement or transaction on the single-connection pool.
-// Every failure maps to the same stable code so callers never leak driver detail.
-func scanIDRows(rows *sql.Rows) ([]string, error) {
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, errors.New(common.CodeDatabaseUnavailable)
-		}
-		out = append(out, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, errors.New(common.CodeDatabaseUnavailable)
-	}
-	return out, nil
-}
-
-// queryIDsTx runs one bounded identifier query inside the caller's transaction.
-func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
-	rows, err := tx.Query(query, args...)
-	if err != nil {
-		return nil, errors.New(common.CodeDatabaseUnavailable)
-	}
-	return scanIDRows(rows)
-}
-
-// retryOutSync is the explicit retry and rollback pointer of one Out. It
+// RetryOutSync is the explicit retry and rollback pointer of one Out. It
 // republishes a chain even when the desired candidate did not change, which is
 // exactly what an operator needs after a partial/failed chain. Automatic polls
 // never call it.
@@ -600,17 +359,17 @@ func queryIDsTx(tx *sql.Tx, query string, args ...any) ([]string, error) {
 // An external HTTP proxy has no chain to retry (Ruling R11), so the call answers
 // CodeOutSyncNotApplicable explicitly: a success here would otherwise read as
 // "the chain was published and confirmed", which the Hub never did.
-func (s *Store) RetryOutSync(outID string, now time.Time) error {
+func RetryOutSync(db *sql.DB, outID string, now time.Time) error {
 	outID = strings.TrimSpace(outID)
-	if !validNodeID(outID) {
+	if !storeline.ValidNodeID(outID) {
 		return common.ErrOutIDInvalid()
 	}
-	tx, err := s.DB.Begin()
+	tx, err := db.Begin()
 	if err != nil {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	defer tx.Rollback()
-	outcome, err := s.DrainOutNodeIntentTx(tx, outID, now, true)
+	outcome, err := DrainOutNodeIntentTx(tx, outID, now, true)
 	if err != nil {
 		return err
 	}
@@ -618,42 +377,32 @@ func (s *Store) RetryOutSync(outID string, now time.Time) error {
 		return errors.New(common.CodeDatabaseUnavailable)
 	}
 	switch outcome {
-	case outDrainNotApplicable:
+	case DrainNotApplicable:
 		return errors.New(CodeOutSyncNotApplicable + ": an external http proxy has no agent chain or readback to retry")
-	case outDrainDeferred:
-		return errors.New(CodeOutSyncPending + ": the out publication is queued behind an in-flight or offline out")
+	case DrainDeferred:
+		return errors.New(storeline.CodeOutSyncPending + ": the out publication is queued behind an in-flight or offline out")
 	}
 	return nil
 }
 
 // drainOutNode begins its own transaction and reconciles one Out. Failures must
 // not fail the request they serve: the next poll, heartbeat or result retries.
-func (s *Store) drainOutNode(outID string, now time.Time) {
-	tx, err := s.DB.Begin()
+func drainOutNode(db *sql.DB, outID string, now time.Time) {
+	tx, err := db.Begin()
 	if err != nil {
 		return
 	}
 	defer tx.Rollback()
-	if _, err := s.DrainOutNodeIntentTx(tx, outID, now, false); err != nil {
+	if _, err := DrainOutNodeIntentTx(tx, outID, now, false); err != nil {
 		return
 	}
 	_ = tx.Commit()
 }
 
-// outIDsForLine reads the Out pool in its own statement so no transaction is held
-// open while the per-Out drain begins its own.
-func (s *Store) outIDsForLine(lineID string) ([]string, error) {
-	return storeIDs(s.DB, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
-}
-
-// storeIDs runs one bounded identifier query and closes its rows before the
-// caller opens another transaction on the single-connection pool.
-func storeIDs(db *sql.DB, query string, args ...any) ([]string, error) {
-	rows, err := db.Query(query, args...)
-	if err != nil {
-		return nil, errors.New(common.CodeDatabaseUnavailable)
-	}
-	return scanIDRows(rows)
+// outIDs reads the Out pool in its own statement so no transaction is held open
+// while the per-Out drain begins its own.
+func outIDs(db *sql.DB) ([]string, error) {
+	return storeline.QueryIDs(db, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
 }
 
 // DrainOutsForLine is retained as the "Line event" half of the coordination.
@@ -662,36 +411,40 @@ func storeIDs(db *sql.DB, query string, args ...any) ([]string, error) {
 // Line candidate carries neither an Out endpoint nor a route. The function stays
 // because the Agent endpoints call it on every Line event, and each Out drain is
 // a bounded no-op unless that Out's own candidate changed.
-func (s *Store) DrainOutsForLine(lineID string, now time.Time) {
-	outs, err := s.outIDsForLine(lineID)
+func DrainOutsForLine(db *sql.DB, lineID string, now time.Time) {
+	// The Line id is deliberately unused: a Line event drains the whole pool and
+	// each Out decides from its own candidate whether anything has to be
+	// published. The parameter is kept because every Agent endpoint passes it
+	// and the signature is the stable "Line event" half of the coordination.
+	outs, err := outIDs(db)
 	if err != nil {
 		return
 	}
 	for _, outID := range outs {
-		s.drainOutNode(outID, now)
+		drainOutNode(db, outID, now)
 	}
 }
 
-// drainNodeCoordination runs the pre-delivery reconciliation of one node.
+// DrainNodeCoordination runs the pre-delivery reconciliation of one node.
 //
 // An Out event republishes the Out's own chain; a Line event republishes the
 // Line. The two directions are independent now, so neither waits for the other.
 // Each step owns its own transaction, so nothing nests on the single-connection
 // pool. A failure in one direction never fails the request: the next event
 // retries it.
-func (s *Store) drainNodeCoordination(nodeID string, now time.Time) {
+func DrainNodeCoordination(db *sql.DB, subs Subscribers, nodeID string, now time.Time) {
 	var role string
-	err := s.DB.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
+	err := db.QueryRow(`SELECT role FROM nodes WHERE id=?`, nodeID).Scan(&role)
 	if err != nil {
-		s.Subscribers.DrainNode(nodeID, now)
+		subs.DrainNode(nodeID, now)
 		return
 	}
 	if role == string(common.NodeRoleOut) {
-		s.drainOutNode(nodeID, now)
+		drainOutNode(db, nodeID, now)
 		return
 	}
-	s.DrainOutsForLine(nodeID, now)
-	s.Subscribers.DrainNode(nodeID, now)
+	DrainOutsForLine(db, nodeID, now)
+	subs.DrainNode(nodeID, now)
 }
 
 // RepublishOutAuthorizations reconciles the whole Out pool with its own desired
@@ -711,13 +464,13 @@ func (s *Store) drainNodeCoordination(nodeID string, now time.Time) {
 // The name is kept: it is the stable lifecycle hook every caller already uses,
 // even though the "authorization" it republishes is now just the Out's own
 // link-key chain.
-func (s *Store) RepublishOutAuthorizations(now time.Time) {
-	outIDs, err := storeIDs(s.DB, `SELECT id FROM nodes WHERE role='out' ORDER BY id ASC`)
+func RepublishOutAuthorizations(db *sql.DB, now time.Time) {
+	outIDs, err := outIDs(db)
 	if err != nil {
 		return
 	}
 	for _, outID := range outIDs {
-		s.drainOutNode(outID, now)
+		drainOutNode(db, outID, now)
 	}
 }
 
@@ -730,17 +483,17 @@ func (s *Store) RepublishOutAuthorizations(now time.Time) {
 //
 // Each drain owns its own transaction and never fails the caller: the delete is
 // already durable, and the refusal is visible in the Line's own sync state.
-func (s *Store) RepublishLineAuthorizations(now time.Time) {
-	lineIDs, err := storeIDs(s.DB, `SELECT id FROM nodes WHERE role='edge' ORDER BY id ASC`)
+func RepublishLineAuthorizations(db *sql.DB, subs Subscribers, now time.Time) {
+	lineIDs, err := storeline.QueryIDs(db, `SELECT id FROM nodes WHERE role='edge' ORDER BY id ASC`)
 	if err != nil {
 		return
 	}
 	for _, lineID := range lineIDs {
-		s.Subscribers.DrainNode(lineID, now)
+		subs.DrainNode(lineID, now)
 	}
 }
 
-// nodeCoordinationReadback reports the readback state of one node for the audit
+// NodeCoordinationReadback reports the readback state of one node for the audit
 // log: a Line reports its egress state, an Out reports its own chain. It is a
 // read-only projection and never mutates or publishes; the returned codes are
 // stable identifiers only.
@@ -748,8 +501,8 @@ func (s *Store) RepublishLineAuthorizations(now time.Time) {
 // An Out reports the same retry semantics as a Line: only a terminal failure is
 // retry-pending. A transition is still applying its own chain, and a healthy
 // chain has nothing left to retry.
-func (s *Store) NodeCoordinationReadback(nodeID string, now time.Time) (OutEgressReadback, error) {
-	tx, err := s.DB.Begin()
+func NodeCoordinationReadback(db *sql.DB, subs Subscribers, nodeID string, now time.Time) (OutEgressReadback, error) {
+	tx, err := db.Begin()
 	if err != nil {
 		return OutEgressReadback{}, errors.New(common.CodeDatabaseUnavailable)
 	}
@@ -778,12 +531,12 @@ func (s *Store) NodeCoordinationReadback(nodeID string, now time.Time) (OutEgres
 		// honest answer is the declaration itself.
 		return OutEgressReadback{
 			OutID:           nodeID,
-			Allowlist:       LineEgressExternal,
-			AllowlistCode:   CodeLineEgressExternalDeclared,
-			FinalEgress:     LineEgressExternal,
-			FinalEgressCode: CodeLineEgressExternalDeclared,
+			Allowlist:       storeline.LineEgressExternal,
+			AllowlistCode:   storeline.CodeLineEgressExternalDeclared,
+			FinalEgress:     storeline.LineEgressExternal,
+			FinalEgressCode: storeline.CodeLineEgressExternalDeclared,
 			RetryPending:    false,
 		}, nil
 	}
-	return s.outEgressReadbackTx(tx, nodeID, now)
+	return outEgressReadbackTx(tx, subs, nodeID, now)
 }
