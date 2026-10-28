@@ -356,7 +356,7 @@ func TestNonInteractive2SameOperationRedo(t *testing.T) {
 		t.Fatalf("first attempt = %+v, %v, want partial", first, err)
 	}
 	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
-		return f.cfg.Metadata(), nil
+		return fixtureMetadata(f.cfg), nil
 	}
 	opts := f.opts
 	opts.NonInteractive, opts.FromRecordedState = true, true

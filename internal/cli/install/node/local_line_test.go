@@ -198,7 +198,7 @@ func makeLocalLineFixture(t *testing.T) *localLineFixture {
 		DownloadArtifact: func(context.Context, core.Artifact, string) (string, error) { return archive, nil },
 		Pair:             func(context.Context, corenode.Config, string) (corenode.Identity, error) { return identity, nil },
 		Metadata: func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
-			return cfg.Metadata(), nil
+			return fixtureMetadata(cfg), nil
 		},
 		Candidate: func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
 			return candidate, nil
@@ -413,7 +413,7 @@ func TestLocalLineRefusesSecondLocalLine(t *testing.T) {
 	other.NodeID = strings.Repeat("b", 32)
 	other.VLESSPort = 9443
 	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
-		return other.Metadata(), nil
+		return fixtureMetadata(other), nil
 	}
 	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
 		return corenode.NewCandidateDocument(corenode.Candidate{

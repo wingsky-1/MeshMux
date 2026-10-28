@@ -193,3 +193,15 @@ func nodeVerifyTail(ctx context.Context, result *core.InstallResult, state *core
 	result.Artifacts = nodeComponents(artifacts)
 	return nil
 }
+
+func nodeComponents(artifacts []core.Artifact) []core.Component {
+	out := []core.Component{{Name: "MeshMux Agent", Version: corenode.CurrentAgentVersion(), Distribution: "same executable as installer; SHA-256 verified"}}
+	for _, a := range artifacts {
+		out = append(out, core.Component{Name: a.Component, Version: a.Version, Distribution: "pinned official GitHub archive; archive and binary SHA-256 verified"})
+	}
+	out = append(out,
+		core.Component{Name: "Fail2ban", Version: "Debian 13 package", Distribution: "official Debian repository"},
+		core.Component{Name: "nftables", Version: "Debian 13 package", Distribution: "official Debian repository"},
+	)
+	return out
+}

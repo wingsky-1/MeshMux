@@ -2,6 +2,9 @@ package node
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/wingsky-1/MeshMux/internal/cli/install/core"
@@ -33,16 +36,6 @@ type nodeIdentityResolved struct {
 	identity       corenode.Identity
 	candidate      corenode.CandidateDocument
 	pairingPending bool
-}
-
-// candidateRevision returns the candidate revision a fresh install must apply:
-// the newest document the Hub reports in metadata. A fixture or older Hub that
-// does not report one keeps the initial-revision behavior.
-func candidateRevision(metadata corenode.Metadata) int64 {
-	if metadata.ConfigRevision >= 1 {
-		return metadata.ConfigRevision
-	}
-	return 1
 }
 
 // nodeResolveIdentityAndCandidate loads the recorded Agent identity or pairs a
@@ -78,7 +71,7 @@ func nodeResolveIdentityAndCandidate(ctx context.Context, result *core.InstallRe
 			}
 			metadata, err = opts.Metadata(ctx, installedCfg, identity)
 			if err == nil {
-				candidate, err = opts.Candidate(ctx, installedCfg, identity, candidateRevision(metadata))
+				candidate, err = opts.Candidate(ctx, installedCfg, identity, metadata.ConfigRevision)
 			}
 			if err == nil && metadata.NodeID != "" {
 				err = metadata.ValidateFor(installedCfg)
@@ -126,7 +119,7 @@ func nodeResolveIdentityAndCandidate(ctx context.Context, result *core.InstallRe
 		}
 		metadata, err = opts.Metadata(ctx, installedCfg, identity)
 		if err == nil {
-			candidate, err = opts.Candidate(ctx, installedCfg, identity, candidateRevision(metadata))
+			candidate, err = opts.Candidate(ctx, installedCfg, identity, metadata.ConfigRevision)
 		}
 		if err == nil && metadata.NodeID != "" {
 			err = metadata.ValidateFor(installedCfg)
@@ -139,4 +132,63 @@ func nodeResolveIdentityAndCandidate(ctx context.Context, result *core.InstallRe
 		}
 	}
 	return nodeIdentityResolved{identity: identity, candidate: candidate}, nil
+}
+
+// clientUnauthorized reports whether a Hub client failure is an identity
+// rejection (revoked or replaced identity) rather than a transport or data
+// problem. Only revocation may prompt the operator for a fresh pairing code.
+func clientUnauthorized(err error) bool {
+	var ce *corenode.ClientError
+	if errors.As(err, &ce) {
+		return ce.StatusCode == 401
+	}
+	return false
+}
+
+func ensurePrivateNodeDirectory(path string) error {
+	if err := core.EnsureNoSymlinkAncestors(filepath.Dir(path)); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
+		return errors.New("AGENT_STATE_UNSAFE")
+	}
+	return nil
+}
+
+func loadNodeIdentity(root string, cfg corenode.Config) (corenode.Identity, bool, error) {
+	path := core.Rooted(root, corenode.IdentityPath)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return corenode.Identity{}, false, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0600 {
+		return corenode.Identity{}, false, errors.New("IDENTITY_INVALID")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return corenode.Identity{}, false, errors.New("IDENTITY_INVALID")
+	}
+	var identity corenode.Identity
+	if err := jsonUnmarshal(data, &identity); err != nil {
+		return corenode.Identity{}, false, errors.New("IDENTITY_INVALID")
+	}
+	if err := identity.ValidateFor(cfg); err != nil {
+		return corenode.Identity{}, false, errors.New("IDENTITY_MISMATCH")
+	}
+	return identity, true, nil
+}
+
+func persistNodeIdentity(root string, identity corenode.Identity) error {
+	if err := ensurePrivateNodeDirectory(core.Rooted(root, nodeAgentStateDir)); err != nil {
+		return err
+	}
+	data, err := jsonMarshal(identity)
+	if err != nil {
+		return err
+	}
+	return core.WriteBytesAtomic(core.Rooted(root, corenode.IdentityPath), data, 0600)
 }

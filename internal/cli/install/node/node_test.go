@@ -209,6 +209,14 @@ type nodeFixture struct {
 	binaryHash  string
 }
 
+// fixtureMetadata returns cfg's immutable metadata with the initial published
+// revision. A v1 Hub never reports revision 0, so fixtures must not either.
+func fixtureMetadata(cfg corenode.Config) corenode.Metadata {
+	metadata := cfg.Metadata()
+	metadata.ConfigRevision = 1
+	return metadata
+}
+
 func makeNodeFixture(t *testing.T, role corenode.Role) *nodeFixture {
 	t.Helper()
 	root := t.TempDir()
@@ -259,7 +267,7 @@ func makeNodeFixture(t *testing.T, role corenode.Role) *nodeFixture {
 		DownloadArtifact: func(context.Context, core.Artifact, string) (string, error) { return archive, nil },
 		Pair:             func(context.Context, corenode.Config, string) (corenode.Identity, error) { return identity, nil },
 		Metadata: func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
-			return cfg.Metadata(), nil
+			return fixtureMetadata(cfg), nil
 		},
 		Candidate: func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
 			return candidate, nil
@@ -573,7 +581,7 @@ func TestNodeIdentityPersistedBeforeMetadataFailure(t *testing.T) {
 		return corenode.Identity{}, errors.New("code consumed")
 	}
 	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
-		return f.cfg.Metadata(), nil
+		return fixtureMetadata(f.cfg), nil
 	}
 	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
 		return f.candidate, nil
@@ -1131,7 +1139,7 @@ func TestNodeFirstInstallAndLedger(t *testing.T) {
 			})
 		case "/api/agent/node":
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(f.cfg.Metadata())
+			_ = json.NewEncoder(w).Encode(fixtureMetadata(f.cfg))
 		case "/api/agent/config/1":
 			documentCandidate := f.candidate
 			documentCandidate.Revision = 1

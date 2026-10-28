@@ -97,7 +97,7 @@ func TestNodeRepairRevokedIdentityRequiresFreshCode(t *testing.T) {
 		return fresh, nil
 	}
 	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
-		return f.cfg.Metadata(), nil
+		return fixtureMetadata(f.cfg), nil
 	}
 	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
 		return f.candidate, nil

@@ -111,3 +111,12 @@ func nodeFinalizeCandidate(ctx context.Context, result *core.InstallResult, stat
 	}
 	return nodeCandidateFinalized{activeCandidate: activeCandidate, candidateConfig: candidateConfig, managed: managed, stagedManaged: stagedManaged, repairNotice: repairNotice}, nil
 }
+
+func verifyNodeCandidate(ctx context.Context, opts core.NodeApplyOptions, kernelPath string, compiled []byte, stageDir string) error {
+	path := filepath.Join(stageDir, "candidate-check.json")
+	if err := os.WriteFile(path, compiled, 0600); err != nil {
+		return err
+	}
+	_, err := opts.Runner.Run(ctx, kernelPath, "check", "-c", path)
+	return err
+}

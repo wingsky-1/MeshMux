@@ -1,8 +1,11 @@
 package node
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -158,4 +161,62 @@ func stageNodeArtifacts(ctx context.Context, result *core.InstallResult, state *
 		return fail(failures.operationLog)
 	}
 	return nodeStaged{stageDir: stageDir, kernelPath: kernelPath, agentPath: agentPath, installedCfg: installedCfg}, nil
+}
+
+func extractNodeKernel(archivePath, target string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	found := false
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if h.Typeflag != tar.TypeReg {
+			continue
+		}
+		if filepath.Base(h.Name) != "sing-box" || h.Size < 1 || h.Size > core.MaxInstallerFile {
+			continue
+		}
+		if found {
+			return errors.New("KERNEL_ARCHIVE_AMBIGUOUS")
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
+		if err != nil {
+			return err
+		}
+		n, copyErr := io.Copy(out, io.LimitReader(tr, core.MaxInstallerFile+1))
+		syncErr := out.Sync()
+		closeErr := out.Close()
+		if copyErr != nil || syncErr != nil || closeErr != nil || n != h.Size || n > core.MaxInstallerFile {
+			_ = os.Remove(target)
+			return errors.New("KERNEL_ARCHIVE_INVALID")
+		}
+		found = true
+	}
+	if !found {
+		return errors.New("KERNEL_BINARY_MISSING")
+	}
+	return os.Chmod(target, 0755)
+}
+
+func usedPackage(packages []string, want string) bool {
+	for _, pkg := range packages {
+		if pkg == want {
+			return true
+		}
+	}
+	return false
 }
