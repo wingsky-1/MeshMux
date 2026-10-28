@@ -168,14 +168,16 @@ func TestTransientSandboxCoversInstallPaths(t *testing.T) {
 		markers    []string
 	}{
 		{"CAP_CHOWN", "os.Chown on managed files and chown(1) on Agent directories",
-			[]string{"internal/cli/install/apply_shared.go:os.Chown", "internal/cli/install/node_apply.go:restoreFileSnapshots", "internal/cli/install/apply.go:restoreFileSnapshots"}},
+			[]string{"internal/cli/install/core/engine_shared.go:os.Chown",
+				"internal/cli/install/core/engine.go:RestoreFileSnapshots",
+				"internal/cli/install/core/nodecontract.go:RestoreFileSnapshots"}},
 		{"CAP_NET_ADMIN", "nft -c / nft list table need the netfilter netlink socket",
-			[]string{"internal/cli/install/node_stage.go:\"nft\", \"-c\"", "internal/cli/install/node_apply.go:\"nft\", \"-j\""}},
+			[]string{"internal/cli/install/node/node_stage.go:\"nft\", \"-c\"", "internal/cli/install/node/node_apply.go:\"nft\", \"-j\""}},
 		{"CAP_DAC_READ_SEARCH", "ss -p reads /proc/<pid>/fd of the non-root sing-box process",
-			[]string{"internal/cli/install/node_plan.go:\"ss\", \"-H\", \"-lntp\"", "internal/cli/install/node_plan.go:\"ss\", \"-H\", \"-lntup\""}},
+			[]string{"internal/cli/install/core/probe.go:\"ss\", \"-H\", \"-lntp\"", "internal/cli/install/node/node_plan.go:\"ss\", \"-H\", \"-lntup\""}},
 		{"CAP_SYS_PTRACE", "/proc/<pid>/exe of that process for the ownership hash",
-			[]string{"internal/cli/install/node_plan.go:os.Readlink(\"/proc/\" + pid + \"/exe\")",
-				"internal/cli/install/node_plan.go:sha256File(\"/proc/\" + pid + \"/exe\")"}},
+			[]string{"internal/cli/install/node/node_plan.go:os.Readlink(\"/proc/\" + pid + \"/exe\")",
+				"internal/cli/install/node/node_plan.go:core.SHA256File(\"/proc/\" + pid + \"/exe\")"}},
 	} {
 		if !strings.Contains(transientCaps, need.capability) {
 			t.Fatalf("capability set %q lacks %s (%s)", transientCaps, need.capability, need.reason)

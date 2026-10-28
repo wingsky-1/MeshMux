@@ -1,0 +1,1305 @@
+package node
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/install/core"
+	corenode "github.com/wingsky-1/MeshMux/internal/core/node"
+)
+
+type fakeNodeRunner struct {
+	calls    []string
+	failCall string
+	failUsed bool
+	users    map[string]bool
+	packages map[string]bool
+	// aclPath, when set, makes the fake `nft -j` readback reflect the ACL
+	// file on disk, so an Agent-applied allowlist is visible to the installer
+	// the same way it is on a real host.
+	aclPath string
+	// aclRequiresFile, when set, makes the Out ACL unit fail to start while
+	// the file is absent. It emulates a clean host where nft -f cannot
+	// apply a table file that installNodeDynamic has not written yet.
+	aclRequiresFile string
+	// jailPorts is the SSH port set the fixture's Fail2ban jail reports.
+	// The installer now requires the jail to cover every actual SSH
+	// listener, so the fixture answers with the same set its preflight
+	// detects instead of a single hard-coded port.
+	jailPorts []int
+}
+
+// fixtureNFTJSON is the `nft -j list table inet meshmux_out` document of the
+// fixture's default-deny guard: the table, the base input chain and the two
+// VLESS drops, with no authorized source.
+const fixtureNFTJSON = `{"nftables":[` +
+	`{"table":{"family":"inet","name":"meshmux_out"}},` +
+	`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}},` +
+	`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":8443}},{"drop":null}]}},` +
+	`{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"udp","field":"dport"}},"right":8443}},{"drop":null}]}}` +
+	`]}`
+
+// fixtureACLJSON renders the `nft -j` document the fixture kernel would print
+// for the managed ACL file. When the file is absent or unreadable it falls
+// back to the default-deny guard, matching a host that has not applied any
+// authorization yet.
+func fixtureACLJSON(aclPath string) string {
+	if aclPath == "" {
+		return fixtureNFTJSON
+	}
+	data, err := os.ReadFile(aclPath)
+	if err != nil {
+		return fixtureNFTJSON
+	}
+	json := fixtureACLJSONFor(string(data), 8443)
+	return json
+}
+
+// fixtureACLJSONFor translates one rendered ACL script into nft -j output.
+func fixtureACLJSONFor(script string, port int) string {
+	rules := []string{
+		`{"table":{"family":"inet","name":"meshmux_out"}}`,
+		`{"chain":{"family":"inet","table":"meshmux_out","name":"input","type":"filter","hook":"input","prio":-10,"policy":"accept"}}`,
+	}
+	for _, line := range strings.Split(script, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 7 && (fields[0] == "ip" || fields[0] == "ip6") && fields[1] == "saddr" &&
+			fields[3] == "tcp" && fields[4] == "dport" && fields[5] == strconv.Itoa(port) && fields[6] == "accept" {
+			family, source := fields[0], fields[2]
+			right := `"` + source + `"`
+			hostBits := "32"
+			if family == "ip6" {
+				hostBits = "128"
+			}
+			if address, bits, ok := strings.Cut(source, "/"); ok {
+				if bits == hostBits {
+					right = `"` + address + `"`
+				} else {
+					right = `{"prefix":{"addr":"` + address + `","len":` + bits + `}}`
+				}
+			}
+			rules = append(rules, `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[`+
+				`{"match":{"op":"==","left":{"payload":{"protocol":"`+family+`","field":"saddr"}},"right":`+right+`}},`+
+				`{"match":{"op":"==","left":{"payload":{"protocol":"tcp","field":"dport"}},"right":`+strconv.Itoa(port)+`}},`+
+				`{"accept":null}]}}`)
+			continue
+		}
+		if len(fields) == 4 && fields[1] == "dport" && fields[3] == "drop" &&
+			(fields[0] == "tcp" || fields[0] == "udp") {
+			rules = append(rules, `{"rule":{"family":"inet","table":"meshmux_out","chain":"input","expr":[`+
+				`{"match":{"op":"==","left":{"payload":{"protocol":"`+fields[0]+`","field":"dport"}},"right":`+strconv.Itoa(port)+`}},`+
+				`{"drop":null}]}}`)
+		}
+	}
+	return `{"nftables":[` + strings.Join(rules, ",") + `]}`
+}
+
+// fixtureSSHPorts is the SSH listener set the node fixture detects. The
+// fixture preflight and its Fail2ban jail readback both use it, so a real
+// host with more than one SSH listener is represented consistently.
+var fixtureSSHPorts = []int{2222, 2200}
+
+func (f *fakeNodeRunner) fail2banJailPorts() string {
+	ports := f.jailPorts
+	if len(ports) == 0 {
+		ports = fixtureSSHPorts
+	}
+	sorted := append([]int(nil), ports...)
+	sort.Ints(sorted)
+	values := make([]string, 0, len(sorted))
+	for _, port := range sorted {
+		values = append(values, strconv.Itoa(port))
+	}
+	return strings.Join(values, ",")
+}
+
+func (f *fakeNodeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	call := name + " " + strings.Join(args, " ")
+	f.calls = append(f.calls, call)
+	if f.failCall != "" && !f.failUsed && strings.Contains(call, f.failCall) {
+		f.failUsed = true
+		return nil, errors.New("fixture fault")
+	}
+	if f.aclRequiresFile != "" && name == "systemctl" && strings.Contains(call, corenode.ACLUnit) {
+		if _, err := os.Stat(f.aclRequiresFile); err != nil {
+			return nil, errors.New("fixture: ACL unit started before the dynamic file existed")
+		}
+	}
+	switch name {
+	case "dpkg":
+		return []byte("amd64\n"), nil
+	case "apt-get":
+		return nil, nil
+	case "getent":
+		if len(args) == 2 && f.users[args[1]] {
+			return []byte("fixture user"), nil
+		}
+		return nil, errors.New("missing user")
+	case "useradd":
+		if f.users == nil {
+			f.users = map[string]bool{}
+		}
+		f.users[args[len(args)-1]] = true
+	case "dpkg-query":
+		if f.packages != nil && f.packages[args[len(args)-1]] {
+			return []byte("install ok installed"), nil
+		}
+		return nil, errors.New("missing package")
+	case "fail2ban-client":
+		// fail2ban 1.1.0 has no `get <JAIL> port`; the installer reads the
+		// jail port back through the nftables-multiport action instance.
+		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
+			args[2] == "action" && args[3] == "nftables-multiport" && args[4] == "port" {
+			return []byte(f.fail2banJailPorts() + "\n"), nil
+		}
+		if len(args) == 5 && args[0] == "get" && args[1] == "meshmux-node-sshd" &&
+			args[2] == "action" && args[3] == "nftables-multiport" && args[4] == "actionstart" {
+			// Real fail2ban 1.1.0 shell-escapes the set braces; the L1 fake
+			// uses the exact daemon format so the readback is validated.
+			return []byte("nft add rule inet f2b-table f2b-chain $proto dport \\{ $(echo '" + f.fail2banJailPorts() + "' | sed s/:/-/g) \\} <addr_family> saddr @<addr_set> reject\n"), nil
+		}
+	case "systemctl":
+		if len(args) > 1 && args[0] == "show" && strings.Contains(call, corenode.SingBoxUnit) {
+			return []byte("ActiveState=active\nSubState=running\nMainPID=4242\n"), nil
+		}
+	case "timedatectl":
+		// Hermetic unit tests simulate a synchronized clock; the real
+		// waitForClockSync poll is covered by its own flap/ctx tests.
+		// Without this the new bounded poll would idle 90s per test that
+		// exercises the real preflight (e.g. TestNodeFirstInstallAndLedger).
+		return []byte("yes\n"), nil
+	case "nft":
+		if len(args) >= 2 && args[0] == "-j" && args[1] == "list" {
+			return []byte(fixtureACLJSON(f.aclPath)), nil
+		}
+		if len(args) >= 2 && args[0] == "list" {
+			return []byte("table inet meshmux_out {\n\tchain input {\n\t\ttype filter hook input priority -10; policy accept;\n\t\ttcp dport 8443 drop\n\t\tudp dport 8443 drop\n\t}\n}"), nil
+		}
+	default:
+		if len(args) == 1 && args[0] == "version" {
+			return []byte(corenode.CurrentAgentVersion() + " " + corenode.KernelVersion), nil
+		}
+	}
+	return nil, nil
+}
+
+type nodeFixture struct {
+	root        string
+	runner      *fakeNodeRunner
+	cfg         corenode.Config
+	opts        core.NodeApplyOptions
+	identity    corenode.Identity
+	candidate   corenode.CandidateDocument
+	archivePath string
+	binaryHash  string
+}
+
+// fixtureMetadata returns cfg's immutable metadata with the initial published
+// revision. A v1 Hub never reports revision 0, so fixtures must not either.
+func fixtureMetadata(cfg corenode.Config) corenode.Metadata {
+	metadata := cfg.Metadata()
+	metadata.ConfigRevision = 1
+	return metadata
+}
+
+func makeNodeFixture(t *testing.T, role corenode.Role) *nodeFixture {
+	t.Helper()
+	root := t.TempDir()
+	cfg := corenode.Config{
+		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
+		Role: role, VLESSPort: 8443, SSHPort: 2222,
+		AgentVersion: corenode.CurrentAgentVersion(),
+	}
+	release, _ := corenode.KernelReleaseFor("amd64")
+	binary := []byte("fixture sing-box binary " + string(role))
+	binaryHash := sha256.Sum256(binary)
+	release.BinarySHA256 = hex.EncodeToString(binaryHash[:])
+	archive := filepath.Join(t.TempDir(), "kernel.tar.gz")
+	if err := writeNodeTestArchive(archive, binary); err != nil {
+		t.Fatal(err)
+	}
+	archiveData, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveHash := sha256.Sum256(archiveData)
+	artifact := core.Artifact{
+		Component: "sing-box", Version: corenode.KernelVersion, Source: release.SourceURL,
+		SHA256: hex.EncodeToString(archiveHash[:]), Format: "tar.gz",
+	}
+	executable := filepath.Join(t.TempDir(), "meshmux")
+	if err := os.WriteFile(executable, []byte("fixture MeshMux Agent executable"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	identity := corenode.Identity{NodeID: cfg.NodeID, IdentityToken: strings.Repeat("A", 43)}
+	candidate := corenode.NewCandidateDocument(corenode.Candidate{
+		NodeID: cfg.NodeID, Role: role, Revision: 7, VLESSPort: cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	})
+	runner := &fakeNodeRunner{users: map[string]bool{}, packages: map[string]bool{"ca-certificates": true, "fail2ban": true, "nftables": true, "python3-systemd": true}}
+	runner.aclPath = core.Rooted(root, corenode.ACLPath)
+	readback := corenode.Readback{
+		Architecture: "amd64", AgentVersion: corenode.CurrentAgentVersion(),
+		AgentSHA256: strings.Repeat("b", 64), KernelVersion: corenode.KernelVersion,
+		KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 7,
+		ConfigSHA256: strings.Repeat("d", 64), LocalActive: true,
+		OutDefaultDeny: role == corenode.RoleOut,
+	}
+	opts := core.NodeApplyOptions{
+		Root: root, Runner: runner, Executable: executable, Artifacts: []core.Artifact{artifact},
+		Preflight: func(context.Context, corenode.Config, bool) ([]core.Check, []int) {
+			return []core.Check{{Name: "os", Status: "pass"}, {Name: "public", Status: "pending"}}, []int{2222, 2200}
+		},
+		DownloadArtifact: func(context.Context, core.Artifact, string) (string, error) { return archive, nil },
+		Pair:             func(context.Context, corenode.Config, string) (corenode.Identity, error) { return identity, nil },
+		Metadata: func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
+			return fixtureMetadata(cfg), nil
+		},
+		Candidate: func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
+			return candidate, nil
+		},
+		Readback: func(context.Context, corenode.Config, string, corenode.CommandRunner) (corenode.Readback, error) {
+			return readback, nil
+		},
+		Verify:      func(context.Context, corenode.Config, core.CommandRunner, corenode.Readback) error { return nil },
+		VerifyAgent: func(string, string) error { return nil },
+	}
+	return &nodeFixture{root: root, runner: runner, cfg: cfg, opts: opts, identity: identity,
+		candidate: candidate, archivePath: archive, binaryHash: release.BinarySHA256}
+}
+
+func writeNodeTestArchive(path string, binary []byte) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "sing-box-1.14.3-linux-amd64/sing-box", Mode: 0755, Size: int64(len(binary)), Typeflag: tar.TypeReg}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(binary); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+func fileSHA256ForTest(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// The fake binary must report the pinned strings without pretending to be a
+// real executable. The runner seam returns these outputs from the install
+// transaction's command boundary.
+func (f *nodeFixture) install(t *testing.T, repair bool, code string) (core.InstallResult, error) {
+	t.Helper()
+	return InstallNode(context.Background(), f.cfg, strings.Repeat("e", 32), repair, code, f.opts)
+}
+
+func TestSameNodeConfigIgnoresInstalledDigests(t *testing.T) {
+	a := corenode.Config{HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32), Role: corenode.RoleEdge, VLESSPort: 8443, SSHPort: 2222}
+	b := a
+	b.AgentVersion, b.AgentSHA256, b.KernelSHA256 = "other", strings.Repeat("b", 64), strings.Repeat("c", 64)
+	if !core.SameNodeConfig(a, b) || a.Validate() != nil {
+		t.Fatal("installed digest fields changed user configuration comparison")
+	}
+	b.HubURL = "https://other.example.invalid"
+	if core.SameNodeConfig(a, b) {
+		t.Fatal("Hub URL change was ignored")
+	}
+	b = a
+	b.VLESSPort++
+	if core.SameNodeConfig(a, b) {
+		t.Fatal("port change was ignored")
+	}
+}
+
+func TestNodePlanRoleUnitsAndHubArtifactsRemainSeparate(t *testing.T) {
+	cfg := corenode.Config{HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32), Role: corenode.RoleOut, VLESSPort: 8443, SSHPort: 2222}
+	plan := BuildNodePlanForRoot(t.TempDir(), strings.Repeat("f", 32), cfg, "amd64", []core.Check{{Name: "external", Status: "pending"}}, []int{2222})
+	if plan.Config.HubURL != cfg.HubURL || plan.Config.VLESSPort != cfg.VLESSPort || !plan.ApplyAvailable {
+		t.Fatalf("Node plan config/status = %+v", plan)
+	}
+	if len(plan.Artifacts) != 1 || plan.Artifacts[0].Component != "sing-box" || len(core.PinnedArtifacts("amd64")) != 2 {
+		t.Fatal("Node manifest leaked into Hub allowlist or vice versa")
+	}
+	if plan.ACLTable != corenode.ACLTable || !containsUnit(plan.Units, corenode.ACLUnit) {
+		t.Fatalf("Out plan omitted ACL ownership: %+v", plan)
+	}
+	if len(plan.ExternalPending) != 1 || plan.ExternalPending[0] != "external" {
+		t.Fatalf("pending external evidence lost: %+v", plan.ExternalPending)
+	}
+}
+
+func TestNodeUnitsKeepRoleDependenciesAndSandboxPathsPrecise(t *testing.T) {
+	edge := nodeManagedFilesForTest(t, corenode.RoleEdge)
+	out := nodeManagedFilesForTest(t, corenode.RoleOut)
+	agent := edge["/etc/systemd/system/"+corenode.AgentUnit].Body
+	if !strings.Contains(agent, "ReadWritePaths=/var/lib/meshmux-agent /var/lib/meshmux-singbox\n") ||
+		strings.Contains(agent, "ReadWritePaths=/var/lib/meshmux-agent /var/lib/meshmux-singbox /etc/") ||
+		strings.Contains(agent, "/run/nftables") {
+		t.Fatalf("Agent sandbox has overbroad or missing paths:\n%s", agent)
+	}
+	if !strings.Contains(agent, "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE\n") ||
+		!strings.Contains(agent, "AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_CHOWN CAP_SYS_PTRACE\n") {
+		t.Fatalf("Agent lacks the minimum process-read capability required for live exe/cmdline/ss verification:\n%s", agent)
+	}
+	edgeKernel := edge["/etc/systemd/system/"+corenode.SingBoxUnit].Body
+	if strings.Contains(edgeKernel, "Requires=meshmux-out-acl.service") || strings.Contains(edgeKernel, "After=meshmux-out-acl.service") {
+		t.Fatalf("Edge kernel unexpectedly depends on Out ACL:\n%s", edgeKernel)
+	}
+	outKernel := out["/etc/systemd/system/"+corenode.SingBoxUnit].Body
+	if !strings.Contains(outKernel, "Requires=meshmux-out-acl.service\n") ||
+		!strings.Contains(outKernel, "After=meshmux-out-acl.service\n") {
+		t.Fatalf("Out kernel does not hard-require ACL:\n%s", outKernel)
+	}
+	aclUnit := out["/etc/systemd/system/"+corenode.ACLUnit].Body
+	if !strings.Contains(aclUnit, "Before=meshmux-sing-box.service\n") {
+		t.Fatalf("ACL ordering missing:\n%s", aclUnit)
+	}
+	for name, body := range map[string]string{"agent": agent, "edge kernel": edgeKernel, "out kernel": outKernel} {
+		for _, line := range strings.Split(body, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				t.Fatalf("%s unit uses // comments, which systemd ignores with warnings; use #:\n%s", name, body)
+			}
+		}
+	}
+	if !strings.Contains(edgeKernel, "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n") ||
+		!strings.Contains(outKernel, "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\n") {
+		t.Fatalf("kernel unit must keep AF_NETLINK: sing-box enumerates interfaces at startup:\n%s\n%s", edgeKernel, outKernel)
+	}
+	aclFile, exists := out[corenode.ACLPath]
+	if !exists || aclFile.Static || aclFile.Body != "" {
+		t.Fatalf("ACL path is not a dynamic-only managed entry: %+v", aclFile)
+	}
+}
+
+func nodeManagedFilesForTest(t *testing.T, role corenode.Role) map[string]nodeManagedFile {
+	t.Helper()
+	cfg := corenode.Config{
+		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
+		Role: role, VLESSPort: 8443, SSHPort: 2222,
+		AgentVersion: corenode.CurrentAgentVersion(),
+	}
+	identity := corenode.Identity{NodeID: cfg.NodeID, IdentityToken: strings.Repeat("A", 43)}
+	files, err := nodeManagedFilesForLayout(cfg, []int{2222}, identity, core.StandaloneNodeLayout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func TestNodeLayoutConflictNeverOverwritesHubState(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleEdge)
+	hub := core.InstallState{
+		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "installed",
+		Config: core.Config{ManagementDomain: "hub.example.invalid"}, ManagedFiles: map[string]string{},
+	}
+	if err := core.WriteState(f.root, hub); err != nil {
+		t.Fatal(err)
+	}
+	// A Hub ledger that publishes no SharedBinaries cannot host a
+	// co-located Line: resolveNodeLayout reports HubHost without CoLocated,
+	// so InstallNode fails closed at preflight with NODE_OWNERSHIP_UNVERIFIED
+	// before readNodeState, rather than reporting a HOST_LAYOUT_CONFLICT from
+	// the Hub ledger's nil Node record. The Hub ledger is never treated as
+	// Node ownership evidence.
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err == nil || result.ErrorCode != "NODE_OWNERSHIP_UNVERIFIED" {
+		t.Fatalf("Hub without shared runtime = %+v %v", result, err)
+	}
+	state, _, _ := core.ReadState(f.root)
+	if state.Config.ManagementDomain != "hub.example.invalid" || state.Node != nil {
+		t.Fatal("Node operation changed Hub ownership state")
+	}
+	if len(f.runner.calls) != 0 {
+		t.Fatalf("ownership failure reached host commands: %v", f.runner.calls)
+	}
+}
+
+// TestNodeLayoutRepairUsesEffectiveLineLedgerNotHubLedger pins the repair
+// ownership source on a co-located host: the Hub ledger at the historical
+// path has Node=nil, so only the Line's own ledger may supply the kernel
+// digest and bind it to this exact Node, role and port set.
+func TestNodeLayoutRepairUsesEffectiveLineLedgerNotHubLedger(t *testing.T) {
+	root := t.TempDir()
+	hubLedger, _ := writeLocalLineHubLedger(t, root, []int{2222})
+	if hubLedger.Node != nil {
+		t.Fatal("fixture Hub ledger unexpectedly records a Node")
+	}
+	cfg := corenode.Config{
+		HubURL: localLineHubOrigin, NodeID: strings.Repeat("a", 32),
+		Role: corenode.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
+	}
+	recorded := cfg
+	recorded.AgentVersion = corenode.CurrentAgentVersion()
+	recorded.AgentSHA256 = strings.Repeat("b", 64)
+	recorded.KernelSHA256 = strings.Repeat("c", 64)
+	if err := core.WriteLocalLineState(root, core.InstallState{
+		Schema: 1, OperationID: strings.Repeat("2", 32), Status: "installed",
+		Node: &recorded, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCgroup := core.CgroupOf
+	oldExecutable := processExecutableOf
+	oldExecutableHash := processExecutableHashOf
+	defer func() { core.CgroupOf = oldCgroup }()
+	defer func() { processExecutableOf = oldExecutable }()
+	defer func() { processExecutableHashOf = oldExecutableHash }()
+	core.CgroupOf = func(pid string) ([]byte, error) {
+		return []byte("0::/system.slice/" + corenode.SingBoxUnit + "\n"), nil
+	}
+	processExecutableOf = func(string) (string, error) { return corenode.SingBoxBinaryPath, nil }
+	processExecutableHashOf = func(string) (string, error) { return recorded.KernelSHA256, nil }
+
+	runner := &fixedNodeRunner{name: "ss", output: []byte(
+		"tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=6))\n" +
+			"udp UNCONN 0 0 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=7))\n",
+	)}
+	checks := nodePortPreflight(context.Background(), cfg, true, root, runner)
+	for _, check := range checks {
+		if check.Status != "pass" {
+			t.Fatalf("effective Line ledger did not authorize its kernel listener: %+v", check)
+		}
+	}
+}
+
+// TestNodeLayoutRepairRejectsUnboundLineLedger pins that a ledger which does
+// not bind this exact Node, or records no verified kernel digest, yields the
+// stable ownership code instead of blaming a third-party PORT_CONFLICT.
+func TestNodeLayoutRepairRejectsUnboundLineLedger(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*corenode.Config)
+	}{
+		{"node id", func(cfg *corenode.Config) { cfg.NodeID = strings.Repeat("f", 32) }},
+		{"role", func(cfg *corenode.Config) { cfg.Role = corenode.RoleOut }},
+		{"vless port", func(cfg *corenode.Config) { cfg.VLESSPort = 9443 }},
+		{"ssh port", func(cfg *corenode.Config) { cfg.SSHPort = 2200 }},
+		{"missing kernel digest", func(cfg *corenode.Config) { cfg.KernelSHA256 = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeLocalLineHubLedger(t, root, []int{2222})
+			cfg := corenode.Config{
+				HubURL: localLineHubOrigin, NodeID: strings.Repeat("a", 32),
+				Role: corenode.RoleEdge, VLESSPort: 8443, SSHPort: 2222,
+			}
+			recorded := cfg
+			recorded.AgentVersion = corenode.CurrentAgentVersion()
+			recorded.AgentSHA256 = strings.Repeat("b", 64)
+			recorded.KernelSHA256 = strings.Repeat("c", 64)
+			tc.mutate(&recorded)
+			if err := core.WriteLocalLineState(root, core.InstallState{
+				Schema: 1, OperationID: strings.Repeat("2", 32), Status: "installed",
+				Node: &recorded, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			listeners := "tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=6))\n"
+			checks := nodePortPreflight(context.Background(), cfg, true, root,
+				&fixedNodeRunner{name: "ss", output: []byte(listeners)})
+			for _, check := range checks {
+				if check.Status != "fail" || check.Code != core.NodeOwnershipUnverified {
+					t.Fatalf("unbound ledger = %+v, want %s", check, core.NodeOwnershipUnverified)
+				}
+			}
+		})
+	}
+}
+
+func TestNodeBadArchiveHashDoesNotWriteHostFiles(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleEdge)
+	f.opts.Artifacts[0].SHA256 = strings.Repeat("0", 64)
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err == nil || result.ErrorCode != "ARTIFACT_CHECKSUM_MISMATCH" {
+		t.Fatalf("bad archive = %+v %v", result, err)
+	}
+	for _, path := range []string{corenode.AgentBinaryPath, corenode.SingBoxBinaryPath, corenode.IdentityPath} {
+		if _, statErr := os.Stat(core.Rooted(f.root, path)); !os.IsNotExist(statErr) {
+			t.Fatalf("bad archive wrote %s", path)
+		}
+	}
+}
+
+func TestNodeIdentityPersistedBeforeMetadataFailure(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleOut)
+	f.cfg.AgentVersion = corenode.CurrentAgentVersion()
+	f.cfg.AgentSHA256 = strings.Repeat("b", 64)
+	f.cfg.KernelSHA256 = f.binaryHash
+	f.candidate = corenode.NewCandidateDocument(corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 1,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	})
+	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
+		return corenode.NewCandidateDocument(corenode.Candidate{
+			NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 1,
+			VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+		}), nil
+	}
+	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
+		return corenode.Metadata{}, errors.New("metadata fault")
+	}
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err == nil || result.ErrorCode != "PAIRING_METADATA_FAILED" {
+		t.Fatalf("metadata fault = %+v %v", result, err)
+	}
+	if _, statErr := os.Stat(core.Rooted(f.root, corenode.IdentityPath)); statErr != nil {
+		t.Fatal("pairing identity was not persisted before Metadata/Candidate validation")
+	}
+	// A repair must reuse that private credential and must not accept the old
+	// pairing code again.
+	f.opts.Pair = func(context.Context, corenode.Config, string) (corenode.Identity, error) {
+		return corenode.Identity{}, errors.New("code consumed")
+	}
+	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
+		return fixtureMetadata(f.cfg), nil
+	}
+	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
+		return f.candidate, nil
+	}
+	f.opts.DownloadArtifact = func(context.Context, core.Artifact, string) (string, error) {
+		return f.archivePath, nil
+	}
+	f.opts.Artifacts[0].SHA256 = fileSHA256ForTest(t, f.archivePath)
+	release, ok := corenode.KernelReleaseFor("amd64")
+	if !ok {
+		t.Fatal("missing amd64 release")
+	}
+	f.opts.Artifacts[0].Source = release.SourceURL
+	info, err := os.Stat(f.archivePath)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("archive unavailable: %v", err)
+	}
+	if _, err := f.install(t, true, ""); err != nil {
+		t.Fatalf("repair did not reuse persisted identity: %v", err)
+	}
+}
+
+func TestNodePortConsistencyAndACLReadback(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleOut)
+	_, err := InstallNode(context.Background(), f.cfg, strings.Repeat("e", 32), false, strings.Repeat("A", 43), f.opts)
+	if err != nil {
+		t.Fatalf("fixture install: %v", err)
+	}
+	if !strings.Contains(strings.Join(f.runner.calls, "\n"), "dpkg --print-architecture") {
+		t.Fatal("actual dpkg architecture was not queried")
+	}
+	for _, call := range f.runner.calls {
+		if strings.Contains(call, "apt-get install") && strings.Contains(call, "upgrade") {
+			t.Fatalf("apt upgrade was requested: %s", call)
+		}
+	}
+
+	files, err := nodeManagedFilesForLayout(f.cfg, []int{2222, 2200}, f.identity, core.StandaloneNodeLayout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jail := files["/etc/fail2ban/jail.d/meshmux-node-ssh.local"].Body
+	if !strings.Contains(jail, "port = 2200,2222") || strings.Contains(jail, "8443") {
+		t.Fatalf("SSH jail ports are not the actual listener set without VLESS: %s", jail)
+	}
+	aclFile, exists := files[corenode.ACLPath]
+	if !exists || aclFile.Static || aclFile.Body != "" {
+		t.Fatal("ACL rules must be initialized only from the validated candidate")
+	}
+}
+
+func TestParseFail2banSSHPortSets(t *testing.T) {
+	for _, tc := range []struct {
+		name, ports, action string
+		want                []int
+	}{
+		{"debian-13-multiport", "2200,2222\n", "nft add rule inet f2b-table f2b-chain tcp dport { 2200, 2222 } ip saddr @addr-set-meshmux-node-sshd reject\n", []int{2200, 2222}},
+		{"single-action-port", "2222", "tcp dport 2222 ip saddr @addr-set-meshmux-node-sshd reject", []int{2222}},
+		{"real-1.1.0-actionstart", "22", "nft add rule inet f2b-table f2b-chain $proto dport \\{ $(echo '22' | sed s/:/-/g) \\} <addr_family> saddr @<addr_set> reject", []int{22}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPorts, err := parseFail2banPorts(tc.ports)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotAction, err := parseFail2banActionPorts(tc.action)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !core.EqualIntSets(gotPorts, tc.want) || !core.EqualIntSets(gotAction, tc.want) {
+				t.Fatalf("jail=%v action=%v, want %v", gotPorts, gotAction, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		ports, action string
+	}{
+		{"2222", "tcp dport { 12222 } ip saddr @addr-set-meshmux-node-sshd reject"},
+		{"2222,2222", "tcp dport { 2222 } ip saddr @addr-set-meshmux-node-sshd reject"},
+		{"2222,2200", "tcp dport { 2222 } ip saddr @addr-set-meshmux-node-sshd reject"},
+		{"ssh", "tcp dport { 22 } ip saddr @addr-set-meshmux-node-sshd reject"},
+	} {
+		jailPorts, jailErr := parseFail2banPorts(tc.ports)
+		actionPorts, actionErr := parseFail2banActionPorts(tc.action)
+		if jailErr == nil && actionErr == nil && core.EqualIntSets(jailPorts, actionPorts) {
+			t.Fatalf("inconsistent port evidence accepted: %q / %q", tc.ports, tc.action)
+		}
+	}
+}
+
+func TestNodeManagedPortUsesPIDCgroupAndTruncatedComm(t *testing.T) {
+	oldCgroup := core.CgroupOf
+	oldExecutable := processExecutableOf
+	oldExecutableHash := processExecutableHashOf
+	defer func() { core.CgroupOf = oldCgroup }()
+	defer func() { processExecutableOf = oldExecutable }()
+	defer func() { processExecutableHashOf = oldExecutableHash }()
+	cgroupByPID := map[string]string{
+		"4242": "0::/system.slice/meshmux-sing-box.service\n",
+		"5555": "0::/system.slice/other.service\n",
+	}
+	core.CgroupOf = func(pid string) ([]byte, error) {
+		value, ok := cgroupByPID[pid]
+		if !ok {
+			return nil, errors.New("gone")
+		}
+		return []byte(value), nil
+	}
+	processExecutableOf = func(string) (string, error) {
+		return corenode.SingBoxBinaryPath, nil
+	}
+	processExecutableHashOf = func(string) (string, error) {
+		return strings.Repeat("a", 64), nil
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, line, protocol string
+		port                 int
+		want                 string
+	}{
+		{
+			name:     "debian13 truncated comm",
+			line:     `tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:(("meshmux-sing-bo",pid=4242,fd=6))`,
+			protocol: "tcp", port: 8443, want: "pass",
+		},
+		{
+			name:     "udp without netid",
+			line:     `UNCONN 0 0 0.0.0.0:8443 0.0.0.0:* users:(("meshmux-sing-bo",pid=4242,fd=7))`,
+			protocol: "udp", port: 8443, want: "pass",
+		},
+		{
+			name:     "lookalike comm in wrong unit",
+			line:     `tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:(("meshmux-sing-box",pid=5555,fd=6))`,
+			protocol: "tcp", port: 8443, want: "fail",
+		},
+		{
+			name:     "multiple owners",
+			line:     "tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:((\"meshmux-sing-bo\",pid=4242,fd=6),(\"other\",pid=5555,fd=8))",
+			protocol: "tcp", port: 8443, want: "fail",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := nodeManagedPort(ctx, tc.line, tc.name, tc.protocol, tc.port, strings.Repeat("a", 64))
+			if got.Status != tc.want {
+				t.Fatalf("managed port = %+v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNodeManagedPortUsesUniquePIDAndRejectsAmbiguousOwnership(t *testing.T) {
+	oldCgroup := core.CgroupOf
+	oldExecutable := processExecutableOf
+	oldExecutableHash := processExecutableHashOf
+	defer func() { core.CgroupOf = oldCgroup }()
+	defer func() { processExecutableOf = oldExecutable }()
+	defer func() { processExecutableHashOf = oldExecutableHash }()
+	core.CgroupOf = func(pid string) ([]byte, error) {
+		if pid == "4242" {
+			return []byte("0::/system.slice/meshmux-sing-box.service\n"), nil
+		}
+		return []byte("0::/system.slice/" + pid + ".service\n"), nil
+	}
+	processExecutableOf = func(string) (string, error) {
+		return corenode.SingBoxBinaryPath, nil
+	}
+	processExecutableHashOf = func(string) (string, error) {
+		return strings.Repeat("a", 64), nil
+	}
+	twoOwners := `tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:(("meshmux-sing-bo",pid=4242,fd=6),("meshmux-sing-bo",pid=5555,fd=7))`
+	check := nodeManagedPort(context.Background(), twoOwners, "vless_tcp", "tcp", 8443, strings.Repeat("a", 64))
+	if check.Status != "fail" || check.Code != "PORT_OWNER_UNVERIFIED" {
+		t.Fatalf("ambiguous listener = %+v", check)
+	}
+}
+
+func TestNodeTableOwnershipDistinguishesAbsentAndProbeFailure(t *testing.T) {
+	cfg := corenode.Config{
+		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
+		Role: corenode.RoleOut, VLESSPort: 8443, SSHPort: 2222,
+	}
+	// A recorded table is only adopted when this host's own Node ledger
+	// binds the exact config, so the ledger lives under a temporary root
+	// instead of the real /var/lib/meshmux-installer.
+	root := t.TempDir()
+	recorded := cfg
+	recorded.AgentVersion, recorded.AgentSHA256, recorded.KernelSHA256 =
+		corenode.CurrentAgentVersion(), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	if err := core.WriteState(root, core.InstallState{
+		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "installed", Node: &recorded,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		output     string
+		err        error
+		allow      bool
+		wantKind   tableOwnershipKind
+		wantStatus string
+	}{
+		{"absent", "Error: No such file or directory\n", errors.New("exit"), false, tableAbsent, "pass"},
+		{"absent kmsg style", "table inet meshmux_out: object not found\n", errors.New("exit"), false, tableAbsent, "pass"},
+		{"permission", "Operation not permitted\n", errors.New("exit"), false, tableProbeFailed, "fail"},
+		{"kernel unsupported", "Error: Could not process rule: Operation not supported\n", errors.New("exit"), false, tableProbeFailed, "fail"},
+		{"third party without ledger", "table inet meshmux_out {\n}\n", nil, false, tableConflict, "fail"},
+		{"recorded managed", "table inet meshmux_out {\n}\n", nil, true, tableManaged, "pass"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &fixedNodeRunner{name: "nft", output: []byte(tc.output), err: tc.err}
+			got := nodeTableOwnership(context.Background(), root, runner, cfg, tc.allow)
+			if got.Kind != tc.wantKind {
+				t.Fatalf("kind = %v, want %v", got.Kind, tc.wantKind)
+			}
+			if check := got.checkName("out_acl_table"); check.Status != tc.wantStatus {
+				t.Fatalf("check = %+v, want status %s", check, tc.wantStatus)
+			}
+		})
+	}
+}
+
+func TestNodeTableOwnershipIsRecheckedAfterNftablesInstall(t *testing.T) {
+	cfg := corenode.Config{
+		HubURL: "https://hub.example.invalid", NodeID: strings.Repeat("a", 32),
+		Role: corenode.RoleOut, VLESSPort: 8443, SSHPort: 2222,
+	}
+	runner := &fixedNodeRunner{
+		name: "nft", output: []byte("Operation not permitted\n"), err: errors.New("exit"),
+	}
+	// The recheck only classifies the table; the ledger root is empty here.
+	root := t.TempDir()
+	if err := verifyNodeTableOwnershipAfterInstall(context.Background(), root, runner, cfg, false); err == nil {
+		t.Fatal("permission failure was accepted after nftables install")
+	}
+	runner.output, runner.err = []byte("Error: No such file or directory\n"), errors.New("exit")
+	if err := verifyNodeTableOwnershipAfterInstall(context.Background(), root, runner, cfg, false); err != nil {
+		t.Fatalf("explicit absent table after nftables install: %v", err)
+	}
+}
+
+func TestNodeHTTPSPreflightRejectsRedirect(t *testing.T) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+	got := nodeHTTPSPreflightWithClient(context.Background(), redirect.URL, redirect.Client())
+	if got.Status != "fail" || got.Code != "NETWORK_UNAVAILABLE" {
+		t.Fatalf("redirecting Hub accepted: %+v", got)
+	}
+}
+
+type fixedNodeRunner struct {
+	name   string
+	output []byte
+	err    error
+}
+
+func (r *fixedNodeRunner) Run(_ context.Context, name string, _ ...string) ([]byte, error) {
+	if name != r.name {
+		return nil, errors.New("unexpected command")
+	}
+	return r.output, r.err
+}
+
+func TestNodeRepairReusesIdentityAndPreservesLKG(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleEdge)
+	f.candidate = corenode.NewCandidateDocument(corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 1,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	})
+	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
+		return f.candidate, nil
+	}
+	if err := core.WriteState(f.root, core.InstallState{
+		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "partial",
+		Node: &f.cfg, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateNodeDirectory(core.Rooted(f.root, nodeAgentStateDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistNodeIdentity(f.root, f.identity); err != nil {
+		t.Fatal(err)
+	}
+	dir := core.Rooted(f.root, nodeKernelDataDir)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	lkg := filepath.Join(dir, "config.json")
+	candidateBody, err := json.Marshal(corenode.NewCandidateDocument(corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 9,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core.Rooted(f.root, corenode.ActiveCandidatePath), candidateBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := corenode.CompileCandidate(corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 9,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lkg, compiled, 0640); err != nil {
+		t.Fatal(err)
+	}
+	compiledHash := sha256.Sum256(compiled)
+	f.opts.Readback = func(context.Context, corenode.Config, string, corenode.CommandRunner) (corenode.Readback, error) {
+		return corenode.Readback{
+			Architecture: "amd64", AgentVersion: corenode.CurrentAgentVersion(),
+			AgentSHA256: strings.Repeat("b", 64), KernelVersion: corenode.KernelVersion,
+			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 9,
+			ConfigSHA256: hex.EncodeToString(compiledHash[:]), LocalActive: true,
+		}, nil
+	}
+	pairCalls := 0
+	f.opts.Pair = func(context.Context, corenode.Config, string) (corenode.Identity, error) {
+		pairCalls++
+		return corenode.Identity{}, errors.New("repair must not consume a code")
+	}
+	result, err := f.install(t, true, "")
+	if err != nil || result.Status != "installed" {
+		t.Fatalf("repair preserved LKG but failed: %+v %v", result, err)
+	}
+	if pairCalls != 0 {
+		t.Fatal("repair requested a replacement pairing code")
+	}
+	data, err := os.ReadFile(lkg)
+	if err != nil || !bytes.Equal(data, compiled) {
+		t.Fatalf("repair lost the existing valid LKG: %q %v", data, err)
+	}
+}
+
+// TestNodeRepairDeclaresThatItKeepsTheRecordedCandidate pins the repair
+// candidate decision (#113 4-4): the verify tail used to decide silently
+// whether to write the downloaded candidate or keep the recorded one. The
+// decision is now fixed and declared — a repair keeps the recorded candidate,
+// records REPAIR_CANDIDATE_NOT_CONVERGED in the journal, and reports it as
+// next_action while the operation still ends "installed" with no error_code.
+func TestNodeRepairDeclaresThatItKeepsTheRecordedCandidate(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleEdge)
+	operationID := strings.Repeat("e", 32)
+	// The Hub offers revision 2 while the host records revision 1: exactly the
+	// divergence a repair must not resolve by itself.
+	offered := corenode.NewCandidateDocument(corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 2,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	})
+	recorded := corenode.NewCandidateDocument(corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 1,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	})
+	f.opts.Candidate = func(context.Context, corenode.Config, corenode.Identity, int64) (corenode.CandidateDocument, error) {
+		return offered, nil
+	}
+	if err := core.WriteState(f.root, core.InstallState{
+		Schema: 1, OperationID: strings.Repeat("1", 32), Status: "partial",
+		Node: &f.cfg, ManagedFiles: map[string]string{}, Artifacts: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateNodeDirectory(core.Rooted(f.root, nodeAgentStateDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistNodeIdentity(f.root, f.identity); err != nil {
+		t.Fatal(err)
+	}
+	recordedBody, err := jsonMarshal(recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(core.Rooted(f.root, nodeKernelDataDir), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core.Rooted(f.root, corenode.ActiveCandidatePath), recordedBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := corenode.CompileCandidate(recorded.Candidate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core.Rooted(f.root, corenode.ActiveConfigPath), compiled, 0640); err != nil {
+		t.Fatal(err)
+	}
+	compiledHash := sha256.Sum256(compiled)
+	f.opts.Readback = func(context.Context, corenode.Config, string, corenode.CommandRunner) (corenode.Readback, error) {
+		return corenode.Readback{
+			Architecture: "amd64", AgentVersion: corenode.CurrentAgentVersion(),
+			AgentSHA256: strings.Repeat("b", 64), KernelVersion: corenode.KernelVersion,
+			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
+			ConfigSHA256: hex.EncodeToString(compiledHash[:]), LocalActive: true,
+		}, nil
+	}
+	result, err := InstallNode(context.Background(), f.cfg, operationID, true, "", f.opts)
+	if err != nil || result.Status != "installed" || result.ErrorCode != "" {
+		t.Fatalf("repair = %+v %v, want installed with no error code", result, err)
+	}
+	if !strings.HasPrefix(result.Recovery, repairCandidateNotConverged) ||
+		!strings.Contains(result.Recovery, "revision 1") || !strings.Contains(result.Recovery, "revision 2") {
+		t.Fatalf("repair did not declare the candidate it kept: %q", result.Recovery)
+	}
+	// The recorded candidate is what the host runs: a repair never converges
+	// to the downloaded revision.
+	active, ok := currentNodeCandidate(f.root, f.cfg)
+	if !ok || active.Revision != 1 {
+		t.Fatalf("active candidate = %+v, want the recorded revision 1", active)
+	}
+	journal, err := os.ReadFile(filepath.Join(f.root, "var/lib/meshmux-installer/operations", operationID, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := false
+	for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
+		if line == "" {
+			continue
+		}
+		var event core.OperationEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("journal line %q: %v", line, err)
+		}
+		if event.Stage == "stage" && event.Status == "candidate_not_converged" {
+			declared = true
+			if event.ErrorCode != "" {
+				t.Fatalf("a successful repair recorded an error code: %+v", event)
+			}
+		}
+	}
+	if !declared {
+		t.Fatalf("journal never declared the kept candidate: %s", journal)
+	}
+}
+
+// TestNodeFreshInstallDoesNotDeclareACandidateDecision keeps the notice a
+// repair fact: a fresh install applies exactly the Hub candidate, so its
+// next_action stays empty.
+func TestNodeFreshInstallDoesNotDeclareACandidateDecision(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleEdge)
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err != nil || result.Status != "installed" {
+		t.Fatalf("fresh install = %+v %v", result, err)
+	}
+	if result.Recovery != "" {
+		t.Fatalf("fresh install declared a repair notice: %q", result.Recovery)
+	}
+}
+
+func TestNodeLKGRequiresCanonicalBytes(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleEdge)
+	dir := core.Rooted(f.root, nodeKernelDataDir)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateNodeDirectory(core.Rooted(f.root, nodeAgentStateDir)); err != nil {
+		t.Fatal(err)
+	}
+	candidate := corenode.Candidate{
+		NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: 1,
+		VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+	}
+	document := corenode.NewCandidateDocument(candidate)
+	documentBody, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core.Rooted(f.root, corenode.ActiveCandidatePath), documentBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(core.Rooted(f.root, corenode.ActiveConfigPath), []byte(`{"listen_port":8443}`), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nodeValidLKG(f.root, f.cfg); ok {
+		t.Fatal("corrupt JSON containing the port was retained as LKG")
+	}
+}
+
+func containsUnit(units []string, unit string) bool {
+	for _, got := range units {
+		if got == unit {
+			return true
+		}
+	}
+	return false
+}
+
+// TestNodeFreshInstallFetchesTheMetadataRevision pins that a fresh install
+// applies the revision the Hub currently publishes rather than assuming
+// revision 1. An Out whose dial address was configured before pairing carries
+// its SS link key in a later candidate; fetching revision 1 would boot the
+// transport-free baseline instead of the guard.
+func TestNodeFreshInstallFetchesTheMetadataRevision(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleOut)
+	const revision = int64(2)
+	linkKey, err := corenode.NewOutLinkKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.opts.Metadata = func(context.Context, corenode.Config, corenode.Identity) (corenode.Metadata, error) {
+		metadata := f.cfg.Metadata()
+		metadata.ConfigRevision = revision
+		return metadata, nil
+	}
+	requested := int64(0)
+	f.opts.Candidate = func(_ context.Context, _ corenode.Config, _ corenode.Identity, rev int64) (corenode.CandidateDocument, error) {
+		requested = rev
+		return corenode.NewCandidateDocument(corenode.Candidate{
+			NodeID: f.cfg.NodeID, Role: f.cfg.Role, Revision: rev,
+			VLESSPort: f.cfg.VLESSPort, KernelVersion: corenode.KernelVersion,
+			Out: &corenode.OutEgress{Server: "out.example.invalid", Port: f.cfg.VLESSPort, Key: linkKey},
+		}), nil
+	}
+	if _, err := f.install(t, false, strings.Repeat("A", 43)); err != nil {
+		t.Fatalf("fresh install at the published revision: %v", err)
+	}
+	if requested != revision {
+		t.Fatalf("installer fetched revision %d, want %d", requested, revision)
+	}
+	active, ok := currentNodeCandidate(f.root, f.cfg)
+	if !ok || active.Revision != revision || active.Out == nil || active.Out.Key != linkKey {
+		t.Fatalf("fresh install did not apply the link-key candidate: %+v", active)
+	}
+}
+
+func TestStateNodeJSONCompatibility(t *testing.T) {
+	state := core.InstallState{Schema: 1, OperationID: strings.Repeat("a", 32), Status: "installed", ManagedFiles: map[string]string{}}
+	body, err := json.Marshal(state)
+	if err != nil || bytes.Contains(body, []byte(`"node"`)) {
+		t.Fatalf("Hub state gained an empty Node object: %s %v", body, err)
+	}
+}
+
+// TestNodeFirstInstallAndLedger runs the complete mutation path against a
+// temporary root. It uses only the injected command runner and a loopback Hub
+// fixture; no host account, apt, service or firewall command is executed.
+func TestNodeFirstInstallAndLedger(t *testing.T) {
+	f := makeNodeFixture(t, corenode.RoleOut)
+	hub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/pair":
+			if r.Method != http.MethodPost || strings.Contains(r.URL.RawQuery, "A") {
+				http.Error(w, "invalid", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"node_id": f.cfg.NodeID, "identity_token": f.identity.IdentityToken,
+				"operation_id": strings.Repeat("1", 32),
+			})
+		case "/api/agent/node":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(fixtureMetadata(f.cfg))
+		case "/api/agent/config/1":
+			documentCandidate := f.candidate
+			documentCandidate.Revision = 1
+			document, err := json.Marshal(documentCandidate)
+			if err != nil {
+				t.Error(err)
+				http.Error(w, "invalid", http.StatusInternalServerError)
+				return
+			}
+			sum := sha256.Sum256(document)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-MeshMux-Config-SHA256", hex.EncodeToString(sum[:]))
+			_, _ = w.Write(document)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer hub.Close()
+	f.cfg.HubURL = hub.URL
+	f.opts.Preflight = nil
+	f.opts.Pair, f.opts.Metadata, f.opts.Candidate = nil, nil, nil
+	f.opts.HTTPClient = hub.Client()
+	f.opts.Readback = func(context.Context, corenode.Config, string, corenode.CommandRunner) (corenode.Readback, error) {
+		return corenode.Readback{
+			Architecture: "amd64", AgentVersion: corenode.CurrentAgentVersion(),
+			AgentSHA256: strings.Repeat("b", 64), KernelVersion: corenode.KernelVersion,
+			KernelSHA256: strings.Repeat("c", 64), ActiveRevision: 1,
+			ConfigSHA256: strings.Repeat("d", 64), LocalActive: true, OutDefaultDeny: true,
+		}, nil
+	}
+	runner := f.runner
+	runner.packages = map[string]bool{"fail2ban": true, "nftables": true, "python3-systemd": true}
+	runner.packages["ca-certificates"] = false
+	// The real preflight proves it queries the host through the injected
+	// runner, while its read-only network probes remain isolated.
+	if _, err := InstallNode(context.Background(), f.cfg, strings.Repeat("e", 32), false, strings.Repeat("A", 43), f.opts); err == nil {
+		t.Fatal("fixture unexpectedly passed a real host preflight")
+	}
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "dpkg --print-architecture") {
+		t.Fatal("preflight did not use the injected runner")
+	}
+
+	// Exercise the mutation path with the focused read-only checks used by the
+	// VM harness, while retaining the real Client + pair + candidate flow.
+	f.opts.Preflight = func(context.Context, corenode.Config, bool) ([]core.Check, []int) {
+		return []core.Check{{Name: "fixture", Status: "pass"}}, append([]int(nil), fixtureSSHPorts...)
+	}
+	runner.failCall = ""
+	runner.calls = nil
+	result, err := f.install(t, false, strings.Repeat("A", 43))
+	if err != nil || result.Status != "installed" {
+		t.Fatalf("first install = %+v %v", result, err)
+	}
+	state, exists, err := core.ReadState(f.root)
+	if err != nil || !exists || state.Status != "installed" || state.Node == nil || state.Node.NodeID != f.cfg.NodeID {
+		t.Fatalf("Node state = %+v %v", state, err)
+	}
+	// The standalone Line owns one jail for every actual SSH listener, not
+	// just the configured rescue port, and records that full set.
+	if !core.EqualIntSets(state.SSHPorts, fixtureSSHPorts) {
+		t.Fatalf("recorded SSH ports = %v, want %v", state.SSHPorts, fixtureSSHPorts)
+	}
+	for _, path := range []string{corenode.AgentConfigPath, corenode.IdentityPath, "/etc/systemd/system/" + corenode.AgentUnit, "/etc/systemd/system/" + corenode.SingBoxUnit, "/etc/fail2ban/jail.d/meshmux-node-ssh.local"} {
+		if _, statErr := os.Stat(core.Rooted(f.root, path)); statErr != nil {
+			t.Fatalf("managed path missing %s: %v", path, statErr)
+		}
+	}
+	if _, recorded := state.ManagedFiles[corenode.IdentityPath]; recorded {
+		t.Fatal("private identity must not enter the static managed-file ledger")
+	}
+	for _, target := range []string{corenode.RuntimeStatePath, corenode.ActiveCandidatePath, corenode.ActiveConfigPath, corenode.ACLPath} {
+		if _, recorded := state.ManagedFiles[target]; recorded {
+			t.Fatalf("dynamic path %s entered the static ledger", target)
+		}
+	}
+	joined := strings.Join(runner.calls, "\n")
+	if !strings.Contains(joined, "apt-get install") || strings.Contains(joined, "apt-get upgrade") || strings.Contains(joined, "apt-get dist-upgrade") {
+		t.Fatalf("apt behavior is not a fixed missing-package install: %s", joined)
+	}
+}
+
+type probeRunner struct {
+	out  []byte
+	err  error
+	args []string
+}
+
+func (r *probeRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	r.args = append([]string(nil), args...)
+	return r.out, r.err
+}
+
+func TestVerifyAgentBinaryRequiresExactVersionProbe(t *testing.T) {
+	selfHash, err := core.SHA256File("/proc/self/exe")
+	if err != nil {
+		t.Skipf("probe requires /proc/self/exe, unavailable on this platform: %v", err)
+	}
+	newOpts := func(runner core.CommandRunner) core.NodeApplyOptions {
+		return core.NodeApplyOptions{Root: "/", Runner: runner}
+	}
+	r := &probeRunner{out: []byte(corenode.CurrentAgentVersion() + "\n")}
+	if err := core.VerifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", selfHash); err != nil {
+		t.Fatalf("exact probe = %v, want nil", err)
+	}
+	if len(r.args) != 1 || r.args[0] != "__internal-agent-version" {
+		t.Fatalf("probe argv = %q, want exactly [__internal-agent-version]", r.args)
+	}
+	r = &probeRunner{out: []byte(corenode.CurrentAgentVersion() + " extra")}
+	if err := core.VerifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", selfHash); err == nil {
+		t.Fatal("substring probe accepted, want AGENT_VERSION_MISMATCH")
+	}
+	r = &probeRunner{err: errors.New("exec failed")}
+	if err := core.VerifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", selfHash); err == nil {
+		t.Fatal("failed probe accepted, want AGENT_VERSION_PROBE_FAILED")
+	}
+	r = &probeRunner{out: []byte(corenode.CurrentAgentVersion() + "\n")}
+	if err := core.VerifyAgentBinary(context.Background(), newOpts(r), "/tmp/staged-meshmuxd", strings.Repeat("0", 64)); err == nil {
+		t.Fatal("hash mismatch accepted, want AGENT_NOT_SELF_COPY")
+	}
+}
+
+// clockFlapRunner emulates a time service that is still starting: the first
+// calls fail or report "no" before settling on "yes". Industry practice is
+// to retry such eventually-consistent signals with a bounded deadline
+// instead of failing a single-shot check (SRE retry-with-deadline).
+type clockFlapRunner struct {
+	calls int
+	ready int
+	fail  int
+}
+
+func (r *clockFlapRunner) Run(_ context.Context, name string, _ ...string) ([]byte, error) {
+	if name != "timedatectl" {
+		return nil, errors.New("unexpected command " + name)
+	}
+	r.calls++
+	if r.calls <= r.fail {
+		return nil, errors.New("time service starting")
+	}
+	if r.calls <= r.ready {
+		return []byte("no\n"), nil
+	}
+	return []byte("yes\n"), nil
+}
+
+func TestWaitForClockSyncRetriesTransientNoAndErrors(t *testing.T) {
+	r := &clockFlapRunner{fail: 1, ready: 3}
+	if err := waitForClockSync(context.Background(), r); err != nil {
+		t.Fatalf("flapping clock = %v, want nil (calls=%d)", err, r.calls)
+	}
+	if r.calls < 4 {
+		t.Fatalf("clock calls = %d, want >=4 (errors+no retried)", r.calls)
+	}
+}
+
+func TestWaitForClockSyncRespectsContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	r := &clockFlapRunner{fail: 1000, ready: 1000}
+	if err := waitForClockSync(ctx, r); err == nil {
+		t.Fatal("cancelled clock wait accepted, want ctx error")
+	}
+}

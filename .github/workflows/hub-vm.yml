@@ -117,10 +117,12 @@ jobs:
         run: |
           mkdir -p .ci/bin
           CGO_ENABLED=0 go build -o .ci/bin/meshmux ./cmd/meshmux
-          go test -c -o .ci/bin/install.test ./internal/cli/install
+          go test -c -o .ci/bin/install.test ./internal/cli/install/hub
+          go test -c -o .ci/bin/install-node.test ./internal/cli/install/node
           go test -c -o .ci/bin/web.test ./internal/web
           go test -c -o .ci/bin/web-handler.test ./internal/web/handler
-          go test -c -o .ci/bin/node.test ./internal/core/node
+          go test -c -o .ci/bin/node.test ./internal/core/node/agent
+          go test -c -o .ci/bin/node-render.test ./internal/core/node/render
       - name: Install QEMU and cloud-init image tools
         run: |
           sudo apt-get update -qq

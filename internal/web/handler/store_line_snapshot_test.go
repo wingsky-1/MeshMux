@@ -165,7 +165,7 @@ func TestBuildLineCandidateOutWithTransportCarriesLinkKey(t *testing.T) {
 		t.Fatalf("out candidate carried non-v4 blocks: %+v", candidate)
 	}
 	document := node.NewCandidateDocument(candidate)
-	if document.Schema != node.CandidateSchemaV4 {
+	if document.Schema != node.CandidateSchema {
 		t.Fatalf("out document schema = %q, want meshmux-node/v4", document.Schema)
 	}
 }

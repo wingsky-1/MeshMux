@@ -1,0 +1,142 @@
+package hub
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/wingsky-1/MeshMux/internal/cli/install/core"
+)
+
+func TestDomains(t *testing.T) {
+	good := core.Config{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org", DirectCaddy: false}
+	if err := good.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []core.Config{
+		{ManagementDomain: "console.example.org", SubscriptionDomain: "console.example.org", HeadscaleDomain: "mesh.example.org"},
+		{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org\nadmin off"},
+		{ManagementDomain: "https://console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org"},
+		{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "localhost"},
+		{ManagementDomain: "CONSOLE.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org"},
+		{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "192.0.2.2"},
+		{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "foo_.example.org"},
+	} {
+		if err := c.Validate(); err == nil {
+			t.Fatalf("invalid domain accepted: %+v", c)
+		}
+	}
+}
+
+func TestReleaseDigestsAndImmutableCopy(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		a := core.PinnedArtifacts(arch)
+		if len(a) != 2 {
+			t.Fatalf("%s: unexpected assets %+v", arch, a)
+		}
+		for _, item := range a {
+			if !strings.HasPrefix(item.Source, "https://github.com/") || !core.ValidDigest.MatchString(item.SHA256) {
+				t.Fatalf("%s: unpinned asset %+v", arch, item)
+			}
+		}
+		a[0].SHA256 = strings.Repeat("0", 64)
+		if core.PinnedArtifacts(arch)[0].SHA256 == a[0].SHA256 {
+			t.Fatal("manifest pointer escaped")
+		}
+	}
+	if len(core.PinnedArtifacts("mips")) != 0 {
+		t.Fatal("unsupported architecture has artifacts")
+	}
+}
+
+func TestVerifyFileRejectsTampering(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "candidate")
+	data := []byte("artifact")
+	if err := os.WriteFile(file, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if err := core.VerifyFile(file, hex.EncodeToString(sum[:])); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.VerifyFile(file, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("modified artifact accepted")
+	}
+	if err := core.VerifyFile(file, ""); err == nil {
+		t.Fatal("missing digest accepted")
+	}
+	if err := os.WriteFile(file, append(data, '!'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.VerifyFile(file, hex.EncodeToString(sum[:])); err == nil {
+		t.Fatal("corrupted artifact accepted")
+	}
+}
+
+func TestSSHListeningPorts(t *testing.T) {
+	sockets := "0.0.0.0:60794 (Stream)\n[::]:60794 (Stream)\n"
+	if got := core.SocketPorts(sockets); len(got) != 1 || got[0] != 60794 {
+		t.Fatalf("socket: %v", got)
+	}
+	ss := "LISTEN 0 128 0.0.0.0:60794 0.0.0.0:* users:((\"sshd\",pid=789,fd=6))\n" +
+		"LISTEN 0 128 [::]:60794 [::]:* users:((\"sshd\",pid=789,fd=6))\n" +
+		"LISTEN 0 128 0.0.0.0:443 0.0.0.0:* users:((\"caddy\",pid=999,fd=6))"
+	if got := core.ParseSSHListeners(ss); len(got) != 1 || got[0] != 60794 {
+		t.Fatalf("actual SSH ports: %v", got)
+	}
+	if got := core.ParseSSHDPorts("port 60794\nport 60795\n"); len(got) != 2 {
+		t.Fatalf("configured SSH ports: %v", got)
+	}
+	if len(core.ParseSSHListeners("LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:((\"nginx\",pid=1))")) != 0 {
+		t.Fatal("unrelated listener accepted as SSH")
+	}
+}
+
+func TestReadOnlyPortProbeDetectsConflict(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("cannot listen on a loopback port, network namespace or sandbox restriction: %v", err)
+	}
+	defer listener.Close()
+	if core.CanBind("tcp", listener.Addr().String()) == nil {
+		t.Fatal("occupied port passed")
+	}
+}
+
+func TestPlanDoesNotMisreportInstallation(t *testing.T) {
+	c := core.Config{ManagementDomain: "console.example.org", SubscriptionDomain: "sub.example.org", HeadscaleDomain: "mesh.example.org", DirectCaddy: false}
+	p := core.BuildPlan("id", c, "amd64", []core.Check{{Name: "os", Status: "pass"}, {Name: "public_https", Status: "pending"}}, []int{60794})
+	if !p.ApplyAvailable || p.Status == "installed" || len(p.FirewallChanges) == 0 {
+		t.Fatalf("unsafe plan: %+v", p)
+	}
+	p = core.BuildPlan("id", c, "amd64", []core.Check{{Name: "os", Status: "fail"}}, nil)
+	if p.Status != "preflight_blocked" {
+		t.Fatalf("failed prerequisite passed: %+v", p)
+	}
+}
+
+func TestDebianReleaseParser(t *testing.T) {
+	// The Hub gate stays Debian 13 only; Node uses nodeOSCheck for its wider rule.
+	if !osSupported("ID=debian\nVERSION_ID=\"13\"\n") || osSupported("ID=ubuntu\nVERSION_ID=\"13\"\n") ||
+		osSupported("ID=debian\nVERSION_ID=\"12\"\n") {
+		t.Fatal("OS release parser failed")
+	}
+	release, codename, ok := core.DebianRelease("ID=debian\nVERSION_ID=\"12.4\"\nVERSION_CODENAME=bookworm\n")
+	if !ok || release != "12" || codename != "bookworm" {
+		t.Fatalf("debianRelease = %q, %q, %v", release, codename, ok)
+	}
+	if _, _, ok := core.DebianRelease("ID=debian\nVERSION_ID=\"\"\n"); ok {
+		t.Fatal("an empty VERSION_ID must not parse as a supported release")
+	}
+	if _, _, ok := core.DebianRelease("ID=debian\nVERSION_ID=\"trixie\"\n"); ok {
+		t.Fatal("a non-numeric VERSION_ID must not parse as a supported release")
+	}
+	if _, _, ok := core.DebianRelease("ID=ubuntu\nVERSION_ID=\"24.04\"\n"); ok {
+		t.Fatal("a non-Debian host must not parse as Debian")
+	}
+}

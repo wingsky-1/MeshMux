@@ -1,31 +1,21 @@
-// Package node is the Line/Out node domain: the fixed host layout, the frozen
-// candidate contract and the runtime that applies it.
+// Package node is the stable facade of the Line/Out node domain. The
+// implementation is split into four subpackages so each boundary is explicit:
 //
-// Boundary (2026-10-26 core split): this package is the node half of the pure
-// domain layer plus the Agent runtime that executes it. It never imports a
-// Hub-side domain — no policy, no subscription, no web. Its one internal
-// dependency is the wire contract internal/core/node/protocol, which also owns the
-// values every document producer must share (egress tags, the VLESS flow, the
-// selector and Tailscale endpoint tags, the rule-set format, and the identity,
-// digest, token and release-version grammars).
+//   - spec is the pure, deterministic domain: the host layout, the frozen
+//     meshmux-node/v1 candidate document with its optional users, reality,
+//     route and out blocks, the Out egress shapes, and the pinned kernel
+//     release. It never performs I/O.
+//   - render compiles one validated candidate into the exact sing-box bytes
+//     (and the retired Out guard table). It is pure and deterministic.
+//   - agent is the host runtime: it owns the private directories, writes
+//     managed files atomically, runs the pinned subprocesses through a fixed
+//     argv, holds the shared runtime lock and reads the live data plane back.
+//   - client is the authenticated outbound Hub client used by the Agent.
 //
-// The pure half is deliberately small and deterministic:
-//   - CompileCandidate / CompileCandidateWithRoute turn a validated candidate
-//     into exact bytes; CompileACL only renders the retired, rule-free Out
-//     table so an upgraded host flushes a legacy source allowlist;
-//   - Candidate.Validate, CandidateDocument.Validate and ValidateFor are shape
-//     checks with stable refusal codes. The ACL source predicates are retired
-//     but kept for the installer's upgrade path;
-//   - ParseHTTPProxyURL, ValidateOutLinkKey and NewOutLinkKey describe the Out
-//     egress.
-//
-// Everything else is the runtime: it owns the host directories, writes managed
-// files atomically, runs the pinned subprocesses through a fixed argv, holds the
-// shared runtime lock and reads the live data plane back. The runtime performs
-// I/O; the pure half never does.
-//
-// Extension points are additive: a new egress tag or wire grammar value belongs
-// in internal/core/node/protocol (and must not change an existing document's bytes),
-// a new candidate schema is a new reader beside the frozen ones, and a new
-// command must be added to the allowlist in protocol before it can be run.
+// This package re-exports the public types, constants and functions of those
+// subpackages, so callers keep importing internal/core/node while the
+// implementation stays navigable. A new egress tag or wire grammar value
+// belongs in internal/core/node/protocol (and must not change an existing
+// document's bytes); a new command must be added to the allowlist in protocol
+// before it can be run.
 package node

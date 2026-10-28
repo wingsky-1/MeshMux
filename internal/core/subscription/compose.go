@@ -182,30 +182,11 @@ type ComposeNetwork struct {
 	DisplayName string
 }
 
-// LineRoute is the server route fragment one selected Line had to publish for
-// this subscription.
-//
-// Deprecated: retired by client-chain egress (docs/superpowers/plans/
-// 2026-10-27-client-chain-egress.md). The Line no longer forwards: the selected
-// Out is rendered into the client documents themselves, so the composer emits
-// no server route and ComposeDocuments.LineRoutes stays empty. The type and the
-// field are kept only so existing callers keep compiling; both are removed in a
-// later v1 release.
-type LineRoute struct {
-	NodeID   string
-	Fragment []byte
-}
-
 // ComposeDocuments is the assembled artifact: the two client documents, the
 // selection identity and the content id.
 type ComposeDocuments struct {
-	SingBox []byte
-	Mihomo  []byte
-	// LineRoutes is always empty.
-	//
-	// Deprecated: retired by client-chain egress; the Line publishes no route
-	// for a subscription any more. Kept so callers compile; removed later.
-	LineRoutes  []LineRoute
+	SingBox     []byte
+	Mihomo      []byte
 	SelectionID string
 	ContentID   string
 }
@@ -496,11 +477,8 @@ func composeSelectionID(lines []Line, out *ComposeOut, rules []ComposeRule, netw
 // serving exactly the bytes that were composed from the current selection. The
 // snapshot identity is deliberately not part of it: two snapshots of the same
 // choice must produce the same artifact id, otherwise every re-save would look
-// like drift.
-//
-// Only the two client documents enter the digest: the retired LineRoutes field
-// is always empty, and hashing it would keep a dead shape in the approval
-// identity.
+// like drift. Only the two client documents enter the digest; the selection and
+// content ids are derived from the recorded selection instead.
 func composeContentID(documents ComposeDocuments) string {
 	var builder strings.Builder
 	builder.WriteString("meshmux-subscription-artifact/1\n")

@@ -390,23 +390,34 @@ func (rt *Runtime) Login(w http.ResponseWriter, r *http.Request, sess Session) {
 		rt.AuthFailure(w, r, sess, false)
 		return
 	}
-	// A successful login replaces every previous login. Rotation and revocation
-	// commit together, preventing fixation and keeping one active admin Session.
+	// A successful login adds one session instead of replacing the others:
+	// every device keeps its own token hash, CSRF value and expiry, so signing
+	// in on a phone never signs the administrator out on a desktop. The new
+	// token is always fresh, so a known or planted cookie cannot be fixed into
+	// an authenticated session. Legacy anonymous rows and rows that can no
+	// longer authenticate are pruned in the same transaction.
+	now := rt.Now()
+	op := Operation(r)
+	if op == "" {
+		op = NewOperation()
+	}
 	token := store.RandomToken()
 	csrf := store.RandomToken()
-	expires := rt.Now().Add(store.SessionLifetime).Unix()
+	expires := now.Add(store.SessionLifetime).Unix()
 	tx, err := rt.Store.DB.Begin()
 	if err != nil {
 		rt.Fail(w, r, 503, store.CodeDatabaseUnavailable, "无法建立会话。", "请重试。")
 		return
 	}
 	defer tx.Rollback()
-	// Every row is replaced, including any anonymous row left by a build that
-	// still minted one for the login form. A successful login is the moment the
-	// stored Session stops being needed at all.
-	_, err = tx.Exec("DELETE FROM sessions")
+	if err = store.PruneSessions(tx, now); err == nil {
+		_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,1,?,?)", store.TokenHash(token), csrf, expires, now.Unix())
+	}
+	// The login record is written in the same transaction as the session: it
+	// carries the operation id and time only, never the password, the token or
+	// the CSRF value, and no URL, IP or user agent.
 	if err == nil {
-		_, err = tx.Exec("INSERT INTO sessions VALUES(?,?,1,?,?)", store.TokenHash(token), csrf, expires, rt.Now().Unix())
+		err = store.RecordLogin(tx, op, now)
 	}
 	// The password was proven, so the shared budget is cleared in this same
 	// transaction: ten routine logins never lock the only administrator out,
@@ -431,6 +442,8 @@ func (rt *Runtime) Login(w http.ResponseWriter, r *http.Request, sess Session) {
 }
 
 func (rt *Runtime) Logout(w http.ResponseWriter, r *http.Request, sess Session) {
+	// Logout revokes only the session that made the request. Every other
+	// signed-in device keeps its own token, CSRF value and expiry.
 	if _, err := rt.Store.DB.Exec("DELETE FROM sessions WHERE token_hash=?", sess.Hash); err != nil {
 		rt.Fail(w, r, 503, store.CodeDatabaseUnavailable, "注销未完成。", "请重试，尚未确认会话撤销。")
 		return
@@ -474,9 +487,10 @@ func (rt *Runtime) Password(w http.ResponseWriter, r *http.Request, sess Session
 	if err == nil {
 		_, err = tx.Exec("DELETE FROM sessions")
 	}
-	// The current password was proven and every Session is about to be revoked,
-	// so the budget is cleared here: otherwise the operator's next login could
-	// hit the limit that this successful change just consumed.
+	// The current password was proven and every Session on every device is
+	// about to be revoked, so the budget is cleared here: otherwise the
+	// operator's next login could hit the limit that this successful change
+	// just consumed.
 	if err == nil {
 		err = store.ResetAuthBudget(tx)
 	}

@@ -51,12 +51,16 @@ var internalDAGLeafs = []struct {
 // It must never import the installer or the web layer (C6/C19).
 var internalDAGHubUpgradeCandidates = []string{"internal/cli/hubupgrade", "internal/cli/upgrade/hub"}
 
-// internalDAGNodeAllowed is node's complete internal dependency set: the frozen
-// protocol contract (at either path), the build identity, and the log-level
-// leaf. The log-level leaf is a policy both long-running entrypoints must agree
-// on; it has no internal imports of its own, so it cannot become a way for node
-// to reach into a domain it does not own.
-var internalDAGNodeAllowed = []string{"internal/protocol", "internal/core/node/protocol", "internal/cli/buildinfo", "internal/logging"}
+// internalDAGNodeAllowed is node's complete internal dependency set: the four
+// node subpackages of the 2026-10-28 split (spec, render, agent, client), the
+// frozen protocol contract (at either path), the build identity, and the
+// log-level leaf. The log-level leaf is a policy both long-running entrypoints
+// must agree on; it has no internal imports of its own, so it cannot become a
+// way for node to reach into a domain it does not own.
+var internalDAGNodeAllowed = []string{
+	"internal/protocol", "internal/core/node/protocol", "internal/cli/buildinfo", "internal/logging",
+	"internal/core/node/spec", "internal/core/node/render", "internal/core/node/agent", "internal/core/node/client",
+}
 
 // internalDAGMeshnetAllowed is meshnet's complete internal dependency set. The
 // adapter used to repeat the Headscale pin as a literal to stay a leaf; the pin

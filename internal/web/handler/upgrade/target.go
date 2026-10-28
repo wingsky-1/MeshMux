@@ -3,7 +3,7 @@ package upgrade
 // The read-only upgrade-target channel of the restricted executor (#11c-1).
 //
 // The stamped target cannot travel in the task envelope: config.* params are
-// frozen to revision/allowed_sources. The Agent therefore reads its own stamp
+// frozen to the revision only. The Agent therefore reads its own stamp
 // over the authenticated agent channel, exactly like the manifest body, and
 // never receives a URL or a path from the Hub.
 //

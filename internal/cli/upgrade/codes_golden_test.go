@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -89,6 +90,10 @@ var errorCodeDomainPaths = map[string]bool{
 // client, a log line or an operator sees is a visible diff here.
 var goldenErrorCodeValues = []string{
 	"DATABASE_UNAVAILABLE",
+	// The Fail2ban Node codes became part of domain node when the install
+	// channel split moved them under internal/cli/install/node.
+	"FAIL2BAN_BASELINE_INVALID",
+	"FAIL2BAN_REPAIR_FAILED",
 	"LINE_EGRESS_EXTERNAL_DECLARED",
 	// The Hub self-upgrade shared codes moved into internal/hubupgrade/codes.go
 	// so the Web producer and the root executor name one value each; they are
@@ -314,10 +319,10 @@ func parseErrorCodeConstants(t *testing.T, root, directory, name string) []error
 					t.Fatalf("%s: %s is not a string literal; the golden cannot read it", where, identifier.Name)
 				}
 				pkgIdent, ok := selector.X.(*ast.Ident)
-				if !ok || pkgIdent.Name != "versions" {
+				if !ok {
 					t.Fatalf("%s: %s is not a string literal; the golden cannot read it", where, identifier.Name)
 				}
-				value := resolveVersionsCode(t, root, selector.Sel.Name)
+				value := resolveForwardedCode(t, root, file, pkgIdent.Name, selector.Sel.Name)
 				declarations = append(declarations, errorCodeDeclaration{value: value, where: where})
 			}
 		}
@@ -325,48 +330,109 @@ func parseErrorCodeConstants(t *testing.T, root, directory, name string) []error
 	return declarations
 }
 
-// resolveVersionsCode follows a single-level alias like
-// `versions.CodeDatabaseUnavailable` to its string literal in
-// internal/cli/versions/codes.go, keeping the golden readable when a domain
-// moves its literal to the shared leaf.
-func resolveVersionsCode(t *testing.T, root, name string) string {
+// resolveForwardedCode follows a selector such as `ledger.CodeHandoffBusy` to
+// the string literal declared by the imported package. The regroup turns the
+// historical hubupgrade package into a forwarding shell over its ledger, backup
+// and dispatch groups, so one level of forwarding is no longer enough: the
+// golden reads the literal wherever the owning package now declares it.
+func resolveForwardedCode(t *testing.T, root string, file *ast.File, packageName, identifier string) string {
 	t.Helper()
-	path := filepath.Join(root, "internal", "cli", "versions", "codes.go")
-	files := token.NewFileSet()
-	file, err := parser.ParseFile(files, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse versions codes %s: %v", path, err)
+	return codeValueInPackage(t, root, importedPackagePath(t, file, packageName), identifier, map[string]bool{})
+}
+
+// importedPackagePath maps the local name of one import in file to its import
+// path. An explicitly aliased import is matched by that name; otherwise the
+// last path element is the local package name.
+func importedPackagePath(t *testing.T, file *ast.File, packageName string) string {
+	t.Helper()
+	for _, specification := range file.Imports {
+		importPath, err := strconv.Unquote(specification.Path.Value)
+		if err != nil {
+			t.Fatalf("unquote import %s: %v", specification.Path.Value, err)
+		}
+		local := path.Base(importPath)
+		if specification.Name != nil {
+			local = specification.Name.Name
+		}
+		if local == packageName {
+			return importPath
+		}
 	}
-	for _, declaration := range file.Decls {
-		generic, ok := declaration.(*ast.GenDecl)
-		if !ok || generic.Tok != token.CONST {
+	t.Fatalf("package %s is not imported by this file", packageName)
+	return ""
+}
+
+// codeValueInPackage returns the string literal behind one Code* constant of
+// the package at importPath, following further forwarding selectors if the
+// declaration is itself an alias.
+func codeValueInPackage(t *testing.T, root, importPath, identifier string, seen map[string]bool) string {
+	t.Helper()
+	key := importPath + ":" + identifier
+	if seen[key] {
+		t.Fatalf("forwarding cycle while resolving %s", key)
+	}
+	seen[key] = true
+
+	modulePath := errorCodeModulePath(root)
+	relativePath, ok := strings.CutPrefix(importPath, modulePath+"/")
+	if !ok {
+		t.Fatalf("import %s is outside module %s", importPath, modulePath)
+	}
+	directory := filepath.Join(root, filepath.FromSlash(relativePath))
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read package %s: %v", importPath, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		for _, specification := range generic.Specs {
-			values, ok := specification.(*ast.ValueSpec)
-			if !ok {
+		filePath := filepath.Join(directory, name)
+		files := token.NewFileSet()
+		file, err := parser.ParseFile(files, filePath, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", filePath, err)
+		}
+		for _, declaration := range file.Decls {
+			generic, ok := declaration.(*ast.GenDecl)
+			if !ok || generic.Tok != token.CONST {
 				continue
 			}
-			for index, identifier := range values.Names {
-				if identifier.Name != name {
+			for _, specification := range generic.Specs {
+				values, ok := specification.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				if index >= len(values.Values) {
-					t.Fatalf("versions %s has no value literal", name)
+				for index, declared := range values.Names {
+					if declared.Name != identifier {
+						continue
+					}
+					if index >= len(values.Values) {
+						t.Fatalf("%s: %s has no value literal; the golden cannot read it", filePath, identifier)
+					}
+					literal, ok := values.Values[index].(*ast.BasicLit)
+					if ok && literal.Kind == token.STRING {
+						value, err := strconv.Unquote(literal.Value)
+						if err != nil {
+							t.Fatalf("%s: unquote %s: %v", filePath, literal.Value, err)
+						}
+						return value
+					}
+					selector, ok := values.Values[index].(*ast.SelectorExpr)
+					if !ok {
+						t.Fatalf("%s: %s is not a string literal; the golden cannot read it", filePath, identifier)
+					}
+					pkgIdent, ok := selector.X.(*ast.Ident)
+					if !ok {
+						t.Fatalf("%s: %s is not a string literal; the golden cannot read it", filePath, identifier)
+					}
+					return codeValueInPackage(t, root, importedPackagePath(t, file, pkgIdent.Name), selector.Sel.Name, seen)
 				}
-				literal, ok := values.Values[index].(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING {
-					t.Fatalf("versions %s is not a string literal", name)
-				}
-				value, err := strconv.Unquote(literal.Value)
-				if err != nil {
-					t.Fatalf("unquote versions %s: %v", name, err)
-				}
-				return value
 			}
 		}
 	}
-	t.Fatalf("versions %s not found in %s", name, path)
+	t.Fatalf("%s not found in package %s (%s)", identifier, importPath, directory)
 	return ""
 }
 
